@@ -1,0 +1,50 @@
+{
+  "schema": "pops.migration.m0.reference-examples.v1",
+  "phase": "candidate",
+  "runner": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/scripts/run_migration_baseline.py",
+  "runner_sha256": "32caea233d08e778be49378c9c4efe78fa90eaebb2a72471472bdaad890fc5bc",
+  "source": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6",
+  "revision": "76319c0658187d9542c527870854321609a0f891",
+  "dirty": false,
+  "platform": "macOS-26.5-arm64-arm-64bit",
+  "python": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/bin/python",
+  "installation": {
+    "package": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/lib/python3.12/site-packages/pops/__init__.py",
+    "native": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "16342cd011e2dc8d002ee180971060ef5a3925367e4953595fc5ab2f49c8ce02"
+  },
+  "dimension": 2,
+  "omp_num_threads": 2,
+  "profiles": [
+    {
+      "profile": "scalar_full",
+      "command": [
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate5-env/bin/python",
+        "-c",
+        "import runpy,sys; from pops._native_selector import select_native_dimension; select_native_dimension(2); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/scripts/run_installed_example.py",
+        "--runtime-sha256",
+        "16342cd011e2dc8d002ee180971060ef5a3925367e4953595fc5ab2f49c8ce02",
+        "--example",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification6/examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+        "--",
+        "--output-dir",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate5-examples/scalar/scalar_full"
+      ],
+      "mpi_ranks": 1,
+      "returncode": 0,
+      "timeout": false,
+      "seconds": 3937.8176452909975,
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate5-examples/scalar/scalar_full.log",
+      "log_sha256": "06f8bbbf9f50ec7695d63ab85867af108c886f3e5130b09593908f3be5423fc2"
+    }
+  ],
+  "selected_profiles": [
+    "scalar_full"
+  ],
+  "limitations": [
+    "No GPU qualification",
+    "Reference examples, not a manufactured-solution convergence matrix",
+    "No process-loss tolerance claim"
+  ]
+}

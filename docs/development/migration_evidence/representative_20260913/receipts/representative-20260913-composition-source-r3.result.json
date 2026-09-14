@@ -1,0 +1,29 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/codegen/test_tensor_transport_composition.py::test_separate_transport_and_tensor_emit_both_operators_and_required_halos",
+    "tests/python/unit/codegen/test_tensor_transport_composition.py::test_implicit_tensor_partition_is_not_charged_to_explicit_transport_bound",
+    "tests/python/unit/codegen/test_partition_stability.py",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-composition-source-r3.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "2bb005f0cdf79f3027167a92931090f6c940ea18",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T12:29:41.747236+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/python:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 9.75767600000836,
+  "source_head_after": "2bb005f0cdf79f3027167a92931090f6c940ea18",
+  "source_status_after": "",
+  "log_sha256": "0595bbdcdaaf2b9f6451983909a6abfbd1ae6ad06a5c39a1f73fee9c7a92d672"
+}

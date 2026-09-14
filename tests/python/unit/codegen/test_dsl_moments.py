@@ -49,6 +49,7 @@ from pops.codegen.toolchain import _default_cxx
 from pops.moments import (CartesianVelocityMoments, ExactSpeeds, bgk_source,
                           gaussian_closure, lorentz_sources, maxwellian_moments,
                           moment_indices, moment_names)
+from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.requirements import repo_include
 
 fails = 0
@@ -371,7 +372,11 @@ x = (np.arange(n) + 0.5) / n
 X, Y = np.meshgrid(x, x, indexing="ij")
 pert = 1.0 + 0.1 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
 U0 = gauss_state(2)[:, None, None] * pert[None, :, :]
-sim = pops.bind(artifact, initial_state={"mom": U0})
+sim = pops.bind(
+    artifact,
+    initial_state={"mom": U0},
+    resources={"execution_context": artifact_execution_context(artifact)},
+)
 report = pops.run(sim, t_end=5.0e-3, max_steps=10)
 chk(report.accepted_steps == 10, "lifecycle final : exactement 10 pas acceptes")
 out = np.array(sim.state_global("mom"))

@@ -1,0 +1,48 @@
+# Job-level contracts only. Test ownership and downstream selection stay in
+# tests/test_manifest.toml and ci_select_tests.py (Python imports / C++ includes).
+# Patterns use Python fnmatch: * also matches directory separators. Rules compose.
+# Unmatched paths, deleted source, and unresolved dependencies use the full fallback.
+
+[[component]]
+name = "build-and-ci"
+paths = ["CMakeLists.txt", "**/CMakeLists.txt", "CMakePresets.json", "cmake/*", "pyproject.toml", "environment.yml", "python/bindings/*", ".github/workflows/*", ".github/actions/*", "scripts/ci_*", "scripts/build*", "scripts/setup*", "tests/test_manifest.toml", "tests/cpp/test_sources.cmake", "tests/cpp/*durations.json", "tests/python/test_durations.json", "tests/python/native_dimensions.json", "tests/python/conftest.py", "tests/python/support/*", "tests/cpp/support/*"]
+full = true
+
+[[component]]
+name = "shared-core"
+paths = ["include/pops/core/*", "include/pops/parallel/*", "python/pops/__init__.py", "python/pops/_native*", "python/pops/_platform_contracts.py", "python/pops/runtime_environment.py"]
+full = true
+
+[[component]]
+name = "executable-documentation"
+paths = ["docs/*.py", "docs/*.sh", "docs/*.cpp", "docs/*.hpp", "tutorials/*.py", "tutorials/*.sh"]
+full = true
+
+[[component]]
+name = "distributed-runtime"
+paths = ["include/pops/runtime/*", "src/runtime/*", "include/pops/mesh/storage/*", "include/pops/mesh/layout/*", "include/pops/numerics/elliptic/prepared_*", "include/pops/numerics/elliptic/*krylov*", "python/pops/runtime/*", "python/pops/output/*", "tests/cpp/*/mpi/*", "tests/python/integration/io/test_hdf5_parallel.py", "tests/gates/m4_runtime_io.toml", "scripts/run_m4_gate.py", "tests/python/architecture/test_m4_runtime_io_gate.py"]
+mpi = true
+
+[[component]]
+name = "collective-field-protocols"
+paths = ["include/pops/numerics/elliptic/interface/*", "include/pops/numerics/elliptic/linear/*", "include/pops/numerics/elliptic/amr/*"]
+mpi = true
+
+[[component]]
+name = "native-components"
+paths = ["include/pops/*", "src/runtime/*"]
+architecture = true
+
+[[component]]
+name = "python-components"
+paths = ["python/pops/*"]
+architecture = true
+
+[[component]]
+name = "component-tests"
+paths = ["tests/cpp/unit/*", "tests/cpp/integration/*", "tests/python/unit/*", "tests/python/integration/*", "tests/python/examples/*", "tests/python/verification/*", "tests/python/architecture/test_*.py"]
+
+[[component]]
+name = "documentation"
+paths = ["*.md", "docs/*", "tutorials/*", "LICENSE*", ".gitignore", ".codespellrc", ".markdownlint*"]
+metadata = true

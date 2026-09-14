@@ -1,0 +1,117 @@
+INSTALLED /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py
+NATIVE /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so SHA256 d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518
+FIXTURE /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/tests/python/unit/time/test_time_multielliptic.py SHA256 fd9b82bdd9c8641c8d4505f6db46f33f07c7cc79f29a619545a7850cd3e814cc SOURCE_SHA bd583faf196f3c1faeedec489e04d24e959ed00b
+== (A) m.elliptic_field lowering + validation ==
+  [OK ] default solve_fields lowers to its exact point-qualified potential provider
+  [OK ] default solve_fields does NOT use the named phi2 overload
+  [OK ] named solve_fields lowers to the exact point-qualified phi2 provider
+  [OK ] the named elliptic RHS brick is emitted in the native loader
+  [OK ] the named field registers its exact aux-component attachment
+  [OK ] the named field attaches its RHS closure (make_poisson_rhs of the brick)
+  [OK ] a FieldHandle owned by another Case is rejected before lowering
+  [OK ] an elliptic_field rhs reading the aux channel is rejected
+  [OK ] an elliptic_field whose aux output is not a declared aux_field is rejected
+  [OK ] the AMR named field stages one complete native package
+  [OK ] the AMR named field retains separate output and RHS roles in the atomic package
+  [OK ] the AMR callback commits through only the complete-package seam
+  [OK ] the AMR native package keeps the erased stable ABI boundary
+  [OK ] the default program lowers deterministically (no named-field leak)
+== (B) named second elliptic solve == default Poisson solve (public runtimes) ==
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : me_ref_public-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.005)
+  interval            : 0 -> 0.005 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 1bfd319d63f85017
+  run identity        : 7d81cd399dc2c669
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.005 / 1
+  elapsed             : 0.005519 s
+  run identity        : 7d81cd399dc2c669
+  [OK ] me_ref_public accepted one public runtime step
+  [OK ] the default electrostatic source actually moved the state
+  [OK ] named field outputs are reported as provider-owned, not external bind aux
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : me_par_public-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.005)
+  interval            : 0 -> 0.005 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 3d6c50cb22013328
+  run identity        : e2c9b41a451df735
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.005 / 1
+  elapsed             : 0.004283 s
+  run identity        : e2c9b41a451df735
+  [OK ] me_par_public accepted one public runtime step
+  named(rhs=default) vs default Poisson: max|d| = 0.00e+00
+  [OK ] named second elliptic solve (same RHS) == default Poisson solve (max|d| = 0.00e+00)
+  [OK ] named field outputs are reported as provider-owned, not external bind aux
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : me_lin_public-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.005)
+  interval            : 0 -> 0.005 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 8b3b1eedf64a97a5
+  run identity        : 42503bed9cc01d91
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.005 / 1
+  elapsed             : 0.010992 s
+  run identity        : 42503bed9cc01d91
+  [OK ] me_lin_public accepted one public runtime step
+  named(rhs=2*default, src=0.5*g2) vs default: max|d| = 0.00e+00
+  [OK ] named field with rhs=2*default and src=0.5*g2 reproduces the default step (max|d| = 0.00e+00)
+PASS test_time_multielliptic

@@ -130,7 +130,8 @@ def test_resolved_plan_is_exact_deeply_frozen_and_self_authenticating():
     plan.verify()
 
     object.__setattr__(plan, "target", "amr_system")
-    with pytest.raises(ValueError, match="identity verification failed"):
+    # The target changes the retained-object authority; its cross-check precedes the digest check.
+    with pytest.raises(ValueError, match="continuation policies differ from resolved retained-object authorities"):
         plan.verify()
 
 
@@ -176,15 +177,18 @@ def test_single_amr_artifact_authenticates_its_compiled_layout_program():
 
 
 def test_bind_inputs_preserve_array_references_but_detect_content_mutation():
+    from pops.model.provider_pack import ComponentKey
+
     state = np.arange(8, dtype=np.float64)
+    key = ComponentKey("case::typed-phases/model::physics", "aux", "gravity", "gravity")
     inputs = plans.BindInputs(
         initial_state={"fluid": state},
         params={"alpha": 2.0},
-        aux={"gravity": state},
+        aux={key: state},
         resources={"execution_context": _Canonical("serial-host")},
     )
     assert inputs.initial_state["fluid"] is state
-    assert inputs.aux["gravity"] is state
+    assert inputs.aux[key] is state
     inputs.verify()
 
     state[0] = -1.0

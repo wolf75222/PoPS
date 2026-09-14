@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/build/migration-native/bin/test_generated_amr_system_block",
+    "--gtest_filter=GeneratedAmrSystemBlock.ComposedProgramHalosPreserveHyperbolicReconstructionRequirements:GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories:GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics",
+    "--gtest_output=xml:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-composition-factory-r1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "2bb005f0cdf79f3027167a92931090f6c940ea18",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T12:30:25.239589+00:00",
+  "environment": {
+    "CCACHE_DIR": "/Users/romaindespoulain/.cache/pops-migration-20260907-ccache",
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 1.1964810420176946,
+  "source_head_after": "2bb005f0cdf79f3027167a92931090f6c940ea18",
+  "source_status_after": "",
+  "log_sha256": "a3b66a49bf0db2b12793182a37dc6540afbbaf5e49218b1a2a9340c4201c716b"
+}

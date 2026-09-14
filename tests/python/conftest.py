@@ -100,6 +100,14 @@ class PythonProcessItem(pytest.Item):
             raise PythonProcessFailure(path, result.returncode, result.stdout)
 
     def repr_failure(self, excinfo: pytest.ExceptionInfo[BaseException]) -> str:
+        if isinstance(excinfo.value, subprocess.TimeoutExpired):
+            # TimeoutExpired.output stays bytes even with subprocess.run(text=True).
+            # The default pytest traceback truncates its buffer, hiding the phase that stalled.
+            output = excinfo.value.output or ""
+            if isinstance(output, bytes):
+                output = output.decode("utf-8", errors="replace")
+            output = output.rstrip()[-16000:]
+            return f"{self.path} timed out after {excinfo.value.timeout} seconds\n{output}"
         if isinstance(excinfo.value, PythonProcessFailure):
             output = excinfo.value.output.rstrip()
             if len(output) > 16000:

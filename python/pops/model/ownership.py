@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from itertools import count
@@ -73,6 +74,51 @@ class OwnerSegment:
 
 _AUTHORITY_SEQUENCE = count()
 _FINGERPRINT_RE = re.compile(r"^[a-z][a-z0-9_.-]*:sha256:[0-9a-f]{64}$")
+class _FingerprintProjection:
+    __slots__ = ("observed", "thread", "active")
+
+    def __init__(self):
+        self.observed: dict[Any, str | None] = {}
+        self.thread = threading.get_ident()
+        self.active = True
+
+    def applies(self):
+        return self.active and self.thread == threading.get_ident()
+
+
+_FINGERPRINT_SCOPE: ContextVar[_FingerprintProjection | None] = ContextVar(
+    "pops_definition_fingerprint_scope", default=None)
+
+
+@contextmanager
+def _definition_fingerprint_scope():
+    """Reuse exact definition fingerprints within one synchronous canonical projection.
+
+    This cache is an operation-local read witness, never a mutable builder's persistent identity.
+    Nested projections share it. Every observed authority is recomputed after the outer scope,
+    including exceptional exits, so a descriptor that mutates a source cannot publish a snapshot
+    combining old and new definitions. Reset before checking to retain ordinary recursion guards
+    and to leave no cached identity behind if either projection or verification fails.
+    """
+    inherited = _FINGERPRINT_SCOPE.get()
+    if inherited is not None and inherited.applies():
+        yield
+        return
+    projection = _FingerprintProjection()
+    token = _FINGERPRINT_SCOPE.set(projection)
+    try:
+        yield
+    finally:
+        # copy_context() can outlive this operation or propagate it to another thread. Closing
+        # and clearing the shared state prevents those contexts from retaining a usable witness.
+        projection.active = False
+        observed = tuple(projection.observed.items())
+        projection.observed.clear()
+        _FINGERPRINT_SCOPE.reset(token)
+        for authority, expected in observed:
+            if authority.fingerprint() != expected:
+                raise UnresolvedOwnershipError(
+                    "model definition changed during canonical projection")
 
 
 def _validate_definition_fingerprint(value: Any) -> str:
@@ -124,6 +170,11 @@ class _AuthoringAuthority:
             )
         self._resolving.active = True
         try:
+            projection = _FINGERPRINT_SCOPE.get()
+            observed = (projection.observed
+                        if projection is not None and projection.applies() else None)
+            if observed is not None and self in observed:
+                return observed[self]
             with self._lock:
                 providers = list(self._fingerprint_providers)
                 fallback = self._fingerprint
@@ -142,7 +193,12 @@ class _AuthoringAuthority:
             for _, (_, provider) in ranked:
                 value = provider()
                 if value is not None:
-                    return _validate_definition_fingerprint(value)
+                    result = _validate_definition_fingerprint(value)
+                    if observed is not None:
+                        observed[self] = result
+                    return result
+            if observed is not None:
+                observed[self] = fallback
             return fallback
         finally:
             self._resolving.active = False

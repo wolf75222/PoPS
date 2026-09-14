@@ -13,6 +13,7 @@ __all__ = [
     "Expr", "Const", "Var", "ValueExpr", "SymbolicTruthValueError",
     "Equation", "Gradient", "GradientMagnitude", "Partial", "Laplacian", "Divergence",
     "TimeDerivative", "Unknown", "OpApply", "Integral", "RateTerm", "RateExpr",
+    "Accumulation", "DiscreteAccumulationEquation", "accumulation",
     # elliptic field-operator algebra (Spec 5 sec.9.2)
     "Reaction", "CoeffGradient", "DivCoeffGrad", "EllipticSum", "elliptic_terms",
     "principal_kinds",
@@ -91,3 +92,9 @@ Integer = _DType("Integer")
 Bool = _DType("Bool")
 
 __all__ += ["Real", "Integer", "Bool"]
+
+# Accumulation uses typed model handles; load it after dtype primitives so the
+# model/parameter imports can use Real while this module initializes.
+from pops._ir.balance import (  # noqa: E402,F401
+    Accumulation, DiscreteAccumulationEquation, accumulation,
+)

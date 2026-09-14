@@ -40,18 +40,21 @@ class _SystemDiagnostics(_System):
         try:
             R = np.asarray(self._s.eval_rhs(block), dtype=float)
         except RuntimeError as ex:
-            # Native execution is deliberately fail-closed: a non-finite residual is rejected
-            # before it can cross the binding.  Pointwise providers likewise publish their
-            # structured rejection only after the device/MPI reduction.  Pybind exposes both as
-            # RuntimeError, so accept only these two exact assemble_rhs contracts; unrelated
-            # runtime/infrastructure failures must still escape rather than become a model report.
+            # Both native spatial routes reject invalid numerical data before publication.
+            # Pybind exposes these as RuntimeError, so recognize only their diagnostic contracts.
+            # The ND values are FiniteVolumeStatus: state/density/pressure/EOS/wave speed/flux.
+            # Invalid geometry, face storage, and unknown runtime errors must still escape.
             message = str(ex)
             rejected_rhs = message.startswith(
                 "assemble_rhs produced non-finite finite-volume data;"
             ) or (
                 message.startswith("numerical flux evaluation ")
                 and " during assemble_rhs: reason_code=0x" in message
-            )
+            ) or message in {
+                f"prepared ND hyperbolic {stage} refused publication status={status}"
+                for stage in ("face evaluation", "residual")
+                for status in (1, 2, 3, 4, 6, 7)
+            }
             if not rejected_rhs:
                 raise
             failures.append("residual -div F + S evaluation failed (%s)" % ex)

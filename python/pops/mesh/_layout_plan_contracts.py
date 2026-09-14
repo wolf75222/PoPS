@@ -39,10 +39,12 @@ class LayoutMappingOperation(IntEnum):
     """Generated Transfer ABI-v1 operation value, never a free selector string."""
 
     CONSERVATIVE_CELL_AVERAGE_V1 = 1
+    VELOCITY_MOMENT_V1 = 2
+    PHYSICAL_PULLBACK_V1 = 3
 
     def to_data(self) -> dict[str, Any]:
         return {
-            "interface": "pops://interfaces/transfer@1",
+            "interface": "pops://interfaces/transfer@2",
             "name": self.name,
             "abi_value": int(self),
         }
@@ -52,6 +54,8 @@ class LayoutSynchronization(Enum):
     """Qualified point at which a directional mapping is part of the step transaction."""
 
     BEFORE_STEP_V1 = "pops://synchronization/before-step@1"
+    AFTER_SOURCE_STEP_V1 = "pops://synchronization/after-source-step@1"
+    PROGRAM_POINT_V1 = "pops://synchronization/program-point@1"
 
     def to_data(self) -> dict[str, Any]:
         return {"uri": self.value}
@@ -759,6 +763,7 @@ class LayoutMappingRequirement:
     operation: LayoutMappingOperation
     synchronization: LayoutSynchronization
     reverse_of: str | None = None
+    physical_map: Any = None
 
     def __post_init__(self) -> None:
         for endpoint in (self.source_layout, self.target_layout):
@@ -776,6 +781,18 @@ class LayoutMappingRequirement:
         if type(self.synchronization) is not LayoutSynchronization:
             raise TypeError(
                 "layout mapping synchronization must be an exact LayoutSynchronization")
+        from .physical_mapping import PhysicalSupportMap
+        if self.operation in (LayoutMappingOperation.VELOCITY_MOMENT_V1,
+                              LayoutMappingOperation.PHYSICAL_PULLBACK_V1):
+            if type(self.physical_map) is not PhysicalSupportMap:
+                raise ValueError("physical mapping operation requires an explicit physical_map")
+            if self.physical_map.operation_abi != int(self.operation):
+                raise ValueError("physical mapping direction disagrees with operation")
+            self.physical_map.validate_ports(self.source_port, self.target_port)
+            if self.reverse_of is not None:
+                raise ValueError("physical maps require independently authored timing and no inverse closure")
+        elif self.physical_map is not None:
+            raise ValueError("conservative averaging cannot carry a physical map")
         if self.reverse_of is not None and (
                 not isinstance(self.reverse_of, str) or not self.reverse_of):
             raise TypeError("reverse mapping identity must be a non-empty string")
@@ -790,6 +807,7 @@ class LayoutMappingRequirement:
             "operation": self.operation.to_data(),
             "synchronization": self.synchronization.to_data(),
             "reverse_of": self.reverse_of,
+            **({"physical_map": self.physical_map.to_data()} if self.physical_map else {}),
         })
         return "pops.layout-mapping.v2::" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -803,6 +821,7 @@ class LayoutMappingRequirement:
             "operation": self.operation.to_data(),
             "synchronization": self.synchronization.to_data(),
             "reverse_of": self.reverse_of,
+            **({"physical_map": self.physical_map.to_data()} if self.physical_map else {}),
         }
 
 
@@ -829,9 +848,8 @@ def reject_concurrent_overwrite_mappings(requirements: Any) -> None:
     """Require one writer per target storage/synchronization for overwrite operations."""
     writers: dict[tuple[str, str, str], str] = {}
     for requirement in requirements:
-        if requirement.operation is not \
-                LayoutMappingOperation.CONSERVATIVE_CELL_AVERAGE_V1:
-            continue
+        if requirement.synchronization is LayoutSynchronization.PROGRAM_POINT_V1:
+            continue  # Each Program.map writes its own SSA scratch, verified at resolution.
         key = (
             requirement.target_layout.qualified_id,
             requirement.target_port.subject.qualified_id,
@@ -972,6 +990,16 @@ class LayoutPlan:
         if len(matches) != 1:
             raise KeyError("layout %s is not declared by this LayoutPlan" % handle.qualified_id)
         return matches[0]
+
+    def project(self, handle: LayoutHandle) -> LayoutPlan:
+        """Authenticate one layout's local authority; cross-layout maps stay on the parent."""
+        selected = self.normalized(handle)
+        assignments = tuple(row for row in self.assignments if row.layout == handle)
+        if len(self.layouts) == 1:
+            return self
+        payload = plan_payload(self.owner, (selected,), assignments, ())
+        return LayoutPlan(self.owner, (selected,), assignments, (),
+                          hashlib.sha256(canonical(payload).encode("utf-8")).hexdigest())
 
     def validate_subjects(self, *, states: Any = (), fields: Any = (), blocks: Any = ()) -> None:
         """Prove every materialized subject has exactly one assignment and no extras."""

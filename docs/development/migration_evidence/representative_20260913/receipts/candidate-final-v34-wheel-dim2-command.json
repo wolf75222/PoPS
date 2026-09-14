@@ -1,0 +1,25 @@
+{
+  "source": "175b0883f9f0752f5710ef3db2c7d7d6802e400a",
+  "command": [
+    "bash",
+    "scripts/build_python.sh",
+    "--dim",
+    "2",
+    "--mpi",
+    "--wheel-dir",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v34-wheel-dim2",
+    "--",
+    "-Ccmake.define.CMAKE_BUILD_WITH_INSTALL_RPATH=ON"
+  ],
+  "environment": {
+    "POPS_ENV_NAME": "pops-migration-20260908",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2",
+    "POPS_HEAVY_MODULE_TU_POOL": "2",
+    "POPS_BUILD_CORES": "2",
+    "CCACHE_DIR": "/Users/romaindespoulain/.cache/pops-migration-20260907-ccache",
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2"
+  },
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate"
+}

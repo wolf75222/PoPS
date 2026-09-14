@@ -9,7 +9,7 @@ from numbers import Real
 from typing import Any
 
 
-_SCALAR_UNARY = frozenset({"neg", "sqrt", "abs", "sin", "cos", "exp", "log"})
+_SCALAR_UNARY = frozenset({"neg", "sqrt", "abs", "sin", "cos", "exp", "log", "erf", "erfc"})
 _SCALAR_BINARY = frozenset({
     "add", "sub", "mul", "div", "pow", "atan2", "hypot", "minimum", "maximum",
 })

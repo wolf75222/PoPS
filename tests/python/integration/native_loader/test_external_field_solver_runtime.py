@@ -123,8 +123,10 @@ int prepare_topology(void* value, const PopsFieldTopologyRequestV2* request,
   }}
   const bool multilevel = saw_level_one;
   if ({str(require_multilevel).lower()} && !saw_level_zero) return 6;
+  // The first derived-field recompute precedes fine-level creation.  Require
+  // real distributed ownership already on L0; the MPI oracle checks L1 after bind.
   if ({str(require_distributed).lower()} &&
-      (!saw_level_zero || !saw_level_one || !saw_owner_zero || !saw_owner_one)) return 11;
+      (!saw_level_zero || !saw_owner_zero || !saw_owner_one)) return 11;
   if ({str(require_multilevel).lower()} && !previous_multilevel_signature.empty() &&
       topology_signature != previous_multilevel_signature &&
       previous_multilevel_layout == request->topology.materialized_layout_identity) return 10;
@@ -406,7 +408,7 @@ def _moving_amr_program(state, rate, field, *, off_policy):
     field_node = next(value for value in program._values if value.op == "solve_fields")
     scheduled = Schedule(Every(AcceptedStep(program.clock), 5), off=off_policy)
     program._replace_value(field_node, attrs={**field_node.attrs, "schedule": scheduled})
-    program.step_strategy(FixedDt(8.0e-2))
+    program.step_strategy(FixedDt(2.0e-2))
     return program
 
 
@@ -521,7 +523,9 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
     background = 0.8
     amplitude = 4.0
     inverse_width = 80.0
-    # A compact super-threshold region moves far enough to replace the fine layout at step 2.
+    # Leave room for the mandatory nesting buffer around the moving tagged region.
+    # Coarsening below the threshold releases its old footprint at step 2.
+    n = 16
     resolved = resolve_periodic_field_program(
         model,
         lambda state, rate, field: _moving_amr_program(
@@ -530,8 +534,9 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         name="external-amr-field-runtime",
         block_name="material",
         target="amr_system",
-        n=8,
+        n=n,
         regrid_every=2,
+        coarsen_below_threshold=True,
         field_solver=provider,
         initial_profile=Gaussian(
             frame=model.frame,
@@ -562,9 +567,21 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
     )
     assert simulation.n_levels() == 2
     boxes_before = tuple(simulation.patch_boxes())
+    fine_cells = sum(
+        int(np.prod(np.asarray(upper) - lower + 1))
+        for level, lower, upper in boxes_before if level == 1
+    )
+    assert 0 < fine_cells < (2 * n) ** 2
     regrids_before = simulation.amr.explain_regrid().regrid_count
-    first = pops.run(simulation, t_end=8.0e-2, max_steps=1)
+    # Bootstrap recomputes first on level zero, then on the prolonged two-level hierarchy.
+    # Each topology owns a fresh solver, whose first solve has counter 1.
+    bootstrap_calls = solve_observer.read_text(encoding="utf-8").splitlines()
+    assert bootstrap_calls == ["1", "1"]
+    first = pops.run(simulation, t_end=2.0e-2, max_steps=1)
     assert first.accepted_steps == 1
+    # The initially-due Program runs once on each live level, using the current solver.
+    initial_step_calls = solve_observer.read_text(encoding="utf-8").splitlines()
+    assert initial_step_calls == bootstrap_calls + ["2", "3"]
     accepted_before_fault = {
         "time": simulation.time(),
         "step": simulation.macro_step(),
@@ -574,8 +591,15 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         "dirty": tuple(simulation._executor._s.dirty_auxiliary_provider_identities()),
     }
     fault_marker.write_text("fail the topology rematerialization solve", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="field"):
-        pops.run(simulation, t_end=1.6e-1, max_steps=1)
+    with pytest.raises(
+        RuntimeError,
+        match="prepared solve failed: status=invalid_evaluation action=fail_run "
+        "reason=native FieldSolver v2 marked a non-finite active solution as solved",
+    ):
+        pops.run(simulation, t_end=4.0e-2, max_steps=1)
+    # Hold/Skip is off-cadence; only the new topology solver attempts a first solve.
+    rejected_calls = solve_observer.read_text(encoding="utf-8").splitlines()
+    assert rejected_calls == initial_step_calls + ["1"]
     assert simulation.time() == accepted_before_fault["time"]
     assert simulation.macro_step() == accepted_before_fault["step"]
     assert tuple(simulation.patch_boxes()) == accepted_before_fault["boxes"]
@@ -587,16 +611,29 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
     assert tuple(simulation._executor._s.dirty_auxiliary_provider_identities()) == (
         accepted_before_fault["dirty"]
     )
+    assert solve_observer.read_text(encoding="utf-8").splitlines() == rejected_calls
     fault_marker.unlink()
-    report = pops.run(simulation, t_end=2.4e-1, max_steps=2)
+    report = pops.run(simulation, t_end=6.0e-2, max_steps=2)
     assert first.accepted_steps + report.accepted_steps == 3
-    assert report.final_time == pytest.approx(2.4e-1)
+    assert report.final_time == pytest.approx(6.0e-2)
     assert simulation.amr.explain_regrid().regrid_count > regrids_before
     assert tuple(simulation.patch_boxes()) != boxes_before
-    # Initial topology materialization publishes generation 1; the initially-due Program solve is
-    # generation 2. Hold/Skip is then off-cadence, while failed and retried step-2 topology
-    # transactions each construct a fresh solver and attempt exactly generation 1.
-    assert solve_observer.read_text(encoding="utf-8").splitlines() == ["1", "2", "1", "1"]
+    # Each gather exposes one level, so covered coarse cells are inactive, not composite values.
+    # Native dense images are x-fastest; select active cells from the accepted fine geometry.
+    coarse_active = np.ones((n, n), dtype=bool)
+    fine_active = np.zeros((2 * n, 2 * n), dtype=bool)
+    for level, lower, upper in simulation.patch_boxes():
+        assert level == 1
+        fine_active[lower[1]:upper[1] + 1, lower[0]:upper[0] + 1] = True
+        coarse_active[lower[1] // 2:upper[1] // 2 + 1,
+                      lower[0] // 2:upper[0] // 2 + 1] = False
+    for level, active in enumerate((coarse_active, fine_active)):
+        assert np.any(active)
+        potential = np.asarray(simulation.field_potential_level_global(slot, level))
+        assert np.all(np.isfinite(potential))
+        np.testing.assert_array_equal(potential.reshape(active.shape)[active], 7.0)
+    # The retry creates one fresh topology solver; neither off-cadence step nor reads solve again.
+    assert solve_observer.read_text(encoding="utf-8").splitlines() == rejected_calls + ["1"]
 
 
 def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries(
@@ -658,6 +695,7 @@ def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retr
     }
     assert accepted_before["potential"].size == 64
     assert np.all(accepted_before["potential"] == 0.0)
+    assert accepted_before["providers"][0]["materialized"] is False
 
     with pytest.raises(
         RuntimeError,
@@ -680,10 +718,11 @@ def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retr
         simulation._executor._temporal_restart_state.to_data(),
         sort_keys=True,
     ) == accepted_before["temporal"]
-    assert (
-        simulation.inspect().to_dict()["instance"]["field_providers"]
-        == accepted_before["providers"]
-    )
+    # The bound provider cache survives rejection; accepted numeric fields and
+    # topology reports still roll back exactly. Preparation is not publication.
+    assert simulation.inspect().to_dict()["instance"]["field_providers"] == [
+        {**provider, "materialized": True} for provider in accepted_before["providers"]
+    ]
     failed = simulation._executor._last_step_transaction_report
     assert (failed.status, failed.phase, failed.action) == (
         "failed",

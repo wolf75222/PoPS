@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 import pops.lib.time as libtime
+from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen.program_graph_lowering import emit_program_graph
 from pops.physics._facade import Model
 from pops.problem import Case
@@ -26,6 +27,7 @@ from pops.time import (
     StagePoint,
     TimePoint,
 )
+from pops.time import evaluation_partition
 from pops.time._program.detach import detach_compiled_program
 from tests.python.support.requirements import (
     default_cxx,
@@ -109,7 +111,8 @@ def _manual_imex_euler(state: Any, explicit: Any, implicit: Any) -> Program:
     ).consume(action=FailRun())
     stage = program.value("imex-euler_stage_0", stage, at=point)
     explicit_rate = program.value("imex-euler_k_exp_0", explicit(stage), at=point)
-    implicit_rate = program.value("imex-euler_k_imp_0", program.apply(linear, stage), at=point)
+    with evaluation_partition(program, "implicit"):
+        implicit_rate = program.value("imex-euler_k_imp_0", program.apply(linear, stage), at=point)
     out = program.value(
         "imex-euler_step",
         u0 + program.dt * explicit_rate + program.dt * implicit_rate,
@@ -130,7 +133,10 @@ class _NormalizedProgram:
 def _normalize_and_lower(program: Program, model: Any) -> _NormalizedProgram:
     detached = detach_compiled_program(program)
     graph = detached.to_graph()
-    source = emit_program_graph(graph, lowering_program=detached, model=model)
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert emit_model is model
+    assert source_module is model.module
+    source = emit_program_graph(graph, lowering_program=detached, model=emit_model)
     assert detached.to_graph().graph_hash == graph.graph_hash
     return _NormalizedProgram(
         authored=program,

@@ -13,6 +13,7 @@ from pops.physics._facade import Model
 from pops.problem import Case
 from pops.solvers import DenseLU
 from pops.time import FailRun, LocalLinear, Program, StagePoint, TimePoint
+from pops.time import evaluation_partition
 from pops.time._methods.properties import certify_program_graph
 from pops.time._methods.tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
 
@@ -170,9 +171,10 @@ def _manual_imex_euler(state, explicit, implicit):
     ).consume(action=FailRun())
     stage = program.value("imex-euler_stage_0", stage, at=point)
     explicit_rate = program.value("imex-euler_k_exp_0", explicit(stage), at=point)
-    implicit_rate = program.value(
-        "imex-euler_k_imp_0", program.apply(linear, stage, fields=None), at=point
-    )
+    with evaluation_partition(program, "implicit"):
+        implicit_rate = program.value(
+            "imex-euler_k_imp_0", program.apply(linear, stage, fields=None), at=point
+        )
     out = program.value(
         "imex-euler_step",
         u0 + program.dt * explicit_rate + program.dt * implicit_rate,
@@ -345,7 +347,10 @@ def test_multistate_runge_kutta_synchronizes_stages_and_commits_atomically():
         pair = rhs[2 * stage : 2 * stage + 2]
         assert pair[0].point == pair[1].point
         assert [value.block.local_id for value in pair] == ["alpha", "beta"]
-    assert all(value.point == TimePoint(program.clock, 1) for value in program.commits().values())
+    assert all(value.point == TimePoint(program.clock, step=1)
+               for value in program.commits().values())
+    for state, value in program.commits().items():
+        assert value.point == program.state(state).next.point
 
 
 def test_multistate_runge_kutta_solves_one_shared_field_from_all_states_per_stage():

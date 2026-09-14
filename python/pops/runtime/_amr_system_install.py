@@ -37,40 +37,6 @@ def _constant_analytic_program(
     )
 
 
-def _gaussian_analytic_program(
-    source: Any, *, native_binary64: Any, ranked_gaussian_center: Any
-) -> tuple[list[list[str]], list[list[float]]]:
-    """Lower the resolved Gaussian to the same canonical postfix ABI as all analytic data."""
-    center = ranked_gaussian_center(source, where="AMR Gaussian")
-    if not center:
-        raise ValueError("AMR Gaussian must have an exact native-rank centre")
-    inverse_width = native_binary64(source["inverse_width"], where="AMR Gaussian inverse_width")
-    if not inverse_width > 0.0:
-        raise ValueError("AMR Gaussian inverse_width must be strictly positive")
-    opcodes: list[str] = []
-    literals: list[float] = []
-    for axis, coordinate in enumerate(("x", "y", "z")[: len(center)]):
-        opcodes.extend((coordinate, "constant", "sub", coordinate, "constant", "sub", "mul"))
-        literals.extend((0.0, center[axis], 0.0, 0.0, center[axis], 0.0, 0.0))
-        if axis:
-            opcodes.append("add")
-            literals.append(0.0)
-    opcodes.extend(("constant", "mul", "neg", "exp", "constant", "mul", "constant", "add"))
-    literals.extend(
-        (
-            inverse_width,
-            0.0,
-            0.0,
-            0.0,
-            native_binary64(source["amplitude"], where="AMR Gaussian amplitude"),
-            0.0,
-            native_binary64(source["background"], where="AMR Gaussian background"),
-            0.0,
-        )
-    )
-    return [opcodes], [literals]
-
-
 class _PreparedAmrFieldSolverInstall:
     """AMR native primitives consumed by provider-owned field-solver installers."""
 
@@ -283,6 +249,14 @@ class _AmrSystemInstall(_AmrSystem):
                 raise ValueError("AMR bootstrap plan must be the exact value from the InstallPlan")
             if amr_transfer is not install_plan.amr_transfer:
                 raise ValueError("AMR transfer must be the exact value from the InstallPlan")
+            from pops.runtime._continuation_transitions import prepare_bind_continuation
+            from pops.runtime._layout_install_projection import LayoutInstallProjection
+            if type(install_plan) is LayoutInstallProjection:
+                prepare_bind_continuation(self, install_plan,
+                    program=install_plan.selected.program.program,
+                    block_names=install_plan.selected.block_names, field_names=())
+            else:
+                prepare_bind_continuation(self, install_plan)
             compiled = install_plan.artifact
             instances = install_plan.instances
             params = install_plan.params
@@ -416,11 +390,14 @@ class _AmrSystemInstall(_AmrSystem):
                 elif route == "gaussian_field":
                     if space != "cell":
                         raise ValueError("pops.bind: gaussian_field requires one cell state")
-                    opcodes, literals = _gaussian_analytic_program(
-                        source,
-                        native_binary64=native_binary64,
-                        ranked_gaussian_center=ranked_gaussian_center,
+                    self._s._stage_bootstrap_analytic_state(
+                        subject_id, name, space, centering, "conservative_cell_average",
+                        ranked_gaussian_center(source, where="AMR Gaussian"),
+                        native_binary64(source["background"], where="AMR Gaussian background"),
+                        native_binary64(source["amplitude"], where="AMR Gaussian amplitude"),
+                        native_binary64(source["inverse_width"], where="AMR Gaussian inverse_width"),
                     )
+                    continue
                 elif route == "analytic_expression":
                     projection = source.get("projection", {})
                     if (
@@ -437,8 +414,12 @@ class _AmrSystemInstall(_AmrSystem):
                         lower_analytic_components,
                     )
 
+                    # Authenticate the declared point expression and every parameter dependency even
+                    # when its explicit integral owns materialization.
+                    if "cell_integrals" in source:
+                        lower_analytic_components(source["components"], frame_id=source["frame_id"], bindings=params)
                     lowered = lower_analytic_components(
-                        source.get("components"),
+                        source.get("cell_integrals", source).get("components"),
                         frame_id=source.get("frame_id"),
                         bindings=params,
                     )
@@ -447,7 +428,8 @@ class _AmrSystemInstall(_AmrSystem):
                         name,
                         space,
                         centering,
-                        "conservative_cell_average",
+                        "exact_cell_integral" if "cell_integrals" in source
+                        else "conservative_cell_average",
                         [list(component_opcodes) for component_opcodes, _ in lowered],
                         [list(component_literals) for _, component_literals in lowered],
                     )

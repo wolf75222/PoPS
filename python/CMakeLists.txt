@@ -267,8 +267,9 @@ if(POPS_NATIVE_DIM STREQUAL "2")
   pops_add_pytest_suite(pops_python_integration_mpi tests/python/integration/mpi "integration;python;mpi;medium" ${_pops_py_mpi_ignore_args})
 
   if(POPS_USE_MPI)
+    # runpy needs explicit direct-script import paths and argv after native selection.
     set(_pops_py_mpi_bootstrap
-        "import os, runpy, sys; from pops._native_selector import select_native_dimension; select_native_dimension(int(os.environ[\"POPS_NATIVE_DIM\"])); runpy.run_path(sys.argv[1], run_name=\"__main__\")")
+        "import os, runpy, sys; from pops._native_selector import select_native_dimension; select_native_dimension(int(os.environ[\"POPS_NATIVE_DIM\"])); sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name=\"__main__\")")
     function(pops_add_mpi_pytest_entrypoint path)
       get_filename_component(_pops_py_mpi_stem "${path}" NAME_WE)
       add_test(

@@ -55,7 +55,7 @@ class ComponentContract:
 
     representation: str
     centering: str
-    unit: str | None
+    unit: Any
     layout: str
     value_kind: str | None = None
 
@@ -63,14 +63,21 @@ class ComponentContract:
         _non_empty(self.representation, "ComponentContract representation")
         _non_empty(self.centering, "ComponentContract centering")
         if self.unit is not None:
-            _non_empty(self.unit, "ComponentContract unit")
+            from pops._ir.quantity import PhysicalDimension
+            if isinstance(self.unit, Mapping):
+                object.__setattr__(self, "unit", PhysicalDimension.from_data(dict(self.unit)))
+            elif not isinstance(self.unit, PhysicalDimension):
+                # Named auxiliary units remain a compatibility declaration; state and field
+                # dimensions use exact exponents, including an explicit dimensionless value.
+                _non_empty(self.unit, "ComponentContract unit")
         _non_empty(self.layout, "ComponentContract layout")
         if self.value_kind is not None:
             _non_empty(self.value_kind, "ComponentContract value_kind")
 
     def to_data(self) -> dict[str, Any]:
         return {"representation": self.representation, "centering": self.centering,
-                "unit": self.unit, "layout": self.layout, "value_kind": self.value_kind}
+                "unit": self.unit.to_data() if hasattr(self.unit, "to_data") else self.unit,
+                "layout": self.layout, "value_kind": self.value_kind}
 
 
 @dataclass(frozen=True, slots=True)
@@ -651,3 +658,37 @@ def build_operator_provider_pack(module: Any, operator: Any) -> ProviderPack:
 
 __all__ = ["ComponentKey", "ComponentContract", "ProviderEntry", "ProviderPack",
            "MissingInputProvider", "build_provider_pack", "build_operator_provider_pack"]
+
+
+def compact_auxiliary_provider_pack(pack: Any) -> ProviderPack:
+    """Project declared :class:`AuxSpace` values to compact native-channel slots.
+
+    A slot is not inferred from a spelling, an axis, or a physics role.  It is
+    assigned once, in declaration order, from the exact owner-qualified
+    ``aux`` and ``field`` rows of the complete provider pack.  The empty pack
+    is valid: a model without auxiliary inputs or field outputs allocates no
+    channel at all.
+    """
+    if type(pack) is not ProviderPack:
+        raise TypeError("auxiliary projection requires an exact ProviderPack")
+    rows = []
+    for key in pack:
+        if key.space_kind not in {"aux", "field"}:
+            continue
+        component_contract = pack.contract(key)
+        if component_contract.centering != "cell" or component_contract.layout != "cell":
+            raise ValueError(
+                "auxiliary carrier accepts only cell-centered cell-layout components; "
+                "%s has centering=%r layout=%r and remains solver-owned"
+                % (key.space, component_contract.centering, component_contract.layout)
+            )
+        # A FieldSpace may deliberately be provided later by the case-owned
+        # field provider.  Its slot is still part of the package ABI, while
+        # availability is verified at bind rather than guessed at codegen.
+        entry = pack.declared_entry(key)
+        rows.append((
+            key,
+            component_contract,
+            type(entry)(entry.producer, entry.available, len(rows)),
+        ))
+    return ProviderPack(rows, capacity=len(rows))

@@ -1,0 +1,31 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/codegen/test_generic_diffusion.py::test_coupled_coefficient_laws_have_all_components_axes_and_runtime_parameters",
+    "tests/python/unit/codegen/test_generic_diffusion.py::test_full_tensor_cross_gradient_uses_the_selected_adjoint_realization",
+    "tests/python/unit/codegen/test_generic_diffusion.py::test_component_transport_diffusion_retains_two_accepted_stages_and_component_faces",
+    "tests/python/unit/codegen/test_amr_tensor_diffusion_codegen.py::test_tensor_composite_implicit_resolves_faces_halos_and_consumed_residual",
+    "tests/python/unit/codegen/test_source_state_storage.py::test_source_only_public_plan_and_exact_module_emit_real_storage",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-halo-source-r1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "ff4187844104b5a798cfe4af04b754c6ca4c864c",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T11:05:37.398099+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/python:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 17.78012204199331,
+  "source_head_after": "ff4187844104b5a798cfe4af04b754c6ca4c864c",
+  "source_status_after": "",
+  "log_sha256": "4c884ec448be9168628e6a0ca07894dfb0c5a3903894bd0a96d09e203327fa45"
+}

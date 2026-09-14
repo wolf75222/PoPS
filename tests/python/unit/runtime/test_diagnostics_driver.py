@@ -262,7 +262,7 @@ def test_uniform_case_initials_resolve_as_the_single_layout_authority():
     assert initial_plan is not None
     binding, = initial_plan.bindings
     assert binding.subject.block_ref.local_id == "tracer"
-    assert binding.source.options.to_data()["native_route"] == "gaussian_field"
+    assert binding.source.options.to_data()["native_route"] == "analytic_expression"
     assert resolved.bootstrap_plan is None
 
 

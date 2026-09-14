@@ -263,7 +263,10 @@ solvers remain standalone C++ numerical components with dedicated tests. `System
 one Cartesian coordinate-provider contract. The historical `geometry == "polar"` engine was
 removed. `pops.mesh.PolarMesh` can still describe annular geometry for inspection and
 scientific output. Native execution fails during resolution before artifact creation.
-`verification/manifest.toml` records `polar_system_runtime = false`.
+The historical `polar_system_runtime = false` disposition remains an unavailable campaign
+record; the detached `verification/manifest.toml` is not shipped in this checkout. The current
+scope and unavailable-cell boundary are recorded in
+[`migration verification scope`](development/migration_verification_scope.md).
 
 ### Adaptive runtime
 
@@ -440,9 +443,11 @@ numerical parity of catalog-selected templates on CPU/Serial.
 `test_amr_compiled_model` validates hierarchy installation. This is a test oracle, not a
 second public registration route.
 
-The repo-local scientific campaign under [`verification/`](../verification/README.md)
-measures orders, conservation, phase, symmetry, and AMR interface errors against external
-oracles. It is distinct from the fast-test catalogue.
+The former repo-local scientific campaign was designed to measure orders, conservation, phase,
+symmetry, and AMR interface errors against external oracles. Its assets are not shipped in this
+checkout; the current scope and unavailable status are recorded in
+[`migration verification scope`](development/migration_verification_scope.md). It is distinct
+from the fast-test catalogue.
 
 ## Backends
 

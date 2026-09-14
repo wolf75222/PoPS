@@ -1,0 +1,34 @@
+{
+  "command": [
+    "/usr/bin/time",
+    "-l",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v31-dim2-env/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/integration/runtime/test_public_tensor_diffusion.py::test_public_variable_rotated_tensor_cross_gradient_full_matrix",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v31-representative-tensor-pytest",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v31-representative-tensor.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v31-proof",
+  "source_head_before": "3eb2722e4618d25f1586632b592ee20b4dc505fa",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T11:21:58.201822+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2",
+    "POPS_BUILD_CORES": "2",
+    "POPS_HEAVY_MODULE_TU_POOL": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 31.746052458009217,
+  "source_head_after": "3eb2722e4618d25f1586632b592ee20b4dc505fa",
+  "source_status_after": "",
+  "log_sha256": "64c23dc0c28348f579a77364dac8005476a9a5543b283c3429c57cf78acea719"
+}

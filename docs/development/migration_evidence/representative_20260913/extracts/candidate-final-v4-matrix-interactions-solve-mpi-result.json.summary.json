@@ -1,0 +1,222 @@
+{
+  "not_a_new_execution": true,
+  "original_path": "candidate-final-v4-matrix-interactions-solve-mpi-result.json",
+  "original_sha256": "0ea329ad627eb37194a364756877207cb76e6db6e34e6a74cf4b51ca0fce9834",
+  "receipt_fields": {
+    "case_results": [
+      {
+        "failure": null,
+        "name": "test_imported_coupled_solve_requires_explicit_and_authenticated_derivative",
+        "seconds": 2.079
+      },
+      {
+        "failure": null,
+        "name": "test_imported_coupled_solve_selects_actual_jacobian_route[approximate-approximate(]",
+        "seconds": 1.305
+      },
+      {
+        "failure": null,
+        "name": "test_imported_coupled_solve_selects_actual_jacobian_route[finite_difference-None]",
+        "seconds": 1.295
+      },
+      {
+        "failure": null,
+        "name": "test_native_full_coupled_solve_iterates_and_conserves[exact]",
+        "seconds": 17.421
+      },
+      {
+        "failure": null,
+        "name": "test_failed_imported_iterate_cannot_publish_any_recipient[exact]",
+        "seconds": 1.513
+      },
+      {
+        "failure": null,
+        "name": "test_native_full_coupled_solve_iterates_and_conserves[approximate]",
+        "seconds": 8.949
+      },
+      {
+        "failure": null,
+        "name": "test_failed_imported_iterate_cannot_publish_any_recipient[approximate]",
+        "seconds": 1.517
+      },
+      {
+        "failure": null,
+        "name": "test_native_full_coupled_solve_iterates_and_conserves[finite_difference]",
+        "seconds": 8.975
+      },
+      {
+        "failure": null,
+        "name": "test_failed_imported_iterate_cannot_publish_any_recipient[finite_difference]",
+        "seconds": 1.508
+      },
+      {
+        "failure": null,
+        "name": "test_native_interaction_guard_prevents_eager_fallible_calls[inactive-invalid-input]",
+        "seconds": 19.265
+      },
+      {
+        "failure": null,
+        "name": "test_native_interaction_guard_prevents_eager_fallible_calls[active-valid-input]",
+        "seconds": 1.629
+      },
+      {
+        "failure": null,
+        "name": "test_rank_local_native_failure_in_selected_arm_rolls_back",
+        "seconds": 1.494
+      },
+      {
+        "failure": null,
+        "name": "test_repeated_native_projection_and_compensating_accepted_weight[16]",
+        "seconds": 19.849
+      },
+      {
+        "failure": null,
+        "name": "test_repeated_native_projection_and_compensating_accepted_weight[32]",
+        "seconds": 11.155
+      },
+      {
+        "failure": null,
+        "name": "test_repeated_native_projection_and_compensating_accepted_weight[64]",
+        "seconds": 11.212
+      },
+      {
+        "failure": null,
+        "name": "test_imported_coupled_solve_requires_explicit_and_authenticated_derivative",
+        "seconds": 2.083
+      },
+      {
+        "failure": null,
+        "name": "test_imported_coupled_solve_selects_actual_jacobian_route[approximate-approximate(]",
+        "seconds": 1.299
+      },
+      {
+        "failure": null,
+        "name": "test_imported_coupled_solve_selects_actual_jacobian_route[finite_difference-None]",
+        "seconds": 1.314
+      },
+      {
+        "failure": null,
+        "name": "test_native_full_coupled_solve_iterates_and_conserves[exact]",
+        "seconds": 17.403
+      },
+      {
+        "failure": null,
+        "name": "test_failed_imported_iterate_cannot_publish_any_recipient[exact]",
+        "seconds": 1.513
+      },
+      {
+        "failure": null,
+        "name": "test_native_full_coupled_solve_iterates_and_conserves[approximate]",
+        "seconds": 8.949
+      },
+      {
+        "failure": null,
+        "name": "test_failed_imported_iterate_cannot_publish_any_recipient[approximate]",
+        "seconds": 1.517
+      },
+      {
+        "failure": null,
+        "name": "test_native_full_coupled_solve_iterates_and_conserves[finite_difference]",
+        "seconds": 8.975
+      },
+      {
+        "failure": null,
+        "name": "test_failed_imported_iterate_cannot_publish_any_recipient[finite_difference]",
+        "seconds": 1.508
+      },
+      {
+        "failure": null,
+        "name": "test_native_interaction_guard_prevents_eager_fallible_calls[inactive-invalid-input]",
+        "seconds": 19.265
+      },
+      {
+        "failure": null,
+        "name": "test_native_interaction_guard_prevents_eager_fallible_calls[active-valid-input]",
+        "seconds": 1.629
+      },
+      {
+        "failure": null,
+        "name": "test_rank_local_native_failure_in_selected_arm_rolls_back",
+        "seconds": 1.494
+      },
+      {
+        "failure": null,
+        "name": "test_repeated_native_projection_and_compensating_accepted_weight[16]",
+        "seconds": 19.849
+      },
+      {
+        "failure": null,
+        "name": "test_repeated_native_projection_and_compensating_accepted_weight[32]",
+        "seconds": 11.155
+      },
+      {
+        "failure": null,
+        "name": "test_repeated_native_projection_and_compensating_accepted_weight[64]",
+        "seconds": 11.211
+      }
+    ],
+    "checkout_clean": true,
+    "command": [
+      "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/mpiexec",
+      "-n",
+      "2",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim2-env/bin/python",
+      "-B",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/frozen-native-mpi-pytest-driver.py",
+      "candidate-final-v4-matrix-interactions-solve-mpi",
+      "-p",
+      "no:cacheprovider",
+      "-q",
+      "-o",
+      "xfail_strict=true",
+      "tests/python/unit/codegen/test_native_interaction_solve.py",
+      "tests/python/unit/codegen/test_native_interaction_guard.py",
+      "tests/python/unit/codegen/test_native_repeated_interaction_balance.py",
+      "--tb=short"
+    ],
+    "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-proof",
+    "driver_sha256": "a9425c0213a9504669f1a508a718d5d8e3289a222509bf6fb10333afd4f29c1d",
+    "elapsed_seconds": 111.01518991700141,
+    "environment": {
+      "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "OMP_NUM_THREADS": "2",
+      "OMP_PROC_BIND": "false",
+      "POPS_CACHE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-interactions-solve-mpi-cache",
+      "POPS_DIFFUSION_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-interactions-solve-mpi-measurements",
+      "POPS_FIELD_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v4-matrix-interactions-solve-mpi-field-measurements",
+      "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_INCLUDE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v4-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_KEEP_GENERATED": "1",
+      "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "POPS_NATIVE_DIM": "2",
+      "POPS_NATIVE_REQUIRED": "1",
+      "POPS_QUALIFICATION_DIM": "2",
+      "POPS_REQUIRE_NATIVE_TESTS": "1",
+      "POPS_TEST_INTERACTION_BANDS": "2",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONNOUSERSITE": "1",
+      "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+      "REQUIRE_NATIVE_TESTS": "1"
+    },
+    "expected_tests_per_rank": 15,
+    "passed": true,
+    "proofs_equal": true,
+    "ranks": 2,
+    "results": {
+      "errors": 0,
+      "failures": 0,
+      "skips": 0,
+      "tests": 30
+    },
+    "returncode": 0,
+    "runner_sha256": "74c4f7fc950d2cd7dc70367af3b7aa8dfde46d300799231832614467fc94251a",
+    "selection": "Entire declared modules, no filtering, no reduced workload, no process timeout",
+    "source": "2d8ba4ecb6c3b3f469156a78cb12133ebf5fb8dd",
+    "sources_unchanged": true,
+    "tests_per_rank": [
+      15,
+      15
+    ]
+  },
+  "schema": "pops.evidence.transparent-extract.v1"
+}

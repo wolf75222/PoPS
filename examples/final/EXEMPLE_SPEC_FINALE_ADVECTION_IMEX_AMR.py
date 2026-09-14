@@ -48,6 +48,7 @@ from pops.time import (
     StagePoint,
     TimePoint,
 )
+from pops.time import evaluation_partition
 
 
 OUTPUT_ROOT = Path("outputs/advection_imex_amr")
@@ -56,9 +57,16 @@ OUTPUT_ROOT = Path("outputs/advection_imex_amr")
 def _native_output_mode() -> Any:
     """Return the shared-file topology proved by the loaded native backend."""
 
+    import os
+
+    from pops._native_selector import select_native_dimension, selected_native_module
     from pops.output import ParallelMode
     from pops.runtime_environment import runtime_environment_report
 
+    if selected_native_module(required=False) is None:
+        launched = os.environ.get("POPS_NATIVE_DIM")
+        if launched in {"1", "2", "3"}:
+            select_native_dimension(int(launched))
     communicator = runtime_environment_report().get("communicator")
     if communicator == "serial":
         return ParallelMode.SERIAL
@@ -98,7 +106,7 @@ IMEX_CN_HEUN = AdditiveRungeKuttaTableau(
     implicit_c=(Fraction(0), Fraction(1)),
     name="cn-heun-imex",
 )
-HYSTERESIS_MIN_CYCLES = 0
+HYSTERESIS_MIN_CYCLES = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +153,7 @@ class IMEXRuntimeSnapshot:
     macro_step: int
     states: dict[str, tuple[np.ndarray, ...]]
     fields: dict[str, tuple[np.ndarray, ...]]
-    patch_boxes: tuple[tuple[int, ...], ...]
+    patch_boxes: tuple[tuple[int, tuple[int, ...], tuple[int, ...]], ...]
     regrid_count: int
     topology_epoch: int
     program_hash: str
@@ -262,11 +270,12 @@ def _manual_imex_program(core: IMEXAMRAuthoring, *, solve_action: Any) -> Progra
             core.explicit_rate(stage, fields),
             at=point,
         ))
-        implicit_rates.append(program.value(
-            "%sk_imp_%d" % (tag, index),
-            program.apply(linear, stage),
-            at=point,
-        ))
+        with evaluation_partition(program, "implicit"):
+            implicit_rates.append(program.value(
+                "%sk_imp_%d" % (tag, index),
+                program.apply(linear, stage),
+                at=point,
+            ))
 
     final = u0
     for weight, rate in zip(tableau.explicit.b, explicit_rates, strict=True):
@@ -672,8 +681,9 @@ def _snapshot(simulation: Any) -> IMEXRuntimeSnapshot:
             for slot in slots
         },
         patch_boxes=tuple(
-            tuple(int(value) for value in row)
-            for row in simulation.patch_boxes()
+            (int(level), tuple(int(value) for value in lower),
+             tuple(int(value) for value in upper))
+            for level, lower, upper in simulation.patch_boxes()
         ),
         regrid_count=int(regrid.regrid_count),
         topology_epoch=int(regrid.topology_epoch),

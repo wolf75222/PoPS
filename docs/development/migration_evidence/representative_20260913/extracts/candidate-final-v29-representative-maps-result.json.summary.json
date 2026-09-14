@@ -1,0 +1,102 @@
+{
+  "not_a_new_execution": true,
+  "original_path": "candidate-final-v29-representative-maps-result.json",
+  "original_sha256": "e01e567e1e9735937c501ae4e36d15ebe38ba8dbf3083a8eed5def52ad8b8ec1",
+  "receipt_fields": {
+    "case_results": [
+      {
+        "failure": null,
+        "name": "test_physical_property_oracle_uses_true_cell_averages[16-12]",
+        "seconds": 0.017
+      },
+      {
+        "failure": null,
+        "name": "test_physical_property_oracle_uses_true_cell_averages[32-24]",
+        "seconds": 0.001
+      },
+      {
+        "failure": null,
+        "name": "test_physical_property_oracle_uses_true_cell_averages[64-48]",
+        "seconds": 0.001
+      },
+      {
+        "failure": null,
+        "name": "test_native_velocity_moment_commutes_with_reference_restriction[coarse0-fine0]",
+        "seconds": 165.092
+      },
+      {
+        "failure": null,
+        "name": "test_native_velocity_moment_commutes_with_reference_restriction[coarse1-fine1]",
+        "seconds": 0.001
+      },
+      {
+        "failure": null,
+        "name": "test_native_spatial_pullback_commutes_with_reference_restriction[coarse0-fine0]",
+        "seconds": 0.001
+      },
+      {
+        "failure": null,
+        "name": "test_native_spatial_pullback_commutes_with_reference_restriction[coarse1-fine1]",
+        "seconds": 0.001
+      },
+      {
+        "failure": "tests/python/integration/runtime/test_physical_mapping_transfer_properties.py:216: in test_physical_commutation_refuses_changed_x_range\n    with pytest.raises(ValueError, match=\"exactly aligned physical x geometry/topology\"):\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AssertionError: Regex pattern did not match.\nE     Expected regex: 'exactly aligned physical x geometry/topology'\nE     Actual message: 'physical maps require exactly aligned shared coordinate geometry/topology'",
+        "name": "test_physical_commutation_refuses_changed_x_range[0.125-1.125]",
+        "seconds": 2.205
+      },
+      {
+        "failure": "tests/python/integration/runtime/test_physical_mapping_transfer_properties.py:216: in test_physical_commutation_refuses_changed_x_range\n    with pytest.raises(ValueError, match=\"exactly aligned physical x geometry/topology\"):\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AssertionError: Regex pattern did not match.\nE     Expected regex: 'exactly aligned physical x geometry/topology'\nE     Actual message: 'physical maps require exactly aligned shared coordinate geometry/topology'",
+        "name": "test_physical_commutation_refuses_changed_x_range[0.0-1.25]",
+        "seconds": 2.175
+      }
+    ],
+    "checkout_clean": true,
+    "command": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-dim2-env/bin/python",
+      "-B",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/unit-diagnostic-live-runner.py",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-maps-live.json"
+    ],
+    "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-proof",
+    "elapsed_seconds": 171.2431222909945,
+    "environment": {
+      "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "OMP_NUM_THREADS": "2",
+      "OMP_PROC_BIND": "false",
+      "POPS_CACHE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-maps-cache",
+      "POPS_DIFFUSION_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-maps-measurements",
+      "POPS_FIELD_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-maps-field-measurements",
+      "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_INCLUDE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_KEEP_GENERATED": "1",
+      "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "POPS_NATIVE_DIM": "2",
+      "POPS_NATIVE_REQUIRED": "1",
+      "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE": "0",
+      "POPS_QUALIFICATION_DIM": "2",
+      "POPS_REQUIRE_NATIVE_TESTS": "1",
+      "POPS_TEST_INTERACTION_BANDS": "2",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONNOUSERSITE": "1",
+      "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+      "REQUIRE_NATIVE_TESTS": "1"
+    },
+    "expected_tests": 9,
+    "passed": false,
+    "proofs_equal": true,
+    "results": {
+      "errors": 0,
+      "failures": 2,
+      "incomplete_markers": 0,
+      "skips": 0,
+      "tests": 9
+    },
+    "returncode": 1,
+    "runner_sha256": "976c65cf2df670a4ab777d85455bf8089a1776854d032ce06a1b121d4b86be4b",
+    "runner_unchanged": true,
+    "selection": "Entire declared modules, no filtering, no reduced workload, no process timeout",
+    "source": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+    "sources_unchanged": true
+  },
+  "schema": "pops.evidence.transparent-extract.v1"
+}

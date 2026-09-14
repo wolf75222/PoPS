@@ -522,8 +522,13 @@ def test_final_amr_authorities_derive_discrete_context_and_nesting():
         (2, 2),
         (2, 2),
     ]
-    assert all(row.buffer == (3, 3) for row in authorities.hierarchy.plan.transitions)
-    assert all(row.lookahead == 4 for row in authorities.hierarchy.plan.transitions)
+    # The example authors second-order MUSCL and StateTransfer: two halo cells,
+    # a lookahead of one, and an explicit two-cell tagging buffer.
+    nesting = authorities.hierarchy.plan.nesting
+    assert nesting.stencil.minimum_buffer == nesting.transfer.minimum_buffer == (2, 2)
+    assert nesting.stencil.minimum_lookahead == nesting.transfer.minimum_lookahead == 1
+    assert all(row.buffer == (2, 2) for row in authorities.hierarchy.plan.transitions)
+    assert all(row.lookahead == 1 for row in authorities.hierarchy.plan.transitions)
     assert authorities.transfer.layout_plan_id == layout_plan.qualified_id
 
     graph = authorities.tagging.graph.graph

@@ -64,7 +64,8 @@ def test_resolved_amr_program_emits_only_the_amr_install_entry() -> None:
     assert "ctx.set_level(" not in amr_source
     assert "_refresh_level_programs();" in amr_source
     assert "ctx.advance_hierarchy(dt, _advance_level)" in amr_source
-    assert "}, ctx_owner, _refresh_level_programs);" in amr_source
+    assert "}, ctx_owner, [=]() { _refresh_level_programs(); }," in amr_source
+    assert "[=]() { _refresh_level_programs(true); });" in amr_source
     level_advance = amr_source.split("auto _advance_level", 1)[1].split("};", 1)[0]
     assert level_advance.index("_refresh_level_programs();") < level_advance.index(
         "_level_programs->at"
@@ -162,7 +163,7 @@ def test_field_coupled_jacvec_is_materialized_inside_every_amr_level_bundle() ->
     assert "evaluate_with_field_state_at(*" in factory_source
     level_iteration = refresh_source.index("ctx.for_each_program_resource_level([&](int) {")
     bundle_insert = refresh_source.index(
-        "_level_programs->emplace_back(_make_level_program());"
+        "next.emplace_back(_make_level_program());"
     )
     assert level_iteration < bundle_insert
     assert "ctx.set_level(" not in refresh_source

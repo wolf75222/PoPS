@@ -52,6 +52,31 @@ inline std::vector<AnalyticProgram> compile_component_programs(
   return result;
 }
 
+/// Exact integral metadata for the existing separable Gaussian initial provider.
+template <int Dim>
+struct GaussianCellAverageProfile {
+  RealVector<Dim> center{};
+  Real background = Real(0);
+  Real amplitude = Real(1);
+  Real inverse_width = Real(1);
+};
+
+/// Validate input authority before staging. Exact integrals read ordered bounds and cell volume;
+/// sampled point profiles cannot read any discrete input.
+template <int Dim>
+void validate_cell_program_inputs(const std::vector<AnalyticProgram>& programs,
+                                  bool exact_integral) {
+  for (const auto& program : programs) {
+    if (exact_integral && program.required_dimension() != 0)
+      throw std::invalid_argument("analytic cell integral must use bounds of its target rank");
+    const auto view = program.view();
+    for (std::size_t i = 0; i < program.instruction_count(); ++i)
+      if (view.instructions[i].op == AnalyticOp::Input &&
+          (!exact_integral || view.instructions[i].operand > 2 * Dim))
+        throw std::invalid_argument("analytic initial input is outside the cell-bound contract");
+  }
+}
+
 namespace detail {
 
 POPS_HD inline Real gauss_node(int index) {
@@ -76,11 +101,33 @@ template <int Dim>
 struct AnalyticCellAverage {
   AnalyticProgramView program;
   Geometry<Dim> geometry;
+  bool exact_integral = false;
 
   POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (exact_integral) {
+      Real bounds[2 * Dim + 1];
+      Real measure = Real(1);
+      for (int axis = 0; axis < Dim; ++axis) {
+        bounds[2 * axis] = geometry.face_coordinate(axis, index[axis]);
+        bounds[2 * axis + 1] = geometry.face_coordinate(axis, index[axis] + 1);
+        if (!Kokkos::isfinite(bounds[2 * axis]) || !Kokkos::isfinite(bounds[2 * axis + 1]) ||
+            !(bounds[2 * axis + 1] > bounds[2 * axis]))
+          return std::numeric_limits<Real>::quiet_NaN();
+        measure *= geometry.spacing(axis);
+      }
+      bounds[2 * Dim] = measure;
+      const auto result = program.eval_checked(geometry.cell_center(index), bounds, 2 * Dim + 1);
+      return result.valid && measure > Real(0) && Kokkos::isfinite(measure)
+                 ? result.value / measure
+                 : std::numeric_limits<Real>::quiet_NaN();
+    }
     constexpr int sample_count = 1 << (2 * Dim);  // 4^Dim tensor quadrature points.
     constexpr Real normalization = Real(1) / static_cast<Real>(1 << Dim);
     const RealVector<Dim> center = geometry.cell_center(index);
+    // A validated literal has an exact cell average. Summing rounded quadrature weights
+    // would perturb even an unchanged conserved component during initialization/reprojection.
+    if (program.instruction_count == 1 && program.instructions[0].op == AnalyticOp::Constant)
+      return program.eval(center);
     Real integral = Real(0);
     for (int sample = 0; sample < sample_count; ++sample) {
       int encoded = sample;
@@ -258,6 +305,8 @@ struct PreparedAnalyticMaterialization {
   MultiFab<Dim, MemorySpace>* values = nullptr;
   Geometry<Dim> geometry;
   const std::vector<AnalyticProgram>* programs = nullptr;
+  bool exact_integral = false;
+  const GaussianCellAverageProfile<Dim>* gaussian = nullptr;
   bool invalid_target = true;
   std::int64_t materialized_values = 0;
 };
@@ -266,7 +315,11 @@ struct PreparedAnalyticMaterialization {
 template <int Dim, class MemorySpace>
 PreparedAnalyticMaterialization<Dim, MemorySpace> prepare_cell_average_materialization(
     MultiFab<Dim, MemorySpace>& values, const Geometry<Dim>& geometry,
-    const std::vector<AnalyticProgram>& programs) {
+    const std::vector<AnalyticProgram>& programs, bool exact_integral = false) {
+  validate_cell_program_inputs<Dim>(programs, exact_integral);
+  for (int axis = 0; axis < Dim; ++axis)
+    if (!(geometry.spacing(axis) > Real(0)) || !std::isfinite(geometry.spacing(axis)))
+      throw std::invalid_argument("analytic projection requires finite positive cell measures");
   const std::int64_t cells = detail::checked_layout_cell_count(values.layout());
   if (values.ncomp() > 0 && cells > std::numeric_limits<std::int64_t>::max() / values.ncomp())
     throw std::overflow_error("analytic materialization value count exceeds int64_t");
@@ -274,9 +327,29 @@ PreparedAnalyticMaterialization<Dim, MemorySpace> prepare_cell_average_materiali
       .values = &values,
       .geometry = geometry,
       .programs = &programs,
+      .exact_integral = exact_integral,
       .invalid_target = detail::invalid_materialization_target_local(values, geometry, programs),
       .materialized_values = cells * values.ncomp(),
   };
+}
+
+/// Compatibility overload for the historical native Gaussian provider.
+template <int Dim, class MemorySpace>
+PreparedAnalyticMaterialization<Dim, MemorySpace> prepare_cell_average_materialization(
+    MultiFab<Dim, MemorySpace>& values, const Geometry<Dim>& geometry,
+    const std::vector<AnalyticProgram>& programs, const GaussianCellAverageProfile<Dim>* gaussian) {
+  auto prepared = prepare_cell_average_materialization(values, geometry, programs, false);
+  bool invalid_gaussian = gaussian != nullptr && values.ncomp() != 1;
+  if (gaussian) {
+    invalid_gaussian = invalid_gaussian || !(gaussian->inverse_width > Real(0)) ||
+                       !std::isfinite(gaussian->inverse_width) ||
+                       !std::isfinite(gaussian->background) || !std::isfinite(gaussian->amplitude);
+    for (int axis = 0; axis < Dim; ++axis)
+      invalid_gaussian = invalid_gaussian || !std::isfinite(gaussian->center[axis]);
+  }
+  prepared.gaussian = gaussian;
+  prepared.invalid_target = prepared.invalid_target || invalid_gaussian;
+  return prepared;
 }
 
 /// Project one fully locally prepared expression set with phase-gated lane collectives.
@@ -292,12 +365,21 @@ std::int64_t materialize_cell_average(
   long invalid_local = 0;
   std::exception_ptr local_error;
   try {
-    for (std::size_t local = 0; local < values.local_size(); ++local)
-      for (int component = 0; component < values.ncomp(); ++component)
+    for (std::size_t local = 0; local < values.local_size(); ++local) {
+      if (prepared.gaussian) {
+        const auto& profile = *prepared.gaussian;
         invalid_local += static_cast<long>(for_each_cell_reduce_sum(
-            values.box(local),
-            detail::AnalyticInitialFiniteKernel<Dim>{
-                {programs[static_cast<std::size_t>(component)].view(), geometry}}));
+            values.box(local), detail::GaussianCellAverageFiniteKernel<Dim>{
+                                   {geometry, profile.center, profile.background, profile.amplitude,
+                                    profile.inverse_width}}));
+      } else {
+        for (int component = 0; component < values.ncomp(); ++component)
+          invalid_local += static_cast<long>(for_each_cell_reduce_sum(
+              values.box(local), detail::AnalyticInitialFiniteKernel<Dim>{
+                                     {programs[static_cast<std::size_t>(component)].view(),
+                                      geometry, prepared.exact_integral}}));
+      }
+    }
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -314,13 +396,23 @@ std::int64_t materialize_cell_average(
                              std::to_string(invalid) + ")");
   local_error = {};
   try {
-    for (std::size_t local = 0; local < values.local_size(); ++local)
-      for (int component = 0; component < values.ncomp(); ++component)
-        for_each_cell(values.box(local),
-                      detail::AnalyticInitialKernel<Dim>{
-                          values.fab(local).view(),
-                          component,
-                          {programs[static_cast<std::size_t>(component)].view(), geometry}});
+    for (std::size_t local = 0; local < values.local_size(); ++local) {
+      if (prepared.gaussian) {
+        const auto& profile = *prepared.gaussian;
+        for_each_cell(values.box(local), detail::GaussianCellAverageKernel<Dim>{
+                                             values.fab(local).view(),
+                                             {geometry, profile.center, profile.background,
+                                              profile.amplitude, profile.inverse_width}});
+      } else {
+        for (int component = 0; component < values.ncomp(); ++component)
+          for_each_cell(values.box(local),
+                        detail::AnalyticInitialKernel<Dim>{
+                            values.fab(local).view(),
+                            component,
+                            {programs[static_cast<std::size_t>(component)].view(), geometry,
+                             prepared.exact_integral}});
+      }
+    }
     device_fence();
   } catch (...) {
     local_error = std::current_exception();

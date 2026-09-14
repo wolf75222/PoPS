@@ -113,7 +113,9 @@ std::string exact_regrid_contract(const hierarchy::LevelLayoutIdentity<Dim>& sou
       .scalar(clustering.options.min_efficiency);
   for (int axis = 0; axis < Dim; ++axis)
     contract.scalar(clustering.options.min_box_size[static_cast<std::size_t>(axis)])
-        .scalar(clustering.options.max_box_size[static_cast<std::size_t>(axis)]);
+        .scalar(clustering.options.max_box_size[static_cast<std::size_t>(axis)])
+        .scalar(clustering.options.nesting_buffer[static_cast<std::size_t>(axis)])
+        .scalar(static_cast<std::uint8_t>(clustering.options.periodic_axes[axis] ? 1 : 0));
   contract.scalar(static_cast<std::uint64_t>(clustering.options.budget.shards))
       .scalar(static_cast<std::uint64_t>(clustering.options.budget.recursion_nodes))
       .scalar(static_cast<std::uint64_t>(clustering.options.budget.cell_visits))

@@ -3,8 +3,8 @@
 Extracted verbatim from ``pops.codegen.program_codegen`` so the Program -> C++ lowering
 fits the Spec-4 file-size budget.  ``_emit_schedule_wrap`` wraps the statements a node
 emitted in its schedule's due-test guard + policy branch; ``program_emit_ops._emit_op``
-calls it after each op lowers itself.  ``_schedule_due_test`` / ``_split_output_decl`` are
-its helpers.  Reuses the op tables in ``program_emit_kernels``.
+calls it after each op lowers itself. ``_schedule_due_expression`` renders the due-test.
+Reuses the op tables in ``program_emit_kernels``.
 """
 
 from __future__ import annotations
@@ -151,7 +151,8 @@ def _schedule_action_line(action: ScheduleAction, *, v: Any, out: Any, is_aux: b
     )
 
 
-def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) -> None:
+def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any,
+                        *, output_setup_end: int | None = None) -> None:
     """Wrap the C++ statements node @p v emitted (``lines[start:]``) in its schedule's due-test guard
     + policy branch (ADC-458, Spec 3 sections 17-18). Scratch nodes may cache their named output;
     field output freshness belongs to the typed ProviderPack transaction and cannot be raw-cached.
@@ -196,8 +197,14 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
     if is_aux:
         guarded_body = body
     else:
-        decl, guarded_body = _split_output_decl(program, body, out, v)
-        lines.append(decl)
+        if output_setup_end is None or not start < output_setup_end <= start + len(body):
+            raise NotImplementedError(
+                "schedule policy on node %r (op '%s') requires an explicit output storage "
+                "setup boundary for scratch %r" % (v.name, v.op, out)
+            )
+        setup_count = output_setup_end - start
+        lines.extend(body[:setup_count])
+        guarded_body = body[setup_count:]
     comment = ""
     if policy.comment is ScheduleComment.SKIP:
         comment = "  // skip: stale %s off-cadence" % ("aux" if is_aux else "value")
@@ -218,20 +225,3 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
             if statement:
                 lines.append("  " + statement)
     lines.append("}")
-
-
-def _split_output_decl(program: Any, body: Any, out: Any, v: Any) -> tuple:
-    """Split a scratch node's emitted @p body into (declaration_line, rest): the OUTPUT scratch
-    ``out`` must be declared OUTSIDE the policy guard so both branches see it, while the fill stays
-    inside. The op binds its output as its FIRST emitted line
-    (``pops::MultiFab<pops::kNativeDimension>& <out> = ctx.*_scratch(...);``);
-    hoist exactly that one line. Raises if the shape is unexpected (a node whose output is not a
-    freshly-declared scratch cannot use a cache/zero policy through this path)."""
-    decl_prefix = "pops::MultiFab<pops::kNativeDimension>& %s = " % out
-    if not body or not body[0].startswith(decl_prefix):
-        raise NotImplementedError(
-            "schedule policy on node %r (op '%s') needs its output scratch %r declared as its first "
-            "emitted line to hoist it out of the guard; got %r (ADC-458)"
-            % (v.name, v.op, out, body[0] if body else None)
-        )
-    return body[0], body[1:]

@@ -110,6 +110,29 @@ class _EmptyProgramAuthority:
     pass
 
 
+def test_face_evidence_reports_its_originating_topology_after_regrid():
+    class HistoricalAuthority(_AcceptedProgramAuthority):
+        def program_flux_ledger_manifest(self):
+            return [(*row, "space:accepted", 3, 8, 2)
+                    for row in super().program_flux_ledger_manifest()]
+
+        def program_sync_manifest(self):
+            return [(*row, "space:accepted", 3, 8, 2)
+                    for row in super().program_sync_manifest()]
+
+    report = build_program_report(HistoricalAuthority())
+    origin = {
+        "spatial_identity": "space:accepted",
+        "topology_epoch": 3,
+        "materialization_generation": 8,
+        "level_count": 2,
+    }
+    assert report.flux_ledger[0]["origin"] == origin
+    assert report.synchronization[0]["origin"] == origin
+    assert report.temporal_partition["topology_epoch"] == 7
+    assert report.to_dict()["flux_ledger"][0]["origin"] == origin
+
+
 def test_empty_authority_produces_an_honest_empty_report():
     report = build_program_report(_EmptyProgramAuthority())
 
@@ -199,6 +222,22 @@ def test_report_serialization_is_array_free_and_detached():
 
 
 def test_multi_layout_report_preserves_the_common_temporal_partition():
+    from pops.runtime._multi_layout_executor import _CompositeTemporalRestartState
+    from pops.runtime._temporal_restart import TemporalRestartState
+    from pops.time import Clock
+
+    states = {}
+    for layout_id in ("layout-a", "layout-b"):
+        clock = Clock(layout_id)
+        state = TemporalRestartState()
+        state.configure_program({
+            "schema_version": 1, "kind": "pops.temporal-program-schedule",
+            "primary_clock": clock.qualified_id,
+            "clocks": [{"id": clock.qualified_id, "descriptor": clock.to_data(),
+                        "ticks_per_macro": 1}],
+            "subcycles": [], "synchronizations": [], "schedules": [], "histories": [],
+        }, time=0.0, macro_step=0)
+        states[layout_id] = state
     partition = {
         "kind": "global",
         "provider_identity": "pops.temporal-partition.global.v1",
@@ -224,7 +263,7 @@ def test_multi_layout_report_preserves_the_common_temporal_partition():
             flux_ledger=[],
             synchronization=[],
             temporal_partition=partition,
-            temporal={"schema_version": 1, "accepted_step": 0},
+            temporal=states[layout_id].to_data(),
         )
         return layout_program, (block,), report
 
@@ -234,10 +273,14 @@ def test_multi_layout_report_preserves_the_common_temporal_partition():
         child("layout-b", "field"),
     )
     executor.block_names = lambda: ("fluid", "field")
+    executor._temporal_restart_state = _CompositeTemporalRestartState(states)
 
     report = executor.program_report()
 
     assert report.temporal_partition == partition
+    assert tuple(report.temporal["layouts"]) == ("layout-a", "layout-b")
+    assert report.temporal["layouts"] == {key: state.to_data() for key, state in states.items()}
+    assert report.temporal["layouts"]["layout-a"] != report.temporal["layouts"]["layout-b"]
 
 
 if __name__ == "__main__":

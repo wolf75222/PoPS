@@ -52,6 +52,12 @@ field_type& scalar_scratch(std::int64_t value_id, int subslot, const field_type&
                              uniform_ghosts_(ghost_depth));
 }
 
+field_type& retained_scalar(std::int64_t value_id, int program_block, int ncomp,
+                            bool produce) const {
+  return persistent_scratch_(ScratchKind::Scalar, value_id, 0, state(program_block), ncomp,
+                             uniform_ghosts_(1), produce);
+}
+
 field_type alloc_scalar_field(int ncomp = 1, int ghost_depth = 1) const {
   if (ncomp < 1 || ghost_depth < 0)
     throw std::invalid_argument("AMR Program scalar allocation has an invalid shape");
@@ -60,7 +66,13 @@ field_type alloc_scalar_field(int ncomp = 1, int ghost_depth = 1) const {
   return make_scratch_(prototype, ncomp, uniform_ghosts_(ghost_depth));
 }
 
-void rhs_into(int program_block, field_type& stage_state, field_type& rhs, int rate_id) const {
+void install_flux_temporal_families(
+    std::initializer_list<std::tuple<int, int, int, std::string_view>> rows) const {
+  install_flux_temporal_families_(rows);
+}
+
+void rhs_into(int program_block, field_type& stage_state, field_type& rhs, int rate_id,
+              std::string_view temporal_family = {}) const {
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program residual");
@@ -74,7 +86,7 @@ void rhs_into(int program_block, field_type& stage_state, field_type& rhs, int r
   copy_valid_(evaluation.residual, rhs);
   if (!active_attempt_states_.empty())
     attach_active_flux_basis_(runtime_block, evaluation, rhs, rate_id,
-                              FluxBasisProvider::PreparedResidual);
+                              FluxBasisProvider::PreparedResidual, temporal_family);
   count_kernel_();
 }
 
@@ -88,6 +100,7 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
   std::vector<const level_evaluation_type*> evaluations;
   std::vector<field_type> candidates;
   std::vector<field_type> backups;
+  std::vector<std::vector<nd::FaceField<Dim>>> retained_candidates;
   std::string request_contract;
   std::exception_ptr preparation_error;
   try {
@@ -102,6 +115,8 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
     evaluations.assign(requests.size(), nullptr);
     candidates.reserve(requests.size());
     backups.reserve(requests.size());
+    retained_candidates.resize(requests.size());
+    std::set<std::vector<nd::FaceField<Dim>>*> unique_face_outputs;
     std::set<int> unique_runtime_blocks;
     std::set<int> unique_rates;
     std::set<const field_type*> unique_outputs;
@@ -120,6 +135,10 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
           !unique_outputs.insert(request.rhs).second)
         throw std::invalid_argument("AMR Program RHS group contains an unsupported request");
       require_same_field_contract_(*request.state, *request.rhs, "AMR Program grouped residual");
+      if (request.retained_faces != nullptr) {
+        if (!unique_face_outputs.insert(request.retained_faces).second)
+          throw std::invalid_argument("AMR grouped face retention outputs must be unique");
+      }
       ordered.push_back(&request);
       runtime_blocks.push_back(runtime_block);
       points.push_back(boundary_evaluation_point(request.rate_id));
@@ -128,7 +147,9 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
       backups.push_back(rhs_scratch_like(*request.rhs));
       exact.scalar(std::int32_t{runtime_block})
           .scalar(std::int32_t{request.rate_id})
-          .scalar(std::uint32_t{static_cast<unsigned int>(request.flux_only)});
+          .scalar(std::uint32_t{static_cast<unsigned int>(request.flux_only)})
+          .text(request.temporal_family)
+          .presence(request.retained_faces != nullptr);
     }
     request_contract = std::move(exact).release();
   } catch (...) {
@@ -142,6 +163,30 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("amr-program-rhs-group"), std::string_view(request_contract)}}, lane))
     throw std::invalid_argument("AMR Program RHS group requests differ between execution ranks");
+
+  // Materializing the hierarchy may enter collectives. Only inspect it after every rank
+  // has admitted the same requests and agreed which ones retain faces.
+  if (std::any_of(ordered.begin(), ordered.end(),
+                  [](const auto* request) { return request->retained_faces != nullptr; })) {
+    const bool shared = facade_->prepared_amr_multiblock_hierarchy_().has_interface_flux_provider();
+    std::exception_ptr capture_error;
+    try {
+      for (std::size_t index = 0; index < ordered.size(); ++index)
+        if (ordered[index]->retained_faces != nullptr &&
+            (shared || facade_->prepared_amr_block_level_active_mask(runtime_blocks[index],
+                                                                     active_level_) != nullptr))
+          throw std::invalid_argument(
+              "AMR grouped face retention requires Cartesian prepared physical closures "
+              "without shared interfaces or embedded boundaries");
+    } catch (...) {
+      capture_error = std::current_exception();
+    }
+    if (all_reduce_max(capture_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && capture_error)
+        std::rethrow_exception(capture_error);
+      throw std::runtime_error("AMR grouped face retention admission failed collectively");
+    }
+  }
 
   const long active = active_attempt_states_.empty() ? 0L : 1L;
   if (all_reduce_min(active, lane) != all_reduce_max(active, lane))
@@ -179,6 +224,15 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
                                    runtime_blocks[index], points[index], *request.state));
       evaluations[index] = &evaluation;
       copy_valid_(evaluation.residual, candidates[index]);
+      if (request.retained_faces != nullptr) {
+        if (evaluation.integrated_face_fluxes.size() != request.rhs->local_size())
+          throw std::invalid_argument("AMR grouped face retention differs from local patches");
+        for (std::size_t local = 0; local < request.rhs->local_size(); ++local)
+          if (evaluation.integrated_face_fluxes[local].cell_box() != request.rhs->box(local) ||
+              evaluation.integrated_face_fluxes[local].ncomp() != request.rhs->ncomp())
+            throw std::invalid_argument("AMR grouped face retention differs from local fields");
+        retained_candidates[index] = evaluation.integrated_face_fluxes;
+      }
       device_fence();
     } catch (...) {
       evaluation_error = std::current_exception();
@@ -189,6 +243,10 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
       throw std::runtime_error("AMR Program RHS group evaluation failed collectively");
     }
   }
+
+  // Endpoint states are the exact requested stage values. Shared interfaces scatter directly
+  // into these detached residual candidates once, then retain their physical sample separately.
+  auto shared_samples = capture_grouped_shared_flux_(group_id, ordered, points, candidates);
 
   FluxExpressionRegistry candidate_registry;
   std::vector<std::size_t> candidate_counts;
@@ -210,10 +268,11 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
             runtime_blocks[index], points[index], request.rate_id,
             request.flux_only != 0 ? FluxBasisProvider::PreparedDefaultFlux
                                    : FluxBasisProvider::PreparedResidual,
-            evaluations[index]->topology_epoch, evaluations[index]->materialization_generation,
-            *request.rhs, evaluations[index], nullptr, nullptr, interval, candidate_registry,
-            candidate_counts, candidate_identity);
+            request.temporal_family, evaluations[index]->topology_epoch,
+            evaluations[index]->materialization_generation, *request.rhs, evaluations[index],
+            nullptr, nullptr, interval, candidate_registry, candidate_counts, candidate_identity);
       }
+      attach_grouped_shared_flux_(ordered, runtime_blocks, shared_samples, candidate_registry);
     } catch (...) {
       flux_preparation_error = std::current_exception();
     }
@@ -302,10 +361,16 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
     facade_->publish_prepared_amr_block_level_batch(
         std::span<const std::pair<int, int>>(evaluation_targets));
   }
+  // All fallible preparation and residual publication has completed. A later failed group
+  // leaves these detached observations intact, just like its previously published residuals.
+  static_assert(std::is_nothrow_swappable_v<std::vector<nd::FaceField<Dim>>>);
+  for (std::size_t index = 0; index < ordered.size(); ++index)
+    if (ordered[index]->retained_faces != nullptr)
+      ordered[index]->retained_faces->swap(retained_candidates[index]);
 }
 
 void neg_div_flux_default_into(int program_block, field_type& stage_state, field_type& rhs,
-                               int rate_id) const {
+                               int rate_id, std::string_view temporal_family = {}) const {
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program default flux residual");
@@ -319,7 +384,7 @@ void neg_div_flux_default_into(int program_block, field_type& stage_state, field
   copy_valid_(evaluation.residual, rhs);
   if (!active_attempt_states_.empty())
     attach_active_flux_basis_(runtime_block, evaluation, rhs, rate_id,
-                              FluxBasisProvider::PreparedDefaultFlux);
+                              FluxBasisProvider::PreparedDefaultFlux, temporal_family);
   count_kernel_();
 }
 void source_default_into(int program_block, field_type& stage_state, field_type& rhs) const {

@@ -6,6 +6,8 @@ state handles and exact model operator handles; they do not select physics by
 name, boolean flags, hidden defaults, or a preset-specific runtime route.
 """
 
+from .dirk import (BACKWARD_EULER_TABLEAU, DIRK, DiagonallyImplicitRungeKuttaTableau,
+                   IMPLICIT_MIDPOINT_TABLEAU)
 from .euler import FORWARD_EULER_TABLEAU, ForwardEuler
 from .imex import IMEX, IMEX_ARS222_TABLEAU, IMEX_EULER_TABLEAU
 from .multistep import AdamsBashforth, BDF
@@ -30,6 +32,10 @@ globals().pop("strang", None)
 
 __all__ = [
     "AdamsBashforth",
+    "BACKWARD_EULER_TABLEAU",
+    "DIRK",
+    "DiagonallyImplicitRungeKuttaTableau",
+    "IMPLICIT_MIDPOINT_TABLEAU",
     "BDF",
     "ButcherTableau",
     "FORWARD_EULER_TABLEAU",

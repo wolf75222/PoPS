@@ -18,7 +18,7 @@
 
 namespace pops {
 
-/// Persistent workspace and algorithm for one scalar nonlinear field on a uniform exact-ranked
+/// Persistent workspace and algorithm for one ordered nonlinear field vector on a uniform exact-ranked
 /// layout. Residual, JVP and gauge providers are direct callable objects selected before the solve;
 /// every Krylov allocation is completed by construction; no Python callback, registry lookup or
 /// dimension switch occurs in Newton/GMRES.
@@ -30,15 +30,17 @@ class FieldNewtonKrylovWorkspace final {
 
   FieldNewtonKrylovWorkspace(const mesh::BoxArray<Dim>& layout,
                              const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
-                             FieldNewtonOptions options)
+                             FieldNewtonOptions options, int components = 1)
       : options_(options),
-        residual_(layout, distribution, local_rank, 1, Extent<Dim>{}),
-        trial_(layout, distribution, local_rank, 1, Extent<Dim>{}),
-        trial_residual_(layout, distribution, local_rank, 1, Extent<Dim>{}),
-        correction_(layout, distribution, local_rank, 1, Extent<Dim>{}),
-        linear_residual_(layout, distribution, local_rank, 1, Extent<Dim>{}),
-        image_(layout, distribution, local_rank, 1, Extent<Dim>{}),
-        work_(layout, distribution, local_rank, 1, Extent<Dim>{}) {
+        residual_(layout, distribution, local_rank, components, Extent<Dim>{}),
+        trial_(layout, distribution, local_rank, components, Extent<Dim>{}),
+        trial_residual_(layout, distribution, local_rank, components, Extent<Dim>{}),
+        correction_(layout, distribution, local_rank, components, Extent<Dim>{}),
+        linear_residual_(layout, distribution, local_rank, components, Extent<Dim>{}),
+        image_(layout, distribution, local_rank, components, Extent<Dim>{}),
+        work_(layout, distribution, local_rank, components, Extent<Dim>{}) {
+    if (components <= 0)
+      throw std::invalid_argument("field Newton requires a positive component count");
     validate_field_newton_options(options_);
     if (options_.restart > options_.linear_max_iterations)
       throw std::invalid_argument(
@@ -48,7 +50,7 @@ class FieldNewtonKrylovWorkspace final {
       throw std::length_error("field Newton GMRES Hessenberg extent overflows size_t");
     basis_.reserve(restart + 1u);
     for (std::size_t index = 0; index <= restart; ++index)
-      basis_.emplace_back(layout, distribution, local_rank, 1, Extent<Dim>{});
+      basis_.emplace_back(layout, distribution, local_rank, components, Extent<Dim>{});
     hessenberg_.resize((restart + 1u) * restart);
     cosine_.resize(restart);
     sine_.resize(restart);
@@ -199,7 +201,7 @@ class FieldNewtonKrylovWorkspace final {
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
           h_(row, column) = static_cast<Real>(
-              all_reduce_sum(dot_local(work_, basis_[static_cast<std::size_t>(row)]), lane));
+              all_reduce_sum(dot_all_local(work_, basis_[static_cast<std::size_t>(row)]), lane));
           saxpy(work_, -h_(row, column), basis_[static_cast<std::size_t>(row)]);
         }
         h_(column + 1, column) = norm_(work_, lane);
@@ -290,21 +292,20 @@ class FieldNewtonKrylovWorkspace final {
   static void copy_(const field_type& source, field_type& destination) {
     if (source.layout() != destination.layout() ||
         source.distribution() != destination.distribution() ||
-        source.local_rank() != destination.local_rank() || source.ncomp() != 1 ||
-        destination.ncomp() != 1)
+        source.local_rank() != destination.local_rank() || source.ncomp() != destination.ncomp())
       throw std::invalid_argument("field Newton workspace layout differs from its vector");
     lincomb(destination, Real(1), source, Real(0), source);
   }
 
   void authenticate_(const field_type& field, const char* role) const {
     if (field.layout() != residual_.layout() || field.distribution() != residual_.distribution() ||
-        field.local_rank() != residual_.local_rank() || field.ncomp() != 1)
+        field.local_rank() != residual_.local_rank() || field.ncomp() != residual_.ncomp())
       throw std::invalid_argument(std::string("field Newton ") + role +
                                   " differs from its prepared exact-ranked layout");
   }
 
   static Real norm_(const field_type& field, const ExecutionLane& lane) {
-    const Real squared = static_cast<Real>(all_reduce_sum(dot_local(field, field), lane));
+    const Real squared = static_cast<Real>(all_reduce_sum(dot_all_local(field, field), lane));
     if (!finite_(squared))
       return squared;
     if (squared < Real(0))

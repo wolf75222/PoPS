@@ -1,0 +1,9 @@
+{
+  "package_source": "2bb005f0cdf79f3027167a92931090f6c940ea18",
+  "fixture_source": "fb9851db5d71c21cfd69e7cf118e982ce9d1487f",
+  "fixture_root": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "production_sources_byte_unchanged": true,
+  "changed_files": {
+    "tests/python/integration/runtime/test_tensor_transport_composition.py": "73da0f0a1e7997f1b3fddb17dda6a45bf44e493a69081a99a12d1b83aef0a0ce"
+  }
+}

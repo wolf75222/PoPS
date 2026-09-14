@@ -231,6 +231,53 @@ def _resolve_amr_program(
     }
 
 
+def _spatial_coordinate_transforms(program: Any) -> set[int]:
+    """Return exact validated coordinate maps owned by the composite temporal stage."""
+    # A composite temporal stage has an explicit coordinate map Q and an exact
+    # direct conservative commit. These maps are internal to its one synchronized
+    # solve, not physical transformations postponed across a reflux correction.
+    coordinate_transforms: set[int] = set()
+    spatial = [value for value in getattr(program, "_values", ())
+               if getattr(value, "op", None) == "solve_spatial_nonlinear"]
+    if len(spatial) == 1:
+        from pops.time._program.spatial_solve import validate_spatial_request, validate_spatial_commit
+
+        token = spatial[0]
+        validate_spatial_request(program, token)
+        validate_spatial_commit(program, token)
+        coordinate_transforms.update(id(value) for value in token.attrs["residual_block"]
+                                     if value.op == "local_transform")
+
+        def ancestors(value: Any) -> dict[int, Any]:
+            result: dict[int, Any] = {}
+            pending = [value]
+            while pending:
+                current = pending.pop()
+                if id(current) in result:
+                    continue
+                result[id(current)] = current
+                pending.extend(getattr(current, "inputs", ()))
+            return result
+
+        # A numerical seed may be mapped independently of the physical previous
+        # stage. Never exempt a transform that also changes that previous stage.
+        previous = ancestors(token.inputs[0])
+        if len(token.inputs) > 1:
+            coordinate_transforms.update(identity for identity, value in ancestors(token.inputs[1]).items()
+                                         if identity not in previous and value.op == "local_transform")
+        for committed in program._commits.values():
+            if committed.block != token.block:
+                continue
+            endpoint = committed
+            while endpoint.op == "linear_combine" and len(endpoint.inputs) == 1:
+                endpoint = endpoint.inputs[0]
+            if endpoint.op == "local_transform":
+                # validate_spatial_commit authenticated this exact Q(candidate).
+                coordinate_transforms.add(id(endpoint))
+
+    return coordinate_transforms
+
+
 def _uses_local_transform(program: Any) -> bool:
     """Return whether the resolved Program reaches a pointwise local transform.
 
@@ -242,9 +289,11 @@ def _uses_local_transform(program: Any) -> bool:
     advertising a late runtime guard as support.
     """
 
+    coordinate_transforms = _spatial_coordinate_transforms(program)
+
     def walk(values: Any) -> bool:
         for value in values:
-            if getattr(value, "op", None) == "local_transform":
+            if getattr(value, "op", None) == "local_transform" and id(value) not in coordinate_transforms:
                 return True
             if getattr(value, "op", None) == "post_synchronization":
                 continue

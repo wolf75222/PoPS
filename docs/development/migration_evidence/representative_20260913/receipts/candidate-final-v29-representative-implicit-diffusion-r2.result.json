@@ -1,0 +1,31 @@
+{
+  "command": [
+    "/usr/bin/time",
+    "-l",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v29-dim2-env/bin/python",
+    "-B",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v30-proof/examples/migration/r1_workflows.py",
+    "implicit-diffusion",
+    "--work-dir",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-implicit-diffusion-r2-work"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v30-proof",
+  "source_head_before": "6a9c5b20bac2be949fda488ce44942329c902294",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T10:57:44.586461+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2",
+    "POPS_BUILD_CORES": "2",
+    "POPS_HEAVY_MODULE_TU_POOL": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 13.08261370897526,
+  "source_head_after": "6a9c5b20bac2be949fda488ce44942329c902294",
+  "source_status_after": "",
+  "log_sha256": "600497e40adad13b2d90e17b2ea65b95f642e21c7a0010e46ee6e89a74c9edc7"
+}

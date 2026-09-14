@@ -53,36 +53,48 @@ def test_rate_registration_consumes_the_same_flux_handle_and_returns_an_owned_ha
     assert "A" in model.module.list_operators()
 
 
-def test_rate_rejects_a_positive_flux_divergence():
+def test_rate_retains_positive_flux_divergence_for_numerical_resolution():
     model, state, flux = _scalar_advection_model()
 
-    with pytest.raises(ValueError, match=r"must be -div\(F\)"):
-        model.rate("wrong_sign", equation=ddt(state) == div(flux))
+    rate = model.rate("diffusion", equation=ddt(state) == div(flux))
+    [occurrence] = rate.occurrences
+    assert occurrence.coefficient == 1
+    assert occurrence.payload is flux
+    assert occurrence.target is state
+    assert "signed or scaled divergence" in rate.view.legacy_incompatibility()
 
 
 @pytest.mark.parametrize("scale", [-2, Fraction(-1, 3), -0.5])
-def test_rate_rejects_flux_coefficients_the_current_lowering_cannot_represent(scale):
+def test_rate_retains_exact_flux_coefficients_for_numerical_resolution(scale):
     model, state, flux = _scalar_advection_model()
 
-    with pytest.raises(ValueError, match=r"exact unit coefficient.*discard a scale"):
-        model.rate("scaled_flux", equation=ddt(state) == Divergence(flux, scale=scale))
+    rate = model.rate("scaled_flux", equation=ddt(state) == Divergence(flux, scale=scale))
+    [occurrence] = rate.occurrences
+    assert occurrence.coefficient == scale
+    assert type(occurrence.coefficient) is type(scale)
+    assert rate.view.legacy_incompatibility() is not None
 
 
-def test_rate_rejects_source_coefficients_instead_of_silently_dropping_them():
+def test_rate_retains_source_coefficients_instead_of_silently_dropping_them():
     model, state, _ = _scalar_advection_model()
     (u,) = state
     source = model.source("forcing", on=state, value=[0 * u])
     scaled_source = RateExpr([("source", source, Fraction(2, 1))])
 
-    with pytest.raises(ValueError, match=r"exact unit coefficient.*discard scale"):
-        model.rate("scaled_source", equation=ddt(state) == scaled_source)
+    rate = model.rate("scaled_source", equation=ddt(state) == scaled_source)
+    assert rate.occurrences[0].coefficient == Fraction(2, 1)
+    assert rate.occurrences[0].payload is source
+    assert rate.view.legacy_incompatibility() is not None
 
 
-def test_rate_rejects_multiple_divergences_instead_of_collapsing_them_to_one_bool():
+def test_rate_retains_multiple_divergences_instead_of_collapsing_them_to_one_bool():
     model, state, flux = _scalar_advection_model()
 
-    with pytest.raises(ValueError, match="one -div"):
-        model.rate("duplicate_flux", equation=ddt(state) == -div(flux) - div(flux))
+    rate = model.rate("duplicate_flux", equation=ddt(state) == -div(flux) - div(flux))
+    assert len(rate.occurrences) == 2
+    assert rate.occurrences[0].payload is rate.occurrences[1].payload is flux
+    assert rate.occurrences[0].identity != rate.occurrences[1].identity
+    assert rate.view.legacy_incompatibility() is not None
 
 
 def test_physics_model_owner_anchor_is_read_only():

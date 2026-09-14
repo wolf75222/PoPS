@@ -28,6 +28,13 @@ _NATIVE_INTERFACE = "pops.prepared-native-component@2"
 _INCLUDE_DIRECTIVE = re.compile(rb"^[ \t]*#[ \t]*include\b(.*)$", re.MULTILINE)
 
 
+def __getattr__(name: str) -> Any:
+    if name in {"NativeFunction", "NativeDerivative", "NativeInputDomain"}:
+        from . import native_calls
+        return getattr(native_calls, name)
+    raise AttributeError(name)
+
+
 def _nonempty_string(value: Any, *, where: str) -> str:
     if type(value) is not str or not value:
         raise TypeError("%s must be a non-empty exact string" % where)

@@ -1,0 +1,35 @@
+{
+  "command": [
+    "/usr/bin/time",
+    "-l",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v31-dim1-env/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/integration/runtime/test_exact_analytic_initial.py::test_public_exact_initial_preserves_nonzero_far_tails[gaussian-negative-tail]",
+    "tests/python/integration/runtime/test_exact_analytic_initial.py::test_public_exact_initial_preserves_nonzero_far_tails[gaussian-positive-tail]",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v31-representative-analytic1-pytest",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v31-representative-analytic1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v31-proof",
+  "source_head_before": "3eb2722e4618d25f1586632b592ee20b4dc505fa",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T11:36:26.096033+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "1",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2",
+    "POPS_BUILD_CORES": "2",
+    "POPS_HEAVY_MODULE_TU_POOL": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 81.89115374995163,
+  "source_head_after": "3eb2722e4618d25f1586632b592ee20b4dc505fa",
+  "source_status_after": "",
+  "log_sha256": "33cda8c779b20a377665f943d6125632dce0ee753657b8a4d6c88b0122a08f30"
+}

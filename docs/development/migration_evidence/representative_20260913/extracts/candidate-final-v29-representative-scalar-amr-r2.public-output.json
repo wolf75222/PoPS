@@ -1,0 +1,34 @@
+{
+  "data": {
+    "accepted_steps": 128,
+    "artifact": "pops.artifact.v1:sha256:8afaa670d4df0d900028eee697825f894b60a6638bb552d86f182f82bdf9ab09",
+    "checkpoint": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-scalar-amr-r2-work/scalar-amr/accepted_restart.npz",
+    "exit_code": 0,
+    "final_time": 0.4,
+    "fine_patches": 4,
+    "levels": 2,
+    "output_dir": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-scalar-amr-r2-work/scalar-amr",
+    "regrids": 129,
+    "restart_bit_identical": true,
+    "scheme": "inline",
+    "state": {
+      "block": "tracer",
+      "component_integrals": [
+        0.0748708797655905
+      ],
+      "component_means": [
+        0.0748708797655905
+      ],
+      "component_names": [
+        "u"
+      ],
+      "domain_volume": 1.0,
+      "levels": 2,
+      "representation": "composite_amr"
+    },
+    "workflow": "scalar-amr"
+  },
+  "original_log": "candidate-final-v29-representative-scalar-amr-r2.log",
+  "original_log_sha256": "be6a02ed74087c7b0cefbf767ceff806c4558818b99b47e079585fadcd36c762",
+  "schema": "pops.public-cli-output-extract.v1"
+}

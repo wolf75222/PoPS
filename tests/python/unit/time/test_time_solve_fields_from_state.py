@@ -186,7 +186,12 @@ def _initial_state():
 
 def _run_public_step(artifact, initial_state):
     """Run one already-compiled public Program from one exact bind-owned state."""
-    simulation = pops.bind(artifact, initial_state={"plasma": initial_state})
+    from tests.python.support.native_execution_context import artifact_execution_context
+
+    simulation = pops.bind(
+        artifact, initial_state={"plasma": initial_state},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(simulation, t_end=DT, max_steps=1)
     result = np.asarray(simulation.state_global("plasma"), dtype=np.float64)
     return report, result

@@ -1,0 +1,9 @@
+[ 16%] Building CXX object CMakeFiles/pops_benchmark_support.dir/src/benchmark_support.cpp.o
+[ 33%] Linking CXX static library libpops_benchmark_support.a
+[ 33%] Built target pops_benchmark_support
+[ 66%] Building CXX object CMakeFiles/pops_benchmark.dir/src/main.cpp.o
+[ 66%] Building CXX object CMakeFiles/pops_benchmark.dir/src/arith_halo_case.cpp.o
+[ 83%] Building CXX object CMakeFiles/pops_benchmark.dir/src/scalar_mg_case.cpp.o
+[100%] Linking CXX executable bin/pops_benchmark
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib' ignored
+[100%] Built target pops_benchmark

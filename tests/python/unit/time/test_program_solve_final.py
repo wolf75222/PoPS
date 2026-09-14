@@ -59,10 +59,22 @@ def test_preconditioner_provider_is_exact_and_authenticated():
 
 def test_one_public_solve_verb_and_no_parallel_solve_verbs():
     assert tuple(inspect.signature(Program.solve).parameters) == (
-        "self", "problem", "solver", "name")
+        "self", "problem", "solver", "name", "values", "at")
     for legacy in (
         "solve_linear", "solve_local_linear", "solve_local_nonlinear", "solve_residual"):
         assert not hasattr(Program, legacy)
+
+
+@pytest.mark.parametrize("binding", ("values", "at"))
+def test_solve_binding_arguments_require_explicit_problem_binding_authority(binding):
+    program, operator, rhs = _matrix_free()
+    problem = LinearProblem(operator, rhs, nullspace=None)
+    before = program._ir_hash()
+    # The new arguments belong to authored problems that implement bind_program_inputs. They
+    # cannot silently reinterpret an already assembled LinearProblem's equation or evaluation point.
+    with pytest.raises(TypeError, match="values/at require a problem with bind_program_inputs"):
+        program.solve(problem, solver=CG(max_iter=4), **{binding: (rhs,)})
+    assert program._ir_hash() == before
 
 
 def test_krylov_descriptor_owns_every_algorithm_control_and_outcome_is_consumed():

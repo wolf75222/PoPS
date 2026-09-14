@@ -1,0 +1,35 @@
+{
+  "schema": "pops.m3.field-stage-matrix.v1",
+  "results": [
+    {
+      "n": 16,
+      "gradient_L2": 0.04433381649792617,
+      "gradient_Linf": 0.07852335197612081,
+      "diagnostics": {
+        "field.reuses/pops.handle.v1::case:general%20fields::field::electric": 1.0,
+        "field.solves/pops.handle.v1::case:general%20fields::field::electric": 4.0
+      },
+      "artifact_identity": "pops.artifact.v1:sha256:5e1eb890c83d0d42e77e4ce913935424b969be6144004389796a5a8149d94e03"
+    },
+    {
+      "n": 32,
+      "gradient_L2": 0.011092882223760245,
+      "gradient_Linf": 0.021019345322064176,
+      "diagnostics": {
+        "field.reuses/pops.handle.v1::case:general%20fields::field::electric": 1.0,
+        "field.solves/pops.handle.v1::case:general%20fields::field::electric": 4.0
+      },
+      "artifact_identity": "pops.artifact.v1:sha256:4fb06fe72e50d5c669bf1985bb01382e546a677a145b1478a3f4a0b228cd9afd"
+    },
+    {
+      "n": 64,
+      "gradient_L2": 0.0027739270598288973,
+      "gradient_Linf": 0.005349132074877083,
+      "diagnostics": {
+        "field.reuses/pops.handle.v1::case:general%20fields::field::electric": 1.0,
+        "field.solves/pops.handle.v1::case:general%20fields::field::electric": 4.0
+      },
+      "artifact_identity": "pops.artifact.v1:sha256:7f47077b3306ba4a47bcc9eb0c2bfa397d129e5ee9f95a4f20646c8d226a4301"
+    }
+  ]
+}

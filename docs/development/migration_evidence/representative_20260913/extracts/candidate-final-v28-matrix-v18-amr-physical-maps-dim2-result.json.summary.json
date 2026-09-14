@@ -1,0 +1,112 @@
+{
+  "not_a_new_execution": true,
+  "original_path": "candidate-final-v28-matrix-v18-amr-physical-maps-dim2-result.json",
+  "original_sha256": "994dca88f4315ea47d582ec2359b0077287d9a7cfa450f51ce253f508bbae855",
+  "receipt_fields": {
+    "case_results": [
+      {
+        "failure": null,
+        "name": "test_amr_maps_keep_exact_distinct_hierarchy_authorities",
+        "seconds": 3.09
+      },
+      {
+        "failure": null,
+        "name": "test_layout_projection_routes_selected_program_parameters_only",
+        "seconds": 0.046
+      },
+      {
+        "failure": null,
+        "name": "test_native_amr_moment_extension_and_restart",
+        "seconds": 112.065
+      },
+      {
+        "failure": null,
+        "name": "test_amr_integral_failure_restores_all_hierarchies_and_retries",
+        "seconds": 61.828
+      },
+      {
+        "failure": null,
+        "name": "test_amr_internal_maps_resolve_to_native_hierarchy_continuations",
+        "seconds": 3.266
+      },
+      {
+        "failure": null,
+        "name": "test_internal_amr_snapshot_decodes_exact_component_and_anisotropic_axes",
+        "seconds": 0.001
+      },
+      {
+        "failure": null,
+        "name": "test_internal_amr_snapshot_rejects_wrong_native_shape[ranked]",
+        "seconds": 0.001
+      },
+      {
+        "failure": null,
+        "name": "test_internal_amr_snapshot_rejects_wrong_native_shape[truncated]",
+        "seconds": 0.001
+      },
+      {
+        "failure": null,
+        "name": "test_native_amr_internal_maps_preserve_stages_and_restart",
+        "seconds": 112.777
+      },
+      {
+        "failure": null,
+        "name": "test_amr_internal_map_failure_then_shorter_step_reuses_same_instance",
+        "seconds": 79.743
+      },
+      {
+        "failure": null,
+        "name": "test_amr_internal_maps_refuse_recursive_timing_before_compile",
+        "seconds": 2.82
+      }
+    ],
+    "checkout_clean": true,
+    "command": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v28-dim2-env/bin/python",
+      "-B",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/unit-diagnostic-live-runner.py",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v28-matrix-v18-amr-physical-maps-dim2-live.json"
+    ],
+    "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v28-proof",
+    "elapsed_seconds": 377.2682865000097,
+    "environment": {
+      "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "OMP_NUM_THREADS": "2",
+      "OMP_PROC_BIND": "false",
+      "POPS_CACHE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v28-matrix-v18-amr-physical-maps-dim2-cache",
+      "POPS_DIFFUSION_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v28-matrix-v18-amr-physical-maps-dim2-measurements",
+      "POPS_FIELD_QUALIFICATION_EVIDENCE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v28-matrix-v18-amr-physical-maps-dim2-field-measurements",
+      "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v28-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_INCLUDE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v28-dim2-env/lib/python3.12/site-packages/pops/include",
+      "POPS_KEEP_GENERATED": "1",
+      "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+      "POPS_NATIVE_DIM": "2",
+      "POPS_NATIVE_REQUIRED": "1",
+      "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE": "0",
+      "POPS_QUALIFICATION_DIM": "2",
+      "POPS_REQUIRE_NATIVE_TESTS": "1",
+      "POPS_TEST_INTERACTION_BANDS": "2",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONNOUSERSITE": "1",
+      "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+      "REQUIRE_NATIVE_TESTS": "1"
+    },
+    "expected_tests": 11,
+    "passed": true,
+    "proofs_equal": true,
+    "results": {
+      "errors": 0,
+      "failures": 0,
+      "incomplete_markers": 0,
+      "skips": 0,
+      "tests": 11
+    },
+    "returncode": 0,
+    "runner_sha256": "976c65cf2df670a4ab777d85455bf8089a1776854d032ce06a1b121d4b86be4b",
+    "runner_unchanged": true,
+    "selection": "Entire declared modules, no filtering, no reduced workload, no process timeout",
+    "source": "fc1ff0c3563f097971a458b10d5fe45d676ffd22",
+    "sources_unchanged": true
+  },
+  "schema": "pops.evidence.transparent-extract.v1"
+}

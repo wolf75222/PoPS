@@ -154,6 +154,9 @@ struct InterfaceFluxLedgerBudget {
   std::size_t max_payload_terms_per_window = 0;
   std::size_t max_transaction_depth = 1;
   std::string exact_contract;
+  // Scratch for one rollback-only residual evaluation, excluded from accepted window ceilings.
+  std::size_t max_evaluation_fragments = 0;
+  std::size_t max_evaluation_payload_terms = 0;
 
   friend bool operator==(const InterfaceFluxLedgerBudget&,
                          const InterfaceFluxLedgerBudget&) = default;
@@ -238,6 +241,7 @@ class TransactionalInterfaceFluxLedger {
    private:
     friend class TransactionalInterfaceFluxLedger;
     PreparedBegin() = default;
+    bool evaluation_ = false;
     std::vector<std::size_t> savepoints_;
     std::string exact_contract_;
   };
@@ -314,6 +318,8 @@ class TransactionalInterfaceFluxLedger {
   }
 
   PreparedBegin prepare_begin() const {
+    if (evaluation_)
+      throw std::runtime_error("AMR interface-flux evaluation cannot nest another transaction");
     if (savepoints_.size() >= budget_.max_transaction_depth)
       throw std::runtime_error(
           "AMR interface-flux ledger transaction depth exceeds its authenticated budget");
@@ -325,9 +331,22 @@ class TransactionalInterfaceFluxLedger {
     return prepared;
   }
 
+  PreparedBegin prepare_evaluation_begin() const {
+    if (savepoints_.size() != 1)
+      throw std::runtime_error("AMR interface-flux evaluation requires one outer attempt");
+    PreparedBegin prepared = prepare_begin();
+    prepared.evaluation_ = true;
+    ExactContractBuilder exact;
+    exact.text("pops.amr-interface-flux-ledger.rollback-only-evaluation")
+        .bytes(prepared.exact_contract_);
+    prepared.exact_contract_ = std::move(exact).release();
+    return prepared;
+  }
+
   void publish_prepared_begin(PreparedBegin& prepared) noexcept {
     static_assert(std::is_nothrow_swappable_v<decltype(savepoints_)>);
     savepoints_.swap(prepared.savepoints_);
+    evaluation_ = prepared.evaluation_;
   }
 
   void begin() {
@@ -336,6 +355,8 @@ class TransactionalInterfaceFluxLedger {
   }
 
   PreparedCommit prepare_commit() const {
+    if (evaluation_)
+      throw std::runtime_error("AMR interface-flux evaluation is rollback-only");
     if (!in_transaction())
       throw std::runtime_error("AMR interface-flux ledger commit without active transaction");
     PreparedCommit prepared;
@@ -391,6 +412,7 @@ class TransactionalInterfaceFluxLedger {
       throw std::runtime_error("AMR interface-flux ledger rollback without active transaction");
     pending_.resize(savepoints_.back());
     savepoints_.pop_back();
+    evaluation_ = false;
   }
 
   void clear() {
@@ -426,10 +448,16 @@ class TransactionalInterfaceFluxLedger {
     if (!in_transaction())
       throw std::runtime_error("AMR interface-flux accumulation requires an active transaction");
     PreparedAccumulation prepared;
-    if (entries.size() > budget_.max_fragments_per_window -
-                             std::min(pending_.size(), budget_.max_fragments_per_window))
+    const std::size_t first = evaluation_ ? savepoints_.back() : 0;
+    const std::size_t fragments =
+        evaluation_ ? budget_.max_evaluation_fragments : budget_.max_fragments_per_window;
+    const std::size_t payload_terms =
+        evaluation_ ? budget_.max_evaluation_payload_terms : budget_.max_payload_terms_per_window;
+    if (entries.size() > fragments - std::min(pending_.size() - first, fragments))
       throw std::length_error("AMR interface-flux fragment budget exceeded before allocation");
-    std::size_t terms = payload_terms_(pending_);
+    std::size_t terms = 0;
+    for (std::size_t index = first; index < pending_.size(); ++index)
+      terms += payload_terms_(pending_[index].payload);
     for (std::size_t candidate_index = 0; candidate_index < entries.size(); ++candidate_index) {
       const Entry& candidate = entries[candidate_index];
       validate_(candidate.key, candidate.measure);
@@ -442,8 +470,7 @@ class TransactionalInterfaceFluxLedger {
         throw std::runtime_error(
             "AMR interface-flux attempt contains a duplicate stage/clock fragment identity");
       const std::size_t candidate_terms = payload_terms_(candidate.payload);
-      if (candidate_terms > budget_.max_payload_terms_per_window -
-                                std::min(terms, budget_.max_payload_terms_per_window))
+      if (candidate_terms > payload_terms - std::min(terms, payload_terms))
         throw std::length_error(
             "AMR interface-flux payload-term budget exceeded before allocation");
       terms += candidate_terms;
@@ -540,6 +567,9 @@ class TransactionalInterfaceFluxLedger {
         .scalar(static_cast<std::uint64_t>(budget_.max_fragments_per_window))
         .scalar(static_cast<std::uint64_t>(budget_.max_payload_terms_per_window))
         .scalar(static_cast<std::uint64_t>(budget_.max_transaction_depth))
+        .scalar(static_cast<std::uint64_t>(budget_.max_evaluation_fragments))
+        .scalar(static_cast<std::uint64_t>(budget_.max_evaluation_payload_terms))
+        .scalar(evaluation_)
         .scalar(static_cast<std::uint64_t>(savepoints.size()))
         .scalar(static_cast<std::uint64_t>(pending.size()))
         .scalar(static_cast<std::uint64_t>(accepted.size()));
@@ -585,6 +615,14 @@ class TransactionalInterfaceFluxLedger {
     if ((budget.max_fragments_per_window == 0) != (budget.max_payload_terms_per_window == 0))
       throw std::invalid_argument(
           "AMR interface-flux ledger budget must be either inactive or fully bounded");
+    if ((budget.max_evaluation_fragments == 0) != (budget.max_evaluation_payload_terms == 0) ||
+        (budget.max_evaluation_fragments != 0 && budget.max_transaction_depth < 2))
+      throw std::invalid_argument("AMR interface-flux evaluation budget is incomplete");
+    if (budget.max_evaluation_fragments >
+            std::numeric_limits<std::size_t>::max() - budget.max_fragments_per_window ||
+        budget.max_evaluation_payload_terms >
+            std::numeric_limits<std::size_t>::max() - budget.max_payload_terms_per_window)
+      throw std::length_error("AMR interface-flux combined workspace budget exceeds size_t");
   }
 
   void validate_budget_() const { validate_budget_(budget_); }
@@ -603,6 +641,7 @@ class TransactionalInterfaceFluxLedger {
   std::vector<Entry> pending_;
   std::vector<Entry> published_;
   std::vector<std::size_t> savepoints_;
+  bool evaluation_ = false;
 };
 
 }  // namespace pops::amr

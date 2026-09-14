@@ -1,0 +1,35 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/codegen/test_partition_stability.py",
+    "tests/python/unit/codegen/test_tensor_transport_composition.py",
+    "tests/python/unit/codegen/test_diffusion_program.py",
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py",
+    "tests/python/unit/codegen/test_generic_diffusion.py::test_coupled_coefficient_laws_have_all_components_axes_and_runtime_parameters",
+    "tests/python/unit/codegen/test_generic_diffusion.py::test_full_tensor_cross_gradient_uses_the_selected_adjoint_realization",
+    "tests/python/unit/codegen/test_generic_diffusion.py::test_component_transport_diffusion_retains_two_accepted_stages_and_component_faces",
+    "tests/python/unit/codegen/test_amr_tensor_diffusion_codegen.py::test_tensor_composite_implicit_resolves_faces_halos_and_consumed_residual",
+    "tests/python/unit/codegen/test_source_state_storage.py::test_source_only_public_plan_and_exact_module_emit_real_storage",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-composition-source-r1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "91c39d8ec8feafa73c21610307791a1c8ec43dd4",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T12:16:00.717681+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/python:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1"
+  },
+  "exit_code": 1,
+  "elapsed_seconds": 31.52563187497435,
+  "source_head_after": "91c39d8ec8feafa73c21610307791a1c8ec43dd4",
+  "source_status_after": "",
+  "log_sha256": "81607601d6265fe7a9014b0c587955be120bfc3b03357f7ede655b82f329f3f5"
+}

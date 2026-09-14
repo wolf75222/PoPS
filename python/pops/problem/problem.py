@@ -68,7 +68,7 @@ class Case:
         self._frozen = False
         self._snapshot = None
         self._block_registry = BlockRegistry(self.owner_path)
-        self._field_registry = FieldRegistry(self.owner_path)
+        self._field_registry = FieldRegistry(self.owner_path, self.resolve)
         self._time_registry = TimeRegistry()
         self._param_registry = ParamRegistry(self.owner_path)
         self._initial_registry = InitialConditionRegistry(self.owner_path, self.resolve)
@@ -294,6 +294,12 @@ class Case:
         from pops.model import Handle, ParamHandle
         from pops.problem.handles import BlockHandle, FieldHandle
 
+        field_unknown = self._field_registry.resolve_unknown(declaration)
+        if field_unknown is not None:
+            if block is not None:
+                raise TypeError("field-owned unknowns do not accept block=")
+            return field_unknown
+
         case_root_owned = (
             isinstance(declaration, Handle)
             and len(declaration.owner_path.nodes) == 1
@@ -415,9 +421,12 @@ class Case:
                 plan.validate_for(spec["model"], states=spec["states"])
                 self._resolved_numerics_for(block_name)
             except Exception as exc:  # noqa: BLE001 -- aggregate exact numerical refusal
+                from pops.numerics.plan import UnsupportedBalanceRealizationError
+                unsupported = exc if isinstance(exc, UnsupportedBalanceRealizationError) else None
                 report = report.error(
-                    "numerics", "invalid_discretization_plan", str(exc),
-                    context={"block": block_name})
+                    "numerics", unsupported.code if unsupported is not None else "invalid_discretization_plan", str(exc),
+                    context={"block": block_name, **({"phase": unsupported.phase, **unsupported.context}
+                                                    if unsupported is not None else {})})
         return report
 
     def _field_validation_context(self, context: Any) -> Any:

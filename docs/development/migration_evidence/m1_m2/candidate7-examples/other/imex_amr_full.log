@@ -1,0 +1,157 @@
+PoPS release runtime | native_sha256=d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : scalar_advection_imex_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 32 x 32 cells; 2 levels, ratios (2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.4)
+  interval            : 0 -> 6.103515625e-05 (max 1 accepted steps)
+  consumers           : checkpoint @ every(1) -> checkpoints/restart; scientific_output hdf5 @ every(1) -> hdf5/state; scientific_output npz @ every(1) -> npz/state; scientific_output paraview-vtu @ every(1) -> paraview/state
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/imex_amr_full/rejected (explicit-root)
+  artifact identity   : 59c15ffe6cb45a84
+  run identity        : 2469a3f7a7dbc7bf
+================================================================
+PoPS run failed after 0 accepted step(s) at t=0 (0.007181 s)
+  StepAttemptRejected: step attempt rejected during local_linear: solve status=singular (attempt_action=reject, reason_code=0, local_linear failed: singular)
+----------------------------------------------------------------
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : scalar_advection_imex_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 32 x 32 cells; 2 levels, ratios (2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.4)
+  interval            : 0 -> 0.0001 (max 1 accepted steps)
+  consumers           : checkpoint @ every(1) -> checkpoints/restart; scientific_output hdf5 @ every(1) -> hdf5/state; scientific_output npz @ every(1) -> npz/state; scientific_output paraview-vtu @ every(1) -> paraview/state
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/imex_amr_full/manual/accepted (explicit-root)
+  artifact identity   : 4b62dc01506965fe
+  run identity        : 1a435600794707e5
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.0001 / 1
+  elapsed             : 0.952494 s
+  run identity        : 1a435600794707e5
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : scalar_advection_imex_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 32 x 32 cells; 2 levels, ratios (2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.4)
+  interval            : 0.0001 -> 0.0002 (max 1 accepted steps)
+  consumers           : checkpoint @ every(1) -> checkpoints/restart; scientific_output hdf5 @ every(1) -> hdf5/state; scientific_output npz @ every(1) -> npz/state; scientific_output paraview-vtu @ every(1) -> paraview/state
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/imex_amr_full/manual/continuous (explicit-root)
+  artifact identity   : 4b62dc01506965fe
+  run identity        : 84fbc06e4a84df1c
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.0002 / 2
+  elapsed             : 0.730944 s
+  run identity        : 84fbc06e4a84df1c
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : scalar_advection_imex_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 32 x 32 cells; 2 levels, ratios (2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.4)
+  interval            : 0.0001 -> 0.0002 (max 1 accepted steps)
+  consumers           : checkpoint @ every(1) -> checkpoints/restart; scientific_output hdf5 @ every(1) -> hdf5/state; scientific_output npz @ every(1) -> npz/state; scientific_output paraview-vtu @ every(1) -> paraview/state
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/imex_amr_full/manual/restarted (explicit-root)
+  artifact identity   : 4b62dc01506965fe
+  run identity        : 44bdc90614a92abe
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.0002 / 2
+  elapsed             : 0.718802 s
+  run identity        : 44bdc90614a92abe
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : scalar_advection_imex_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 32 x 32 cells; 2 levels, ratios (2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.4)
+  interval            : 0 -> 0.0001 (max 1 accepted steps)
+  consumers           : checkpoint @ every(1) -> checkpoints/restart; scientific_output hdf5 @ every(1) -> hdf5/state; scientific_output npz @ every(1) -> npz/state; scientific_output paraview-vtu @ every(1) -> paraview/state
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/imex_amr_full/preset (explicit-root)
+  artifact identity   : f0c1767b305c6764
+  run identity        : ff8aa14c21e5bb75
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.0001 / 1
+  elapsed             : 0.759012 s
+  run identity        : ff8aa14c21e5bb75
+HDF5: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/imex_amr_full/manual/accepted/hdf5/state/scientific-output-hdf5-s__pops.handle.v1-case-scal__f3ac5afadf2d32258c4fec4945ac8d26a969dc90646cddfc072d473b956a86be6__s000000001__c844368483bf7a9d9f90b0dfcbea0ff99673d937f3cb4b59d6e2b2f0b99bb952.h5
+ParaView: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/imex_amr_full/manual/accepted/paraview/state/scientific-output-paravi__pops.handle.v1-case-scal__fe4f80d70c09d66e7db0d5ca92b18add056307e2474c74a0b64d26057afcb6cf8__s000000001__5776e4cd5a64d260d807ae96ff43df1fa088083ff0ad1f72d1d5b9f22430dd61.vtu
+checkpoint: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/other/imex_amr_full/manual/manual_restart.npz
+bit-identical restart: True
+bit-identical continuation: True
+manual/pops.lib.time.IMEX parity: True
+rejected-attempt rollback: True
+regrid count: 2 -> 3 (topology epoch 2 -> 3)
+report: {"artifact": "pops.artifact.v1:sha256:4b62dc01506965feb6a060c663c2e35279af2a8b200e3d30edf6916b4dd3091b", "checkpoint_restart_bit_identical": true, "continuation_bit_identical": true, "finite": true, "flux_ledger_levels": [0, 1], "levels": 2, "manual_preset_bit_identical": true, "program_accepted_state_bytes": 140717, "program_hash": "11b23ae58ff748efe78dc8b939bf128a28d324bd7bbcc99c895c0e5f7e9607bc", "regrid_count": 2, "regrid_count_after_continuation": 3, "rejected_attempt_error": "step attempt rejected during local_linear: solve status=singular (attempt_action=reject, reason_code=0, local_linear failed: singular)", "rejected_attempt_rollback": true, "runtime_steps": 1, "runtime_steps_after_continuation": 2, "runtime_time": 0.0001, "runtime_time_after_continuation": 0.0002, "synchronization_phases": ["reflux", "average_down"], "tagging_hysteresis_min_cycles": 0, "topology_epoch": 2, "topology_epoch_after_continuation": 3}

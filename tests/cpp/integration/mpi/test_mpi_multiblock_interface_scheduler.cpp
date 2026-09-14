@@ -52,13 +52,14 @@ PopsExecutionContextV1 mpi_execution() {
           "MPI_DOUBLE"};
 }
 
-Field make_field(const std::vector<Box<Dim>>& boxes, int components) {
+Field make_field(const std::vector<Box<Dim>>& boxes, int components, int owner_shift = 0) {
   mesh::BoxArray<Dim> layout(boxes);
   mesh::RankSpace<Dim> ranks(Index<Dim>{}, rank_extent(n_ranks()));
   std::vector<Index<Dim>> owners;
   owners.reserve(boxes.size());
   for (std::size_t box = 0; box < boxes.size(); ++box)
-    owners.push_back(ranks.coordinate(box % static_cast<std::size_t>(n_ranks())));
+    owners.push_back(ranks.coordinate((box + static_cast<std::size_t>(owner_shift)) %
+                                      static_cast<std::size_t>(n_ranks())));
   auto distribution = mesh::Distribution<Dim>::partitioned(layout, ranks, std::move(owners));
   return Field(std::move(layout), std::move(distribution), ranks.coordinate(my_rank()), components,
                Extent<Dim>{});
@@ -254,6 +255,115 @@ int run_mpi_interface_scheduler() {
     }
     if (!rejected || !local_field_is_zero(left_rhs) || !local_field_is_zero(right_rhs) ||
         divergent.evaluation_count(route.identity, 0) != 0)
+      ++failures;
+
+    // A rank-local evaluator exception is already collective for every admitted MPI route,
+    // with unique patch ownership; omitting sample capture must preserve failure/retry behavior.
+    auto failure_left = make_field(left_boxes, 2);
+    auto failure_right = make_field(right_boxes, 2);
+    auto failure_left_rhs = make_field(left_boxes, 2);
+    auto failure_right_rhs = make_field(right_boxes, 2);
+    failure_left.set_val(Real(1));
+    failure_right.set_val(Real(2));
+    failure_left_rhs.set_val(Real(0));
+    failure_right_rhs.set_val(Real(0));
+    Scheduler evaluator_failure;
+    bool inject_failure = true;
+    evaluator_failure.install(
+        route, failure_left, geometry(left_domain, Real(0), Real(1)), failure_right,
+        geometry(right_domain, Real(1), Real(2)), mpi_execution(),
+        [&](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+          if (inject_failure && my_rank() == 1)
+            throw std::runtime_error("injected evaluator failure");
+          for (int value = 0; value < batch.face_count * batch.component_count; ++value)
+            batch.shared_flux[value] = Real(0);
+        });
+    bool evaluator_rejected = false;
+    try {
+      evaluator_failure.apply(point, std::vector<Field*>{&failure_left, &failure_right},
+                              std::vector<Field*>{&failure_left_rhs, &failure_right_rhs});
+    } catch (const std::runtime_error& error) {
+      evaluator_rejected =
+          std::string(error.what()).find("evaluator failed on one or more ranks") !=
+          std::string::npos;
+    }
+    if (all_reduce_sum(evaluator_rejected ? 1L : 0L) != 2 ||
+        !local_field_is_zero(failure_left_rhs) || !local_field_is_zero(failure_right_rhs) ||
+        evaluator_failure.evaluation_count(route.identity, 0) != 0)
+      ++failures;
+    inject_failure = false;
+    evaluator_failure.apply(point, std::vector<Field*>{&failure_left, &failure_right},
+                            std::vector<Field*>{&failure_left_rhs, &failure_right_rhs});
+    if (evaluator_failure.evaluation_count(route.identity, 0) != 1 ||
+        !local_field_is_zero(failure_left_rhs) || !local_field_is_zero(failure_right_rhs))
+      ++failures;
+
+    // Preserve one earned physical sample across an ownership-only transition, while
+    // requiring a different exact live route on every rank after redistribution.
+    auto sample_left = make_field(left_boxes, 2), sample_right = make_field(left_boxes, 2);
+    auto sample_left_rhs = make_field(left_boxes, 2), sample_right_rhs = make_field(left_boxes, 2);
+    sample_left.set_val(Real(1));
+    sample_right.set_val(Real(2));
+    sample_left_rhs.set_val(Real(0));
+    sample_right_rhs.set_val(Real(0));
+    auto sample_route = route;
+    sample_route.identity = "mpi.retained.physical-sampling";
+    sample_route.sampling_provider_identity = "test.artifact-v1/parameters-v1/endpoints-v1";
+    sample_route.affine_mapping_identity = "test.periodic-normal-map";
+    sample_route.right_normal_translation = Real(1);
+    const auto sample_geometry = geometry(left_domain, Real(0), Real(1));
+    const auto sample_evaluator = [](const BoundaryEvaluationPoint&,
+                                     const InterfaceFluxBatch& batch) {
+      for (int value = 0; value < batch.face_count * batch.component_count; ++value)
+        batch.shared_flux[value] = Real(value + 1) / 8;
+    };
+    Scheduler sample_scheduler;
+    sample_scheduler.install(sample_route, sample_left, sample_geometry, sample_right,
+                             sample_geometry, mpi_execution(), sample_evaluator);
+    auto sample_point = point;
+    sample_point.graph_identity = "test.retained-program";
+    sample_point.rate_identity = "shared-rhs/1";
+    sample_point.application_identity = "program-rhs-group";
+    std::vector<InterfaceFluxSample> captured;
+    sample_scheduler.apply(sample_point, std::vector<Field*>{&sample_left, &sample_right},
+                           std::vector<Field*>{&sample_left_rhs, &sample_right_rhs}, nullptr,
+                           &captured);
+    if (captured.size() != 1)
+      throw std::runtime_error("shared capture did not return one physical sample");
+    const auto retained = captured.front();
+    const std::string old_live(sample_scheduler.authenticate_sample(retained));
+    auto redistributed_left = make_field(left_boxes, 2, 1);
+    auto redistributed_right = make_field(left_boxes, 2, 1);
+    auto redistributed = sample_scheduler.rematerialized(
+        1,
+        [&](std::size_t block, int) -> Field& {
+          return block == 0 ? redistributed_left : redistributed_right;
+        },
+        [&](int) { return sample_geometry; });
+    const std::string new_live(redistributed.authenticate_sample(retained));
+    if (old_live == new_live || captured.front().flux_density != retained.flux_density ||
+        captured.front().route_contract != retained.route_contract)
+      ++failures;
+    Scheduler fresh_provider;
+    fresh_provider.install(sample_route, redistributed_left, sample_geometry, redistributed_right,
+                           sample_geometry, mpi_execution(), sample_evaluator);
+    if (fresh_provider.authenticate_sample(retained) != new_live ||
+        fresh_provider.evaluation_count(sample_route.identity, 0) != 0)
+      ++failures;
+    // Altering only the provider parameters must invalidate the retained physical sample.
+    auto altered_route = sample_route;
+    altered_route.sampling_provider_identity += "/other-parameters";
+    Scheduler altered_provider;
+    altered_provider.install(altered_route, redistributed_left, sample_geometry,
+                             redistributed_right, sample_geometry, mpi_execution(),
+                             sample_evaluator);
+    bool altered_rejected = false;
+    try {
+      (void)altered_provider.authenticate_sample(retained);
+    } catch (const std::invalid_argument&) {
+      altered_rejected = true;
+    }
+    if (all_reduce_sum(altered_rejected ? 1L : 0L) != 2)
       ++failures;
 
     Scheduler factory_failure;

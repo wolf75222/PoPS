@@ -201,11 +201,13 @@ def test_leaf_header_selects_a_strict_subset_containing_its_suite(tmp_path):
         assert smoke in targets
 
 
-def test_global_includer_header_selects_all(tmp_path):
-    """A header in the heavy-TU closure escalates to FULL (soundness rule)."""
-    outputs, _ = _run_plan_cpp(tmp_path, ["include/pops/runtime/system.hpp"])
-    assert outputs["cpp_mode"] == "all"
-    assert outputs["cpp_count"] == outputs["cpp_total"]
+def test_runtime_header_selects_its_actual_consumers(tmp_path):
+    """Runtime ownership is shared by its linked consumers, not every test binary."""
+    outputs, targets = _run_plan_cpp(tmp_path, ["include/pops/runtime/system.hpp"])
+    assert outputs["cpp_mode"] == "subset"
+    assert "test_system_abstraction" in targets
+    assert "test_splitting" not in targets
+    assert int(outputs["cpp_count"]) < int(outputs["cpp_total"])
 
 
 def test_nonexistent_header_fails_open_to_all(tmp_path):
@@ -266,7 +268,7 @@ def test_empty_change_selects_none(tmp_path):
 # --------------------------------------------------------------------------- #
 # Duration-balanced C++ matrix partition                                      #
 # --------------------------------------------------------------------------- #
-def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=7):
+def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=11):
     changed = tmp_path / f"changed-{shard_index}.txt"
     changed.write_text("".join(f"{c}\n" for c in changed_lines), encoding="utf-8")
     out = tmp_path / f"gh-out-{shard_index}.txt"
@@ -315,12 +317,12 @@ def test_cpp_target_shards_are_deterministic_duration_balanced_exact_cover():
 
 def test_cpp_duration_catalog_verifier_authenticates_full_inventory(capsys):
     class Args:
-        shard_total = 7
+        shard_total = 11
 
     assert sel.verify_cpp_duration_catalogs(Args()) == 0
     output = capsys.readouterr().out
     assert "C++ targets in both duration catalogs" in output
-    assert "7 shards form an exact cover" in output
+    assert "11 shards form an exact cover" in output
 
 
 @pytest.mark.parametrize(
@@ -404,11 +406,11 @@ def test_cpp_duration_catalog_inventory_authenticates_metadata(
         sel.validate_cpp_duration_catalogs(["test_alpha"])
 
 
-def test_amr_program_header_plan_covers_both_analytic_targets_exactly_once(tmp_path):
-    """The ADC-760 reproducer must produce one authenticated, exact one-shard plan."""
+def test_analytic_header_plan_covers_both_analytic_targets_exactly_once(tmp_path):
+    """Both analytic consumers retain authenticated duration entries and exact coverage."""
     output = _run_plan_cpp_shard(
         tmp_path,
-        ["include/pops/runtime/program/amr_program_context.hpp"],
+        ["include/pops/runtime/analytic/expression.hpp"],
         shard_index=0,
         shard_total=1,
     )
@@ -425,17 +427,17 @@ def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     very_heavy = sorted(target for target, seconds in build.items() if seconds >= 240.0)
     assert len(very_heavy) >= 7, "cold-CI catalog lost the known five-minute AMR TUs"
 
-    shards = sel.cpp_target_shards(very_heavy, 7)
+    shards = sel.cpp_target_shards(very_heavy, 11)
     sel.ci_shard_binpack.verify_partition(very_heavy, shards, excluded=())
     targets_per_shard, larger_shards = divmod(len(very_heavy), len(shards))
     expected_counts = [targets_per_shard] * (len(shards) - larger_shards)
     expected_counts += [targets_per_shard + 1] * larger_shards
     assert sorted(map(len, shards)) == expected_counts
 
-    # Sixteen five-minute TUs force exactly one three-target shard across the seven CI workers.
-    # LPT keeps that unavoidable shard at or below 15.1 modeled minutes, leaving at least 2.9
+    # The heavy-template inventory assigns two or three targets across the eleven CI workers.
+    # LPT plus deterministic exchanges stays below 15.1 modeled minutes, leaving at least 2.9
     # minutes inside the workflow's 18 min build watchdog. CTest alone remains below its 7 min watchdog.
-    full_shards = sel.cpp_target_shards(sorted(build), 7)
+    full_shards = sel.cpp_target_shards(sorted(build), 11)
     weights = sel.cpp_target_weights(sorted(build))
     modeled_loads = [
         sum(weights[target] for target in shard) for shard in full_shards
@@ -462,7 +464,7 @@ def test_cpp_ctest_selection_uses_target_labels_not_gtest_suite_names():
 
 
 def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
-    """Ordinary suites stay source-registered; runtime discovery is explicit and rare."""
+    """Ordinary suites stay source-registered; conditional discovery is explicit and rare."""
     cmake = (REPO_ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert re.search(
         r"gtest_add_tests\(\s*TARGET \$\{ARG_NAME\}\s+"
@@ -471,11 +473,24 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     )
     assert "DISCOVERY_MODE PRE_TEST" not in cmake
 
-    # No current registration opts into the one-include-per-executable escape
-    # hatch.  A future parameterized/generated suite must make that cost and
-    # contract explicit instead of silently restoring the CTest file fanout.
+    # The dimension-conditional diffusion suite and the checkpoint suite whose comments
+    # confuse CMake's TEST parser are the two explicit discovery exceptions. MPI-only
+    # executables use rank launches, so source scanning cannot create stale CTest entries.
     registrations = cmake.split("function(pops_add_test name)", maxsplit=1)[1]
-    assert "RUNTIME_DISCOVERY" not in registrations
+    assert registrations.count("RUNTIME_DISCOVERY") == 2
+    assert re.search(
+        r"pops_add_gtest_suite\(NAME test_amr_program_diffusion\b[^\n]*RUNTIME_DISCOVERY\)",
+        registrations,
+    )
+
+    assert re.search(
+        r"pops_add_gtest_suite\(NAME test_checkpoint_history_policy\b[^\n]*RUNTIME_DISCOVERY\)",
+        registrations,
+    )
+    checkpoint_source = (
+        REPO_ROOT / "tests/cpp/integration/runtime/test_checkpoint_history_policy.cpp"
+    ).read_text(encoding="utf-8")
+    assert "TEST (a second ScopeGuard" in checkpoint_source
 
     runtime_only = re.compile(
         r"\b(?:TEST_P|TYPED_TEST|TYPED_TEST_P|INSTANTIATE_TEST_SUITE_P)\s*\("
@@ -484,8 +499,8 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     conditional_start = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef)\b")
     conditional_end = re.compile(r"^\s*#\s*endif\b")
     offenders = []
-    conditional_offenders = []
-    for source in (REPO_ROOT / "tests/cpp").rglob("*.cpp"):
+    conditional_sources = []
+    for source in sorted((REPO_ROOT / "tests/cpp").rglob("*.cpp")):
         text = source.read_text(encoding="utf-8")
         if runtime_only.search(text):
             offenders.append(source.relative_to(REPO_ROOT).as_posix())
@@ -496,23 +511,31 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
             elif conditional_end.match(line):
                 conditional_depth -= 1
             elif conditional_depth and test_declaration.search(line):
-                conditional_offenders.append(
-                    f"{source.relative_to(REPO_ROOT).as_posix()}:{line_number}"
+                conditional_sources.append(
+                    (source.relative_to(REPO_ROOT).as_posix(), line_number)
                 )
     assert not offenders, (
         "parameterized GoogleTests require an explicit RUNTIME_DISCOVERY suite: "
         + ", ".join(offenders)
     )
-    assert not conditional_offenders, (
-        "conditionally compiled GoogleTests require explicit RUNTIME_DISCOVERY: "
-        + ", ".join(conditional_offenders)
-    )
+    assert conditional_sources == [
+        ("tests/cpp/integration/amr/test_amr_program_diffusion.cpp", 515),
+        ("tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp", 325),
+    ]
+    assert "test_mpi_amr_spatial_norm" in re.search(
+        r"set\(POPS_CPP_MPI_ONLY_TESTS(?P<body>.*?)\n  \)", cmake, re.DOTALL
+    ).group("body")
+    assert "NO_DISCOVER" in re.search(
+        r"function\(pops_add_mpi_gtest_suite name\)(?P<body>.*?)endfunction\(\)",
+        cmake,
+        re.DOTALL,
+    ).group("body")
 
 
-def test_full_cpp_plan_seven_shards_preserves_every_cpp_target(tmp_path):
+def test_full_cpp_plan_eleven_shards_preserves_every_cpp_target(tmp_path):
     outputs = [
         _run_plan_cpp_shard(tmp_path, ["CMakeLists.txt"], shard_index)
-        for shard_index in range(7)
+        for shard_index in range(11)
     ]
     selected = set(outputs[0]["cpp_targets"].split())
     sharded = [output["cpp_shard_targets"].split() for output in outputs]
@@ -533,11 +556,11 @@ def test_full_cpp_plan_seven_shards_preserves_every_cpp_target(tmp_path):
     ), "the generated catalog is a pure-Python architecture test, not a C++ shard"
 
 
-def test_subset_cpp_plan_seven_shards_preserves_selected_union(tmp_path):
+def test_subset_cpp_plan_eleven_shards_preserves_selected_union(tmp_path):
     changed = ["include/pops/numerics/time/schemes/splitting.hpp"]
     outputs = [
         _run_plan_cpp_shard(tmp_path, changed, shard_index)
-        for shard_index in range(7)
+        for shard_index in range(11)
     ]
     selected = set(outputs[0]["cpp_targets"].split())
     flat = [
@@ -673,13 +696,8 @@ def test_compositional_union_prunes_a_mixed_change(tmp_path):
     assert kinds["python/pops/time/_program/api.py"] == "none"
 
 
-def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
-    """A global-includer header anywhere in the change escalates the union to FULL (soundness).
-
-    This is the literal ADC-427 shape: ``system.hpp`` / the program-context headers are global
-    includers (compiled into every target via the runtime TUs and the emitter), so the sound
-    selection is ALL -- the plan spells out the per-file reason for each.
-    """
+def test_runtime_headers_in_mixed_change_union_actual_consumers(tmp_path):
+    """Shared runtime headers keep their real graph impact in a mixed change."""
     changed = [
         "CHANGELOG.md",
         "include/pops/runtime/program/amr_program_context.hpp",
@@ -690,16 +708,15 @@ def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
         "python/pops/time/_program/api.py",
         "tests/python/unit/time/test_time_condensed_schur.py",
     ]
-    outputs, _targets, plan = _run_plan_cpp_explain(tmp_path, changed)
-    assert outputs["cpp_mode"] == "all"
-    assert outputs["cpp_count"] == outputs["cpp_total"]
+    outputs, targets, plan = _run_plan_cpp_explain(tmp_path, changed)
+    assert outputs["cpp_mode"] == "subset"
+    assert "test_splitting" not in targets
     for header in (
         "include/pops/runtime/system.hpp",
         "include/pops/runtime/program/program_context.hpp",
         "include/pops/runtime/program/amr_program_context.hpp",
     ):
-        assert plan["impact"][header]["kind"] == "all"
-        assert plan["impact"][header]["reason"] == "header-in-global-includer-closure"
+        assert plan["impact"][header]["kind"] == "include-impact"
     # The narrow files still carry their real per-file impact in the plan (auditable).
     assert plan["impact"]["src/runtime/system/system_fields.cpp"]["kind"] == (
         "runtime-tu-targets"
@@ -755,6 +772,79 @@ def test_runtime_object_lib_map_uses_central_sources_and_test_consumers():
     assert "src/runtime/amr/amr_system.cpp" in sources["pops_runtime_amr"]
     assert consumers["pops_runtime_system"], "no system consumers parsed"
     assert consumers["pops_runtime_amr"], "no amr consumers parsed"
+
+
+def test_source_closure_follows_private_headers_and_quoted_project_includes(tmp_path, monkeypatch):
+    (tmp_path / "include/pops").mkdir(parents=True)
+    (tmp_path / "src/private").mkdir(parents=True)
+    (tmp_path / "include/pops/operator.hpp").write_text("// operator\n")
+    (tmp_path / "src/main.cpp").write_text('#include "private/owner.hpp"\n')
+    (tmp_path / "src/private/owner.hpp").write_text('#include "pops/operator.hpp"\n')
+    monkeypatch.setattr(graph, "ROOT", tmp_path)
+    monkeypatch.setattr(graph, "INCLUDE_DIR", tmp_path / "include")
+    assert graph.source_closure("src/main.cpp") == {"pops/operator.hpp"}
+
+
+def test_solver_header_selects_direct_and_linked_runtime_consumers(tmp_path):
+    header = "include/pops/numerics/elliptic/interface/field_newton_krylov.hpp"
+    outputs, targets, plan = _run_plan_cpp_explain(tmp_path, [header])
+    assert outputs["cpp_mode"] == "subset"
+    assert "test_prepared_field_solver_nd" in targets
+    assert "test_splitting" not in targets
+    assert "test_polar_fluid_transport" not in targets
+    sources, consumers = sel._runtime_object_lib_map()
+    reached = {
+        lib for lib, paths in sources.items()
+        if any(header in graph.source_dependencies(path) for path in paths)
+    }
+    assert reached, "representative solver must have an out-of-line native consumer"
+    expected = set().union(*(consumers[lib] for lib in reached))
+    serial = {suite["name"] for suite in _serial_suites()}
+    assert expected & serial <= set(targets)
+    assert plan["impact"][header]["kind"] == "include-impact"
+
+
+def test_runtime_source_map_closes_archive_aliases_and_core_dependencies():
+    sources, consumers = sel._runtime_object_lib_map()
+    assert "src/runtime/program/step_transaction.cpp" in sources["pops_runtime_core_objects"]
+    assert consumers["pops_runtime_amr"] <= consumers["pops_runtime_system"]
+    assert consumers["pops_runtime_system"] <= consumers["pops_runtime_core_objects"]
+    assert {"test_amr_tensor_fac_provider", "test_generated_amr_system_block", "test_multiblock_interface_scheduler", "test_amr_composite_poisson", "test_amr_spatial_parity"} <= consumers["pops_runtime_amr"]
+    assert "test_prepared_embedded_boundary_nd" in consumers["pops_runtime_system"]
+
+
+def test_unknown_test_source_mixed_with_known_header_falls_back(tmp_path):
+    outputs, _ = _run_plan_cpp(tmp_path, [
+        "include/pops/numerics/time/schemes/splitting.hpp",
+        "tests/cpp/unit/future/test_new_unregistered.cpp",
+    ])
+    assert outputs["cpp_mode"] == "all"
+
+
+def test_direct_cpp_unit_test_does_not_pull_unrelated_smoke(tmp_path):
+    outputs, targets = _run_plan_cpp(tmp_path, ["tests/cpp/unit/numerics/test_splitting.cpp"])
+    assert outputs["cpp_mode"] == "subset"
+    assert targets == ["test_splitting"]
+
+
+def test_unconsumed_sdk_header_remains_broad_in_mixed_change(tmp_path):
+    outputs, _ = _run_plan_cpp(tmp_path, [
+        "include/pops/numerics/spatial/operators/polar_operator.hpp",
+        "tests/cpp/unit/numerics/test_splitting.cpp",
+    ])
+    assert outputs["cpp_mode"] == "all"
+
+
+def test_source_closure_follows_declared_cpp_support_search_path(tmp_path, monkeypatch):
+    (tmp_path / "include/pops").mkdir(parents=True)
+    (tmp_path / "tests/cpp/support").mkdir(parents=True)
+    (tmp_path / "tests/cpp/unit").mkdir(parents=True)
+    (tmp_path / "include/pops/operator.hpp").write_text("// operator\n")
+    (tmp_path / "tests/cpp/support/test_harness.hpp").write_text("#include <pops/operator.hpp>\n")
+    (tmp_path / "tests/cpp/unit/test_owner.cpp").write_text('#include "test_harness.hpp"\n')
+    monkeypatch.setattr(graph, "ROOT", tmp_path)
+    monkeypatch.setattr(graph, "INCLUDE_DIR", tmp_path / "include")
+    assert graph.source_closure("tests/cpp/unit/test_owner.cpp") == {"pops/operator.hpp"}
 
 
 if __name__ == "__main__":

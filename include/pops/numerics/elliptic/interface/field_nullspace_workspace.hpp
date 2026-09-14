@@ -117,13 +117,15 @@ class FieldNullspaceWorkspace {
           const FieldView<const Real, Dim> coverage_values =
               coverage == nullptr ? FieldView<const Real, Dim>{} : coverage->fab(local).view();
           level_value_(level, 2 * basis_index) += static_cast<double>(for_each_cell_reduce_sum(
-              rhs.box(local), detail::FieldBasisMomentKernel<Dim>{
-                                  values, mask_values, coverage_values, basis.field_component,
-                                  mask != nullptr, coverage != nullptr, measure}));
+              rhs.box(local),
+              detail::FieldBasisMomentKernel<Dim>{
+                  values, mask_values, coverage_values, basis.field_component, mask != nullptr,
+                  coverage != nullptr, measure, basis.component_count}));
           level_value_(level, 2 * basis_index + 1) += static_cast<double>(for_each_cell_reduce_sum(
-              rhs.box(local), detail::FieldBasisAbsMomentKernel<Dim>{
-                                  values, mask_values, coverage_values, basis.field_component,
-                                  mask != nullptr, coverage != nullptr, measure}));
+              rhs.box(local),
+              detail::FieldBasisAbsMomentKernel<Dim>{
+                  values, mask_values, coverage_values, basis.field_component, mask != nullptr,
+                  coverage != nullptr, measure, basis.component_count}));
         }
       }
     }
@@ -171,7 +173,7 @@ class FieldNullspaceWorkspace {
               phi.box(local),
               detail::FieldBasisMomentKernel<Dim>{
                   values, mask_values, coverage_values, basis.field_component, mask != nullptr,
-                  coverage != nullptr, basis.measure(resolved_level)}));
+                  coverage != nullptr, basis.measure(resolved_level), basis.component_count}));
         }
       }
     }
@@ -199,10 +201,11 @@ class FieldNullspaceWorkspace {
               mask == nullptr ? FieldView<const Real, Dim>{} : mask->fab(local).view();
           const FieldView<const Real, Dim> coverage_values =
               coverage == nullptr ? FieldView<const Real, Dim>{} : coverage->fab(local).view();
-          for_each_cell(phi.box(local), detail::ShiftFieldBasisKernel<Dim>{
-                                            phi.fab(local).view(), mask_values, coverage_values,
-                                            basis.field_component, mask != nullptr,
-                                            coverage != nullptr, coefficient});
+          for_each_cell(phi.box(local),
+                        detail::ShiftFieldBasisKernel<Dim>{phi.fab(local).view(), mask_values,
+                                                           coverage_values, basis.field_component,
+                                                           mask != nullptr, coverage != nullptr,
+                                                           coefficient, basis.component_count});
         }
       }
     }
@@ -245,8 +248,6 @@ class FieldNullspaceWorkspace {
     clear_level_values_(gram_value_count_);
     for (std::size_t left = 0; left < basis_count_; ++left) {
       for (std::size_t right = left; right < basis_count_; ++right) {
-        if (plan_.bases[left].field_component != plan_.bases[right].field_component)
-          continue;
         for (std::size_t level = 0; level < layouts_.size(); ++level) {
           const MultiFab<Dim>& layout = *layouts_[level];
           const int resolved_level = first_level_ + static_cast<int>(level);
@@ -272,7 +273,9 @@ class FieldNullspaceWorkspace {
                     detail::FieldBasisGramKernel<Dim>{
                         left_values, right_values, left_coverage_values, right_coverage_values,
                         left_mask != nullptr, right_mask != nullptr, left_coverage != nullptr,
-                        right_coverage != nullptr, plan_.bases[left].measure(resolved_level)}));
+                        right_coverage != nullptr, plan_.bases[left].measure(resolved_level),
+                        plan_.bases[left].field_component, plan_.bases[right].field_component,
+                        plan_.bases[left].component_count, plan_.bases[right].component_count}));
           }
         }
         for (std::size_t level = 0; level < layouts_.size(); ++level)

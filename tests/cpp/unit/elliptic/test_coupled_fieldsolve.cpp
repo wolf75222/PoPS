@@ -49,6 +49,8 @@ void install_execution_lane(NativeSystem& system) {
 }
 
 pops::SystemConfig<Dim> config(int cells) {
+  // System materializes its rank space in the constructor, before the prepared lane is installed.
+  pops::comm_init();
   pops::SystemConfig<Dim> result;
   for (int axis = 0; axis < Dim; ++axis) {
     result.shape[axis] = cells;
@@ -115,7 +117,7 @@ double max_difference(const std::vector<double>& first, const std::vector<double
 }
 
 std::vector<pops::runtime::system::AuxiliaryComponentKey> install_field_outputs(
-    NativeSystem& system, const std::string& owner, const std::string& field) {
+    NativeSystem& system, const std::string& owner, const std::string& field, bool seal = true) {
   using namespace pops::runtime::system;
   AuxiliaryStorageShape<Dim> shape;
   for (int axis = 0; axis < Dim; ++axis)
@@ -136,7 +138,8 @@ std::vector<pops::runtime::system::AuxiliaryComponentKey> install_field_outputs(
       {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::evaluation},
       std::move(outputs),
       {}});
-  system.seal_auxiliary_providers();
+  if (seal)
+    system.seal_auxiliary_providers();
   return keys;
 }
 
@@ -148,6 +151,124 @@ std::vector<std::string> periodic_kinds() {
   return std::vector<std::string>(static_cast<std::size_t>(2 * Dim), "periodic");
 }
 
+struct NativeLoad {
+  std::string key;
+  pops::Real scale;
+  pops::runtime::system::NativeEllipticAttachmentRole role =
+      pops::runtime::system::NativeEllipticAttachmentRole::output_and_rhs;
+  std::string field_slot;
+  std::string binding_identity;
+  bool claim_outputs = false;
+  int gradient_sign = 1;
+};
+
+NativeLoad rhs_only_load(std::string key, pops::Real scale) {
+  NativeLoad result{std::move(key), scale};
+  result.role = pops::runtime::system::NativeEllipticAttachmentRole::rhs_only;
+  result.field_slot = "test.exact-load-plan";
+  result.binding_identity = "test.resolved-provider/" + result.key;
+  return result;
+}
+
+void stage_charge_package(NativeSystem& system, const std::string& block,
+                          const std::vector<pops::runtime::system::AuxiliaryComponentKey>& outputs,
+                          const std::vector<NativeLoad>& loads) {
+  using namespace pops::runtime::system;
+  system.install_block_state_route(block, "test.coupled-fieldsolve/" + block + "/state@1");
+  auto capability = std::make_shared<NativePackageCapabilityState<Dim>>();
+  capability->identity = block;
+  auto installer = NativePackageCapabilityFactory<Dim>::block_installer(capability);
+  system.stage_prepared_native_package(
+      "test.named-load-package/" + block,
+      [capability] {
+        capability->phase = NativeCapabilityPhase::routes_open;
+        capability->close_routes();
+      },
+      [capability, installer, block, outputs, loads] {
+        capability->phase = NativeCapabilityPhase::install_open;
+        ChargeModel model{};
+        model.hyp = pops::nd::ScalarAdvection<Dim>::prepare(pops::RealVector<Dim>{});
+        model.ell.q = pops::Real(1);
+        PreparedNativeSystemPackage<Dim> package;
+        package.consumer_qid = block;
+        package.block = pops::prepare_compiled_system_block<Dim>(
+            *installer, block, block, std::move(model), "minmod", "rusanov", "conservative",
+            "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, true, 1);
+        for (const auto& load : loads) {
+          package.elliptic_attachments.push_back(
+              {load.key, "test.native-rhs/" + block + "/" + load.key,
+               load.key == "fields_from_state" ||
+                       (load.role == NativeEllipticAttachmentRole::rhs_only && !load.claim_outputs)
+                   ? std::vector<AuxiliaryComponentKey>{}
+                   : outputs,
+               load.gradient_sign,
+               [scale = load.scale](const NativeField& state, NativeField& rhs) {
+                 pops::add_scaled_component(state, scale, 0, rhs);
+               },
+               load.role, load.field_slot, load.binding_identity});
+        }
+        installer->commit(std::move(package));
+      },
+      capability, capability);
+}
+
+NativeSystem named_load_system(int cells, const std::vector<std::string>& keys,
+                               const std::vector<double>& coefficients,
+                               const std::vector<NativeLoad>& attachments,
+                               int output_gradient_sign = 1) {
+  NativeSystem system(config(cells));
+  install_execution_lane(system);
+  const auto outputs = install_field_outputs(system, "test.exact-load-output", "potential", false);
+  stage_charge_package(system, "first", outputs, attachments);
+  const std::string slot = "test.exact-load-plan";
+  system.register_configured_field_solver_provider(
+      "cartesian_cg", slot,
+      {"pops.system.cartesian-cg-options@1",
+       {{"abs_tol", 0.0}, {"max_iterations", std::int64_t{200}}, {"rel_tol", 1.0e-8}}});
+  std::vector<std::string> identities;
+  for (const auto& key : keys)
+    identities.push_back("test.resolved-provider/" + key);
+  system.set_field_solver_plan(slot, "test.exact-load.plan@1", "test.exact-load.provider@1",
+                               "test.exact-load-output", "first", "potential", identities,
+                               std::vector<std::string>(keys.size(), "first"), keys, coefficients,
+                               slot);
+  system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
+                                      "test.periodic-cartesian", "test.periodic-cartesian.v1");
+  system.set_field_boundary_plan(slot, periodic_kinds(), periodic_faces(0.0), periodic_faces(0.0),
+                                 periodic_faces(0.0));
+  system.set_field_nullspace(
+      slot, "pops.field-nullspace.operator-topology-derived",
+      {"pops.field-nullspace.operator-topology-derived.options@1", {{"gauge.value", 0.0}}});
+  system.register_elliptic_field("first", "potential", outputs, output_gradient_sign);
+  return system;
+}
+
+void expect_negative_field_gradient(const NativeSystem& system,
+                                    const std::vector<double>& potential, int cells) {
+  for (int axis = 0; axis < Dim; ++axis) {
+    SCOPED_TRACE(axis);
+    const auto gradient = system.auxiliary_component(
+        {"test.exact-load-output", "field", "potential", "gradient-" + std::to_string(axis)});
+    ASSERT_EQ(gradient.size(), potential.size());
+    std::size_t stride = 1;
+    for (int lower_axis = 0; lower_axis < axis; ++lower_axis)
+      stride *= static_cast<std::size_t>(cells);
+    double error = 0;
+    double magnitude = 0;
+    for (std::size_t cell = 0; cell < potential.size(); ++cell) {
+      const int coordinate = static_cast<int>((cell / stride) % static_cast<std::size_t>(cells));
+      const std::size_t minus = coordinate == 0 ? cell + stride * (cells - 1) : cell - stride;
+      const std::size_t plus =
+          coordinate == cells - 1 ? cell - stride * (cells - 1) : cell + stride;
+      const double expected = -0.5 * cells * (potential[plus] - potential[minus]);
+      error = std::max(error, std::abs(gradient[cell] - expected));
+      magnitude = std::max(magnitude, std::abs(expected));
+    }
+    ASSERT_GT(magnitude, 1024.0 * std::numeric_limits<pops::Real>::epsilon());
+    EXPECT_LE(error, 16.0 * std::numeric_limits<pops::Real>::epsilon() * std::max(1.0, magnitude));
+  }
+}
+
 }  // namespace
 
 TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block) {
@@ -156,8 +277,14 @@ TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block)
   const auto second = charge_density(cells, 0.6, 0.25);
   NativeSystem system = two_block_system(cells, first, second);
 
+  const std::string default_slot = "pops.system.default-field";
+  const auto slots_before_materialization = system.field_provider_slots();
+  EXPECT_FALSE(system.field_provider_materialized(default_slot));
+  EXPECT_FALSE(system.field_provider_materialized(default_slot));
+  EXPECT_EQ(system.field_provider_slots(), slots_before_materialization);
   const pops::SolveReport live_report = pops::consume_solve_outcome(system.solve_fields());
   ASSERT_TRUE(live_report.solved()) << live_report.reason;
+  EXPECT_TRUE(system.field_provider_materialized(default_slot));
   const std::vector<double> all_live = system.potential();
   ASSERT_EQ(all_live.size(), cell_count(cells));
 
@@ -223,8 +350,19 @@ TEST(test_coupled_fieldsolve,
       slot, "pops.field-nullspace.operator-topology-derived",
       pops::PreparedProviderOptions{"pops.field-nullspace.operator-topology-derived.options@1",
                                     {{"gauge.value", 0.0}}});
+  const auto unmaterialized_slots = system.field_provider_slots();
+  EXPECT_FALSE(system.field_provider_materialized(slot));
+  EXPECT_FALSE(system.field_provider_materialized(slot));
+  EXPECT_EQ(system.field_provider_slots(), unmaterialized_slots);
+  EXPECT_THROW((void)system.field_provider_materialized("unknown-provider"), std::out_of_range);
   const auto outputs = install_field_outputs(system, "test.qualified-coupled", "potential");
   system.register_elliptic_field("first", "potential", outputs, -1);
+  const auto materialized_slots = system.field_provider_slots();
+  const auto configured_slots = system.configured_field_provider_slots();
+  EXPECT_TRUE(system.field_provider_materialized(slot));
+  EXPECT_TRUE(system.field_provider_materialized(slot));
+  EXPECT_EQ(system.field_provider_slots(), materialized_slots);
+  EXPECT_EQ(system.configured_field_provider_slots(), configured_slots);
   system.set_block_elliptic_field("first", "potential",
                                   [](const NativeField& state, NativeField& rhs) {
                                     pops::add_scaled_component(state, pops::Real(1), 0, rhs);
@@ -278,6 +416,304 @@ TEST(test_coupled_fieldsolve,
   ASSERT_TRUE(override_report.solved()) << override_report.reason;
   EXPECT_GT(max_difference(system.field_potential_global(slot), all_live), 1e-5)
       << "the named prepared plan must consume both qualified simultaneous stage slots";
-  EXPECT_EQ(system.density("first"), first);
-  EXPECT_EQ(system.density("second"), second);
+  // Both gathers are collective; their global vectors belong only to communicator rank zero.
+  const auto first_after = system.density("first");
+  const auto second_after = system.density("second");
+  if (pops::my_rank() == 0) {
+    EXPECT_EQ(first_after, first);
+    EXPECT_EQ(second_after, second);
+  } else {
+    EXPECT_TRUE(first_after.empty());
+    EXPECT_TRUE(second_after.empty());
+  }
+}
+
+TEST(test_coupled_fieldsolve, native_load_keys_use_the_case_output_and_each_exact_coefficient) {
+  constexpr int cells = 24;
+  const auto density = charge_density(cells, 1.0, 0.0);
+  auto system = named_load_system(cells, {"load-a", "load-b"}, {2.0, -0.5},
+                                  {{"load-a", pops::Real(3)}, {"load-b", pops::Real(5)}});
+  ASSERT_NO_THROW(system.finalize_native_packages());
+  system.set_density("first", density);
+  auto reference =
+      named_load_system(cells, {"combined-load"}, {1.0}, {{"combined-load", pops::Real(3.5)}});
+  ASSERT_NO_THROW(reference.finalize_native_packages());
+  reference.set_density("first", density);
+  const std::string slot = "test.exact-load-plan";
+  const auto report = pops::consume_solve_outcome(system.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&system.block_state(0)}));
+  const auto reference_report = pops::consume_solve_outcome(reference.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&reference.block_state(0)}));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  ASSERT_TRUE(reference_report.solved()) << reference_report.reason;
+  const auto potential = system.field_potential_global(slot);
+  EXPECT_LE(max_difference(potential, reference.field_potential_global(slot)), 1.0e-11);
+  EXPECT_GT(max_difference(potential, std::vector<double>(potential.size(), 0.0)), 1.0e-5);
+  EXPECT_THROW((void)system.field_potential_global("load-a"), std::exception);
+  EXPECT_THROW((void)system.field_potential_global("load-b"), std::exception);
+}
+
+TEST(test_coupled_fieldsolve, native_output_alias_requires_one_exact_provider_on_its_block) {
+  auto supported = named_load_system(24, {"electron-load"}, {2.0}, {{"potential", pops::Real(1)}});
+  EXPECT_NO_THROW(supported.finalize_native_packages());
+  auto ambiguous =
+      named_load_system(24, {"load-a", "load-b"}, {2.0, -0.5}, {{"potential", pops::Real(1)}});
+  EXPECT_THROW(ambiguous.finalize_native_packages(), std::exception);
+  EXPECT_THROW((void)ambiguous.block_state(0), std::exception);
+}
+
+TEST(test_coupled_fieldsolve, native_missing_and_foreign_loads_reject_before_block_publication) {
+  auto missing =
+      named_load_system(24, {"load-a", "load-b"}, {2.0, -0.5}, {{"load-a", pops::Real(1)}});
+  EXPECT_THROW(missing.finalize_native_packages(), std::exception);
+  EXPECT_THROW((void)missing.block_state(0), std::exception);
+  auto foreign = named_load_system(24, {"load-a"}, {2.0}, {{"foreign-load", pops::Real(1)}});
+  EXPECT_THROW(foreign.finalize_native_packages(), std::exception);
+  EXPECT_THROW((void)foreign.block_state(0), std::exception);
+}
+
+TEST(test_coupled_fieldsolve, native_default_poisson_attachment_retains_its_prepared_block_rhs) {
+  NativeSystem system(config(24));
+  install_execution_lane(system);
+  stage_charge_package(system, "first", {}, {{"fields_from_state", pops::Real(1)}});
+  ASSERT_NO_THROW(system.finalize_native_packages());
+  system.set_poisson("charge_density", "cartesian_cg");
+  system.set_density("first", charge_density(24, 1.0, 0.0));
+  const auto report = pops::consume_solve_outcome(system.solve_fields());
+  ASSERT_TRUE(report.solved()) << report.reason;
+  const auto potential = system.potential();
+  EXPECT_GT(max_difference(potential, std::vector<double>(potential.size(), 0.0)), 1.0e-5);
+}
+
+TEST(test_coupled_fieldsolve, native_rhs_only_repeated_signed_coefficients_preserve_case_gradient) {
+  constexpr int cells = 24;
+  const auto density = charge_density(cells, 1.0, 0.0);
+  auto system = named_load_system(cells, {"electron-load", "electron-load"}, {2.0, -0.5},
+                                  {rhs_only_load("electron-load", pops::Real(0.5))}, -1);
+  ASSERT_NO_THROW(system.finalize_native_packages());
+  system.set_density("first", density);
+  // Both resolved occurrences use the same density law: (2 - 0.5) * (0.5 rho) = 0.75 rho.
+  auto reference = named_load_system(cells, {"combined-load"}, {1.0},
+                                     {rhs_only_load("combined-load", pops::Real(0.75))}, -1);
+  ASSERT_NO_THROW(reference.finalize_native_packages());
+  reference.set_density("first", density);
+  const std::string slot = "test.exact-load-plan";
+  const auto report = pops::consume_solve_outcome(system.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&system.block_state(0)}));
+  const auto reference_report = pops::consume_solve_outcome(reference.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&reference.block_state(0)}));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  ASSERT_TRUE(reference_report.solved()) << reference_report.reason;
+  const auto potential = system.field_potential_global(slot);
+  EXPECT_LE(max_difference(potential, reference.field_potential_global(slot)), 1.0e-11);
+  EXPECT_GT(max_difference(potential, std::vector<double>(potential.size(), 0.0)), 1.0e-5);
+  expect_negative_field_gradient(system, potential, cells);
+  EXPECT_EQ(system.density("first"), density);
+  EXPECT_THROW((void)system.field_potential_global("electron-load"), std::exception);
+}
+
+TEST(test_coupled_fieldsolve, native_rhs_only_electron_and_ion_blocks_share_one_case_output) {
+  constexpr int cells = 24;
+  const auto electron_density = charge_density(cells, 1.0, 0.0);
+  const auto ion_density = charge_density(cells, 0.6, 0.25);
+  NativeSystem system(config(cells));
+  install_execution_lane(system);
+  const auto outputs = install_field_outputs(system, "test.exact-load-output", "potential", false);
+  stage_charge_package(system, "electron", outputs,
+                       {rhs_only_load("electron-load", pops::Real(1))});
+  stage_charge_package(system, "ion", outputs, {rhs_only_load("ion-load", pops::Real(1))});
+  const std::string slot = "test.exact-load-plan";
+  system.register_configured_field_solver_provider(
+      "cartesian_cg", slot,
+      {"pops.system.cartesian-cg-options@1",
+       {{"abs_tol", 0.0}, {"max_iterations", std::int64_t{200}}, {"rel_tol", 1.0e-8}}});
+  system.set_field_solver_plan(
+      slot, "test.exact-load.plan@1", "test.exact-load.provider@1", "test.exact-load-output",
+      "electron", "potential",
+      {"test.resolved-provider/electron-load", "test.resolved-provider/ion-load"},
+      {"electron", "ion"}, {"electron-load", "ion-load"}, {-1.0, 1.0}, slot);
+  system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
+                                      "test.periodic-cartesian", "test.periodic-cartesian.v1");
+  system.set_field_boundary_plan(slot, periodic_kinds(), periodic_faces(0.0), periodic_faces(0.0),
+                                 periodic_faces(0.0));
+  system.set_field_nullspace(
+      slot, "pops.field-nullspace.operator-topology-derived",
+      {"pops.field-nullspace.operator-topology-derived.options@1", {{"gauge.value", 0.0}}});
+  system.register_elliptic_field("electron", "potential", outputs, -1);
+  ASSERT_NO_THROW(system.finalize_native_packages());
+  system.set_density("electron", electron_density);
+  system.set_density("ion", ion_density);
+
+  std::vector<double> combined(electron_density.size());
+  for (std::size_t index = 0; index < combined.size(); ++index)
+    combined[index] = -electron_density[index] + ion_density[index];
+  auto reference = named_load_system(cells, {"combined-load"}, {1.0},
+                                     {rhs_only_load("combined-load", pops::Real(1))}, -1);
+  ASSERT_NO_THROW(reference.finalize_native_packages());
+  reference.set_density("first", combined);
+  const auto report = pops::consume_solve_outcome(system.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&system.block_state(0), &system.block_state(1)}));
+  const auto reference_report = pops::consume_solve_outcome(reference.solve_fields_from_blocks(
+      slot, std::vector<const NativeField*>{&reference.block_state(0)}));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  ASSERT_TRUE(reference_report.solved()) << reference_report.reason;
+  const auto potential = system.field_potential_global(slot);
+  EXPECT_LE(max_difference(potential, reference.field_potential_global(slot)), 1.0e-11);
+  expect_negative_field_gradient(system, potential, cells);
+  EXPECT_EQ(system.density("electron"), electron_density);
+  EXPECT_EQ(system.density("ion"), ion_density);
+}
+
+TEST(test_coupled_fieldsolve, native_rhs_only_forged_authorities_reject_before_block_publication) {
+  for (int forgery = 0; forgery != 5; ++forgery) {
+    SCOPED_TRACE(forgery);
+    auto load = rhs_only_load("electron-load", pops::Real(1));
+    switch (forgery) {
+      case 0:
+        load.field_slot = "another-field-plan";
+        break;
+      case 1:
+        load.binding_identity = "test.resolved-provider/foreign-load";
+        break;
+      case 2:
+        load.claim_outputs = true;
+        break;
+      case 3:
+        load.gradient_sign = -1;
+        break;
+      case 4:
+        load.role = pops::runtime::system::NativeEllipticAttachmentRole::output_and_rhs;
+        break;
+    }
+    auto system = named_load_system(24, {"electron-load"}, {1.0}, {load}, -1);
+    EXPECT_THROW(system.finalize_native_packages(), std::exception);
+    EXPECT_THROW((void)system.block_state(0), std::exception);
+  }
+}
+
+TEST(test_coupled_fieldsolve,
+     native_output_bearing_wrong_gradient_rejects_before_block_publication) {
+  auto system =
+      named_load_system(24, {"electron-load"}, {1.0}, {{"electron-load", pops::Real(1)}}, -1);
+  EXPECT_THROW(system.finalize_native_packages(), std::exception);
+  EXPECT_THROW((void)system.block_state(0), std::exception);
+}
+
+namespace {
+
+void install_interface_test_boundary(NativeSystem& system, const std::string& block, int ordinal) {
+  std::vector<std::string> faces(2 * Dim, "external");
+  std::vector<std::string> identities;
+  for (int face = 0; face < 2 * Dim; ++face)
+    identities.push_back("test.interface-mask/face/" + std::to_string(face));
+  auto boundary = pops::prepare_hyperbolic_boundary<Dim>(faces, std::vector<double>(2 * Dim, 0.0),
+                                                         identities, {"Scalar"})
+                      .with_omitted_interface_faces({ordinal});
+  system.install_prepared_hyperbolic_boundary(
+      block, "test.interface-mask/boundary@1", 1, "test.coupled-fieldsolve/" + block + "/state@1",
+      std::make_shared<pops::PreparedHyperbolicBoundary<Dim>>(std::move(boundary)));
+}
+
+pops::SystemConfig<Dim> interface_mask_config() {
+  auto result = config(4);
+  result.periodicity.fill(false);
+  return result;
+}
+
+void check_direct_interface_mask_consensus(bool divergent) {
+  NativeSystem system(interface_mask_config());
+  install_execution_lane(system);
+  system.install_block_state_route("first", "test.coupled-fieldsolve/first/state@1");
+  const int ordinal = divergent && pops::my_rank() != 0 ? 1 : 0;
+  install_interface_test_boundary(system, "first", ordinal);
+  ChargeModel model{};
+  model.hyp = pops::nd::ScalarAdvection<Dim>::prepare(pops::RealVector<Dim>{});
+  model.ell.q = pops::Real(1);
+  pops::add_compiled_model(system, "first", std::move(model), "minmod", "rusanov", "conservative",
+                           "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, true);
+  const std::vector<double> density(cell_count(4), 2.0);
+  system.set_density("first", density);
+  const auto saved_density = system.density("first");
+  if (pops::my_rank() == 0)
+    EXPECT_EQ(saved_density, density);
+  const auto lifecycle = system.lifecycle_state();
+  EXPECT_THROW((void)system.auxiliary_registry_contract(), std::logic_error);
+  if (divergent) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      try {
+        system.mark_bound();
+        FAIL() << "rank-divergent interface mask was bound";
+      } catch (const std::runtime_error& error) {
+        EXPECT_NE(std::string(error.what()).find("interface face ownership differs"),
+                  std::string::npos);
+      }
+      EXPECT_EQ(system.lifecycle_state(), lifecycle);
+      EXPECT_EQ(system.n_blocks(), 1);
+      EXPECT_EQ(system.density("first"), saved_density);
+      EXPECT_THROW((void)system.auxiliary_registry_contract(), std::logic_error);
+    }
+    EXPECT_THROW(install_interface_test_boundary(system, "first", ordinal), std::logic_error);
+  } else {
+    ASSERT_NO_THROW(system.mark_bound());
+    EXPECT_EQ(system.lifecycle_state(), "bound");
+    EXPECT_EQ(system.n_blocks(), 1);
+    EXPECT_EQ(system.density("first"), saved_density);
+    EXPECT_NO_THROW((void)system.auxiliary_registry_contract());
+  }
+}
+
+void check_package_interface_mask_consensus(bool divergent) {
+  NativeSystem system(interface_mask_config());
+  install_execution_lane(system);
+  add_charge_block(system, "first");
+  const std::vector<double> density(cell_count(4), 2.0);
+  system.set_density("first", density);
+  const auto saved_density = system.density("first");
+  if (pops::my_rank() == 0)
+    EXPECT_EQ(saved_density, density);
+  stage_charge_package(system, "pending", {}, {});
+  const int ordinal = divergent && pops::my_rank() != 0 ? 1 : 0;
+  install_interface_test_boundary(system, "pending", ordinal);
+  const auto lifecycle = system.lifecycle_state();
+  EXPECT_THROW((void)system.auxiliary_registry_contract(), std::logic_error);
+  if (divergent) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      try {
+        system.finalize_native_packages();
+        FAIL() << "rank-divergent package interface mask was published";
+      } catch (const std::runtime_error& error) {
+        EXPECT_NE(
+            std::string(error.what()).find("native package finalization rolled back collectively"),
+            std::string::npos);
+      }
+      EXPECT_EQ(system.lifecycle_state(), lifecycle);
+      EXPECT_EQ(system.n_blocks(), 1);
+      EXPECT_EQ(system.density("first"), saved_density);
+      EXPECT_THROW((void)system.auxiliary_registry_contract(), std::logic_error);
+    }
+    EXPECT_THROW(install_interface_test_boundary(system, "pending", ordinal), std::runtime_error);
+    EXPECT_THROW(system.install_block_state_route("pending", "substituted-state"),
+                 std::runtime_error);
+  } else {
+    ASSERT_NO_THROW(system.finalize_native_packages());
+    EXPECT_EQ(system.n_blocks(), 2);
+    EXPECT_EQ(system.density("first"), saved_density);
+    ASSERT_NO_THROW(system.mark_bound());
+    EXPECT_EQ(system.lifecycle_state(), "bound");
+  }
+}
+
+}  // namespace
+
+TEST(test_coupled_fieldsolve, exact_interface_masks_bind_collectively_without_partial_publication) {
+  check_direct_interface_mask_consensus(false);
+  if (pops::n_ranks() > 1)
+    check_direct_interface_mask_consensus(true);
+}
+
+TEST(test_coupled_fieldsolve,
+     exact_interface_masks_finalize_collectively_without_partial_publication) {
+  check_package_interface_mask_consensus(false);
+  if (pops::n_ranks() > 1)
+    check_package_interface_mask_consensus(true);
 }

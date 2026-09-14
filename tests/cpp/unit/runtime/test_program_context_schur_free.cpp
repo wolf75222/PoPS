@@ -115,3 +115,65 @@ TEST(ProgramRuntimeStateCadence, MacroStepOverflowFailsBeforeProgramDispatch) {
   EXPECT_DOUBLE_EQ(physical_time, 0.0);
   EXPECT_EQ(macro_step, std::numeric_limits<int>::max());
 }
+
+TEST(ProgramRuntimeStateCadence, SuspendedRegionsKeepOneCadenceAndQualifiedScratchPort) {
+  pops::runtime::program::ProgramRuntimeState<2> state;
+  pops::MultiFab<2> stage;
+  double time = 0.0;
+  int step = 0;
+  int started = 0, finished = 0;
+  state.set_cadence(2, 1, "Regions");
+  state.install_unverified_step([&](double dt) {
+    ++started;
+    EXPECT_DOUBLE_EQ(dt, 0.25);
+    state.suspend_program_map("mapped-half-stage", false, {&stage}, [&] { ++finished; });
+  });
+  EXPECT_EQ(state.advance_cadence_region(time, step, 0.5, "Regions"), "mapped-half-stage");
+  EXPECT_EQ(started, 1);
+  EXPECT_EQ(finished, 0);
+  EXPECT_EQ(step, 0);
+  EXPECT_EQ(state.program_map_fields("mapped-half-stage", false).front(), &stage);
+  EXPECT_THROW(state.advance_cadence_region(time, step, 0.5, "Regions"), std::logic_error);
+  EXPECT_THROW(state.program_map_fields("wrong-stage", false), std::logic_error);
+  EXPECT_THROW(state.program_map_fields("mapped-half-stage", true), std::logic_error);
+  state.release_program_map("mapped-half-stage", false);
+  EXPECT_EQ(state.advance_cadence_region(time, step, 0.5, "Regions"), "mapped-half-stage");
+  EXPECT_EQ(started, 2);
+  EXPECT_EQ(finished, 1);
+  EXPECT_EQ(step, 0);
+  EXPECT_DOUBLE_EQ(time, 0.25);
+  state.release_program_map("mapped-half-stage", false);
+  EXPECT_TRUE(state.advance_cadence_region(time, step, 0.5, "Regions").empty());
+  EXPECT_EQ(finished, 2);
+  EXPECT_EQ(step, 1);
+  EXPECT_DOUBLE_EQ(time, 0.5);
+  EXPECT_FALSE(state.cadence_continuation_);
+  EXPECT_FALSE(state.balance_due_window_active_);
+}
+
+TEST(ProgramRuntimeStateCadence, RejectedContinuationRestoresClockAndDiscardsBorrowedPorts) {
+  pops::runtime::program::ProgramRuntimeState<1> state;
+  pops::MultiFab<1> stage;
+  double time = 2.0;
+  int step = 0;
+  bool reject = true;
+  state.install_unverified_step([&](double) {
+    state.suspend_program_map("intermediate", true, {&stage}, [&] {
+      if (reject)
+        throw std::runtime_error("injected rejection after map");
+    });
+  });
+  EXPECT_EQ(state.advance_cadence_region(time, step, 0.125, "Regions"), "intermediate");
+  state.release_program_map("intermediate", true);
+  EXPECT_THROW(state.advance_cadence_region(time, step, 0.125, "Regions"), std::runtime_error);
+  EXPECT_DOUBLE_EQ(time, 2.0);
+  EXPECT_EQ(step, 0);
+  EXPECT_FALSE(state.cadence_continuation_);
+  EXPECT_FALSE(state.cadence_dispatch_active_);
+  reject = false;
+  EXPECT_EQ(state.advance_cadence_region(time, step, 0.125, "Regions"), "intermediate");
+  state.release_program_map("intermediate", true);
+  EXPECT_TRUE(state.advance_cadence_region(time, step, 0.125, "Regions").empty());
+  EXPECT_DOUBLE_EQ(time, 2.125);
+  EXPECT_EQ(step, 1);
+}

@@ -62,6 +62,7 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
         "params_utilization", "aux", "provider_pack", "has_eigenvalues",
         "wave_speed_provider", "operators", "operator_aliases", "operator_bindings",
         "capabilities", "native_routes", "native_catalog", "abi_requirements",
+        "expressions",
     }
     if set(manifest) != required:
         raise TypeError("ModuleManifest semantic projection received an unsupported schema")
@@ -103,6 +104,7 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
         "operator_bindings": manifest["operator_bindings"],
         "has_eigenvalues": manifest["has_eigenvalues"],
         "wave_speed_provider": manifest["wave_speed_provider"],
+        "expressions": manifest["expressions"],
         "component_digests": {"module": module.module_hash()},
     }, where="model semantic payload")
 
@@ -180,7 +182,10 @@ def _drop_program_presentation(value: Any, program_clock_owner: Any) -> Any:
         ):
             normalized["owner"] = None
         if (
-            set(normalized) == {"schema_version", "name", "partitions"}
+            set(normalized) in (
+                {"schema_version", "name", "partitions"},
+                {"schema_version", "name", "partitions", "identity"},
+            )
             and normalized.get("schema_version") == 1
             and isinstance(normalized.get("partitions"), Mapping)
         ):
@@ -240,7 +245,8 @@ def _semantic_node(row: Any) -> dict[str, Any]:
 
 
 def _space_rows(rows: Any, *, state: bool) -> dict[str, Any]:
-    keys = {"components", "layout", "representation", "centering", "units", "frame", "clock"}
+    keys = {"components", "layout", "representation", "centering", "units", "frame", "clock",
+            "support", "sampling", "value_shape", "domain"}
     if state:
         keys |= {"roles", "storage"}
     return {name: {key: row[key] for key in sorted(keys)} for name, row in rows.items()}

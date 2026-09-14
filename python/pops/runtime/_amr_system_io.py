@@ -123,6 +123,9 @@ class _AmrSystemIO(_AmrSystem):
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
             raise RuntimeError("AMR checkpoint restart transaction is already active")
+        from pops.runtime._continuation_transitions import prepare_receipt
+        prepare_receipt(self, "restart")
+        self._continuation_receipt_before_restart = getattr(self, "_last_continuation_transition_report", None)
         self._checkpoint_restart_python_snapshot = (
             getattr(self, "_last_restart_identity", None),
             getattr(self, "_last_restart_report", None),
@@ -134,6 +137,7 @@ class _AmrSystemIO(_AmrSystem):
             self._s.begin_restart_transaction()
         except BaseException:
             del self._checkpoint_restart_python_snapshot
+            del self._continuation_receipt_before_restart
             raise
 
     def _apply_checkpoint_restart(self, prepared: _PreparedAMRSystemRestart) -> Any:
@@ -143,6 +147,8 @@ class _AmrSystemIO(_AmrSystem):
 
         self._last_restart_report = apply_v3(self, self._s, prepared.codec)
         self._last_restart_identity = prepared.restart_identity
+        from pops.runtime._continuation_transitions import completed_restart_receipt
+        self._prepared_continuation_restart_receipt = completed_restart_receipt(self)
         if prepared.codec.hierarchy_mode == "regrid_on_restart":
             return _AMRRegridRestartEvidence(
                 prepared.restart_identity,
@@ -158,6 +164,9 @@ class _AmrSystemIO(_AmrSystem):
     def _finalize_checkpoint_restart(self) -> None:
         self._s.finalize_restart_transaction()
         del self._checkpoint_restart_python_snapshot
+        self._last_continuation_transition_report = self._prepared_continuation_restart_receipt
+        del self._prepared_continuation_restart_receipt
+        del self._continuation_receipt_before_restart
 
     def _rollback_checkpoint_restart(self) -> None:
         snapshot = self._checkpoint_restart_python_snapshot
@@ -172,6 +181,9 @@ class _AmrSystemIO(_AmrSystem):
                 self._step_controller,
             ) = snapshot
             del self._checkpoint_restart_python_snapshot
+            self._last_continuation_transition_report = self._continuation_receipt_before_restart
+            del self._continuation_receipt_before_restart
+            self.__dict__.pop("_prepared_continuation_restart_receipt", None)
 
     def restart(self, path: Any, *, bit_identical: bool = False) -> Any:
         """Restore the direct AMR engine through the native collective transaction protocol."""

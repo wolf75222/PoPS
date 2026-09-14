@@ -1,0 +1,28 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/group-faces-native-driver.py",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-group-faces-uniform-r2",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/build/migration-native/bin/test_system_interface_core_session",
+    "SystemInterfaceCoreSession.real_physical_group_without_interfaces_retains_transport_and_ghost_hook"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "175b0883f9f0752f5710ef3db2c7d7d6802e400a",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T13:33:15.799022+00:00",
+  "environment": {
+    "CCACHE_DIR": "/Users/romaindespoulain/.cache/pops-migration-20260907-ccache",
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 0.8257643750403076,
+  "source_head_after": "175b0883f9f0752f5710ef3db2c7d7d6802e400a",
+  "source_status_after": "",
+  "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

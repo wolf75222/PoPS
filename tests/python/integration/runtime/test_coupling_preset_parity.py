@@ -103,7 +103,9 @@ def test_state_schema_resolves_permuted_physical_and_custom_roles_uniquely(dimen
     with pytest.raises(ValueError, match="duplicate role token"):
         StateSchema.resolve(tokens + ("density",), dimension=dimension)
     with pytest.raises(ValueError, match="duplicate role token"):
-        StateSchema.resolve(("custom", "custom"), dimension=dimension)
+        StateSchema.resolve((Custom("q1"), Custom("q1")), dimension=dimension)
+    with pytest.raises(ValueError, match="anonymous 'custom' role"):
+        StateSchema.resolve(("custom",), dimension=dimension)
 
     # A schema is generic structural metadata: a partial vector is valid until a
     # fluid-only consumer explicitly requests a complete momentum basis.

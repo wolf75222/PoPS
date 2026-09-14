@@ -33,8 +33,10 @@ loop.
 Named applications such as diocotron, Euler-Poisson, two-fluid, and validation setups live
 in [`adc_cases`](https://github.com/wolf75222/adc_cases). This repository owns the reusable
 solver core, the Python DSL that builds compiled artifacts, and the C++ runtime that
-executes them. The repo-local scientific campaign lives under
-[`verification/`](verification/README.md).
+executes them. Source and native test selection is declared by
+[`tests/test_manifest.toml`](tests/test_manifest.toml); the qualification boundary and
+current unavailable cells are recorded in
+[`docs/development/migration_verification_scope.md`](docs/development/migration_verification_scope.md).
 
 At the mathematical level, a case usually couples conservative states `U` to one or more
 elliptic fields through an owner-qualified provider pack `P`:
@@ -193,28 +195,68 @@ Shorter introductions live in [`docs/tuto`](docs/tuto/README.md).
 
 ## Verification
 
-[`verification/`](verification/README.md) is the repo-local scientific campaign. It is not
-installed in the `pops` wheel. It is distinct from the fast-test catalogue
-(`tests/test_manifest.toml`) and the performance harness (`benchmarks/manifest.toml`).
+The former `verification/` campaign contract is absent from this checkout: its manifest,
+runner, checker, case package, and JSON schemas are not shipped. The seven files retained
+under `tests/python/verification/` are historical orphan records, not an executable
+qualification route. See [migration verification scope](docs/development/migration_verification_scope.md)
+for the decision, missing assets, and replacement gates.
 
-`verification/manifest.toml` is the source of truth (schema `pops.verification.manifest.v1`).
-Catalogued families include infrastructure (`PH`), transport (`TR`), Euler (`EU`), Poisson
-(`PO`), time (`TM`), Euler-Poisson (`CP`), AMR (`AM`), and robustness (`RB`). One native
-artifact compiles exactly one spatial dimension (`POPS_NATIVE_DIM` is `1`, `2`, or `3`).
-
-Validate the manifest and plan a suite without executing cases:
+The repository-owned source and package checks are executable from the repository root:
 
 ```bash
-python scripts/check_verification_manifest.py
-python scripts/run_verification.py \
-  --suite pr \
-  --dimensions 1 \
-  --max-nodes 2 \
-  --output build/verification/plan
+python scripts/check_packaging_manifest.py
 ```
 
-`--suite` is one of `pr`, `nightly`, `weekly`, `release`, `two_node`. `--max-nodes > 2` is
-refused. The planner writes `plan.json`; it does not compile, bind, or launch jobs.
+The names `run_m3_gate.py` and `run_m4_gate.py` refer to historical gates from the older ADC-679-era
+gate family: `run_m3_gate.py` checks the ADC-672--678 AMR/multi-layout matrix, while `run_m4_gate.py`
+checks the ADC-679--687 runtime/I/O matrix. Their `--check-only` modes inspect those historical
+manifests; they do not define the current migration M3 fields or M4 interactions.
+
+The current migration fixtures are organized by contract. M3 field-problem and field-observation
+coverage includes `tests/python/integration/runtime/test_public_field_problem.py`,
+`test_public_field_reuse.py`, and `test_public_field_consumers.py`. M4 interaction and typed-native
+call coverage includes `tests/python/unit/codegen/test_joint_interaction_codegen.py`,
+`test_native_interaction_matrix.py`, `test_native_call_compiled.py`, and
+`tests/python/integration/native_loader/test_external_component_package.py`. The contract and
+acceptance boundaries are recorded in
+[`migration M3-M6 contract`](docs/development/migration_m3_m6_contract.md) and the
+[migration verification scope](docs/development/migration_verification_scope.md).
+
+The C++ native gate uses the checked-in presets and CTest targets:
+
+```bash
+cmake --preset serial
+cmake --build --preset serial
+ctest --preset serial --output-on-failure
+```
+
+Use the `mpi` preset only when MPI and parallel HDF5 are part of the declared matrix:
+
+```bash
+cmake --preset mpi
+cmake --build --preset mpi
+ctest --preset mpi --output-on-failure
+```
+
+For an installed Python artifact, build exactly one dimension and add `--mpi` only for a
+declared MPI cell:
+
+```bash
+bash scripts/build_python.sh --dim 2
+# bash scripts/build_python.sh --dim 2 --mpi
+```
+
+These commands establish source/package consistency, compile and artifact health, and selected
+runtime evidence. Build, package, and `doctor()` authentication does not prove that every bind or
+scientific workflow executes. A qualification result requires the complete declared M3-M8
+matrix, including the current migration fixtures, at one exact source/native/wheel provenance
+with its numerical, restart, output, collective, and configuration oracles retained. The
+historical AMR/multi-layout and runtime/I/O scripts are not substitutes for those current M3/M4
+fixtures. `scripts/run_final_gate.py` is the available release-gate entry point for a selected
+dimension and wheel; a successful source or smoke check alone never closes an unrun matrix cell.
+The separate benchmark protocol is declared in
+`benchmarks/manifest.toml`; source, unit, and operation-count checks do not establish a
+performance claim. No local CPU or MPI result establishes GPU or cluster support.
 
 ## Documentation
 
@@ -223,7 +265,8 @@ refused. The planner writes `plan.json`; it does not compile, bind, or launch jo
   normative Python/C++ contract and acceptance matrix.
 - [Algorithms](docs/ALGORITHMS.md): numerical methods and implementation notes.
 - [Tutorials](docs/tuto/README.md): linear introductions built with the public API.
-- [Verification](verification/README.md): scientific campaign layout, manifest, and case contract.
+- [Migration verification scope](docs/development/migration_verification_scope.md): current
+  executable gates, unavailable campaign assets, and M8 retirement boundary.
 - [Versioning](docs/VERSIONING.md): public API scope and release process.
 - [Documentation quality](docs/DOC_QUALITY.md): maintained corpus and conformance rules.
 - [Contributing](CONTRIBUTING.md): build, test, review, and PR workflow.

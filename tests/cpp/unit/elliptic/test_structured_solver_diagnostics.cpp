@@ -204,7 +204,9 @@ TEST(test_structured_solver_diagnostics,
   const pops::SolveReport report = solver.solve();
   EXPECT_EQ(report.status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(report.action, pops::SolveAction::kFailRun);
-  EXPECT_EQ(report.reason, "composite_fac_non_finite_initial_residual");
+  // Static FAC validates its affine forcing R(0) before inspecting the candidate.
+  EXPECT_EQ(report.reason, "composite_fac_non_finite_forcing");
+  EXPECT_EQ(report.evaluations, 1);
   expect_report_is_structured(report, solver.maximum_iterations());
   EXPECT_EQ(report.reference_residual_norm, pops::Real(0));
   EXPECT_EQ(report.residual_norm, pops::Real(0));

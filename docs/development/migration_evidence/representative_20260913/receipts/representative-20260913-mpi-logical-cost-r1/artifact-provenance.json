@@ -1,0 +1,17 @@
+{
+  "plan_sha256": "9e54413c8f6597a0294ea1854ead0633a6e19ea038f8786eaceda4ba09fa6e82",
+  "native_binary_source": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+  "new_exporter_sha256": "3dd00f178802b555012710962cd259b64017f61c75aac9dfbe628b2284218672",
+  "inputs": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-pmpi-finalize-export.c": "434cdcc6dd01a304e9b7e89c877ba8134d9344ed767a369e789fe05de930b004",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-pmpi-summarize.py": "aa33ed2922ad98028de374980da728b94093097b0d3eb79b1a66d8b9a75264b5",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/build/libpops_mpi_probe.dylib": "a0716680baf8046db7b612302aac7cbdec64e1f440d14c13a8d4c05435cc5238",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/pops_mpi_probe.c": "4f06b15f2611f030c2122df2b871057029c408a31f624eb5b9cefbd4e00c0579",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/manifest.json": "39914645565deac2abacc6c23a938acd9fc58c0c442850fe9032269f71a67a8c",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-pmpi-source-coverage.json": "683db8b51e93c41f02b49143f287edc5238983af8591be085e47e266d0ec3ab9",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/build/migration-native/bin/test_amr_layout_transfer": "db7c86982e968cdbd492eced7f3d73ac81b57fb749d8741afc3c5130cd570412",
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/lib/libmpi.12.dylib": "45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7",
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/lib/libpmpi.12.dylib": "380e010b719611322679108adf31b26abf3064acdb749e47c4f6ff83971f74c3"
+  },
+  "primary_review": "Astra reviewed actual new exporter/summarizer and existing PMPI producer; logical API operand/posting scope, not wiretraffic. New native compile not performed; exact previously validated binary."
+}

@@ -144,9 +144,8 @@ def install_runtime_lane(sim, components):
 
 def finalize_provider_pack(sim):
     """Materialize all staged PreparedSystemBlocks through their one sealed ProviderPack."""
-    if sim._pending_native_packages:
-        sim._s._finalize_native_packages()
-        sim._pending_native_packages = 0
+    sim._batch_native_packages = False
+    sim._commit_pending_native_packages()
 
 
 def make_system(n, ne0, ni0, ng0):
@@ -162,6 +161,8 @@ def make_system(n, ne0, ni0, ng0):
                   for name in ("electrons", "ions", "neutrals")]
     sim = System(system_config_2d(n))
     install_runtime_lane(sim, components)
+    # The exact auxiliary registry seals once for the complete component set.
+    sim._batch_native_packages = True
     for name, component, _artifact in components:
         sim.add_equation(name, model=component, spatial=engine.Spatial(none=True))
     finalize_provider_pack(sim)

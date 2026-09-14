@@ -353,8 +353,9 @@ class AmrRuntime {
   ///
   /// Finer levels are invalidated because their ownership and transfer histories were prepared from
   /// the prior parent materialization.
-  void apply_rebalance(std::size_t level, PreparedRebalanceDecision<Dim> decision,
-                       field_type remapped_state) {
+  PreparedRestorePublication prepare_rebalance_publication(std::size_t level,
+                                                           PreparedRebalanceDecision<Dim> decision,
+                                                           field_type remapped_state) const {
     if (level >= hierarchy_.num_levels() || !decision.accepted ||
         decision.reason != RebalanceReason::NetBenefit)
       throw std::invalid_argument("AMR runtime requires an accepted prepared rebalance decision");
@@ -378,7 +379,22 @@ class AmrRuntime {
         current.level(), current.domain(), current.patches(), proposed, current.ratio_from_parent(),
         current.validation_budget());
     level_type replacement(std::move(rebalanced), std::move(remapped_state));
-    commit_hierarchy_(hierarchy_.with_level(std::move(replacement)));
+    auto candidate = hierarchy_.with_level(std::move(replacement));
+    const auto next_topology =
+        detail::next_generation(topology_epoch_, "AMR runtime topology epoch");
+    const auto next_materialization = detail::next_generation(
+        materialization_generation_, "AMR runtime materialization generation");
+    auto next_contract = detail::exact_runtime_spatial_contract(
+        spatial_identity_, candidate, next_topology, next_materialization);
+    return PreparedRestorePublication(
+        std::move(candidate), topology_epoch_, materialization_generation_, exact_spatial_contract_,
+        next_topology, next_materialization, std::move(next_contract));
+  }
+
+  void apply_rebalance(std::size_t level, PreparedRebalanceDecision<Dim> decision,
+                       field_type remapped_state) {
+    publish_prepared_restore(
+        prepare_rebalance_publication(level, std::move(decision), std::move(remapped_state)));
   }
 
   template <::pops::amr::transfer::Centering Center>
@@ -454,20 +470,6 @@ class AmrRuntime {
   }
 
  private:
-  void commit_hierarchy_(hierarchy_type candidate) {
-    static_assert(std::is_nothrow_move_assignable_v<hierarchy_type>);
-    const std::uint64_t next_topology =
-        detail::next_generation(topology_epoch_, "AMR runtime topology epoch");
-    const std::uint64_t next_materialization = detail::next_generation(
-        materialization_generation_, "AMR runtime materialization generation");
-    std::string next_contract = detail::exact_runtime_spatial_contract(
-        spatial_identity_, candidate, next_topology, next_materialization);
-    hierarchy_ = std::move(candidate);
-    topology_epoch_ = next_topology;
-    materialization_generation_ = next_materialization;
-    exact_spatial_contract_.swap(next_contract);
-  }
-
   hierarchy_type hierarchy_;
   std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> load_balance_;
   std::string spatial_identity_;

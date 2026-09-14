@@ -44,7 +44,7 @@ from pops.codegen.krylov_contract import validated_krylov_footprint
 _RHS_OPS = ("rhs", "source", "apply", "coupled_rate")
 _STATE_SCRATCH_OPS = (
     "local_transform", "linear_combine", "solve_local_linear", "solve_local_nonlinear",
-    "solve_coupled_implicit", "where")
+    "solve_coupled_implicit", "solve_spatial_nonlinear", "where")
 _SCALAR_FIELD_OPS = ("solve_linear", "scalar_field", "cell_compare")
 # A linear_source is a pure operator DECLARATION node (vtype 'operator', no allocated buffer): it
 # appears in the Program's _SCRATCH_OPS for the liveness walk but stages no MultiFab, so it is its
@@ -429,7 +429,22 @@ def _persistent_solver_buffers(program: Any) -> list:
         if value.op == "matrix_free_operator"
     }
     for v in values:
-        if v.op == "matrix_free_operator":
+        if v.op == "solve_spatial_nonlinear":
+            from pops.time._program.spatial_solve import spatial_newton_options
+
+            restart = spatial_newton_options(v.attrs["newton_controls"])["restart"]
+            persistent.append({
+                "kind": "prepared_spatial_residual",
+                "name": v.name,
+                "buffers": restart + 13,
+                "exact": False,
+                "per_materialized_level": True,
+                "note": (
+                    "four FD/candidate fields + seven Newton fields + restart+1 GMRES basis "
+                    "fields + one full-halo trial field; lower bound excludes the selected "
+                    "diffusion face/boundary workspace and residual-operation scratch"),
+            })
+        elif v.op == "matrix_free_operator":
             operator_bundle = _operator_bundle_footprint(v)
             conditional = operator_bundle["jacvec_conditional_buffers"]
             persistent.append({

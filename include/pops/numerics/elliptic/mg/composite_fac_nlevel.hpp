@@ -252,6 +252,7 @@ struct FluxMismatchTransfer {
   FieldView<const Real, Dim> fine_aperture_lower{};
   FieldView<const Real, Dim> fine_aperture_upper{};
   FieldView<const Real, Dim> parent_inverse_volume{};
+  bool arithmetic_average = false;
 
   POPS_HD Real coefficient_or_one_(const FieldView<const Real, Dim>& field,
                                    const Index<Dim>& index) const {
@@ -264,6 +265,8 @@ struct FluxMismatchTransfer {
   }
 
   POPS_HD Real harmonic_(Real left, Real right) const {
+    if (arithmetic_average)
+      return Real(0.5) * left + Real(0.5) * right;
     const Real denominator = left + right;
     return denominator != Real(0) ? Real(2) * left * right / denominator : Real(0);
   }
@@ -280,9 +283,8 @@ struct FluxMismatchTransfer {
     const Real parent_aperture =
         child_side < 0 ? aperture_or_one_(parent_aperture_lower, coarse_index, normal_axis)
                        : aperture_or_one_(parent_aperture_upper, coarse_index, normal_axis);
-    const Real inv_vol = parent_inverse_volume.data == nullptr
-                             ? Real(1)
-                             : parent_inverse_volume(coarse_index, 0);
+    const Real inv_vol =
+        parent_inverse_volume.data == nullptr ? Real(1) : parent_inverse_volume(coarse_index, 0);
     const Real coarse_face =
         parent_aperture * coarse_face_k * (parent(coarse_index, 0) - parent(parent_neighbor, 0));
 
@@ -322,8 +324,8 @@ struct FluxMismatchTransfer {
       fine_faces +=
           fine_aperture * fine_face_k * (fine(fine_face_ghost, 0) - fine(fine_face_inner, 0));
     }
-    residual(coarse_index, 0) += sign * inv_vol * inverse_spacing_squared *
-                                 (coarse_face - fine_face_weight * fine_faces);
+    residual(coarse_index, 0) +=
+        sign * inv_vol * inverse_spacing_squared * (coarse_face - fine_face_weight * fine_faces);
   }
 };
 

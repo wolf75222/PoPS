@@ -22,9 +22,11 @@
 
 namespace pops::runtime::system {
 
-inline constexpr int kNativeSystemPackageAbiVersion = 4;
+inline constexpr int kNativeSystemPackageAbiVersion = 5;
 inline constexpr const char* kNativeSystemPackageAbiVersionSymbol =
     "pops_native_system_package_abi_version";
+
+enum class NativeEllipticAttachmentRole : std::uint8_t { output_and_rhs, rhs_only };
 
 template <int Dim>
 struct PreparedNativeEllipticAttachment {
@@ -33,7 +35,43 @@ struct PreparedNativeEllipticAttachment {
   std::vector<AuxiliaryComponentKey> outputs;
   int gradient_sign = 1;
   std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs;
+  NativeEllipticAttachmentRole role = NativeEllipticAttachmentRole::output_and_rhs;
+  std::string field_slot;
+  std::string binding_identity;
 };
+
+template <int Dim>
+inline void validate_native_elliptic_attachment_contract(
+    const PreparedNativeEllipticAttachment<Dim>& attachment) {
+  if (attachment.field.empty() || attachment.rhs_identity.empty() || !attachment.rhs ||
+      (attachment.gradient_sign != -1 && attachment.gradient_sign != 1))
+    throw std::invalid_argument("native package committed an incomplete elliptic attachment");
+  if (attachment.role == NativeEllipticAttachmentRole::rhs_only) {
+    if (attachment.field_slot.empty() || attachment.binding_identity.empty() ||
+        !attachment.outputs.empty() || attachment.gradient_sign != 1)
+      throw std::invalid_argument("native RHS-only attachment has an invalid role contract");
+  } else if (attachment.role == NativeEllipticAttachmentRole::output_and_rhs) {
+    if (!attachment.field_slot.empty() || !attachment.binding_identity.empty() ||
+        (attachment.field != "fields_from_state" && attachment.outputs.empty()))
+      throw std::invalid_argument("native output-bearing attachment has an invalid role contract");
+  } else {
+    throw std::invalid_argument("native elliptic attachment has an unknown role");
+  }
+}
+
+template <int Dim>
+inline void require_native_elliptic_output_contract(
+    const PreparedNativeEllipticAttachment<Dim>& attachment,
+    const std::vector<AuxiliaryComponentKey>& outputs, int gradient_sign) {
+  validate_native_elliptic_attachment_contract(attachment);
+  // A resolved RHS contribution owns its density law only. The staged Case field owns output
+  // components and gradient orientation; an output-bearing adapter must still match them exactly.
+  if (attachment.role == NativeEllipticAttachmentRole::output_and_rhs &&
+      (attachment.gradient_sign != gradient_sign ||
+       (!attachment.outputs.empty() && attachment.outputs != outputs)))
+    throw std::logic_error(
+        "System native elliptic attachment differs from its staged output contract");
+}
 
 template <int Dim>
 struct PreparedNativeSystemPackage {
@@ -61,7 +99,7 @@ inline std::string exact_native_system_package_contract(
   const PreparedSystemBlock<Dim>& block = package.block;
   ExactContractBuilder contract;
   contract.text("pops.prepared-native-system-package")
-      .scalar(std::uint32_t{3})
+      .scalar(std::uint32_t{4})
       .scalar(std::int32_t{Dim})
       .text(package.consumer_qid)
       .text(block.name)
@@ -93,6 +131,7 @@ inline std::string exact_native_system_package_contract(
       .presence(static_cast<bool>(closures.boundary_core_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_flux_full_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_flux_core_at_point_prepared))
+      .presence(static_cast<bool>(closures.periodic_flux_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_residual_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_jvp_at_point_prepared))
       .presence(static_cast<bool>(closures.external_boundary_flux))
@@ -134,6 +173,9 @@ inline std::string exact_native_system_package_contract(
       [](ExactContractBuilder& item, const PreparedNativeEllipticAttachment<Dim>& attachment) {
         item.text(attachment.field)
             .text(attachment.rhs_identity)
+            .scalar(static_cast<std::uint8_t>(attachment.role))
+            .text(attachment.field_slot)
+            .text(attachment.binding_identity)
             .scalar(std::int32_t{attachment.gradient_sign})
             .sequence(attachment.outputs,
                       [](ExactContractBuilder& output, const AuxiliaryComponentKey& key) {
@@ -286,12 +328,13 @@ class PreparedNativeBlockInstaller final {
           "provider-free native package selected an auxiliary consumer plan");
     for (std::size_t index = 0; index < package.elliptic_attachments.size(); ++index) {
       const auto& attachment = package.elliptic_attachments[index];
-      if (attachment.field.empty() || attachment.rhs_identity.empty() || !attachment.rhs ||
-          (attachment.field != "fields_from_state" && attachment.outputs.empty()) ||
-          (attachment.gradient_sign != -1 && attachment.gradient_sign != 1))
-        throw std::invalid_argument("native package committed an incomplete elliptic attachment");
+      validate_native_elliptic_attachment_contract(attachment);
       for (std::size_t previous = 0; previous < index; ++previous)
-        if (package.elliptic_attachments[previous].field == attachment.field)
+        if (package.elliptic_attachments[previous].field == attachment.field &&
+            (attachment.role != NativeEllipticAttachmentRole::rhs_only ||
+             package.elliptic_attachments[previous].role !=
+                 NativeEllipticAttachmentRole::rhs_only ||
+             package.elliptic_attachments[previous].field_slot == attachment.field_slot))
           throw std::invalid_argument(
               "native package committed one elliptic attachment more than once");
     }

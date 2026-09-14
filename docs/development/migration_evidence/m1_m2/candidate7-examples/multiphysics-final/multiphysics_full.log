@@ -1,0 +1,98 @@
+PoPS release runtime | native_sha256=d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : two_fluid_transport_field_collision
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : ions, electrons
+  numerics electrons  : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  numerics ions       : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 8 x 8 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.001)
+  interval            : 0 -> 0.001 (max 1 accepted steps)
+  consumers           : checkpoint @ every(100) -> checkpoints/restart; scientific_output hdf5 @ at_end -> state/two_fluid; scientific_output paraview-vtu @ at_start -> visualization/two_fluid
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/multiphysics-final/multiphysics_full/accepted (explicit-root)
+  artifact identity   : 75b6fcf4b8c08bcb
+  run identity        : 9276b8fb2d5cd82e
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.001 / 1
+  elapsed             : 0.104330 s
+  run identity        : 9276b8fb2d5cd82e
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : two_fluid_transport_field_collision
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : ions, electrons
+  numerics electrons  : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  numerics ions       : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 8 x 8 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.001)
+  interval            : 0.001 -> 0.002 (max 1 accepted steps)
+  consumers           : checkpoint @ every(100) -> checkpoints/restart; scientific_output hdf5 @ at_end -> state/two_fluid; scientific_output paraview-vtu @ at_start -> visualization/two_fluid
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/multiphysics-final/multiphysics_full/continuous (explicit-root)
+  artifact identity   : 75b6fcf4b8c08bcb
+  run identity        : 7785e7e2e1412670
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.002 / 2
+  elapsed             : 0.091485 s
+  run identity        : 7785e7e2e1412670
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : two_fluid_transport_field_collision
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : ions, electrons
+  numerics electrons  : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  numerics ions       : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 8 x 8 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.001)
+  interval            : 0.001 -> 0.002 (max 1 accepted steps)
+  consumers           : checkpoint @ every(100) -> checkpoints/restart; scientific_output hdf5 @ at_end -> state/two_fluid; scientific_output paraview-vtu @ at_start -> visualization/two_fluid
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/multiphysics-final/multiphysics_full/restarted (explicit-root)
+  artifact identity   : 75b6fcf4b8c08bcb
+  run identity        : 5e3beb3ede9c12ac
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.002 / 2
+  elapsed             : 0.092705 s
+  run identity        : 5e3beb3ede9c12ac
+PoPS final multiphysics acceptance:
+  HDF5: pops.scientific-output.v1:sha256:fd029feea028134b7a7e84ebe7265be120da304708b195a693427a0640b59a17
+  ParaView: pops.scientific-output.v1:sha256:d7e81de0ad922232d1fb2d81920fd45835de7960838078375d376a32ca7177d9
+  checkpoint: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/multiphysics-final/multiphysics_full/accepted_restart.npz
+  layout: pops.layout-plan.v1::e9ff299f39b621df48e8c13e3dcaa7c16925107715d465c7982d3834b2dd343a
+  missing mapping refusal: missing mapping provider for pops.handle.v1::case:two_fluid_transport_field_collision::layout::ions -> pops.handle.v1::case:two_fluid_transport_field_collision::layout::electrons operation CONSERVATIVE_CELL_AVERAGE_V1
+  bit-identical restart: step 2

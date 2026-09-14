@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from pops._bootstrap import ModelSpec
 from pops.runtime._numeric import native_real, positive_int
 from pops.runtime._engine_descriptors import Spatial, Explicit
+from pops.runtime._state_storage import StateStorageSpatial, require_state_storage_model
 from pops.runtime.routes import (
     check_riemann_requirement_contract as _check_riemann_requirement_contract,
 )
@@ -45,21 +46,21 @@ def _compiled_newton_kwargs(time: Any) -> dict[str, Any]:
 class _AmrSystemEquation(_AmrSystem):
     """add_equation + named-aux methods of AmrSystem."""
 
-    def _lower_spatial(self, spatial: Any) -> Spatial:
-        """Return the exact runtime Spatial consumed by AMR install and bound snapshots."""
+    def _lower_spatial(self, spatial: Any) -> Spatial | StateStorageSpatial:
+        """Return the exact transport or Program-storage adapter consumed by AMR install."""
         if spatial is None:
             return Spatial()
-        if type(spatial) is Spatial:
+        if type(spatial) in (Spatial, StateStorageSpatial):
             return spatial
         runtime_spatial = getattr(spatial, "runtime_spatial", None)
         if not callable(runtime_spatial):
             raise TypeError(
-                "AMR spatial selection must implement the pops.numerics finite-volume lowering "
-                "protocol or be an exact private Spatial value; got %r" % type(spatial).__name__
+                "AMR spatial selection must implement a finite-volume or Program-storage lowering "
+                "protocol or be an exact private spatial adapter; got %r" % type(spatial).__name__
             )
         first, second = runtime_spatial(), runtime_spatial()
-        if type(first) is not Spatial or type(second) is not Spatial:
-            raise TypeError("runtime_spatial() must return an exact private Spatial value")
+        if (type(first) is not Spatial and type(first) is not StateStorageSpatial) or type(second) is not type(first):
+            raise TypeError("runtime_spatial() must return an exact private spatial adapter")
         if first != second:
             raise ValueError("runtime_spatial() must be deterministic")
         return first
@@ -108,7 +109,7 @@ class _AmrSystemEquation(_AmrSystem):
         - a non-empty implicit mask is consumed by the typed ``Program.implicit_source`` primitive
           after ``add_equation`` records the descriptor; Newton options ride the same ABI as stride.
 
-        @p spatial: private adapter lowered from ``pops.numerics.FiniteVolume(...)``.
+        @p spatial: exact private transport or authenticated Program-storage adapter.
         @p time: private engine policy lowered from an explicit ``pops.Program`` or a
         ``pops.lib.time`` factory. @p substeps: overrides time.substeps.
         """
@@ -171,13 +172,16 @@ class _AmrSystemEquation(_AmrSystem):
                 "the complete prepared AMR package (symbol pops_install_native_amr)"
             )
 
-        # Descriptor-owned model predicates are shared verbatim with System and availability.
-        _check_riemann_requirement_contract(
-            spatial.riemann_capability_contract,
-            compiled,
-            "AmrSystem.add_equation",
-            flux=spatial.flux,
-        )
+        # Authenticate Program storage before bypassing transport-only predicates.
+        if type(spatial) is StateStorageSpatial:
+            require_state_storage_model(compiled, spatial, where="AmrSystem.add_equation")
+        else:
+            _check_riemann_requirement_contract(
+                spatial.riemann_capability_contract,
+                compiled,
+                "AmrSystem.add_equation",
+                flux=spatial.flux,
+            )
 
         nstride = positive_int(
             getattr(time, "stride", 1), where="AmrSystem.add_equation.stride"
@@ -246,7 +250,7 @@ class _AmrSystemEquation(_AmrSystem):
             compiled, dimension=compiled.native_dimension, adiabatic_index=gamma
         )
         contract_candidate = _candidate_coupling_contracts(self, name, contract)
-        if spatial.external_flux_id is not None:
+        if type(spatial) is Spatial and spatial.external_flux_id is not None:
             if "amr" not in spatial.external_flux_supported_layouts:
                 raise ValueError(
                     "AmrSystem.add_equation: external Riemann brick %r does not support AMR"

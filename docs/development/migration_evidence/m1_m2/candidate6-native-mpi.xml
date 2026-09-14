@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="4"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="0"
+	timestamp="2026-09-08T00:51:24"
+	>
+	<testcase name="test_mpi_prepared_amr_ghost_fill_np3" classname="test_mpi_prepared_amr_ghost_fill_np3" time="0.469169" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;medium;mpi"/>
+		</properties>
+		<system-out>[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_mpi_prepared_amr_ghost_fill
+[ RUN      ] test_mpi_prepared_amr_ghost_fill.partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_mpi_prepared_amr_ghost_fill
+[ RUN      ] test_mpi_prepared_amr_ghost_fill.partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_mpi_prepared_amr_ghost_fill
+[ RUN      ] test_mpi_prepared_amr_ghost_fill.partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate
+[       OK ] test_mpi_prepared_amr_ghost_fill.partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate (110 ms)
+[----------] 1 test from test_mpi_prepared_amr_ghost_fill (110 ms total)
+
+[----------] Global tes...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_coupled_fieldsolve_np2" classname="test_coupled_fieldsolve_np2" time="0.143933" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_coupled_fieldsolve
+[ RUN      ] test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs
+Note: Google Test filter = test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_coupled_fieldsolve
+[ RUN      ] test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs
+[       OK ] test_coupled_fieldsolve.named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs (38 ms)
+[----------] 1 test from test_coupled_fieldsolve (38 ms total)
+
+[----------] Global test en...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_program_context_contract_np2" classname="test_program_context_contract_np2" time="0.105332" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation
+[==========] Running 4 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 4 tests from ProgramContextContract
+[ RUN      ] ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors
+Note: Google Test filter = ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProv...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_generated_amr_system_block_np2" classname="test_generated_amr_system_block_np2" time="0.198071" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+Note: Google Test filter = GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+[       OK ] GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance (93 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (93 ms total)
+
+[----------] Global test environment tear-down
+[       OK ] GeneratedAmrSyste...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

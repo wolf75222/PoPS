@@ -1,0 +1,396 @@
+--- env 'pops-migration-20260907' active (CONDA_PREFIX=/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907) ---
+native spatial specialization: Dim=2
+production module heavy-TU pool: 2 (from POPS_HEAVY_MODULE_TU_POOL)
+ccache: dir=/Users/romaindespoulain/.cache/pops-migration-20260907-ccache basedir=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2
+MPI backend: ON; native parallel HDF5: ON
+HDF5 root: /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907
+preserve-native-variants: snapshotted dimensions [2]
+--- python -m pip wheel -v . --no-deps --no-build-isolation --wheel-dir /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/wheels-candidate7 -C build-dir=build/{wheel_tag}-dim2 -C cmake.define.POPS_NATIVE_DIM=2 -C cmake.define.POPS_HEAVY_MODULE_TU_POOL=2 -C cmake.define.POPS_USE_MPI=ON -C cmake.define.POPS_USE_HDF5=ON -Ccmake.define.CMAKE_BUILD_WITH_INSTALL_RPATH=ON ---
+Processing ./.
+  Preparing metadata (pyproject.toml): started
+  Running command Preparing metadata (pyproject.toml)
+  *** scikit-build-core 1.0.3 using CMake 4.4.3 (metadata_wheel)
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: pops
+  Building wheel for pops (pyproject.toml): started
+  Running command Building wheel for pops (pyproject.toml)
+  *** scikit-build-core 1.0.3 using CMake 4.4.3 (wheel)
+  *** Configuring CMake...
+  loading initial cache file build/cp312-cp312-macosx_26_0_arm64-dim2/CMakeInit.txt
+  -- PoPS native spatial specialization: Dim=2
+  -- PoPS Real specialization: double
+  -- ccache actif : /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/ccache (cache de compilation ; -DPOPS_USE_CCACHE=OFF pour desactiver)
+  -- Kokkos trouve (install 5.2.1) : for_each_cell backend = Kokkos (OPENMP;SERIAL)
+  -- Found MPI: TRUE (found version "4.0") found components: CXX
+  -- MPI found (/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/mpiexec) : enabling distributed comm seam
+  -- Found MPI: TRUE (found version "4.0") found components: C CXX
+  -- Parallel HDF5 found (1.14.3) : enabling native collective DataWriter
+  -- FFTW3 found (/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907) : PoissonFFT local-axis production radix backend
+  -- pops Python module: interpreteur /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/python (3.12.14)
+  -- pops Python module: pybind11 2.13.6 trouve dans l'environnement (pas de FetchContent)
+  -- pops Python module: signature en-tetes POPS_HEADER_SIG=e5962c24087c9ed408fe23a030a1cbe0c7139c9c979b7dd6cdc5af614b159ae2
+  -- Configuring done (2.5s)
+  -- Generating done (0.0s)
+  -- Build files have been written to: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/cp312-cp312-macosx_26_0_arm64-dim2
+  *** Building project with Ninja...
+  [0/2] Re-checking globbed directories...
+  ninja: no work to do.
+  *** Installing project into wheel...
+  -- Install configuration: "Release"
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/_native/dim2/_pops.cpython-312-darwin.so
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/_native/variants.json
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/hierarchy/amr_hierarchy.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/hierarchy/hierarchy_plan.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/hierarchy/level_layout.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/refinement_ratio.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/reflux/face_flux_ledger.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/reflux/metric_reflux.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/regridding/regrid.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/tagging/berger_rigoutsos.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/tagging/clustering_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/tagging/tag_mask.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/transfer/temporal_interpolation_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/amr/transfer/transfer_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/foundation/allocator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/foundation/cold.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/foundation/kokkos_env.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/foundation/native_dimension.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/foundation/types.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/foundation/validation.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/identity/canonical_value.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/identity/prepared_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/identity/prepared_provider_options.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/identity/sha256.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/model/coupled_system.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/model/equation_block.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/model/physical_model.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/state/state.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/core/state/variables.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/coupling/amr/amr_coupler_mp.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/coupling/amr/amr_diagnostics.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/coupling/amr/amr_regrid_coupler.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/coupling/base/aux_fill.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/coupling/base/elliptic_rhs.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/coupling/source/coupled_source.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/coupling/source/coupled_source_program.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/coupling/source/coupling_operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/coupling/system/amr_system_coupler.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/diagnostics/fallback_diagnostics.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/diagnostics/runtime_diagnostics.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/boundary/fill_boundary.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/boundary/halo_exchange.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/boundary/halo_schedule.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/boundary/nd_boundary_schedule.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/boundary/periodicity.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/boundary/physical_bc.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/boundary/prepared_boundary_component.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/execution/for_each.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/geometry/coordinate_map.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/geometry/geometry.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/geometry/prepared_metric_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/index/box.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/index/box_hash.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/index/entity_index.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/index/extent.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/index/index.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/index/real_vector.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/layout/box_array.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/layout/copy_schedule.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/layout/distribution.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/layout/field_distribution.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/layout/rank_space.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/layout/refinement.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/parallel/region_transfer.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/storage/fab.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/storage/field_replica_consensus.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/storage/field_view.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/storage/mf_arith.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/storage/multifab.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/mesh/topology/boundary_topology.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/elliptic_problem.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/elliptic_solver.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/field_boundary_kernel.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/field_newton_krylov.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/field_nonlinear.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/field_nullspace.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/field_nullspace_builtins.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/field_nullspace_prepare.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/field_nullspace_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/field_nullspace_workspace.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/interface/field_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/generic_krylov.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/krylov_method_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/krylov_workspace.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/prepared_affine_problem.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/prepared_vector_metric.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/pure_field_algebra.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/scaled_field_algebra.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/scaled_scalar.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/solve_outcome.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/solve_report.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/linear/vector_distribution.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/mg/composite_fac_nlevel.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/mg/geometric_mg.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/nd/cartesian_poisson.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/poisson/poisson_fft.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/poisson/poisson_operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/polar/polar_geometry.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/fv/flux_failure.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/fv/flux_interfaces.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/fv/numerical_flux.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/fv/reconstruction.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/fv/spatial_discretisation.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/linalg/block_inverse.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/linalg/dense_eig.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/nonlinear/local_nonlinear_collective.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/nonlinear/newton_options.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/nonlinear/prepared_local_nonlinear.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/nonlinear/prepared_variable_recovery.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/embedded_boundary/characteristic.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/embedded_boundary/cut_geometry.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/embedded_boundary/operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/nd/conservation_laws.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/nd/face_field.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/nd/finite_volume.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/nd/reconstruction.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/nd/state_schema.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/operators/cartesian_operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/operators/masked_operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/operators/polar_operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/primitives/face_flux.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/primitives/positivity.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/primitives/state_access.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/primitives/wave_speed.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial/provider_matrix.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/spatial_operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/levels/amr_clock.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/levels/amr_patch_range.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/levels/amr_subcycling.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/levels/amr_subcycling_engine.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/levels/amr_subcycling_plan.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/prepared_coarse_fine_operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/reflux/amr_flux_execution.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/reflux/amr_flux_helpers.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/reflux/amr_flux_ledger.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/reflux/amr_flux_preparation.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/integrators/implicit_stepper.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/integrators/time_integrator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/numerics/time/integrators/time_steppers.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/parallel/comm.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/parallel/execution_lane.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/parallel/field_distribution_reduction.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/parallel/load_balance.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/parallel/ownership_plan.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/parallel/prepared_load_balance.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/parallel/prepared_provider_consensus.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/parallel/solve_report_consensus.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/parallel/world_communicator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/admissibility/admissibility.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/admissibility/admissible_set.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/admissibility/enforcement_schedule.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/admissibility/projection.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/bricks/bricks.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/bricks/elliptic.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/bricks/hyperbolic.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/bricks/source.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/composition/composite.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/composition/exact_brick_contract.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/fluids/euler.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/inversion/inversion.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/physics/inversion/variable_inversion.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/accelerator/prepared_stream_executor.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/amr_runtime.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/amr_tensor_elliptic.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/bootstrap_transfer_builtins.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/coarse_fine_ghost_schedule.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/composite_reduction.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/detail/native_tagger_session.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/exact_field_solver_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/field_solver_options.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/hierarchy_policy_authority.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/hierarchy_tensor_solver_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/persistent_tagging_state.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/prepared_amr_ghost_fill.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/prepared_clustering_component.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/prepared_component_providers.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/prepared_multiblock_hierarchy.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/prepared_reflux_component.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/prepared_tagger_component.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/prepared_tagging_execution.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr/tensor_composite_fac.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr_patch.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/amr_system.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/analytic/collective_preflight.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/analytic/expression.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/analytic/initial_materialization.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/analytic/level_set.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/builders/block/block_builder.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/builders/compiled/amr_dsl_block.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/builders/compiled/dsl_block.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/builders/compiled/generated_amr_system_block.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/builders/compiled/generated_system_block.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/builders/compiled/model_runtime_params.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/builders/compiled/native_loader.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/builders/factory/model_factory.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/builders/scheme_dispatch.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/checkpoint/spatial_contract.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/component_interfaces.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/component_manifest.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/dispatch_tags.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/generated_component_abi.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/generated_component_catalog.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/generated_release_contract.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/generated_route_accessors.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/model_spec.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/platform_manifest.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/route_ids.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/runtime_params.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/config/spatial_domain.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/dynamic/abi_key.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/dynamic/authenticated_native_file.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/dynamic/component_consumers.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/dynamic/component_loader.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/dynamic/dynlib.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/dynamic/model_registry.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/dynamic/prepared_execution_context.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/export.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/facade_options.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/module_capabilities.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/multiblock/evaluation_point.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/multiblock/interface_flux_scheduler.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/multiblock/prepared_interface_flux_component.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/named_field_output.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/named_field_publication.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/numerical_defaults.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/output/hdf5_collective.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/output_piece.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/output_piece_collective.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_checkpoint.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_cell_temporal_configuration.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_cell_temporal_runtime.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_field_runtime_definitions.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_field_runtime_private.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_field_runtime_public.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_field_runtime_services.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_field_runtime_solver.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_flux_basis.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_flux_basis_definitions.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_flux_expression_definitions.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_flux_expression_polynomial.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_flux_expression_public.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_flux_expression_runtime.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_flux_expression_services.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_history_checkpoint_public.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_history_checkpoint_services.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_spatial.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_spatial_operations.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_spatial_operations_services.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/amr_program_context_subcycling_runtime.inc
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/cache_manager.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/cell_temporal_partition.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/cell_temporal_partition_executor.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/clock_schedule.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/component_package.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/external_brick.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/external_riemann_brick.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/module_metadata.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/prepared_scalar_boundary_session.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/prepared_tensor_boundary_session.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/profiler.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/program_context.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/program_runtime_state.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/residual_operator.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/same_level_cell_temporal_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/source_mask.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/step_transaction.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/program/wire_ids.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/recovery/uniform_recovery_consumer.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/runtime_environment.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/auxiliary_checkpoint.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/auxiliary_ghost_fill.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/derived_aux_provider.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/exact_aux_registry.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/exact_field_marshaling.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/exact_field_solver_backend.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/exact_named_field.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/native_package_capability.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/prepared_embedded_boundary.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/prepared_field_solver_component.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/provider_storage_binding.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/system_block_closures.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/system_block_store.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/system_boundary_registry.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/system_coupling_registry.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/system_diagnostics_registry.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/system_domain.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/system_lifecycle.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops/runtime/system/system_poisson_options.hpp
+  -- Installing: /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmptw4xp3hw/wheel/platlib/pops/include/pops_headers.manifest
+  *** Making wheel...
+  *** Created pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl
+  Building wheel for pops (pyproject.toml): finished with status 'done'
+  Created wheel for pops: filename=pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl size=7427466 sha256=4bc8fda4395f510f9e56710dbce6e769030730d48752ef67fc0eaa1c2ac49792
+  Stored in directory: /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pip-ephem-wheel-cache-fi_gjgc4/wheels/f0/d0/fe/de901d5a70639f83e18e29f235bae3e87f14268f718b0a5c2f
+Successfully built pops
+--- installing exact retained wheel /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/wheels-candidate7/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl ---
+Processing /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/wheels-candidate7/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl
+Installing collected packages: pops
+  Attempting uninstall: pops
+    Found existing installation: pops 1.0.0
+    Uninstalling pops-1.0.0:
+      Successfully uninstalled pops-1.0.0
+Successfully installed pops-1.0.0
+release wheel: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/wheels-candidate7/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl
+{"distribution_root": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib/python3.12/site-packages", "expected_dimensions": [2], "installed_member_count": 915, "installed_tree_sha256": "9feb2a12f311ef57bcfcd33de9264c442ad47bdbb3ce93d70fa0a198dc543e04", "native_manifest": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib/python3.12/site-packages/pops/_native/variants.json", "native_manifest_member": "pops/_native/variants.json", "native_manifest_sha256": "e4524b31919672d3bba33770360a3005ab1becc385be5eecf7b6b0e7cc34052f", "native_variants": [{"abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=e5962c24087c9ed408fe23a030a1cbe0c7139c9c979b7dd6cdc5af614b159ae2;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=3fcb294ba5c1a4eb24d6db2fa5222fa6b8420176ffa10b9c985f2b6eec96e654;dim=2", "dimension": 2, "extension": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so", "has_kokkos": true, "has_mpi": true, "member": "pops/_native/dim2/_pops.cpython-312-darwin.so", "sha256": "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518", "version": "1.0.0"}], "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib/python3.12/site-packages/pops/__init__.py", "proof_script_sha256": "3aa78bc8c3648e120439ac6e90a0887b60a54f37da7b7db2b2983015be5f1a8d", "python_executable": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/python3.12", "schema_version": 3, "version": "1.0.0", "wheel_path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/wheels-candidate7/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl", "wheel_sha256": "4bc8fda4395f510f9e56710dbce6e769030730d48752ef67fc0eaa1c2ac49792"}
+preserve-native-variants: restored sibling dimensions []
+codesign: verified Dim=2 ad-hoc signature: /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so
+installed native Dim=2 extension: /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so
+
+--- pops.runtime.doctor.doctor() ---
+pops 1.0.0 Dim=2
+[OK ] interpreteur     /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/python (3.12) ; extension /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so
+[OK ] numpy            2.5.3
+[OK ] kokkos           Kokkos module (thread/device resources selected before initialization)
+[OK ] compilateur      /usr/bin/clang++ [baked by the _pops build] ; -std=c++20 accepted
+[OK ] include          /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/include
+[OK ] headers_sync     headers == module build (sig e5962c24087c...)
+[OK ] kokkos_root      /Users/romaindespoulain/miniforge3/envs/pops-migration-20260907
+[OK ] threads          OMP_NUM_THREADS=(default) ; first System created=False
+=> healthy environment : module importable, DSL compilable, ABI coherent.
+        9.41 real         5.82 user         2.41 sys
+           102727680  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              194542  page reclaims
+                4481  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  24  messages sent
+                  24  messages received
+                  65  signals received
+                4393  voluntary context switches
+               10056  involuntary context switches
+            80570793  instructions retired
+            48037103  cycles elapsed
+             1687888  peak memory footprint

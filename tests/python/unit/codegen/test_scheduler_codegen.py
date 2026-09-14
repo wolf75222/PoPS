@@ -11,9 +11,10 @@ named MultiFab):
   - `when(cond)` -> reuses the Program Bool predicate token as the due test
   - `ClockTick` / `AMRLevel` -> qualified logical-clock / hierarchy-level runtime domains
   - `recompute`  -> the body runs only when due, no else
-  - `hold`       -> store/restore the cached value on Uniform; refused for AMR before emission
-  - `skip`       -> retained fields on frozen hierarchies only; scratch refuses until its stale
-                    value is prepared transactional state
+  - `hold`       -> store/restore the cached value on Uniform; AMR retains the ProviderPack and
+                    rematerializes it after a dynamic topology publication
+  - `skip`       -> retains an initially prepared field; dynamic AMR requires the same exact
+                    topology rematerializer, while scratch still requires prepared state
   - `zero`       -> a `set_val(0)` else-branch
   - `accumulate_dt` -> `ctx.cache_accumulate_dt` off-cadence + `ctx.cache_effective_dt` on the due step
   - `error`      -> a `ctx.scheduler_error(...)` else-branch
@@ -448,6 +449,88 @@ def test_field_skip_requires_an_exact_dynamic_topology_rematerializer():
         _resolve_amr_program("amr", program, context=unsupported)
 
 
+def test_field_hold_requires_an_exact_dynamic_topology_rematerializer():
+    # The public field operator correctly refuses a raw Hold cache. The native integration route
+    # replaces the already authenticated Program node so the retained ProviderPack owns freshness.
+    program = _field_program(lambda clock: _every(clock, 5, adctime.Skip()))
+    field_node = next(value for value in program._values if value.op == "solve_fields")
+    program._replace_value(
+        field_node,
+        attrs={**field_node.attrs, "schedule": _every(program.clock, 5, adctime.Hold())},
+    )
+    assert amr_program_op_support(program, context=_amr_context(frozen=False)) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_hold": "green",
+    }
+    unsupported = _amr_context(frozen=False, rematerializer=False)
+    assert amr_program_op_support(program, context=unsupported) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_hold": "pending:dynamic_hierarchy_provider_pack",
+    }
+    with pytest.raises(CapabilityResolutionError, match="dynamic_hierarchy_provider_pack"):
+        _resolve_amr_program("amr", program, context=unsupported)
+
+
+@pytest.mark.parametrize("off", (adctime.Hold(), adctime.Skip()), ids=("hold", "skip"))
+def test_dynamic_field_schedule_authenticates_the_case_transfer_subject(off):
+    from pops.lib.time import ForwardEuler
+    from pops.time import AcceptedStep, Every, FixedDt, Schedule
+    from tests.python.integration._final_field_program import (
+        resolve_periodic_field_program,
+        scalar_advection_field_model,
+    )
+
+    def factory(state, rate, field):
+        program = ForwardEuler(state, rate=rate, fields=field)
+        field_node = next(value for value in program._values if value.op == "solve_fields")
+        program._replace_value(
+            field_node,
+            attrs={
+                **field_node.attrs,
+                "schedule": Schedule(
+                    Every(AcceptedStep(program.clock), 5), off=off
+                ),
+            },
+        )
+        program.step_strategy(FixedDt(8.0e-2))
+        return program
+
+    resolved = resolve_periodic_field_program(
+        scalar_advection_field_model("dynamic-field-schedule"),
+        factory,
+        name="dynamic-field-schedule",
+        block_name="material",
+        target="amr_system",
+        n=8,
+        anchored_field=True,
+    )
+
+    resolution = resolved.capabilities["resolution"]["amr_program"]
+    assert resolution["status"] == "proven"
+    assert {row["name"]: row["status"] for row in resolution["groups"]} == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_" + type(off).__name__.lower(): "green",
+    }
+    schedules = resolved.time.temporal_manifest()["schedules"]
+    assert schedules and all(not row["cache_required"] for row in schedules)
+    retained = resolved.continuation_transitions.to_data()["objects"]
+    assert {row["kind"] for row in retained} >= {"field_value", "field_observation"}
+    assert not any(row["kind"] == "scheduler_cache" for row in retained)
+    from pops.codegen._phases import _field_topology_rematerializer_validated
+
+    assert not _field_topology_rematerializer_validated(
+        resolved.field_plans,
+        resolved.amr_transfer,
+        {
+            name: plan.operator.unknown
+            for name, plan in resolved.field_plans.items()
+        },
+    )
+
+
 def test_field_skip_when_requires_an_initial_provider_pack():
     program = adctime.Program("when_field_skip")
     state = typed_state(program, "ions")
@@ -512,6 +595,65 @@ def test_scratch_hold_caches_named_scratch():
     decl_idx = cpp.index("MultiFab<pops::kNativeDimension>& r")
     guard_idx = cpp.index("if (ctx.schedule_decision(")
     assert decl_idx < guard_idx
+
+
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+@pytest.mark.parametrize("policy", (adctime.Hold, adctime.Zero))
+def test_scheduled_transform_storage_precedes_guard_and_stage_time_stays_due(target, policy):
+    from fractions import Fraction
+    from pops.codegen.module_lowering import lower_and_validate
+    from pops.physics._facade import Model
+
+    model = Model("scheduled_transform")
+    q, = model.conservative_vars("q")
+    model.primitive_vars(q)
+    model.conservative_from([q])
+    model.flux(x=[0 * q], y=[0 * q])
+    model.eigenvalues(x=[0 * q], y=[0 * q])
+    transform = model.local_transform("held_copy", (q,))
+    model.module.operator_capabilities("held_copy", cacheable=True)
+    program = adctime.Program("scheduled_transform")
+    current = typed_state(program, "material", model=model)
+    endpoint = typed_state(program, "material", state_name="U", model=model).next
+    stage = program.value("stage", current,
+                          at=adctime.TimePoint(program.clock, Fraction(1, 2)))
+    held = transform(stage, name="held", schedule=_every(program.clock, 2, policy()))
+    program.commit(endpoint, program.value("next", current + held, at=endpoint.point))
+    if target == "amr_system" and policy is adctime.Hold:
+        with pytest.raises(NotImplementedError, match="persistent hierarchy value cache"):
+            emit_cpp_program(program, model=lower_and_validate(model)[0], target=target)
+        return
+    cpp = emit_cpp_program(program, model=lower_and_validate(model)[0], target=target)
+    output = "u%d" % held.id
+    declaration = "pops::MultiFab<pops::kNativeDimension>& %s = *transform_state_resource_%d;" % (
+        output, held.id)
+    guard = "if (ctx.schedule_decision(%d," % held.id
+    stage_time = "ctx.set_stage_time(1, 2);"
+    assert cpp.index(declaration) < cpp.index(guard) < cpp.index(stage_time)
+    due_body, off_body = cpp[cpp.index(guard):].split("} else {", 1)
+    assert stage_time in due_body
+    assert stage_time not in off_body
+    assert "transform_failed_%d" % held.id in due_body
+    if policy is adctime.Hold:
+        assert "ctx.cache_store_scratch(%d, %s);" % (held.id, output) in due_body
+        assert "ctx.cache_restore_scratch(%d, %s);" % (held.id, output) in off_body
+    else:
+        assert "%s.set_val(" % output in off_body
+    if target == "amr_system":
+        # AMR reacquires its resource through a collective before binding the output;
+        # the complete dependency setup must be outside both cadence branches.
+        resource = "transform_status_resource_%d = &ctx.scalar_scratch" % held.id
+        assert cpp.index(resource) < cpp.index(declaration)
+
+
+def test_scheduled_scratch_requires_an_explicit_storage_boundary():
+    clock = adctime.Clock("macro")
+    value = SimpleNamespace(id=7, name="unknown_scratch", op="local_transform",
+                            clock=clock, point=None,
+                            attrs={"schedule": _every(clock, 2, adctime.Hold())})
+    lines = ["pops::MultiFab<pops::kNativeDimension>& out = ctx.state(0);"]
+    with pytest.raises(NotImplementedError, match="explicit output storage setup boundary"):
+        _emit_schedule_wrap(None, value, {7: "out"}, lines, 0)
 
 
 def test_scratch_zero_sets_the_scratch_to_zero():

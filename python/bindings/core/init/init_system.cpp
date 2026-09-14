@@ -14,6 +14,7 @@
 #include <array>
 #include <cmath>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <exception>
 #include <initializer_list>
@@ -52,21 +53,29 @@ SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& row) {
       {"mapping_identity", "provider_identity", "provider_component_identity",
        "provider_manifest_identity", "source_layout_identity", "target_layout_identity",
        "source_block", "target_block", "source_representation", "target_representation",
-       "synchronization_identity", "refinement_ratio", "operation"},
+       "synchronization_identity", "refinement_ratio", "operation", "physical_contract",
+       "physical_source_to_target", "physical_source_active", "physical_target_active",
+       "program_invocation"},
       "prepared layout-transfer spec");
-  return {py::cast<std::string>(row["mapping_identity"]),
-          py::cast<std::string>(row["provider_identity"]),
-          py::cast<std::string>(row["provider_component_identity"]),
-          py::cast<std::string>(row["provider_manifest_identity"]),
-          py::cast<std::string>(row["source_layout_identity"]),
-          py::cast<std::string>(row["target_layout_identity"]),
-          py::cast<std::string>(row["source_block"]),
-          py::cast<std::string>(row["target_block"]),
-          py::cast<std::string>(row["source_representation"]),
-          py::cast<std::string>(row["target_representation"]),
-          py::cast<std::string>(row["synchronization_identity"]),
-          py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["refinement_ratio"]),
-          py::cast<std::int32_t>(row["operation"])};
+  return {
+      py::cast<std::string>(row["mapping_identity"]),
+      py::cast<std::string>(row["provider_identity"]),
+      py::cast<std::string>(row["provider_component_identity"]),
+      py::cast<std::string>(row["provider_manifest_identity"]),
+      py::cast<std::string>(row["source_layout_identity"]),
+      py::cast<std::string>(row["target_layout_identity"]),
+      py::cast<std::string>(row["source_block"]),
+      py::cast<std::string>(row["target_block"]),
+      py::cast<std::string>(row["source_representation"]),
+      py::cast<std::string>(row["target_representation"]),
+      py::cast<std::string>(row["synchronization_identity"]),
+      py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["refinement_ratio"]),
+      py::cast<std::int32_t>(row["operation"]),
+      py::cast<bool>(row["physical_contract"]),
+      py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_source_to_target"]),
+      py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_source_active"]),
+      py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_target_active"]),
+      py::cast<std::string>(row["program_invocation"])};
 }
 
 SystemLayoutTransferExecution layout_transfer_execution_from_python(const py::dict& row) {
@@ -129,11 +138,10 @@ PreparedProviderOptions prepared_provider_options_from_python(const std::string&
 
 template <int Dim>
 void evaluate_system_interface_provider(
-    pops::System<Dim>& system,
+    std::size_t block_count,
     const std::shared_ptr<pops::runtime::multiblock::InterfaceFluxScheduler<Dim>>& scheduler,
     const pops::ExecutionLane* lane,
-    const std::vector<std::shared_ptr<pops::runtime::program::PreparedScalarBoundarySession<Dim>>>&
-        boundary_sessions,
+    const typename pops::SystemInterfaceCoreSession<Dim>::pointer& core,
     const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
     const std::vector<pops::MultiFab<Dim>*>& states,
     const std::vector<pops::MultiFab<Dim>*>& residuals, const std::vector<int>& flux_only) {
@@ -142,11 +150,10 @@ void evaluate_system_interface_provider(
   std::exception_ptr request_error;
   std::string request_contract;
   try {
-    const auto blocks = static_cast<std::size_t>(system.n_blocks());
-    if (!scheduler || boundary_sessions.size() != blocks || point.clock.empty() || point.tick < 0 ||
-        point.level != 0 || point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) ||
-        !std::isfinite(point.dt) || !std::isfinite(point.physical_time) ||
-        point.stage_fraction < ::pops::amr::Rational(0, 1) ||
+    const auto blocks = block_count;
+    if (!scheduler || !core || point.clock.empty() || point.tick < 0 || point.level != 0 ||
+        point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) || !std::isfinite(point.dt) ||
+        !std::isfinite(point.physical_time) || point.stage_fraction < ::pops::amr::Rational(0, 1) ||
         ::pops::amr::Rational(1, 1) < point.stage_fraction || states.size() != blocks ||
         residuals.size() != blocks || (!flux_only.empty() && flux_only.size() != blocks))
       throw std::invalid_argument(
@@ -166,9 +173,6 @@ void evaluate_system_interface_provider(
         .scalar(point.physical_time)
         .scalar(static_cast<std::uint64_t>(blocks));
     for (std::size_t block = 0; block < blocks; ++block) {
-      if (!boundary_sessions[block])
-        throw std::invalid_argument(
-            "System shared-interface evaluation lacks a prepared block boundary session");
       const bool has_state = states[block] != nullptr;
       const bool has_residual = residuals[block] != nullptr;
       const int mode = flux_only.empty() ? 0 : flux_only[block];
@@ -195,12 +199,7 @@ void evaluate_system_interface_provider(
 
   std::exception_ptr core_error;
   try {
-    for (std::size_t block = 0; block < states.size(); ++block)
-      if (states[block] != nullptr)
-        system.block_rhs_core_into_at(
-            point, static_cast<int>(block), *states[block], *residuals[block],
-            !flux_only.empty() && flux_only[block] != 0, &system, static_cast<int>(block), point,
-            *lane, *boundary_sessions[block]);
+    core->evaluate();
   } catch (...) {
     core_error = std::current_exception();
   }
@@ -239,19 +238,13 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
 
   std::shared_ptr<Scheduler> scheduler;
   const pops::ExecutionLane* lane = &prepared_lane;
-  std::vector<std::shared_ptr<pops::runtime::program::PreparedScalarBoundarySession<Dim>>>
-      boundary_sessions;
   std::optional<pops::Geometry<Dim>> geometry;
-  std::optional<pops::BoundaryTopology<Dim>> topology;
   std::vector<pops::MultiFab<Dim>*> left_states;
   std::vector<pops::MultiFab<Dim>*> right_states;
   std::exception_ptr storage_error;
   try {
     scheduler = std::make_shared<Scheduler>();
     geometry.emplace(system.prepared_block_geometry());
-    topology.emplace(
-        pops::BoundaryTopology<Dim>::axis_periodic(system.prepared_block_periodicity()));
-    boundary_sessions.reserve(static_cast<std::size_t>(system.n_blocks()));
     left_states.reserve(jobs.size());
     right_states.reserve(jobs.size());
     for (const auto& job : jobs) {
@@ -271,11 +264,6 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
     throw std::runtime_error(
         "System shared-interface storage preparation failed on another MPI rank");
   }
-
-  for (int block = 0; block < system.n_blocks(); ++block)
-    boundary_sessions.push_back(pops::runtime::program::PreparedScalarBoundarySession<Dim>::prepare(
-        *geometry, *topology, system.block_state(block), *lane,
-        static_cast<std::uint64_t>(block) + 1));
 
   for (std::size_t index = 0; index < jobs.size(); ++index) {
     auto& job = jobs[index];
@@ -299,13 +287,15 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
   provider.provider_identity =
       "pops.system.interface-provider.nd.v1:sha256:" + pops::identity::sha256_hex(identity_bytes);
   provider.collective_contract = std::move(provider_contract);
-  auto evaluate = [&system, scheduler, lane, boundary_sessions](
+  const auto block_count = static_cast<std::size_t>(system.n_blocks());
+  auto evaluate = [block_count, scheduler, lane](
                       const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
                       const std::vector<pops::MultiFab<Dim>*>& states,
                       const std::vector<pops::MultiFab<Dim>*>& residuals,
-                      const std::vector<int>& flux_only) {
-    evaluate_system_interface_provider(system, scheduler, lane, boundary_sessions, point, states,
-                                       residuals, flux_only);
+                      const std::vector<int>& flux_only,
+                      const typename pops::SystemInterfaceCoreSession<Dim>::pointer& core) {
+    evaluate_system_interface_provider<Dim>(block_count, scheduler, lane, core, point, states,
+                                            residuals, flux_only);
   };
   provider.evaluate_rhs = evaluate;
   provider.evaluate_core = std::move(evaluate);
@@ -390,19 +380,15 @@ void bind_system_assembly(py::class_<System>& cls) {
              const std::vector<std::string>& face_analytic_clocks) {
             reject_unqualified_periodic_identifications<pops::kNativeDimension>(
                 periodic_identifications, "ranked Cartesian boundary authority");
-            std::vector<bool> omitted(face_types.size(), false);
-            for (int ordinal : omitted_interface_faces) {
-              if (ordinal < 0 || static_cast<std::size_t>(ordinal) >= face_types.size() ||
-                  face_types[static_cast<std::size_t>(ordinal)] != "external" ||
-                  omitted[static_cast<std::size_t>(ordinal)])
-                throw py::value_error(
-                    "every omitted interface face must be one unique external ranked face");
-              omitted[static_cast<std::size_t>(ordinal)] = true;
-            }
-            system.install_hyperbolic_boundary(
-                name, identity, required_depth, face_types, face_values, face_identities,
-                component_roles, state_identity, face_representations, face_converter_identities,
-                face_analytic_opcodes, face_analytic_literals, face_analytic_clocks);
+            auto boundary = pops::prepare_hyperbolic_boundary<pops::kNativeDimension>(
+                                face_types, face_values, face_identities, component_roles, false,
+                                face_representations, face_converter_identities,
+                                face_analytic_opcodes, face_analytic_literals, face_analytic_clocks)
+                                .with_omitted_interface_faces(omitted_interface_faces);
+            system.install_prepared_hyperbolic_boundary(
+                name, identity, required_depth, state_identity,
+                std::make_shared<pops::PreparedHyperbolicBoundary<pops::kNativeDimension>>(
+                    std::move(boundary)));
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
@@ -594,12 +580,13 @@ void bind_system_assembly(py::class_<System>& cls) {
       .def(
           "_register_native_package",
           [](System& system, const std::string& name, const std::string& so_path,
-             const std::string& expected_model_identity, const std::string& expected_binary_identity,
-             const std::string& limiter, const std::string& riemann, const std::string& recon,
-             const std::string& time, double gamma, int substeps, bool evolve, int stride,
-             const std::vector<double>& params, double positivity_floor, int newton_max_iters,
-             double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
-             double newton_damping, bool newton_diagnostics) {
+             const std::string& expected_model_identity,
+             const std::string& expected_binary_identity, const std::string& limiter,
+             const std::string& riemann, const std::string& recon, const std::string& time,
+             double gamma, int substeps, bool evolve, int stride, const std::vector<double>& params,
+             double positivity_floor, int newton_max_iters, double newton_rel_tol,
+             double newton_abs_tol, double newton_fd_eps, double newton_damping,
+             bool newton_diagnostics) {
             NewtonOptions newton = newton_options_from_abi(
                 newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
             system.register_native_package(name, so_path, expected_model_identity,
@@ -786,6 +773,21 @@ void bind_system_checkpoint(py::class_<System>& cls) {
       // Selective history persistence + deterministic ring replay (ADC-626): the checkpoint stores only
       // the policy-selected slots + the per-slot dt; the restart replays the gaps via
       // rebuild_history_slots (re-stepping the installed Program from the nearest older stored slot).
+      .def(
+          "history_sample_identity",
+          [](const System& s, const std::string& name) {
+            const auto bytes = s.history_sample_identity(name);
+            return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+          },
+          py::arg("name"))
+      .def(
+          "restore_history_sample_identity",
+          [](System& s, const std::string& name, py::bytes encoded) {
+            const std::string bytes = encoded;
+            s.restore_history_sample_identity(
+                name, std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+          },
+          py::arg("name"), py::arg("encoded"))
       .def("history_slot_dt", &System::history_slot_dt, py::arg("name"), py::arg("slot"))
       .def("restore_history_slot_dt", &System::restore_history_slot_dt, py::arg("name"),
            py::arg("slot"), py::arg("dt"))
@@ -845,6 +847,9 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("set_clock", &System::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("set_potential", &System::set_potential, py::arg("phi"))
       .def("field_provider_slots", &System::field_provider_slots)
+      .def("field_provider_materialized", &System::field_provider_materialized,
+           py::arg("provider_slot"),
+           "Collective-free readiness of one exact registered field provider.")
       .def("configured_field_provider_slots", &System::configured_field_provider_slots,
            "Read-only installed/configured field-provider restart authority; does not materialize "
            "the default field")
@@ -1133,8 +1138,52 @@ void bind_system_stepping(py::class_<System>& cls) {
   cls.def("solve_fields",
           [](System& system) { return consume_solve_outcome(system.solve_fields()); })
       .def("step", &System::step, py::arg("dt"))
+      .def("_advance_program_region", &System::advance_program_region, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)
+      .def("_begin_nested_step_transaction", &System::begin_nested_step_transaction)
+      .def("_step_transaction_depth", &System::step_transaction_depth)
+      .def("_checkpoint_program_exchanges",
+           [](const System& system) {
+             const auto bytes = system.checkpoint_program_exchanges();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def("_validate_checkpoint_program_exchanges",
+           [](const System&, py::bytes payload) {
+             const std::string_view bytes(
+                 PyBytes_AS_STRING(payload.ptr()),
+                 static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
+             (void)pops::runtime::program::AcceptedExchangeLedger::from_checkpoint(
+                 std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                                               bytes.size()));
+           })
+      .def("_restore_checkpoint_program_exchanges",
+           [](System& system, py::bytes payload) {
+             const std::string_view bytes(
+                 PyBytes_AS_STRING(payload.ptr()),
+                 static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
+             system.restore_checkpoint_program_exchanges(std::span<const std::uint8_t>(
+                 reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
+           })
+      .def("_program_exchange_records",
+           [](const System& system) {
+             py::list result;
+             for (const auto& record : system.program_exchange_records()) {
+               py::dict row;
+               row["operation_identity"] = record.operation_identity;
+               row["occurrence_identity"] = record.occurrence_identity;
+               row["evaluation_context"] = record.evaluation_context;
+               row["quadrature_identity"] = record.quadrature_identity;
+               row["orientation"] = record.orientation;
+               row["face_measure"] = record.face_measure;
+               row["numerical_flux"] = record.numerical_flux;
+               row["temporal_weight"] = record.temporal_weight;
+               row["multiplicity"] = record.multiplicity;
+               row["integrated_amount"] = record.integrated_amount();
+               result.append(std::move(row));
+             }
+             return result;
+           })
       .def("_commit_step_transaction", &System::commit_step_transaction)
       .def("_step_change_l2", &System::step_change_l2)
       .def("_finalize_step_transaction", &System::finalize_step_transaction)
@@ -1288,8 +1337,8 @@ void bind_system_data(py::class_<System>& cls) {
             std::vector<double> speeds;
             speeds.reserve(names.size());
             for (int index = 0; index < static_cast<int>(names.size()); ++index)
-              speeds.push_back(static_cast<double>(
-                  system.block_max_speed(index, system.block_state(index))));
+              speeds.push_back(
+                  static_cast<double>(system.block_max_speed(index, system.block_state(index))));
             return speeds;
           },
           "Current per-block max wave speeds in registry order.")
@@ -1454,6 +1503,7 @@ void init_system(py::module_& m) {
   using NativeSystem = pops::System<pops::kNativeDimension>;
   py::class_<SystemLayoutTransferReceipt>(m, "_SystemLayoutTransferReceipt")
       .def_readonly("applied", &SystemLayoutTransferReceipt::applied)
+      .def_readonly("program_invocation", &SystemLayoutTransferReceipt::program_invocation)
       .def_readonly("mapping_identity", &SystemLayoutTransferReceipt::mapping_identity)
       .def_readonly("provider_identity", &SystemLayoutTransferReceipt::provider_identity)
       .def_readonly("provider_component_identity",

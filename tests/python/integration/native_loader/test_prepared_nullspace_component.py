@@ -13,6 +13,7 @@ from tests.python.support.requirements import (
     repo_include,
     require_native_or_skip,
 )
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 def _require_native() -> None:
@@ -300,6 +301,7 @@ def test_external_nullspace_provider_compiles_links_installs_and_runs(
     public_runtime = pops.bind(
         public_compiled,
         initial_state={"blk": np.stack([initial])},
+        resources={"execution_context": artifact_execution_context(public_compiled)},
     )
     public_plan_calls_after_bind = _native_plan_calls(public_compiled.so_path)
     assert public_plan_calls_after_bind == 1

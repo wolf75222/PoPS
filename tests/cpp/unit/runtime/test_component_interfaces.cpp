@@ -1283,14 +1283,19 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
 
   std::array<double, 1> transferred{};
   std::array<std::int32_t, 2> ratio{2, 2};
-  PopsTransferApiV1 transfer_api{
-      abi_header(sizeof(PopsTransferApiV1), POPS_NATIVE_INTERFACE_TRANSFER_V1),
+  PopsTransferApiV2 transfer_api{
+      abi_header(sizeof(PopsTransferApiV2), POPS_NATIVE_INTERFACE_TRANSFER_V2, 2),
       +[](void*, const PopsTransferRequestV1* request, PopsComponentStatusV1* result) {
         const auto* source = static_cast<const double*>(request->source.data);
         auto* destination = static_cast<double*>(request->destination.data);
         destination[0] = 0.25 * (source[0] + source[1] + source[2] + source[3]);
         *result = ok_status();
         return 0;
+      },
+      +[](void*, const PopsTransferIntegralRequestV2*, PopsComponentStatusV1* result) {
+        *result = {sizeof(PopsComponentStatusV1), 91, POPS_COMPONENT_ABORT_RUN_V1,
+                   "fixture only supports standard conservative transfer"};
+        return 91;
       }};
   PopsTransferRequestV1 transfer_request{sizeof(PopsTransferRequestV1),
                                          abi::const_field_view(tag_values.data(), 2, 2),
@@ -1913,6 +1918,8 @@ TEST(ComponentInterfaces, FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch) 
     metadata[index].upper[0] = static_cast<std::int64_t>(2 * index + 1);
     metadata[index].lower[1] = metadata[index].upper[1] = 0;
     metadata[index].cell_spacing[0] = metadata[index].cell_spacing[1] = index == 0 ? 1.0 : 0.5;
+    metadata[index].physical_lower[0] =
+        static_cast<double>(metadata[index].lower[0]) * metadata[index].cell_spacing[0];
   }
   PopsFieldGlobalTopologyV1 global{sizeof(PopsFieldGlobalTopologyV1),
                                    "multilevel-recipe",
@@ -1925,6 +1932,13 @@ TEST(ComponentInterfaces, FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch) 
                                    metadata.size(),
                                    metadata.data()};
   global.domain_upper[0] = 3;
+  std::vector<pops::component::FieldTopologyLevelGeometryV2> level_geometry(2);
+  for (std::size_t level = 0; level < level_geometry.size(); ++level) {
+    level_geometry[level].upper[0] = level == 0 ? 3 : 7;
+    level_geometry[level].upper[1] = level == 0 ? 0 : 1;
+    level_geometry[level].cell_spacing[0] = level_geometry[level].cell_spacing[1] =
+        level == 0 ? 1.0 : 0.5;
+  }
   std::array<std::uint8_t, 2> coarse_coverage{1, 0};
   std::array<std::uint8_t, 2> fine_coverage{1, 1};
   const std::vector<pops::component::FieldTopologyPatchInputV2> inputs{
@@ -1969,8 +1983,8 @@ TEST(ComponentInterfaces, FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch) 
         result->status = ok_status();
         return 0;
       }};
-  const auto topology =
-      pops::component::prepare_field_topology(topology_api, &calls, global, inputs, execution);
+  const auto topology = pops::component::prepare_field_topology(topology_api, &calls, global,
+                                                                inputs, execution, level_geometry);
   ASSERT_EQ(topology.local_patches().size(), 2u);
   EXPECT_EQ(topology.local_patches()[0].material_mask, (std::vector<std::uint8_t>{1, 0}));
   EXPECT_EQ(topology.local_patches()[1].material_mask, (std::vector<std::uint8_t>{1, 1}));
@@ -2052,6 +2066,150 @@ TEST(ComponentInterfaces, PreparedExecutionContextBindsExactExecutionLaneAuthori
   EXPECT_EQ(view.communicator_f_handle, 0);
   EXPECT_EQ(view.communicator_datatype_f_handle, 0);
 #endif
+}
+
+TEST(ComponentInterfaces, FieldTopologyAuthenticatesShiftedAnisotropicLevelGeometry) {
+  using pops::component::FieldTopologyLevelGeometryV2;
+  using pops::component::validate_field_global_topology;
+  for (int dimension = 1; dimension <= 3; ++dimension) {
+    SCOPED_TRACE(dimension);
+    std::vector<FieldTopologyLevelGeometryV2> geometry(2);
+    std::array<PopsFieldPatchMetadataV1, 2> patches{};
+    PopsFieldGlobalTopologyV1 topology{};
+    topology.struct_size = sizeof(topology);
+    topology.topology_recipe_identity = "test::hierarchy-recipe";
+    topology.source_layout_identity = "test::hierarchy-layout";
+    topology.materialized_layout_identity = "test::materialized-hierarchy";
+    topology.dimension = dimension;
+    topology.patch_count = patches.size();
+    topology.patches = patches.data();
+    for (int axis = 0; axis < dimension; ++axis) {
+      const int ratio = axis + 2;
+      geometry[0].lower[axis] = -3 * (axis + 1);
+      geometry[0].upper[axis] = geometry[0].lower[axis] + 7;
+      geometry[0].physical_lower[axis] = -2.0 + axis;
+      geometry[0].cell_spacing[axis] = 0.5 * (axis + 1);
+      // Independent level index origins are supported; physical domains still coincide.
+      geometry[1].lower[axis] = 17 - 9 * axis;
+      geometry[1].upper[axis] = geometry[1].lower[axis] + 8 * ratio - 1;
+      geometry[1].physical_lower[axis] = geometry[0].physical_lower[axis];
+      geometry[1].cell_spacing[axis] = geometry[0].cell_spacing[axis] / ratio;
+      topology.domain_lower[axis] = geometry[0].lower[axis];
+      topology.domain_upper[axis] = geometry[0].upper[axis];
+    }
+    for (std::size_t level = 0; level < patches.size(); ++level) {
+      auto& patch = patches[level];
+      patch.struct_size = sizeof(patch);
+      patch.global_patch_index = level;
+      patch.level = static_cast<int>(level);
+      patch.dimension = dimension;
+      patch.centering = POPS_FIELD_CENTERING_CELL_V1;
+      patch.layout_identity = topology.source_layout_identity;
+      patch.patch_identity = level == 0 ? "test::coarse" : "test::fine";
+      for (int axis = 0; axis < dimension; ++axis) {
+        const int ratio = axis + 2;
+        patch.lower[axis] = geometry[level].lower[axis] + (level == 0 ? 0 : 2 * ratio);
+        patch.upper[axis] = geometry[level].upper[axis] - (level == 0 ? 0 : 2 * ratio);
+        patch.cell_spacing[axis] = geometry[level].cell_spacing[axis];
+        patch.physical_lower[axis] = geometry[level].physical_lower[axis] +
+                                     (static_cast<double>(patch.lower[axis]) -
+                                      static_cast<double>(geometry[level].lower[axis])) *
+                                         patch.cell_spacing[axis];
+      }
+    }
+    EXPECT_THROW(validate_field_global_topology(topology), std::invalid_argument);
+    EXPECT_NO_THROW(validate_field_global_topology(topology, geometry));
+    const auto valid_fine = patches[1];
+    const auto reject = [&] {
+      EXPECT_THROW(validate_field_global_topology(topology, geometry), std::invalid_argument);
+      patches[1] = valid_fine;
+    };
+    patches[1].level = 2;
+    reject();
+    patches[1].lower[0] = geometry[1].lower[0] - 1;
+    reject();
+    patches[1].upper[0] = geometry[1].upper[0] + 1;
+    reject();
+    patches[1].lower[0] = std::numeric_limits<std::int64_t>::min();
+    patches[1].upper[0] = std::numeric_limits<std::int64_t>::max();
+    reject();
+    patches[1].physical_lower[0] += patches[1].cell_spacing[0];
+    reject();
+    patches[1].cell_spacing[0] *= 2.0;
+    reject();
+    patches[1].physical_lower[0] = std::numeric_limits<double>::quiet_NaN();
+    reject();
+    auto wrong_geometry = geometry;
+    wrong_geometry.front().lower[0] -= 1;
+    EXPECT_THROW(validate_field_global_topology(topology, wrong_geometry), std::invalid_argument);
+    wrong_geometry = geometry;
+    wrong_geometry.back().cell_spacing[0] = 0.0;
+    EXPECT_THROW(validate_field_global_topology(topology, wrong_geometry), std::invalid_argument);
+    // Missing geometry never turns a valid-looking refined patch into an unqualified flat patch.
+    auto coarse_only = topology;
+    coarse_only.patch_count = 1;
+    EXPECT_NO_THROW(validate_field_global_topology(coarse_only));
+    patches[0].upper[0] = topology.domain_upper[0] + 1;
+    EXPECT_THROW(validate_field_global_topology(coarse_only), std::invalid_argument);
+  }
+}
+
+TEST(ComponentInterfaces, TransferV2IntegralDispatchIsTypedAndPreflighted) {
+  std::array<double, 4> source{1, 2, 3, 4};
+  std::array<double, 1> destination{-99};
+  std::array<double, 4> weights{1, -1, 0.5, 0.5};
+  int calls = 0;
+  PopsTransferApiV2 api{abi_header(sizeof(PopsTransferApiV2), POPS_NATIVE_INTERFACE_TRANSFER_V2, 2),
+                        +[](void*, const PopsTransferRequestV1*, PopsComponentStatusV1* status) {
+                          *status = ok_status();
+                          return 0;
+                        },
+                        +[](void* state, const PopsTransferIntegralRequestV2* request,
+                            PopsComponentStatusV1* status) {
+                          ++*static_cast<int*>(state);
+                          *static_cast<double*>(request->destination.data) = 37;
+                          *status = ok_status();
+                          return 0;
+                        }};
+  EXPECT_TRUE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_TRANSFER_V2, &api, sizeof(api)));
+  auto missing = api;
+  missing.apply_integral = nullptr;
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_TRANSFER_V2, &missing, sizeof(missing)));
+  auto retired = api;
+  retired.header.interface_version = 1;
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_TRANSFER_V2, &retired, sizeof(retired)));
+  auto truncated = api;
+  truncated.header.struct_size = sizeof(PopsComponentTableHeaderV1);
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_TRANSFER_V2, &truncated, sizeof(truncated)));
+  PopsTransferIntegralRequestV2 request{};
+  request.struct_size = sizeof(request);
+  request.source = abi::const_field_view(source.data(), 2, 2);
+  request.destination = abi::field_view(destination.data(), 1, 1);
+  request.dimension = 2;
+  request.operation = POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+  request.physical_contract_identity = "test::physical-map";
+  request.axis_weights = weights.data();
+  request.weight_count = weights.size();
+  request.weight_offsets[1] = 2;
+  request.execution = abi::host_execution_context();
+  PopsComponentStatusV1 status = pops::component::unwritten_component_status();
+  EXPECT_EQ(pops::component::apply_transfer_integral(api, &calls, request, status), 0);
+  EXPECT_EQ(calls, 1);
+  EXPECT_DOUBLE_EQ(destination[0], 37);
+  request.weight_offsets[1] = 3;
+  EXPECT_THROW(pops::component::apply_transfer_integral(api, &calls, request, status),
+               std::invalid_argument);
+  request.weight_offsets[1] = 2;
+  request.source.component_stride = std::numeric_limits<std::ptrdiff_t>::max();
+  request.source.component_count = request.destination.component_count = 2;
+  EXPECT_THROW(pops::component::apply_transfer_integral(api, &calls, request, status),
+               std::invalid_argument);
+  EXPECT_EQ(calls, 1);
+  EXPECT_DOUBLE_EQ(destination[0], 37);
 }
 
 }  // namespace

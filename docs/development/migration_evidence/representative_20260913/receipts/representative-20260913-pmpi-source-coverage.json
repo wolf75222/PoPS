@@ -1,0 +1,1818 @@
+{
+  "schema": "pops.representative-mpi-metric-source-coverage.v1",
+  "source": "6a9c5b20bac2be949fda488ce44942329c902294",
+  "source_root": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v30-proof",
+  "scanner_sha256": "518b56f6ba3d856c3b829c194b50bf19f12d148460c51b87cf4d4f215fb4d124",
+  "coverage": {
+    "passed": true,
+    "coverage_basis": "all raw MPI call spellings in scanned native and Python files",
+    "classification_is_advisory": true,
+    "observed_instrumented_apis": [
+      "MPI_Allgather",
+      "MPI_Allgatherv",
+      "MPI_Allreduce",
+      "MPI_Barrier",
+      "MPI_Bcast",
+      "MPI_Cancel",
+      "MPI_Comm_dup",
+      "MPI_Comm_free",
+      "MPI_Gather",
+      "MPI_Gatherv",
+      "MPI_Irecv",
+      "MPI_Isend",
+      "MPI_Sendrecv",
+      "MPI_Waitall"
+    ],
+    "instrumented_apis_not_observed": [],
+    "explicit_non_payload_apis": {
+      "MPI_Abort": "process control",
+      "MPI_Comm_c2f": "communicator handle conversion",
+      "MPI_Comm_compare": "communicator metadata",
+      "MPI_Comm_f2c": "communicator handle conversion",
+      "MPI_Comm_get_attr": "communicator metadata",
+      "MPI_Comm_rank": "communicator metadata",
+      "MPI_Comm_set_errhandler": "communicator error policy",
+      "MPI_Comm_size": "communicator metadata",
+      "MPI_Error_string": "error reporting",
+      "MPI_Finalize": "MPI lifecycle",
+      "MPI_Finalized": "MPI lifecycle query",
+      "MPI_Get_count": "completion status query",
+      "MPI_Init_thread": "MPI lifecycle",
+      "MPI_Initialized": "MPI lifecycle query",
+      "MPI_Query_thread": "MPI lifecycle query",
+      "MPI_Type_c2f": "datatype handle conversion",
+      "MPI_Type_commit": "datatype lifecycle",
+      "MPI_Type_contiguous": "datatype construction",
+      "MPI_Type_f2c": "datatype handle conversion",
+      "MPI_Type_free": "datatype lifecycle"
+    },
+    "unclassified_apis": [],
+    "advisory_non_executable_categories": [
+      "native_comment",
+      "native_string_literal",
+      "python_comment",
+      "python_docstring",
+      "python_string_literal"
+    ]
+  },
+  "native": {
+    "extensions": [
+      ".c",
+      ".cpp",
+      ".h",
+      ".hpp",
+      ".inc"
+    ],
+    "files_scanned": 369,
+    "raw_symbol_occurrences": {
+      "MPI_Abort": 1,
+      "MPI_Allgather": 2,
+      "MPI_Allgatherv": 3,
+      "MPI_Allreduce": 108,
+      "MPI_BOR": 2,
+      "MPI_BYTE": 14,
+      "MPI_Barrier": 6,
+      "MPI_Bcast": 23,
+      "MPI_CHAR": 8,
+      "MPI_COMM_NULL": 22,
+      "MPI_COMM_WORLD": 90,
+      "MPI_CONGRUENT": 6,
+      "MPI_Cancel": 5,
+      "MPI_Comm": 25,
+      "MPI_Comm_c2f": 4,
+      "MPI_Comm_compare": 19,
+      "MPI_Comm_dup": 3,
+      "MPI_Comm_f2c": 5,
+      "MPI_Comm_free": 9,
+      "MPI_Comm_get_attr": 2,
+      "MPI_Comm_rank": 16,
+      "MPI_Comm_set_errhandler": 3,
+      "MPI_Comm_size": 14,
+      "MPI_DATATYPE_NULL": 2,
+      "MPI_DOUBLE": 24,
+      "MPI_Datatype": 3,
+      "MPI_ERRORS_RETURN": 1,
+      "MPI_ERR_COUNT": 6,
+      "MPI_ERR_OTHER": 13,
+      "MPI_Error_string": 2,
+      "MPI_FLOAT": 1,
+      "MPI_Finalize": 4,
+      "MPI_Finalized": 6,
+      "MPI_Fint": 10,
+      "MPI_Gather": 4,
+      "MPI_Gatherv": 5,
+      "MPI_Get_count": 4,
+      "MPI_IDENT": 10,
+      "MPI_INFO_NULL": 1,
+      "MPI_INT": 19,
+      "MPI_IN_PLACE": 21,
+      "MPI_Init": 1,
+      "MPI_Init_thread": 4,
+      "MPI_Initialized": 8,
+      "MPI_Irecv": 5,
+      "MPI_Isend": 5,
+      "MPI_LONG": 10,
+      "MPI_MAX": 32,
+      "MPI_MAX_ERROR_STRING": 2,
+      "MPI_MIN": 13,
+      "MPI_Query_thread": 3,
+      "MPI_REQUEST_NULL": 30,
+      "MPI_Request": 34,
+      "MPI_SOURCE": 4,
+      "MPI_STATUSES_IGNORE": 5,
+      "MPI_STATUS_IGNORE": 2,
+      "MPI_SUCCESS": 100,
+      "MPI_SUM": 8,
+      "MPI_Sendrecv": 4,
+      "MPI_Status": 8,
+      "MPI_TAG": 4,
+      "MPI_TAG_UB": 2,
+      "MPI_THREAD_MULTIPLE": 8,
+      "MPI_THREAD_SINGLE": 4,
+      "MPI_Type_c2f": 3,
+      "MPI_Type_commit": 2,
+      "MPI_Type_contiguous": 2,
+      "MPI_Type_f2c": 5,
+      "MPI_Type_free": 2,
+      "MPI_UINT64_T": 2,
+      "MPI_UNDEFINED": 5,
+      "MPI_UNEQUAL": 9,
+      "MPI_UNSIGNED_LONG_LONG": 13,
+      "MPI_Waitall": 11
+    },
+    "raw_call_spelling_counts": {
+      "MPI_Abort": 1,
+      "MPI_Allgather": 2,
+      "MPI_Allgatherv": 2,
+      "MPI_Allreduce": 108,
+      "MPI_Barrier": 4,
+      "MPI_Bcast": 23,
+      "MPI_Cancel": 5,
+      "MPI_Comm_c2f": 3,
+      "MPI_Comm_compare": 18,
+      "MPI_Comm_dup": 3,
+      "MPI_Comm_f2c": 5,
+      "MPI_Comm_free": 5,
+      "MPI_Comm_get_attr": 2,
+      "MPI_Comm_rank": 9,
+      "MPI_Comm_set_errhandler": 3,
+      "MPI_Comm_size": 8,
+      "MPI_Error_string": 2,
+      "MPI_Finalize": 1,
+      "MPI_Finalized": 4,
+      "MPI_Gather": 4,
+      "MPI_Gatherv": 4,
+      "MPI_Get_count": 4,
+      "MPI_Init_thread": 1,
+      "MPI_Initialized": 6,
+      "MPI_Irecv": 5,
+      "MPI_Isend": 5,
+      "MPI_Query_thread": 2,
+      "MPI_Sendrecv": 4,
+      "MPI_Type_c2f": 2,
+      "MPI_Type_commit": 2,
+      "MPI_Type_contiguous": 2,
+      "MPI_Type_f2c": 5,
+      "MPI_Type_free": 2,
+      "MPI_Waitall": 9
+    },
+    "classified_call_occurrences": [
+      {
+        "api": "MPI_Irecv",
+        "category": "native_source_call",
+        "line": 179,
+        "path": "include/pops/mesh/boundary/halo_exchange.hpp"
+      },
+      {
+        "api": "MPI_Isend",
+        "category": "native_source_call",
+        "line": 203,
+        "path": "include/pops/mesh/boundary/halo_exchange.hpp"
+      },
+      {
+        "api": "MPI_Comm_get_attr",
+        "category": "native_source_call",
+        "line": 529,
+        "path": "include/pops/mesh/boundary/halo_exchange.hpp"
+      },
+      {
+        "api": "MPI_Waitall",
+        "category": "native_source_call",
+        "line": 664,
+        "path": "include/pops/mesh/boundary/halo_exchange.hpp"
+      },
+      {
+        "api": "MPI_Waitall",
+        "category": "native_source_call",
+        "line": 673,
+        "path": "include/pops/mesh/boundary/halo_exchange.hpp"
+      },
+      {
+        "api": "MPI_Get_count",
+        "category": "native_source_call",
+        "line": 684,
+        "path": "include/pops/mesh/boundary/halo_exchange.hpp"
+      },
+      {
+        "api": "MPI_Cancel",
+        "category": "native_source_call",
+        "line": 696,
+        "path": "include/pops/mesh/boundary/halo_exchange.hpp"
+      },
+      {
+        "api": "MPI_Irecv",
+        "category": "native_source_call",
+        "line": 150,
+        "path": "include/pops/mesh/nd_proof/translation_exchange.hpp"
+      },
+      {
+        "api": "MPI_Isend",
+        "category": "native_source_call",
+        "line": 172,
+        "path": "include/pops/mesh/nd_proof/translation_exchange.hpp"
+      },
+      {
+        "api": "MPI_Comm_get_attr",
+        "category": "native_source_call",
+        "line": 336,
+        "path": "include/pops/mesh/nd_proof/translation_exchange.hpp"
+      },
+      {
+        "api": "MPI_Waitall",
+        "category": "native_source_call",
+        "line": 488,
+        "path": "include/pops/mesh/nd_proof/translation_exchange.hpp"
+      },
+      {
+        "api": "MPI_Cancel",
+        "category": "native_source_call",
+        "line": 494,
+        "path": "include/pops/mesh/nd_proof/translation_exchange.hpp"
+      },
+      {
+        "api": "MPI_Waitall",
+        "category": "native_source_call",
+        "line": 646,
+        "path": "include/pops/mesh/parallel/region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Cancel",
+        "category": "native_source_call",
+        "line": 663,
+        "path": "include/pops/mesh/parallel/region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Irecv",
+        "category": "native_source_call",
+        "line": 684,
+        "path": "include/pops/mesh/parallel/region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Isend",
+        "category": "native_source_call",
+        "line": 697,
+        "path": "include/pops/mesh/parallel/region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Waitall",
+        "category": "native_source_call",
+        "line": 709,
+        "path": "include/pops/mesh/parallel/region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Get_count",
+        "category": "native_source_call",
+        "line": 720,
+        "path": "include/pops/mesh/parallel/region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Waitall",
+        "category": "native_source_call",
+        "line": 552,
+        "path": "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Cancel",
+        "category": "native_source_call",
+        "line": 558,
+        "path": "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Irecv",
+        "category": "native_source_call",
+        "line": 582,
+        "path": "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Isend",
+        "category": "native_source_call",
+        "line": 595,
+        "path": "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Waitall",
+        "category": "native_source_call",
+        "line": 605,
+        "path": "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Get_count",
+        "category": "native_source_call",
+        "line": 613,
+        "path": "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp"
+      },
+      {
+        "api": "MPI_Sendrecv",
+        "category": "native_source_call",
+        "line": 623,
+        "path": "include/pops/numerics/elliptic/poisson/poisson_fft.hpp"
+      },
+      {
+        "api": "MPI_Sendrecv",
+        "category": "native_string_literal",
+        "line": 629,
+        "path": "include/pops/numerics/elliptic/poisson/poisson_fft.hpp"
+      },
+      {
+        "api": "MPI_Sendrecv",
+        "category": "native_source_call",
+        "line": 647,
+        "path": "include/pops/numerics/elliptic/poisson/poisson_fft.hpp"
+      },
+      {
+        "api": "MPI_Sendrecv",
+        "category": "native_string_literal",
+        "line": 653,
+        "path": "include/pops/numerics/elliptic/poisson/poisson_fft.hpp"
+      },
+      {
+        "api": "MPI_Error_string",
+        "category": "native_source_call",
+        "line": 107,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Initialized",
+        "category": "native_source_call",
+        "line": 133,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Finalized",
+        "category": "native_source_call",
+        "line": 135,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Finalize",
+        "category": "native_source_call",
+        "line": 145,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Finalized",
+        "category": "native_source_call",
+        "line": 163,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Initialized",
+        "category": "native_source_call",
+        "line": 168,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Init_thread",
+        "category": "native_source_call",
+        "line": 176,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Query_thread",
+        "category": "native_source_call",
+        "line": 188,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Comm_rank",
+        "category": "native_source_call",
+        "line": 213,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Comm_size",
+        "category": "native_source_call",
+        "line": 221,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Barrier",
+        "category": "native_source_call",
+        "line": 227,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 234,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 235,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 243,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 244,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 254,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 255,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 267,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 268,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 279,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 280,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 301,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 302,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 319,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 320,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 328,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 329,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 337,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 338,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 355,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 356,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 370,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 371,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 384,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 385,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 400,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 401,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 415,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 416,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 429,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 430,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Comm_rank",
+        "category": "native_source_call",
+        "line": 507,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Comm_rank",
+        "category": "native_string_literal",
+        "line": 508,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Comm_size",
+        "category": "native_source_call",
+        "line": 520,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Comm_size",
+        "category": "native_string_literal",
+        "line": 521,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Barrier",
+        "category": "native_source_call",
+        "line": 549,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Barrier",
+        "category": "native_string_literal",
+        "line": 550,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 562,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 563,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 577,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 578,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 592,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 593,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 607,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 608,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 622,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 623,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 637,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 638,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 652,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 653,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 665,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 667,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 690,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 692,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 718,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 719,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 734,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 735,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 750,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 751,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 763,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 765,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 789,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 791,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 820,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 821,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 841,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 842,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 862,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 863,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 883,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 884,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 905,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 906,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 926,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 927,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Initialized",
+        "category": "native_source_call",
+        "line": 970,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Finalized",
+        "category": "native_source_call",
+        "line": 971,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Query_thread",
+        "category": "native_source_call",
+        "line": 972,
+        "path": "include/pops/parallel/comm.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_source_call",
+        "line": 59,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_string_literal",
+        "line": 62,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_dup",
+        "category": "native_source_call",
+        "line": 276,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Abort",
+        "category": "native_source_call",
+        "line": 289,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_free",
+        "category": "native_source_call",
+        "line": 292,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_dup",
+        "category": "native_string_literal",
+        "line": 297,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_dup",
+        "category": "native_string_literal",
+        "line": 299,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_set_errhandler",
+        "category": "native_source_call",
+        "line": 301,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_free",
+        "category": "native_source_call",
+        "line": 305,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_set_errhandler",
+        "category": "native_string_literal",
+        "line": 310,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_set_errhandler",
+        "category": "native_string_literal",
+        "line": 313,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_source_call",
+        "line": 405,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_string_literal",
+        "line": 406,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_free",
+        "category": "native_source_call",
+        "line": 457,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_c2f",
+        "category": "native_source_call",
+        "line": 558,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 578,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 579,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 581,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 582,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 601,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 602,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 623,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 625,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 688,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 689,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 691,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 692,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Gather",
+        "category": "native_source_call",
+        "line": 723,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Gather",
+        "category": "native_string_literal",
+        "line": 725,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 729,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 731,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Gatherv",
+        "category": "native_source_call",
+        "line": 794,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Gatherv",
+        "category": "native_string_literal",
+        "line": 798,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_free",
+        "category": "native_source_call",
+        "line": 825,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Comm_free",
+        "category": "native_string_literal",
+        "line": 825,
+        "path": "include/pops/parallel/execution_lane.hpp"
+      },
+      {
+        "api": "MPI_Initialized",
+        "category": "native_source_call",
+        "line": 36,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Finalized",
+        "category": "native_source_call",
+        "line": 37,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 50,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 51,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 52,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 53,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Comm_size",
+        "category": "native_source_call",
+        "line": 57,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Type_c2f",
+        "category": "native_source_call",
+        "line": 84,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Comm_rank",
+        "category": "native_source_call",
+        "line": 134,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Comm_size",
+        "category": "native_source_call",
+        "line": 145,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Comm_c2f",
+        "category": "native_source_call",
+        "line": 182,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Barrier",
+        "category": "native_source_call",
+        "line": 200,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Comm_rank",
+        "category": "native_source_call",
+        "line": 211,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 219,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 220,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 225,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 226,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 241,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 243,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 251,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 253,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Comm_size",
+        "category": "native_source_call",
+        "line": 270,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Comm_rank",
+        "category": "native_source_call",
+        "line": 271,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 281,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 282,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 296,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 298,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allgather",
+        "category": "native_source_call",
+        "line": 302,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allgather",
+        "category": "native_string_literal",
+        "line": 304,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 329,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 331,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 361,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 363,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allgatherv",
+        "category": "native_source_call",
+        "line": 371,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allgatherv",
+        "category": "native_string_literal",
+        "line": 374,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Comm_size",
+        "category": "native_source_call",
+        "line": 398,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Comm_rank",
+        "category": "native_source_call",
+        "line": 399,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 408,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 409,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 425,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 427,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Gather",
+        "category": "native_source_call",
+        "line": 431,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Gather",
+        "category": "native_string_literal",
+        "line": 433,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 435,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 437,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 463,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 465,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 498,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 500,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Gatherv",
+        "category": "native_source_call",
+        "line": 509,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Gatherv",
+        "category": "native_string_literal",
+        "line": 512,
+        "path": "include/pops/parallel/world_communicator.hpp"
+      },
+      {
+        "api": "MPI_Waitall",
+        "category": "native_source_call",
+        "line": 611,
+        "path": "include/pops/runtime/amr/prepared_amr_ghost_fill.hpp"
+      },
+      {
+        "api": "MPI_Cancel",
+        "category": "native_source_call",
+        "line": 617,
+        "path": "include/pops/runtime/amr/prepared_amr_ghost_fill.hpp"
+      },
+      {
+        "api": "MPI_Irecv",
+        "category": "native_source_call",
+        "line": 644,
+        "path": "include/pops/runtime/amr/prepared_amr_ghost_fill.hpp"
+      },
+      {
+        "api": "MPI_Isend",
+        "category": "native_source_call",
+        "line": 658,
+        "path": "include/pops/runtime/amr/prepared_amr_ghost_fill.hpp"
+      },
+      {
+        "api": "MPI_Waitall",
+        "category": "native_source_call",
+        "line": 669,
+        "path": "include/pops/runtime/amr/prepared_amr_ghost_fill.hpp"
+      },
+      {
+        "api": "MPI_Get_count",
+        "category": "native_source_call",
+        "line": 677,
+        "path": "include/pops/runtime/amr/prepared_amr_ghost_fill.hpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 937,
+        "path": "include/pops/runtime/amr/tensor_composite_fac.hpp"
+      },
+      {
+        "api": "MPI_Comm_c2f",
+        "category": "native_source_call",
+        "line": 101,
+        "path": "include/pops/runtime/dynamic/prepared_execution_context.hpp"
+      },
+      {
+        "api": "MPI_Type_c2f",
+        "category": "native_source_call",
+        "line": 102,
+        "path": "include/pops/runtime/dynamic/prepared_execution_context.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_source_call",
+        "line": 122,
+        "path": "include/pops/runtime/dynamic/prepared_execution_context.hpp"
+      },
+      {
+        "api": "MPI_Comm_f2c",
+        "category": "native_source_call",
+        "line": 122,
+        "path": "include/pops/runtime/dynamic/prepared_execution_context.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_string_literal",
+        "line": 124,
+        "path": "include/pops/runtime/dynamic/prepared_execution_context.hpp"
+      },
+      {
+        "api": "MPI_Type_f2c",
+        "category": "native_source_call",
+        "line": 126,
+        "path": "include/pops/runtime/dynamic/prepared_execution_context.hpp"
+      },
+      {
+        "api": "MPI_Comm_f2c",
+        "category": "native_source_call",
+        "line": 254,
+        "path": "include/pops/runtime/multiblock/interface_flux_scheduler.hpp"
+      },
+      {
+        "api": "MPI_Type_f2c",
+        "category": "native_source_call",
+        "line": 256,
+        "path": "include/pops/runtime/multiblock/interface_flux_scheduler.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_source_call",
+        "line": 262,
+        "path": "include/pops/runtime/multiblock/interface_flux_scheduler.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_string_literal",
+        "line": 263,
+        "path": "include/pops/runtime/multiblock/interface_flux_scheduler.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_source_call",
+        "line": 1082,
+        "path": "include/pops/runtime/multiblock/interface_flux_scheduler.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_string_literal",
+        "line": 1084,
+        "path": "include/pops/runtime/multiblock/interface_flux_scheduler.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_source_call",
+        "line": 1098,
+        "path": "include/pops/runtime/multiblock/interface_flux_scheduler.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_string_literal",
+        "line": 1100,
+        "path": "include/pops/runtime/multiblock/interface_flux_scheduler.hpp"
+      },
+      {
+        "api": "MPI_Initialized",
+        "category": "native_source_call",
+        "line": 839,
+        "path": "include/pops/runtime/system/prepared_field_solver_component.hpp"
+      },
+      {
+        "api": "MPI_Initialized",
+        "category": "native_string_literal",
+        "line": 840,
+        "path": "include/pops/runtime/system/prepared_field_solver_component.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_source_call",
+        "line": 846,
+        "path": "include/pops/runtime/system/prepared_field_solver_component.hpp"
+      },
+      {
+        "api": "MPI_Comm_f2c",
+        "category": "native_source_call",
+        "line": 846,
+        "path": "include/pops/runtime/system/prepared_field_solver_component.hpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_string_literal",
+        "line": 848,
+        "path": "include/pops/runtime/system/prepared_field_solver_component.hpp"
+      },
+      {
+        "api": "MPI_Type_f2c",
+        "category": "native_source_call",
+        "line": 849,
+        "path": "include/pops/runtime/system/prepared_field_solver_component.hpp"
+      },
+      {
+        "api": "MPI_Comm_f2c",
+        "category": "native_source_call",
+        "line": 167,
+        "path": "src/runtime/amr/amr_layout_transfer.cpp"
+      },
+      {
+        "api": "MPI_Type_f2c",
+        "category": "native_source_call",
+        "line": 169,
+        "path": "src/runtime/amr/amr_layout_transfer.cpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_source_call",
+        "line": 173,
+        "path": "src/runtime/amr/amr_layout_transfer.cpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_string_literal",
+        "line": 174,
+        "path": "src/runtime/amr/amr_layout_transfer.cpp"
+      },
+      {
+        "api": "MPI_Error_string",
+        "category": "native_source_call",
+        "line": 95,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 146,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 147,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 154,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 156,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 190,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 191,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 199,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 200,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 219,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 219,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_source_call",
+        "line": 290,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Allreduce",
+        "category": "native_string_literal",
+        "line": 291,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Type_contiguous",
+        "category": "native_source_call",
+        "line": 300,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Type_contiguous",
+        "category": "native_string_literal",
+        "line": 302,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Type_commit",
+        "category": "native_source_call",
+        "line": 303,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Type_commit",
+        "category": "native_string_literal",
+        "line": 303,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Type_free",
+        "category": "native_source_call",
+        "line": 308,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Type_free",
+        "category": "native_string_literal",
+        "line": 308,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 317,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 318,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_source_call",
+        "line": 335,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Bcast",
+        "category": "native_string_literal",
+        "line": 337,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Comm_rank",
+        "category": "native_source_call",
+        "line": 818,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Comm_rank",
+        "category": "native_source_call",
+        "line": 846,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Comm_size",
+        "category": "native_source_call",
+        "line": 847,
+        "path": "src/runtime/output/hdf5_collective.cpp"
+      },
+      {
+        "api": "MPI_Comm_f2c",
+        "category": "native_source_call",
+        "line": 106,
+        "path": "src/runtime/system/system_layout_transfer.cpp"
+      },
+      {
+        "api": "MPI_Type_f2c",
+        "category": "native_source_call",
+        "line": 108,
+        "path": "src/runtime/system/system_layout_transfer.cpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_source_call",
+        "line": 115,
+        "path": "src/runtime/system/system_layout_transfer.cpp"
+      },
+      {
+        "api": "MPI_Comm_compare",
+        "category": "native_string_literal",
+        "line": 116,
+        "path": "src/runtime/system/system_layout_transfer.cpp"
+      }
+    ],
+    "source_call_counts": {
+      "MPI_Abort": 1,
+      "MPI_Allgather": 1,
+      "MPI_Allgatherv": 1,
+      "MPI_Allreduce": 54,
+      "MPI_Barrier": 3,
+      "MPI_Bcast": 12,
+      "MPI_Cancel": 5,
+      "MPI_Comm_c2f": 3,
+      "MPI_Comm_compare": 9,
+      "MPI_Comm_dup": 1,
+      "MPI_Comm_f2c": 5,
+      "MPI_Comm_free": 4,
+      "MPI_Comm_get_attr": 2,
+      "MPI_Comm_rank": 8,
+      "MPI_Comm_set_errhandler": 1,
+      "MPI_Comm_size": 7,
+      "MPI_Error_string": 2,
+      "MPI_Finalize": 1,
+      "MPI_Finalized": 4,
+      "MPI_Gather": 2,
+      "MPI_Gatherv": 2,
+      "MPI_Get_count": 4,
+      "MPI_Init_thread": 1,
+      "MPI_Initialized": 5,
+      "MPI_Irecv": 5,
+      "MPI_Isend": 5,
+      "MPI_Query_thread": 2,
+      "MPI_Sendrecv": 2,
+      "MPI_Type_c2f": 2,
+      "MPI_Type_commit": 1,
+      "MPI_Type_contiguous": 1,
+      "MPI_Type_f2c": 5,
+      "MPI_Type_free": 1,
+      "MPI_Waitall": 9
+    },
+    "inc_source_calls": [],
+    "apis_only_in_inc": []
+  },
+  "python": {
+    "root": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v30-proof/python",
+    "files_scanned": 681,
+    "classified_call_occurrences": [],
+    "raw_call_spelling_counts": {},
+    "counts_by_category": {}
+  },
+  "native_execution": false
+}

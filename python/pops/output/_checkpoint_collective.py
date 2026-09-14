@@ -282,7 +282,7 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
         isinstance(manifest["schema_version"], bool)
         or manifest["schema_version"] != CHECKPOINT_ENVELOPE_SCHEMA_VERSION
         or not isinstance(manifest["runtime_kind"], str)
-        or manifest["runtime_kind"] not in {"uniform", "amr", "multi_layout_uniform"}
+        or manifest["runtime_kind"] not in {"uniform", "amr", "multi_layout_uniform", "multi_layout_amr"}
     ):
         raise ValueError("checkpoint manifest version/runtime kind is unsupported")
     clock = manifest["clock"]
@@ -885,15 +885,30 @@ def _bounded_checkpoint_stream_bytes(stream: Any, max_bytes: int) -> bytes:
     read = getattr(stream, "read", None)
     if not callable(read):
         raise TypeError("checkpoint bounded stream read requires a binary stream")
-    payload = read(max_bytes)
-    if not isinstance(payload, bytes) or not payload:
+    # The authenticated capacity can cover an entire AMR hierarchy and be much larger than
+    # this rank's actual archive. BufferedReader may allocate its requested size before EOF.
+    # Bound each allocation and tolerate short reads without mistaking them for EOF.
+    chunks = []
+    remaining = max_bytes
+    while remaining:
+        requested = min(remaining, 1024 * 1024)
+        chunk = read(requested)
+        if not isinstance(chunk, bytes):
+            raise TypeError("checkpoint bounded stream read returned no exact bytes")
+        if len(chunk) > requested:
+            raise ValueError("checkpoint stream exceeded its bounded read request")
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    if not chunks:
         raise TypeError("checkpoint bounded stream read returned no exact bytes")
     trailing = read(1)
     if not isinstance(trailing, bytes):
         raise TypeError("checkpoint bounded stream read returned non-byte trailing data")
     if trailing:
         raise ValueError("checkpoint archive exceeds its live resource budget")
-    return payload
+    return b"".join(chunks)
 
 
 def root_bytes(

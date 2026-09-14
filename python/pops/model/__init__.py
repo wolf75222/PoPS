@@ -130,3 +130,6 @@ __all__ = [
     "ComponentKey", "ComponentContract", "ProviderEntry", "ProviderPack",
     "MissingInputProvider", "build_provider_pack", "build_operator_provider_pack",
 ]
+
+from pops._ir.quantity import PhysicalDimension, PhysicalSupport
+__all__ += ["PhysicalDimension", "PhysicalSupport"]

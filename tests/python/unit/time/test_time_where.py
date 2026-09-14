@@ -227,7 +227,12 @@ def _run_section_b(t):
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 0.5 + 0.4 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     initial = np.ascontiguousarray(np.stack([rho0]))
-    simulation = pops.bind(artifact, initial_state={"blk": initial})
+    from tests.python.support.native_execution_context import artifact_execution_context
+
+    simulation = pops.bind(
+        artifact, initial_state={"blk": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
 
     report = pops.run(simulation, t_end=dt, max_steps=1)
     assert report.accepted_steps == 1, "the public where Program must accept exactly one step"

@@ -98,6 +98,9 @@ def _integer_vector(payload: Any, key: str) -> tuple[int, ...]:
 def preflight_uniform_restart(payload: Any) -> None:
     """Validate every dynamic history/cache key before restart mutates native state."""
     from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
+    from pops.runtime._checkpoint_exchanges import (
+        CONTINUATION_CHECKPOINT_KEYS, validate_checkpoint_continuation_arrays,
+    )
     from pops.runtime._program_cadence_checkpoint import (
         PROGRAM_CADENCE_CHECKPOINT_KEYS,
     )
@@ -118,11 +121,12 @@ def preflight_uniform_restart(payload: Any) -> None:
         "cache_nodes",
         "cache_names",
         "temporal_restart_state",
-    } | PROGRAM_CADENCE_CHECKPOINT_KEYS
+    } | PROGRAM_CADENCE_CHECKPOINT_KEYS | CONTINUATION_CHECKPOINT_KEYS
     missing = sorted(required - files)
     if missing:
         raise ValueError("restart : strict Uniform checkpoint is missing %s" % ", ".join(missing))
 
+    validate_checkpoint_continuation_arrays(payload)
     _float_scalar(payload, "t")
     macro_step = _integer_scalar(payload, "macro_step", minimum=0)
     program_hash = _text_scalar(payload, "program_hash")
@@ -162,6 +166,7 @@ def preflight_uniform_restart(payload: Any) -> None:
         MANIFEST_KEY,
         IDENTITY_KEY,
         *PROGRAM_CADENCE_CHECKPOINT_KEYS,
+        *CONTINUATION_CHECKPOINT_KEYS,
     }
     if "blocks" in files:
         blocks = _text_vector(payload, "blocks", unique=True)
@@ -250,7 +255,13 @@ def preflight_uniform_restart(payload: Any) -> None:
                 raise ValueError(
                     "restart : history '%s' has inconsistent initialized/fill-count metadata" % name
                 )
-            validate_history_slot_dt_payload(payload, name, depth, fill_count, level=level)
+            slot_dt = validate_history_slot_dt_payload(payload, name, depth, fill_count, level=level)
+            from pops.runtime._history_sample_identity import identity_key, prepare_identity_payload
+
+            sample_key = identity_key(name, level)
+            if sample_key in files:
+                allowed.add(sample_key)
+            prepare_identity_payload(payload, name, level, depth, initialized=initialized, slot_dt=slot_dt)
             for slot in stored:
                 key = _history_slot_key(name, level, slot)
                 if key not in files:

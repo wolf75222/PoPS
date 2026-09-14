@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pops.lib.time as libtime
 import pytest
 from pops.boundary import ZeroFlux
@@ -67,7 +68,11 @@ def _case_and_grid() -> tuple[pops.Case, CartesianGrid]:
 
 def _run(case: pops.Case, layout: Uniform, initial: np.ndarray) -> np.ndarray:
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
-    runtime = pops.bind(artifact, initial_state={"tracer": initial})
+    runtime = pops.bind(
+        artifact,
+        initial_state={"tracer": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(runtime, t_end=DT, max_steps=1)
     assert report.accepted_steps == 1
     return np.asarray(runtime.state_global("tracer"), dtype=np.float64).reshape(

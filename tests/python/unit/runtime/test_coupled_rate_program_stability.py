@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 from pops.amr import (
     AMRExecution,
     AMRHierarchy,
@@ -391,7 +392,10 @@ def test_coupled_rate_bound_drives_a_conservative_native_amr_step(
 ) -> None:
     del isolated_native_cache, kokkos_root
     artifact = pops.compile(_resolve_coupled_rate_case(cxx=native_cxx))
-    simulation = pops.bind(artifact)
+    simulation = pops.bind(
+        artifact,
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     level_count = simulation.n_levels()
     assert level_count == 2
     assert simulation.program_report().level_relations == [

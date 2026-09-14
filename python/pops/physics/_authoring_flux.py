@@ -319,7 +319,12 @@ class _FluxMixin(_HyperbolicModel):
             raise ValueError("flux_jacobian : flux %s expected with %d components (got %d)"
                              % (key, self.n_vars, len(comps)))
         defs = self.prim_defs
-        return [[diff(comps[i], self.cons_names[j], defs) for j in range(self.n_vars)]
+        coordinates = self._conservative_coordinates
+        if coordinates is None:
+            coordinates = self.cons_names
+        elif len(coordinates) != self.n_vars:
+            raise ValueError("flux_jacobian conservative coordinate authority has invalid arity")
+        return [[diff(comps[i], coordinates[j], defs) for j in range(self.n_vars)]
                 for i in range(self.n_vars)]
 
     def left(self, expr: Any) -> Any:

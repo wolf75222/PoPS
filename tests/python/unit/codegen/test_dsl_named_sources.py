@@ -8,9 +8,8 @@ authority. It covers the named-source tests 1-8 plus the cache-key contract:
   - m.source([...]) stays backward compatible and is equivalent to source_term("default", [...]);
   - an old stepper requesting a total source on a multiple-named-source model is rejected
     (never summed implicitly);
-  - the model hash folds named sources in CONDITIONALLY: a model without any named source keeps
-    a byte-identical hash to before the feature (golden), while changing a named source or a
-    linear_source matrix invalidates the cache.
+  - the model hash authenticates models with and without named sources against the current schema
+    goldens, while changing a named source or a linear_source matrix invalidates the cache.
 
 Run with python3 (PYTHONPATH = built pops package).
 """
@@ -21,11 +20,11 @@ from pops.codegen.module_lowering import lower_and_validate
 from pops.model import ProviderPack
 from pops.physics._facade import Model
 
-# Golden hashes for the canonical Module-lowered model-hash schema.  The exact auxiliary
-# ProviderPack now participates in cache identity; named-source declarations must still preserve
+# Golden hashes for canonical Module-lowered model-hash schema 9, including qualified expression
+# graphs and the exact auxiliary ProviderPack. Named-source declarations must still preserve
 # equality between source() and source_term("default", ...) and inequality when formulas differ.
-GOLDEN_WITH_SOURCE = "268ae488896b60d9a7625914ed624823d0a40cf7ff2368b9ab3392a846d4473e"
-GOLDEN_NO_SOURCE = "e094513368a60cbf7b3e32bb2bb23e552ea0cc56301c94607fec2ba5937abf81"
+GOLDEN_WITH_SOURCE = "108b3b99056c619e43d714276541246bafcd44c5f4f204487ac24e67073cae4b"
+GOLDEN_NO_SOURCE = "fe836a8be7c76789b859792fa826f59b6e2d2c5bc9fad6fd7afd035a44c82fbe"
 
 
 def canonical_hash(model):
@@ -40,8 +39,7 @@ def canonical_hash(model):
 def build(with_source=True):
     """Canonical 3-variable electrostatic model (rho, rho_u, rho_v), aux grad_x/grad_y.
 
-    Mirrors the golden computed on master with only m.source(...); used to assert the named-source
-    feature leaves the existing cache key untouched."""
+    Authenticates the current schema with m.source(...) and without a source declaration."""
     m = Model("es3")
     rho, mx, my = m.conservative_vars("rho", "rho_u", "rho_v")
     gx = m.aux("grad_x")

@@ -12,6 +12,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -215,6 +216,9 @@ void prove_multiblock_subcycling() {
       {1, 2, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly}};
   Engine<Dim> engine = Engine<Dim>::prepare(
       hierarchy, relations, {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+  pops::runtime::program::Profiler profiler;
+  profiler.enable();
+  engine.bind_profiler(&profiler);
 
   std::array<std::array<pops::Real, 3>, 2> initial_mass{};
   for (std::size_t block = 0; block < 2; ++block)
@@ -321,6 +325,10 @@ void prove_multiblock_subcycling() {
   EXPECT_EQ(engine.last_accepted_attempt(), 1U);
   EXPECT_EQ(callback_order.size(), 20U);
   EXPECT_EQ(reflux_order, (std::vector<std::size_t>{1, 1, 1, 1, 1, 1, 0, 0}));
+  EXPECT_EQ(profiler.counter("average_down"), 8);
+  ASSERT_NE(profiler.entry("average_down"), nullptr);
+  EXPECT_EQ(profiler.entry("average_down")->count, 8U);
+  profiler.disable();
   for (std::size_t block = 0; block < 2; ++block) {
     EXPECT_EQ(engine.ledgers(block, 0).size(), 1U);
     EXPECT_EQ(engine.ledgers(block, 1).size(), 3U);
@@ -406,6 +414,138 @@ void prove_multiblock_subcycling() {
 
   engine.advance(typed_window, advance, reconcile, validate);
   EXPECT_EQ(engine.last_accepted_attempt(), 5U);
+
+  std::vector<std::vector<pops::MultiFab<Dim>>> before_fatal(2);
+  for (std::size_t block = 0; block < 2; ++block)
+    for (std::size_t level = 0; level < 3; ++level)
+      before_fatal[block].emplace_back(hierarchy.state(block, level));
+  const auto revision_before_fatal = hierarchy.accepted_revision();
+  const auto clock_before_fatal = engine.accepted_clock(1, 2);
+  const auto history_before_fatal = engine.accepted_history(1, 2)->window;
+  const auto ledgers_before_fatal = engine.ledgers(1, 1).size();
+  constexpr std::string_view fatal_cause =
+      "local_nonlinear failed: iteration_limit action=fail_run";
+  auto fail_fatally = [&](std::span<typename Engine<Dim>::LevelAdvanceContext> group) {
+    advance(group);
+    if (group[0].level != 2 || group[0].substep != 1)
+      return;
+    // The last rank owns the fatal cause; even an earlier rank's typed retry cannot override it.
+    if (hierarchy.lane().rank() == hierarchy.lane().size() - 1)
+      throw std::runtime_error(std::string(fatal_cause));
+    throw pops::runtime::program::StepAttemptRejected(
+        pops::SolveStatus::kIterationLimit, pops::runtime::program::StepAttemptDisposition::kRetry,
+        0x53554243u, "explicit-subcycle", "a peer requested a retry");
+  };
+  const pops::amr::ClockWindow fatal_window{{0, 3, {0, 1}, 0.6}, {0, 3, {1, 1}, 0.8}};
+  std::string fatal_diagnostic;
+  try {
+    engine.advance(fatal_window, fail_fatally, reconcile, validate);
+    ADD_FAILURE() << "a fatal level-group callback must leave the attempt";
+  } catch (const pops::runtime::program::StepAttemptRejected&) {
+    ADD_FAILURE() << "a peer's typed retry must not override a fatal callback";
+  } catch (const std::runtime_error& error) {
+    fatal_diagnostic = error.what();
+  }
+  EXPECT_NE(fatal_diagnostic.find(fatal_cause), std::string::npos);
+  EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs({{"fatal-cause", fatal_diagnostic}},
+                                                             hierarchy.lane()));
+  EXPECT_EQ(engine.last_accepted_attempt(), 5U);
+  EXPECT_EQ(hierarchy.accepted_revision(), revision_before_fatal);
+  EXPECT_EQ(engine.accepted_clock(1, 2), clock_before_fatal);
+  EXPECT_EQ(engine.accepted_history(1, 2)->window.begin, history_before_fatal.begin);
+  EXPECT_EQ(engine.accepted_history(1, 2)->window.end, history_before_fatal.end);
+  EXPECT_EQ(engine.ledgers(1, 1).size(), ledgers_before_fatal);
+  for (std::size_t block = 0; block < 2; ++block)
+    for (std::size_t level = 0; level < 3; ++level)
+      EXPECT_EQ(
+          pops::difference_sum_sq_all(hierarchy.state(block, level), before_fatal[block][level]),
+          pops::Real(0));
+  engine.advance(fatal_window, advance, reconcile, validate);
+  EXPECT_EQ(engine.last_accepted_attempt(), 7U);
+}
+
+template <int Dim>
+void prove_synchronized_envelopes() {
+  auto hierarchy = make_hierarchy<Dim>();
+  const std::vector<pops::amr::ParentChildClockRelation> relations{
+      {0, 1, {1, 1}, pops::amr::RemainderPolicy::IntegralOnly},
+      {1, 2, {1, 1}, pops::amr::RemainderPolicy::IntegralOnly}};
+  auto engine = Engine<Dim>::prepare(hierarchy, relations,
+                                     {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+  pops::runtime::program::Profiler profiler;
+  profiler.enable();
+  engine.bind_profiler(&profiler);
+  const pops::amr::ClockWindow window{{0, 0, {0, 1}, 0.0}, {0, 0, {1, 1}, 0.2}};
+  int callbacks = 0;
+  bool inject_failure = true;
+  auto advance = [&](auto root) {
+    ++callbacks;
+    EXPECT_EQ(root.front().level, 0U);
+    for (std::size_t level = 0; level < 3; ++level) {
+      auto group = engine.synchronized_level_group(level);
+      ASSERT_EQ(group.size(), 2U);
+      for (auto& context : group) {
+        EXPECT_EQ(context.level, level);
+        EXPECT_EQ(context.window.begin.level, static_cast<int>(level));
+        EXPECT_EQ(context.window.begin.physical_time, window.begin.physical_time);
+        EXPECT_EQ(context.window.end.physical_time, window.end.physical_time);
+        EXPECT_EQ(context.incoming_flux == nullptr, level == 0);
+        EXPECT_EQ(context.outgoing_flux == nullptr, level == 2);
+        if (level > 0) {
+          ASSERT_NE(context.staged_parent, nullptr);
+          // Parent candidates have already changed. Its staged state remains the old,
+          // block-qualified value at the common physical-time origin.
+          if (context.staged_parent->local_size() != 0)
+            EXPECT_EQ(pops::reduce_min_local(*context.staged_parent),
+                      context.block == 0 ? pops::Real(1) : pops::Real(4));
+          EXPECT_EQ(context.incoming_flux,
+                    engine.synchronized_level_group(level - 1)[context.block].outgoing_flux);
+        }
+        context.candidate.set_val(context.block == 0 ? pops::Real(2) : pops::Real(8));
+      }
+    }
+    if (inject_failure && hierarchy.lane().rank() == 0)
+      throw std::runtime_error("injected rank-local synchronized solve failure");
+  };
+  std::vector<std::size_t> reflux_order;
+  auto reconcile = [&](auto& context) { reflux_order.push_back(context.parent_level); };
+  auto validate = [](std::size_t, std::size_t, const auto&) {};
+  auto stage = [](std::size_t, auto) {};
+  EXPECT_THROW(engine.advance(window, advance, reconcile, validate, stage, true),
+               std::runtime_error);
+  EXPECT_FALSE(engine.has_synchronized_groups());
+  EXPECT_EQ(engine.last_accepted_attempt(), 0U);
+  for (std::size_t level = 0; level < 3; ++level) {
+    if (hierarchy.state(0, level).local_size() != 0)
+      EXPECT_EQ(pops::reduce_min_local(hierarchy.state(0, level)), pops::Real(1));
+    if (hierarchy.state(1, level).local_size() != 0)
+      EXPECT_EQ(pops::reduce_min_local(hierarchy.state(1, level)), pops::Real(4));
+  }
+  const std::vector<pops::amr::ParentChildClockRelation> asynchronous_relations{
+      {0, 1, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly}, relations[1]};
+  auto asynchronous =
+      Engine<Dim>::prepare(hierarchy, asynchronous_relations,
+                           {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+  int unsupported_callbacks = 0;
+  auto unsupported = [&](auto) { ++unsupported_callbacks; };
+  EXPECT_THROW(asynchronous.advance(window, unsupported, reconcile, validate, stage, true),
+               std::exception);
+  EXPECT_EQ(unsupported_callbacks, 0);
+  EXPECT_EQ(asynchronous.last_accepted_attempt(), 0U);
+  inject_failure = false;
+  engine.advance(window, advance, reconcile, validate, stage, true);
+  EXPECT_EQ(callbacks, 2);
+  EXPECT_EQ(profiler.counter("average_down"), 4);
+  ASSERT_NE(profiler.entry("average_down"), nullptr);
+  EXPECT_EQ(profiler.entry("average_down")->count, 4U);
+  EXPECT_EQ(reflux_order, (std::vector<std::size_t>{1, 1, 0, 0}));
+  for (std::size_t level = 0; level < 3; ++level) {
+    if (hierarchy.state(0, level).local_size() != 0)
+      EXPECT_EQ(pops::reduce_min_local(hierarchy.state(0, level)), pops::Real(2));
+    if (hierarchy.state(1, level).local_size() != 0)
+      EXPECT_EQ(pops::reduce_min_local(hierarchy.state(1, level)), pops::Real(8));
+    EXPECT_EQ(engine.accepted_clock(0, level)->physical_time, window.end.physical_time);
+  }
 }
 
 }  // namespace
@@ -414,4 +554,10 @@ TEST(test_amr_multiblock_substeps, three_levels_two_blocks_are_atomic_and_conser
   prove_multiblock_subcycling<1>();
   prove_multiblock_subcycling<2>();
   prove_multiblock_subcycling<3>();
+}
+
+TEST(test_amr_multiblock_substeps, synchronized_envelopes_preserve_parent_time_and_rollback) {
+  prove_synchronized_envelopes<1>();
+  prove_synchronized_envelopes<2>();
+  prove_synchronized_envelopes<3>();
 }

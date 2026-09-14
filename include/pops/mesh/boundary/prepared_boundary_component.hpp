@@ -5,7 +5,7 @@
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
-#include <pops/runtime/program/step_transaction.hpp>
+#include <pops/runtime/program/collective_step_rejection.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
@@ -27,131 +27,6 @@
 #include <vector>
 
 namespace pops::runtime::program {
-namespace boundary_phase_detail {
-
-struct StepRejectionEnvelope {
-  SolveStatus status = SolveStatus::kInvalidEvaluation;
-  StepAttemptDisposition disposition = StepAttemptDisposition::kReject;
-  std::uint32_t reason_code = 0;
-  std::string phase;
-  std::string detail;
-};
-
-inline void append_u64(std::string& bytes, std::uint64_t value) {
-  for (int shift = 56; shift >= 0; shift -= 8)
-    bytes.push_back(static_cast<char>((value >> shift) & 0xffu));
-}
-
-inline std::uint64_t read_u64(std::string_view bytes, std::size_t& cursor) {
-  if (cursor > bytes.size() || bytes.size() - cursor < 8)
-    throw std::runtime_error("collective boundary step rejection envelope is truncated");
-  std::uint64_t value = 0;
-  for (int byte = 0; byte < 8; ++byte)
-    value = (value << 8u) | static_cast<unsigned char>(bytes[cursor++]);
-  return value;
-}
-
-inline void append_text(std::string& bytes, std::string_view value) {
-  append_u64(bytes, static_cast<std::uint64_t>(value.size()));
-  bytes.append(value.data(), value.size());
-}
-
-inline std::string read_text(std::string_view bytes, std::size_t& cursor) {
-  const std::uint64_t encoded_size = read_u64(bytes, cursor);
-  if (encoded_size > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
-    throw std::overflow_error("collective boundary step rejection text exceeds size_t");
-  const std::size_t size = static_cast<std::size_t>(encoded_size);
-  if (cursor > bytes.size() || size > bytes.size() - cursor)
-    throw std::runtime_error("collective boundary step rejection text is truncated");
-  std::string value(bytes.substr(cursor, size));
-  cursor += size;
-  return value;
-}
-
-inline std::string encode_step_rejection(const StepAttemptRejected& rejected) {
-  std::string bytes("pops.boundary-step-rejection.v1");
-  append_u64(bytes, static_cast<std::uint64_t>(rejected.status()));
-  append_u64(bytes, static_cast<std::uint64_t>(rejected.disposition()));
-  append_u64(bytes, rejected.reason_code());
-  append_text(bytes, rejected.phase());
-  append_text(bytes, rejected.detail());
-  return bytes;
-}
-
-inline StepRejectionEnvelope decode_step_rejection(std::string_view bytes) {
-  constexpr std::string_view prefix = "pops.boundary-step-rejection.v1";
-  if (!bytes.starts_with(prefix))
-    throw std::runtime_error("collective boundary step rejection has another schema");
-  std::size_t cursor = prefix.size();
-  const std::uint64_t status = read_u64(bytes, cursor);
-  const std::uint64_t disposition = read_u64(bytes, cursor);
-  const std::uint64_t reason_code = read_u64(bytes, cursor);
-  if (status > static_cast<std::uint64_t>(SolveStatus::kSafeguardFailure) ||
-      disposition > static_cast<std::uint64_t>(StepAttemptDisposition::kReject) ||
-      reason_code > std::numeric_limits<std::uint32_t>::max())
-    throw std::runtime_error("collective boundary step rejection has invalid typed fields");
-  StepRejectionEnvelope result;
-  result.status = static_cast<SolveStatus>(status);
-  result.disposition = static_cast<StepAttemptDisposition>(disposition);
-  result.reason_code = static_cast<std::uint32_t>(reason_code);
-  result.phase = read_text(bytes, cursor);
-  result.detail = read_text(bytes, cursor);
-  if (cursor != bytes.size() || result.phase.empty())
-    throw std::runtime_error("collective boundary step rejection envelope is incomplete");
-  return result;
-}
-
-[[noreturn]] inline void throw_collective_step_rejection(const ExecutionLane& lane,
-                                                         const std::string& local_payload,
-                                                         long locally_rejected) {
-  std::string selected_payload;
-  if (all_reduce_min(locally_rejected, lane) != 0) {
-    if (!all_ranks_agree_exact_ordered_byte_pairs({{"boundary-step-rejection", local_payload}},
-                                                  lane))
-      throw std::runtime_error("collective boundary step rejection fields differ between ranks");
-    selected_payload = local_payload;
-  } else {
-    const long local_root =
-        locally_rejected != 0 ? static_cast<long>(lane.rank()) : static_cast<long>(lane.size());
-    const long root = all_reduce_min(local_root, lane);
-    if (root < 0 || root >= static_cast<long>(lane.size()))
-      throw std::runtime_error("collective boundary step rejection lost its typed envelope");
-    const bool authoritative = lane.rank() == root;
-    const long invalid_length =
-        authoritative &&
-                local_payload.size() > static_cast<std::size_t>(std::numeric_limits<long>::max())
-            ? 1L
-            : 0L;
-    if (all_reduce_max(invalid_length, lane) != 0)
-      throw std::length_error("collective boundary step rejection exceeds long capacity");
-    const long encoded_length =
-        all_reduce_max(authoritative ? static_cast<long>(local_payload.size()) : 0L, lane);
-    if (encoded_length <= 0)
-      throw std::runtime_error("collective boundary step rejection envelope is empty");
-    long allocation_failed = 0;
-    try {
-      if (authoritative)
-        selected_payload = local_payload;
-      selected_payload.resize(static_cast<std::size_t>(encoded_length));
-    } catch (...) {
-      allocation_failed = 1;
-    }
-    if (all_reduce_max(allocation_failed, lane) != 0)
-      throw std::bad_alloc();
-    broadcast_bytes_inplace(selected_payload.data(), selected_payload.size(), lane,
-                            static_cast<int>(root));
-    const long mismatch = locally_rejected != 0 && local_payload != selected_payload ? 1L : 0L;
-    if (all_reduce_max(mismatch, lane) != 0)
-      throw std::runtime_error(
-          "collective boundary step rejection fields differ between rejecting ranks");
-  }
-  const StepRejectionEnvelope envelope = decode_step_rejection(selected_payload);
-  throw StepAttemptRejected(envelope.status, envelope.disposition, envelope.reason_code,
-                            envelope.phase, envelope.detail);
-}
-
-}  // namespace boundary_phase_detail
-
 /// Run one rank-symmetric boundary-provider phase on its exact prepared lane. Native component
 /// callbacks receive only their noncollective patch authority; this outer gate converges failures
 /// before another provider is allowed to enter dependency collectives. Typed retry/reject control is
@@ -159,36 +34,13 @@ inline StepRejectionEnvelope decode_step_rejection(std::string_view bytes) {
 template <class Operation>
 void collective_boundary_provider_phase(const ExecutionLane& lane, std::string_view failure_message,
                                         Operation&& operation) {
-  enum class ExceptionKind : long { none = 0, step_rejected = 1, ordinary = 2 };
-  ExceptionKind kind = ExceptionKind::none;
-  std::string rejection_payload;
-  std::exception_ptr local_error;
-  try {
-    std::forward<Operation>(operation)();
-    Kokkos::fence();
-  } catch (const StepAttemptRejected& rejected) {
-    try {
-      rejection_payload = boundary_phase_detail::encode_step_rejection(rejected);
-      kind = ExceptionKind::step_rejected;
-    } catch (...) {
-      kind = ExceptionKind::ordinary;
-      local_error = std::current_exception();
-    }
-  } catch (...) {
-    kind = ExceptionKind::ordinary;
-    local_error = std::current_exception();
-  }
-
-  const long ordinary = kind == ExceptionKind::ordinary ? 1L : 0L;
-  const long rejected = kind == ExceptionKind::step_rejected ? 1L : 0L;
-  if (all_reduce_max(ordinary, lane) != 0) {
-    if (lane.size() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error(std::string(failure_message));
-  }
-  if (all_reduce_max(rejected, lane) == 0)
-    return;
-  boundary_phase_detail::throw_collective_step_rejection(lane, rejection_payload, rejected);
+  collective_step_rejection_phase(
+      lane.communicator(),
+      {"pops.boundary-step-rejection.v1", "boundary-step-rejection", true, false}, failure_message,
+      [&] {
+        std::forward<Operation>(operation)();
+        Kokkos::fence();
+      });
 }
 
 }  // namespace pops::runtime::program

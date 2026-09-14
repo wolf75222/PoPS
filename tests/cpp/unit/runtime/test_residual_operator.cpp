@@ -32,7 +32,7 @@ TEST(ResidualOperator, ExactAndFiniteDifferenceJvpAgreeOnCoupledFixture) {
   ResidualOperator exact(coupled_domain(), identity, DaeIndex::kNotDae,
                          LinearizationFidelity::kExact, coupled_residual, coupled_exact_jvp);
   ResidualOperator approx(coupled_domain(), identity, DaeIndex::kNotDae,
-                          LinearizationFidelity::kApproximate, coupled_residual);
+                          LinearizationFidelity::kFiniteDifference, coupled_residual);
   const std::vector<double> x{1.25, -0.4}, v{0.3, -0.7};
   const auto je = exact.apply_jvp(x, v);
   const auto jf = approx.apply_jvp(x, v);
@@ -49,9 +49,34 @@ TEST(ResidualOperator, FidelityAndDomainContractsFailClosed) {
 
   auto bad = coupled_domain();
   bad.blocks[1].offset = 0;
-  ResidualOperator overlap(bad, {}, DaeIndex::kNotDae, LinearizationFidelity::kApproximate,
+  ResidualOperator overlap(bad, {}, DaeIndex::kNotDae, LinearizationFidelity::kFiniteDifference,
                            coupled_residual);
   EXPECT_EQ(overlap.support().refusal, SupportRefusal::kInvalidDomain);
+}
+
+TEST(ResidualOperator, ApproximateDerivativeRequiresItsOwnProvider) {
+  ResidualOperator missing(coupled_domain(), {}, DaeIndex::kNotDae,
+                           LinearizationFidelity::kApproximate, coupled_residual);
+  EXPECT_EQ(missing.support().refusal, SupportRefusal::kUnsupportedLinearization);
+  EXPECT_THROW(missing.apply_jvp({1.0, 2.0}, {1.0, 0.0}), std::logic_error);
+
+  int residual_calls = 0;
+  auto residual = [&](const std::vector<double>& x, std::vector<double>& out) {
+    ++residual_calls;
+    coupled_residual(x, out);
+  };
+  auto lagged_jvp = [](const std::vector<double>&, const std::vector<double>& v,
+                       std::vector<double>& out) {
+    out[0] = 4.0 * v[0] + 3.0 * v[1];
+    out[1] = v[0] - 2.0 * v[1];
+  };
+  ResidualOperator approximate(coupled_domain(), {}, DaeIndex::kNotDae,
+                               LinearizationFidelity::kApproximate, residual, {}, lagged_jvp);
+  ASSERT_TRUE(approximate.support());
+  const auto result = approximate.apply_jvp({1.0, 2.0}, {1.0, 0.0});
+  EXPECT_DOUBLE_EQ(result[0], 4.0);
+  EXPECT_DOUBLE_EQ(result[1], 1.0);
+  EXPECT_EQ(residual_calls, 0);  // An approximate provider is not a silent FD request.
 }
 
 TEST(ResidualOperator, EvaluatorOutputsAreValidated) {
@@ -59,7 +84,7 @@ TEST(ResidualOperator, EvaluatorOutputsAreValidated) {
     r[0] = std::numeric_limits<double>::quiet_NaN();
   };
   ResidualOperator bad_residual(coupled_domain(), {}, DaeIndex::kNotDae,
-                                LinearizationFidelity::kApproximate, nonfinite_residual);
+                                LinearizationFidelity::kFiniteDifference, nonfinite_residual);
   EXPECT_THROW(bad_residual.evaluate({1.0, 2.0}), std::runtime_error);
 
   auto wrong_size_jvp = [](const std::vector<double>&, const std::vector<double>&,
@@ -81,7 +106,7 @@ TEST(ResidualOperator, RealIndex1DaeChecksConsistentInitialization) {
     return SupportDecision{};
   };
   ResidualOperator dae(coupled_domain(), mass, DaeIndex::kIndex1,
-                       LinearizationFidelity::kApproximate, dae_residual, {}, {},
+                       LinearizationFidelity::kFiniteDifference, dae_residual, {}, {},
                        ConsistentInitializationPolicy::kRequireInitializer, initialize);
   EXPECT_TRUE(dae.support());
   EXPECT_TRUE(dae.validate_consistent_initial_state({0.25, 0.75}, 1e-14));
@@ -97,7 +122,7 @@ TEST(ResidualOperator, RealIndex1DaeChecksConsistentInitialization) {
 TEST(ResidualOperator, ConsistentInitializationFailsClosed) {
   const MassDescriptor mass{MassKind::kAlgebraic, {1.0, 0.0}};
   ResidualOperator missing(coupled_domain(), mass, DaeIndex::kIndex1,
-                           LinearizationFidelity::kApproximate, coupled_residual, {}, {},
+                           LinearizationFidelity::kFiniteDifference, coupled_residual, {}, {},
                            ConsistentInitializationPolicy::kRequireInitializer);
   EXPECT_EQ(missing.support().refusal, SupportRefusal::kInconsistentInitialState);
 
@@ -105,7 +130,7 @@ TEST(ResidualOperator, ConsistentInitializationFailsClosed) {
     return SupportDecision{SupportRefusal::kInconsistentInitialState, "fixture failed"};
   };
   ResidualOperator failure(coupled_domain(), mass, DaeIndex::kIndex1,
-                           LinearizationFidelity::kApproximate, coupled_residual, {}, {},
+                           LinearizationFidelity::kFiniteDifference, coupled_residual, {}, {},
                            ConsistentInitializationPolicy::kRequireInitializer, failed);
   std::vector<double> state{0.25, 0.5};
   EXPECT_EQ(failure.consistent_initialize(state, 1e-14).refusal,
@@ -116,7 +141,7 @@ TEST(ResidualOperator, ConsistentInitializationFailsClosed) {
     return SupportDecision{};
   };
   ResidualOperator invalid(coupled_domain(), mass, DaeIndex::kIndex1,
-                           LinearizationFidelity::kApproximate, coupled_residual, {}, {},
+                           LinearizationFidelity::kFiniteDifference, coupled_residual, {}, {},
                            ConsistentInitializationPolicy::kRequireInitializer, nonfinite);
   state = {0.25, 0.5};
   EXPECT_EQ(invalid.consistent_initialize(state, 1e-14).refusal,
@@ -126,12 +151,12 @@ TEST(ResidualOperator, ConsistentInitializationFailsClosed) {
 TEST(ResidualOperator, RefusesHigherIndexAndUnsupportedMass) {
   const MassDescriptor algebraic{MassKind::kAlgebraic, {1.0, 0.0}};
   ResidualOperator higher(coupled_domain(), algebraic, DaeIndex::kHigherIndex,
-                          LinearizationFidelity::kApproximate, coupled_residual);
+                          LinearizationFidelity::kFiniteDifference, coupled_residual);
   EXPECT_EQ(higher.support().refusal, SupportRefusal::kHigherIndex);
 
   const MassDescriptor singular_constant{MassKind::kConstant, {1.0, 0.0}};
   ResidualOperator unsupported(coupled_domain(), singular_constant, DaeIndex::kNotDae,
-                               LinearizationFidelity::kApproximate, coupled_residual);
+                               LinearizationFidelity::kFiniteDifference, coupled_residual);
   EXPECT_EQ(unsupported.support().refusal, SupportRefusal::kUnsupportedMass);
 }
 

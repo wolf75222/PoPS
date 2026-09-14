@@ -7,7 +7,7 @@ each changed file contributes its own impact and the selection is their union --
 unit adds the test targets that compile it, a pybind adapter adds the bindings suites, and a
 ``python/pops/codegen`` emitter adds the
 codegen / native-loader group, a ``tests/cpp`` source adds its own target, and docs / non-codegen
-``python/pops`` / ``tests/python`` add nothing. A global-includer or missing header, or any
+``python/pops`` / ``tests/python`` add nothing. A missing header, unreadable dependency graph, or any
 unmapped build input (cmake / workflows / scripts / CMakeLists / the manifest), fails safe to ALL.
 Python selection is manifest-driven with a static import-closure for ``python/pops/**`` changes so
 pure Python edits can run only the tests that import the changed module.
@@ -20,6 +20,8 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterable
 import json
+import math
+from itertools import combinations
 import os
 import re
 import subprocess
@@ -50,6 +52,8 @@ CPP_BROAD_FILES = {
     "scripts/ci_include_graph.py",
     "scripts/ci_python_module_objects.py",
     "scripts/ci_route_mode.py",
+    "scripts/ci_plan.py",
+    "scripts/ci_components.toml",
     "scripts/ci_select_tests.py",
     "scripts/ci_shard_binpack.py",
     "tests/CMakeLists.txt",
@@ -73,8 +77,13 @@ PYTHON_BROAD_FILES = {
     "pyproject.toml",
     "python/CMakeLists.txt",
     "scripts/ci_import_closure.py",
+    "scripts/ci_pytest_timings.py",
+    "scripts/ci_python_dimensions.py",
+    "tests/python/native_dimensions.json",
     "scripts/ci_python_module_objects.py",
     "scripts/ci_route_mode.py",
+    "scripts/ci_plan.py",
+    "scripts/ci_components.toml",
     "scripts/ci_select_tests.py",
     "scripts/ci_shard_binpack.py",
     "src/CMakeLists.txt",
@@ -85,6 +94,9 @@ PYTHON_BROAD_FILES = {
 }
 
 PYTHON_BROAD_PREFIXES = (
+    "cmake/",
+    "include/pops/core/",
+    "include/pops/parallel/",
     ".github/actions/setup-kokkos/",
     "python/bindings/",
     "tests/python/support/",
@@ -219,20 +231,6 @@ PYTHON_SMOKE_TESTS = (
     "tests/python/unit/runtime/test_capabilities.py",
 )
 
-# Native prepared-provider protocol headers are consumed through generated extension modules, not
-# Python imports.  Their three external-provider E2Es are therefore an explicit protocol closure:
-# import-graph selection alone cannot discover this cross-language dependency.
-PYTHON_ELLIPTIC_NATIVE_PROVIDER_TESTS = (
-    "tests/python/integration/native_loader/test_prepared_krylov_method_component.py",
-    "tests/python/integration/native_loader/test_prepared_nullspace_component.py",
-    "tests/python/integration/native_loader/test_prepared_preconditioner_component.py",
-)
-PYTHON_ELLIPTIC_NATIVE_PROVIDER_PREFIXES = (
-    "include/pops/numerics/elliptic/",
-    "include/pops/core/identity/prepared_provider",
-    "include/pops/mesh/layout/field_distribution.hpp",
-    "include/pops/mesh/storage/field_replica_consensus.hpp",
-)
 
 
 def normalize(path: str) -> str:
@@ -268,7 +266,9 @@ def areas_for(path: str, table: Iterable[tuple[tuple[str, ...], tuple[str, ...]]
     matched: set[str] = set()
     for prefixes, areas in table:
         if startswith_any(path, prefixes):
-            matched.update(areas)
+            # Tables are ordered from specific component to its general parent.
+            # A solver header belongs to elliptic, not every numerical family.
+            return set(areas)
     return matched
 
 
@@ -624,96 +624,100 @@ def is_cpp_runtime_tu(path: str) -> bool:
 # src/CMakeLists.txt is the target-source map; tests/CMakeLists.txt owns only consumers.
 TESTS_CMAKE = ROOT / "tests" / "CMakeLists.txt"
 RUNTIME_CMAKE = ROOT / "src" / "CMakeLists.txt"
-# The heavy runtime TUs are compiled ONCE into these OBJECT libs (ADC-336 / ADC-632 / ADC-335)
-# and spliced into every consuming test target. A change to a TU in one of them impacts exactly
-# that lib's consumers, so we read the central source list and the test consumer list together.
-_RUNTIME_OBJECT_LIBS = (
-    "pops_runtime_system",
-    "pops_runtime_amr",
-    "pops_runtime_output",
-)
-
-
-def _cmake_object_lib_sources(text: str, libname: str) -> set[str]:
-    """Repo-relative native sources in the central object-library source manifest."""
-    sources: set[str] = set()
-    source_var = {
-        "pops_runtime_system": "POPS_RUNTIME_SYSTEM_SOURCES",
-        "pops_runtime_amr": "POPS_RUNTIME_AMR_SOURCES",
-        "pops_runtime_output": "POPS_RUNTIME_OUTPUT_SOURCES",
-    }[libname]
-    match = re.search(r"set\(\s*" + source_var + r"\b(.*?)\)", text, re.DOTALL)
-    if match:
-        for hit in re.finditer(r"\b(runtime/[^\s)]+\.(?:cpp|hpp|h|hh|hxx))", match.group(1)):
-            sources.add("src/" + hit.group(1))
-    return sources
+# Source ownership and transitive linkage come from the existing CMake authority.
+_runtime_map_cache: dict[str, tuple[dict[str, set[str]], dict[str, set[str]]]] = {}
 
 
 def _cmake_object_lib_consumers(text: str, libname: str) -> set[str]:
-    """Test-target NAMEs whose ``pops_add_gtest_suite(...)`` call links ``libname``.
-
-    The consumers reference the OBJECT lib through ``EXTRA_LIBS``; the serial-target filter is
-    applied by the caller (an MPI-only consumer never reaches the serial selection).
-    """
     consumers: set[str] = set()
     for body in re.findall(r"pops_add_gtest_suite\((.*?)\)", text, re.DOTALL):
-        if libname not in body:
+        if libname not in body.split():
             continue
         name = re.search(r"\bNAME\s+(\S+)", body)
         if name:
             consumers.add(name.group(1))
+    for target, body in re.findall(r"target_link_libraries\(\s*(test_\w+)\s+(.*?)\)", text, re.DOTALL):
+        if libname in body.split():
+            consumers.add(target)
     return consumers
 
 
-_runtime_map_cache: dict[str, tuple[dict[str, set[str]], dict[str, set[str]]]] = {}
-
-
 def _runtime_object_lib_map() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
-    """Return central ``(lib_sources, lib_consumers)`` maps (memoized).
+    """Map declared runtime source owners to their transitive C++ test consumers.
 
-    ``lib_sources[lib]`` is the set of ``src/runtime/**`` ``.cpp``/``.hpp`` compiled into the
-    OBJECT lib; ``lib_consumers[lib]`` is the set of test-target names that link it. A change to
-    ``tests/CMakeLists.txt`` is a broad-file force-all (``CPP_BROAD_FILES``), so a stale parse can
-    never under-select on a changeset that edited the map.
+    Includes archive/object aliases and PUBLIC/INTERFACE runtime dependencies. No
+    second target list is maintained beside src/CMakeLists.txt.
     """
     key = str(RUNTIME_CMAKE) + "\0" + str(TESTS_CMAKE)
     if key not in _runtime_map_cache:
-        runtime_text = (
-            RUNTIME_CMAKE.read_text(encoding="utf-8", errors="ignore")
-            if RUNTIME_CMAKE.is_file()
-            else ""
-        )
-        tests_text = (
-            TESTS_CMAKE.read_text(encoding="utf-8", errors="ignore")
-            if TESTS_CMAKE.is_file()
-            else ""
-        )
-        sources = {lib: _cmake_object_lib_sources(runtime_text, lib) for lib in _RUNTIME_OBJECT_LIBS}
-        consumers = {lib: _cmake_object_lib_consumers(tests_text, lib) for lib in _RUNTIME_OBJECT_LIBS}
-        _runtime_map_cache[key] = (sources, consumers)
+        try:
+            runtime_text = RUNTIME_CMAKE.read_text(encoding="utf-8")
+            tests_text = TESTS_CMAKE.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ci_include_graph.GraphError(f"runtime source manifest unreadable: {exc}") from exc
+        runtime_text = re.sub(r"#[^\n]*", "", runtime_text)
+        variables = {
+            name: body for name, body in re.findall(
+                r"set\(\s*(POPS_RUNTIME_\w+_SOURCES)\s+(.*?)\)", runtime_text, re.DOTALL
+            )
+        }
+        sources: dict[str, set[str]] = {}
+        dependencies: dict[str, set[str]] = {}
+        for lib, body in re.findall(
+            r"add_library\(\s*(pops_runtime_\w+)\s+(.*?)\)", runtime_text, re.DOTALL
+        ):
+            dependencies.setdefault(lib, set()).update(
+                re.findall(r"\$<TARGET_OBJECTS:(pops_runtime_\w+)>", body)
+            )
+            for var in re.findall(r"\$\{(POPS_RUNTIME_\w+_SOURCES)\}", body):
+                if var not in variables:
+                    raise ci_include_graph.GraphError(f"unresolved runtime source list: {var}")
+                owned = set(re.findall(r"\b(runtime/[^\s)]+)", variables[var]))
+                if not owned:
+                    raise ci_include_graph.GraphError(f"empty runtime source list: {var}")
+                sources.setdefault(lib, set()).update("src/" + path for path in owned)
+        for lib, body in re.findall(
+            r"target_link_libraries\(\s*(pops_runtime_\w+)\s+(.*?)\)", runtime_text, re.DOTALL
+        ):
+            dependencies.setdefault(lib, set()).update(re.findall(r"\bpops_runtime_\w+", body))
+        if not sources:
+            raise ci_include_graph.GraphError("no compiled runtime owners in source manifest")
+        unknown = set().union(*dependencies.values()) - dependencies.keys()
+        if unknown:
+            raise ci_include_graph.GraphError("unresolved runtime targets: " + ",".join(sorted(unknown)))
+        consumers = {lib: _cmake_object_lib_consumers(tests_text, lib) for lib in dependencies}
+        # If A links B, every consumer of A also consumes B. Repeat for aliases/chains.
+        pending = True
+        while pending:
+            pending = False
+            for lib, deps in dependencies.items():
+                for dep in deps:
+                    before = len(consumers[dep])
+                    consumers[dep].update(consumers[lib])
+                    pending |= len(consumers[dep]) != before
+        _runtime_map_cache[key] = (sources, {lib: consumers[lib] for lib in sources})
     return _runtime_map_cache[key]
 
 
 def _runtime_header_included_by(path: str, lib_sources: set[str]) -> bool:
-    """True if a private runtime header is ``#include``d by a source in ``lib_sources``.
+    return any(path in ci_include_graph.source_dependencies(source) for source in lib_sources)
 
-    Runtime TUs include their private headers with quoted RELATIVE paths (e.g. ``system_impl.hpp``
-    next to ``system_fields.cpp``), so a change to that header impacts the same OBJECT lib as the
-    TUs. Matched by basename against each TU's quoted includes -- best-effort source parse, safe:
-    a miss is treated as an unregistered runtime input and fails open to all tests.
-    """
-    target_base = Path(path).name
-    for source in lib_sources:
-        if not source.endswith(".cpp"):
-            continue
-        src_path = ROOT / source
-        if not src_path.is_file():
-            continue
-        text = src_path.read_text(encoding="utf-8", errors="ignore")
-        for quoted in re.finditer(r'#\s*include\s*"([^"]+)"', text):
-            if Path(quoted.group(1)).name == target_base:
-                return True
-    return False
+
+def cpp_suite_include_closures(suites: list[dict]) -> dict[str, set[str]]:
+    """Each suite's own headers plus headers compiled in its linked runtime owners."""
+    sources, consumers = _runtime_object_lib_map()
+    library_headers = {
+        lib: set().union(*(ci_include_graph.source_closure(src) for src in paths))
+        for lib, paths in sources.items()
+    }
+    closures: dict[str, set[str]] = {}
+    for suite in suites:
+        closure = set().union(*(ci_include_graph.source_closure(src) for src in suite["sources"]))
+        for lib, targets in consumers.items():
+            if suite["name"] in targets:
+                closure.update(library_headers[lib])
+        closures[suite["name"]] = closure
+    return closures
 
 
 def runtime_tu_targets(path: str, all_target_set: set[str]) -> tuple[set[str], list[str]]:
@@ -728,8 +732,7 @@ def runtime_tu_targets(path: str, all_target_set: set[str]) -> tuple[set[str], l
     lib_sources, lib_consumers = _runtime_object_lib_map()
     matched: list[str] = []
     targets: set[str] = set()
-    for lib in _RUNTIME_OBJECT_LIBS:
-        sources = lib_sources[lib]
+    for lib, sources in lib_sources.items():
         belongs = path in sources or (
             path.endswith((".hpp", ".h", ".hh", ".hxx")) and _runtime_header_included_by(path, sources)
         )
@@ -890,6 +893,64 @@ def validate_cpp_duration_catalogs(targets: Iterable[str]) -> None:
         raise SystemExit("C++ duration catalog inventory mismatch: " + "; ".join(failures))
 
 
+def _refine_cpp_target_shards(
+    shards: list[list[str]], weights: dict[str, float],
+) -> list[list[str]]:
+    """Reduce LPT's critical path using bounded, deterministic target exchanges.
+
+    Cold template builds are indivisible and can dominate a shard containing only
+    three targets. Moving one such target rarely helps, but exchanging it for one
+    or two targets elsewhere can fit the same measured work more evenly. Accept
+    only strictly lower maximum loads, retaining LPT's original upper bound. The
+    number of exchanges is capped by the number of selected targets.
+    """
+    for _ in range(sum(map(len, shards))):
+        loads = [math.fsum(weights[target] for target in shard) for shard in shards]
+        source = max(range(len(shards)), key=lambda index: (loads[index], -index))
+        maximum = loads[source]
+        best = None
+        for destination, shard in enumerate(shards):
+            if destination == source:
+                continue
+            # The empty return bundle also admits a simple move. Preserve the
+            # sorted target order so ties do not depend on manifest input order.
+            bundles = [(), *((target,) for target in shard), *combinations(shard, 2)]
+            bundle_weights = [
+                (bundle, math.fsum(weights[t] for t in bundle)) for bundle in bundles
+            ]
+            for target in shards[source]:
+                for bundle, returned_weight in bundle_weights:
+                    transferred_weight = weights[target] - returned_weight
+                    if transferred_weight <= 0.0:
+                        continue
+                    candidate_loads = list(loads)
+                    candidate_loads[source] -= transferred_weight
+                    candidate_loads[destination] += transferred_weight
+                    candidate_maximum = max(candidate_loads)
+                    # Avoid exchanges caused solely by floating-point summation
+                    # noise; this tolerance never changes a modeled target cost.
+                    if candidate_maximum >= maximum - 1.0e-9:
+                        continue
+                    candidate = (
+                        candidate_maximum,
+                        tuple(sorted(candidate_loads, reverse=True)),
+                        destination, target, bundle,
+                    )
+                    if best is None or candidate < best:
+                        best = candidate
+        if best is None:
+            break
+        _, _, destination, target, bundle = best
+        shards[source].remove(target)
+        shards[destination].append(target)
+        for returned in bundle:
+            shards[destination].remove(returned)
+            shards[source].append(returned)
+        shards[source].sort()
+        shards[destination].sort()
+    return shards
+
+
 def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
     """Return a deterministic, build-and-test-balanced exact partition of C++ targets."""
     if total <= 0:
@@ -899,6 +960,7 @@ def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
     weights = cpp_target_weights(targets)
     try:
         shards = ci_shard_binpack.assign_shards(targets, total, weights)
+        shards = _refine_cpp_target_shards(shards, weights)
         ci_shard_binpack.verify_partition(targets, shards, excluded=())
     except ci_shard_binpack.PartitionError as exc:
         raise SystemExit(f"C++ shard partition invariant violated: {exc}") from exc
@@ -1084,6 +1146,16 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
                 f"{test_name!r} cannot have both {owner_labels[0]} and cpp-standalone"
             )
         owner_label = owner_labels[0]
+        if "cpp-not-built" in labels:
+            owner = owner_label.removeprefix("cpp-target:")
+            if test_name != f"{owner}_NOT_BUILT":
+                raise SystemExit(
+                    "CTest target-label contract failed; invalid unbuilt placeholder "
+                    f"{test_name!r} for {owner_label}"
+                )
+            # POST_BUILD discovery leaves a labeled sentinel for unbuilt runtime-discovery
+            # targets in other shards. It is never a discovered case, including when selected.
+            continue
         if owner_label not in expected:
             # Configure-time GoogleTest discovery deliberately registers the complete CTest
             # catalogue even when this shard builds only its selected executables.  The owner is
@@ -1187,7 +1259,7 @@ def classify_cpp_impact(
     * ``selected`` -- the union of every file's include-closure / runtime-target / binding-label /
       codegen-label /
       direct-test targets;
-    * ``full_reasons`` -- non-empty iff some file forces a FULL selection (a global-includer or
+    * ``full_reasons`` -- non-empty iff some file forces a FULL selection (an unreadable graph or
       missing header, or an unmapped build-input path); the caller then escalates to ALL;
     * ``areas`` -- the label areas contributed by runtime/binding/codegen files;
     * ``impact`` -- ``{file: {"kind": ..., "targets": [...]/"labels": [...]/...}}`` for the
@@ -1195,8 +1267,8 @@ def classify_cpp_impact(
 
     The per-file kinds:
 
-    * ``include/pops/**`` header -> ``include-impact`` (its source-closure suites) or, when the
-      header is a global includer / absent, ``all`` (soundness / fail-open);
+    * ``include/pops/**`` header -> ``include-impact`` (suite and linked runtime closures plus
+      generated-code consumers), or ``all`` if the header/graph is unavailable;
     * ``src/runtime/**`` ``.cpp``/``.hpp`` -> ``runtime-tu-targets`` (the serial consumers of its
       central OBJECT lib); an unregistered source or other build input fails open to ``all``;
     * ``python/bindings/**`` adapters -> ``binding-labels``; non-source adapter build inputs fail
@@ -1213,12 +1285,15 @@ def classify_cpp_impact(
     impact: dict[str, dict] = {}
     full_reasons: list[str] = []
 
-    # The include-graph global-includer closure is read once (fail-open on any graph error).
+    # Each compiled source belongs to its real consumers; graph failures remain broad.
     try:
-        global_closure = ci_include_graph.global_includer_closure()
+        suite_closures = cpp_suite_include_closures(suites) if any(map(is_cpp_header, changed)) else {}
+        emitter_closure = set().union(*(
+            ci_include_graph.source_closure(str(path.relative_to(ROOT)))
+            for path in (ROOT / "python/pops").rglob("*.py")
+        )) if suite_closures else set()
         graph_error: str | None = None
     except ci_include_graph.GraphError as exc:
-        global_closure = set()
         graph_error = f"include-graph-unreadable:{exc}"
 
     for path in changed:
@@ -1228,10 +1303,6 @@ def classify_cpp_impact(
                 impact[path] = {"kind": "all", "reason": graph_error}
                 full_reasons.append(f"{path}:{graph_error}")
                 continue
-            if node in global_closure:
-                impact[path] = {"kind": "all", "reason": "header-in-global-includer-closure"}
-                full_reasons.append(f"{path}:header-in-global-includer-closure")
-                continue
             if not ci_include_graph.header_exists(node):
                 impact[path] = {"kind": "all", "reason": "changed-header-not-in-tree"}
                 full_reasons.append(f"{path}:changed-header-not-in-tree")
@@ -1239,15 +1310,18 @@ def classify_cpp_impact(
             hit_targets: set[str] = set()
             try:
                 for suite in suites:
-                    closure: set[str] = set()
-                    for source in suite["sources"]:
-                        closure |= ci_include_graph.source_closure(source)
-                    if node in closure:
+                    if node in suite_closures[suite["name"]]:
                         hit_targets.add(suite["name"])
                         add_reason(reasons, suite["name"], f"include-impact:{node}")
             except ci_include_graph.GraphError as exc:
                 impact[path] = {"kind": "all", "reason": f"suite-source-missing:{exc}"}
                 full_reasons.append(f"{path}:suite-source-missing:{exc}")
+                continue
+            if node in emitter_closure:
+                hit_targets.update(select_cpp_by_labels(suites, CPP_CODEGEN_AREAS, reasons))
+            if not hit_targets:
+                impact[path] = {"kind": "all", "reason": "header-without-known-test-consumer"}
+                full_reasons.append(f"{path}:header-without-known-test-consumer")
                 continue
             selected.update(hit_targets)
             impact[path] = {"kind": "include-impact", "targets": sorted(hit_targets)}
@@ -1255,7 +1329,12 @@ def classify_cpp_impact(
 
         if path.startswith(CPP_RUNTIME_PREFIX):
             if is_cpp_runtime_tu(path):
-                tu_targets, matched_libs = runtime_tu_targets(path, all_target_set)
+                try:
+                    tu_targets, matched_libs = runtime_tu_targets(path, all_target_set)
+                except ci_include_graph.GraphError as exc:
+                    impact[path] = {"kind": "all", "reason": str(exc)}
+                    full_reasons.append(f"{path}:{exc}")
+                    continue
                 if not matched_libs:
                     impact[path] = {
                         "kind": "all",
@@ -1293,15 +1372,17 @@ def classify_cpp_impact(
             continue
 
         if path.startswith("tests/cpp/") and path.endswith(".cpp"):
-            target = Path(path).stem
-            if target in all_target_set:
-                selected.add(target)
-                add_reason(reasons, target, "direct-test-edit")
-                impact[path] = {"kind": "test-target", "targets": [target]}
-            else:
-                # A test source not in the serial manifest (MPI-only, or a support file that
-                # slipped the broad guard) has no serial target to build.
+            owners = {suite["name"] for suite in suites if path in suite["sources"]}
+            if owners:
+                selected.update(owners)
+                for target in owners:
+                    add_reason(reasons, target, "direct-test-edit")
+                impact[path] = {"kind": "test-target", "targets": sorted(owners)}
+            elif any(path in suite["sources"] for suite in manifest_cpp_suites(load_manifest(), include_mpi=True)):
                 impact[path] = {"kind": "none", "reason": "non-serial-test-source"}
+            else:
+                impact[path] = {"kind": "all", "reason": "test-source-not-in-manifest"}
+                full_reasons.append(f"{path}:test-source-not-in-manifest")
             continue
 
         if path.startswith(CPP_CODEGEN_PREFIX):
@@ -1354,7 +1435,7 @@ def plan_cpp(args: argparse.Namespace) -> int:
     impact: dict[str, dict] = {}
     # ADC-646: compositional per-file impact. Each changed file contributes its own C++ impact
     # (include-closure / binding-label group / direct test / codegen-label group / nothing), and
-    # the selection is their UNION. A global-includer or missing header, or an unmapped build
+    # the selection is their UNION. A missing header, unreadable graph, or an unmapped build
     # input, escalates the whole change to ALL (soundness / fail-safe); everything else prunes.
     if not full:
         selected, per_file_full, areas, impact = classify_cpp_impact(
@@ -1364,7 +1445,8 @@ def plan_cpp(args: argparse.Namespace) -> int:
             full = True
             full_reasons.extend(per_file_full)
         elif selected:
-            for target in CPP_SMOKE_TARGETS:
+            source_change = any(entry.get("kind") not in {"test-target", "none"} for entry in impact.values())
+            for target in CPP_SMOKE_TARGETS if source_change else ():
                 if target in all_target_set:
                     selected.add(target)
                     add_reason(reasons, target, "smoke-backstop")
@@ -1376,9 +1458,7 @@ def plan_cpp(args: argparse.Namespace) -> int:
             full = True
             full_reasons.append("no-manifest-match-for-non-meta-change")
 
-    if full or len(selected) > len(all_targets) * 0.75:
-        if not full:
-            full_reasons.append("selected-more-than-75-percent")
+    if full:
         mode = "all"
         targets = all_targets
         regex = ""
@@ -1599,6 +1679,38 @@ class PythonSelection:
         self.reasons = reasons
 
 
+def native_python_runtime_headers() -> set[str]:
+    """Headers in compiled runtime/binding sources lack an exact Python import owner."""
+    sources, _consumers = _runtime_object_lib_map()
+    paths = set().union(*sources.values())
+    paths.update(
+        str(path.relative_to(ROOT)) for path in (ROOT / "python/bindings").rglob("*")
+        if path.is_file() and path.suffix in CPP_BINDING_TU_SUFFIXES
+    )
+    return set().union(*(ci_include_graph.source_closure(path) for path in paths))
+
+
+def native_python_dependencies(headers: list[str], all_tests: set[str]) -> tuple[set[str], list[str]]:
+    """Cross the native/Python seam using embedded includes and the Python import graph.
+
+    Emitters and tests already declare the native headers they compile as C++ include
+    literals. Follow those public/private include closures, then reuse the same reverse
+    Python import closure used for a Python source change.
+    """
+    nodes = {path[len("include/"):] for path in headers}
+    emitters = [
+        str(path.relative_to(ROOT)) for path in sorted((ROOT / "python/pops").rglob("*.py"))
+        if nodes & ci_include_graph.source_closure(str(path.relative_to(ROOT)))
+    ]
+    selected = {
+        test for test in all_tests
+        if nodes & ci_include_graph.source_closure(test)
+    }
+    if emitters:
+        selected.update(ci_import_closure.impacted_tests(emitters, repo_root=ROOT) & all_tests)
+    return selected, emitters
+
+
 def compute_python_selection(changed_files: str, force_all: bool) -> PythonSelection:
     """Compute the selected Python test files (the shard-independent selection).
 
@@ -1657,46 +1769,90 @@ def compute_python_selection(changed_files: str, force_all: bool) -> PythonSelec
             why.add("non-py-pops-file")
 
         if not full:
+            # Classify every non-Python input before unioning its labels. An unknown
+            # input must remain broad even when a different file has a known impact.
+            cpp_test_sources = {
+                source for suite in manifest_cpp_suites(manifest, include_mpi=True)
+                for source in suite["sources"]
+            }
+            headers: list[str] = []
+            try:
+                native_runtime_headers = native_python_runtime_headers() if any(map(is_cpp_header, changed)) else set()
+            except ci_include_graph.GraphError as exc:
+                native_runtime_headers = set()
+                full_reasons.append(f"native-runtime-graph-unreadable:{exc}")
             for path in changed:
+                if path in all_test_set or only_meta([path]):
+                    continue
                 if path.startswith("python/pops/") and path.endswith(".py"):
                     continue
-                areas.update(areas_for(path, PYTHON_PATH_AREAS))
-                areas.update(areas_for(path, CPP_PATH_AREAS))
-            label_hits = select_python_by_labels(suites, areas, reasons)
-            if label_hits:
-                selected.update(label_hits)
-                why.add("manifest-labels")
-
-        if not full and any(
-            startswith_any(path, PYTHON_ELLIPTIC_NATIVE_PROVIDER_PREFIXES)
-            for path in changed
-        ):
-            protocol_hits = {
-                test for test in PYTHON_ELLIPTIC_NATIVE_PROVIDER_TESTS
-                if test in all_test_set
-            }
-            selected.update(protocol_hits)
-            if protocol_hits:
-                why.add("elliptic-native-provider-contract")
-            for test in protocol_hits:
-                add_reason(reasons, test, "elliptic-native-provider-contract")
+                if path in cpp_test_sources:
+                    continue
+                file_areas = areas_for(path, PYTHON_PATH_AREAS) | areas_for(path, CPP_PATH_AREAS)
+                if is_cpp_header(path):
+                    if not ci_include_graph.header_exists(path[len("include/"):]):
+                        full_reasons.append(f"{path}:changed-header-not-in-tree")
+                        continue
+                    headers.append(path)
+                    # Native SDK headers with no compiled runtime/binding consumers
+                    # need only their actual emitter/embedded-test import descendants.
+                    if path[len("include/"):] not in native_runtime_headers:
+                        continue
+                elif is_cpp_runtime_tu(path):
+                    try:
+                        _targets, owners = runtime_tu_targets(path, set())
+                    except ci_include_graph.GraphError:
+                        owners = []
+                    if not owners:
+                        full_reasons.append(f"{path}:runtime-source-not-in-central-manifest")
+                        continue
+                elif not file_areas:
+                    full_reasons.append(f"{path}:unmapped-path")
+                    continue
+                if not file_areas:
+                    full_reasons.append(f"{path}:no-native-component-owner")
+                areas.update(file_areas)
+            if full_reasons:
+                full = True
+                why.add("unmapped-or-unreadable-input")
+            else:
+                label_hits = select_python_by_labels(suites, areas, reasons)
+                if label_hits:
+                    selected.update(label_hits)
+                    why.add("manifest-labels")
+                if headers:
+                    try:
+                        native_hits, emitters = native_python_dependencies(headers, all_test_set)
+                    except (ci_include_graph.GraphError, ci_import_closure.OffGraphChange) as exc:
+                        full = True
+                        full_reasons.append(f"native-python-graph-unreadable:{exc}")
+                        why.add("native-python-graph-unreadable")
+                    else:
+                        selected.update(native_hits)
+                        why.add("native-input-checked")
+                        if native_hits:
+                            why.add("native-include-closure")
+                        for test in native_hits:
+                            add_reason(reasons, test, "native-include-closure")
+                        for emitter in emitters:
+                            why.add("native-emitter:" + emitter)
 
         if not full and selected:
             _apply_cross_test_closure(selected, reasons)
-            for test in PYTHON_SMOKE_TESTS:
+            source_change = any(not (path in all_test_set or path in cpp_test_sources or only_meta([path])) for path in changed)
+            for test in PYTHON_SMOKE_TESTS if source_change else ():
                 if test in all_test_set:
                     selected.add(test)
                     add_reason(reasons, test, "smoke-backstop")
 
-        if not full and not selected and not only_meta(changed):
+        if not full and not selected and not all(
+            only_meta([path]) or path in cpp_test_sources or path in headers for path in changed
+        ):
             full = True
             full_reasons.append("no-manifest-match-for-non-meta-change")
             why.add("no-manifest-match-for-non-meta-change")
 
-    if full or len(selected) > len(all_tests) * 0.75:
-        if not full:
-            full_reasons.append("selected-more-than-75-percent")
-            why.add("selected-more-than-75-percent")
+    if full:
         mode = "all"
         selected_tests = all_tests
     else:

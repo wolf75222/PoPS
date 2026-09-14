@@ -1,0 +1,363 @@
+{
+  "schema": "pops.mpi-probe-manifest.v1",
+  "abi_version": 1,
+  "api_names": [
+    "MPI_Allgather",
+    "MPI_Allgatherv",
+    "MPI_Allreduce",
+    "MPI_Barrier",
+    "MPI_Bcast",
+    "MPI_Gather",
+    "MPI_Gatherv",
+    "MPI_Irecv",
+    "MPI_Isend",
+    "MPI_Sendrecv",
+    "MPI_Waitall",
+    "MPI_Cancel",
+    "MPI_Comm_dup",
+    "MPI_Comm_free"
+  ],
+  "snapshot": {
+    "c_type": "struct pops_mpi_probe_snapshot_v1",
+    "size_bytes": 688,
+    "fields": [
+      {
+        "name": "abi_version",
+        "type": "uint32_t"
+      },
+      {
+        "name": "api_count",
+        "type": "uint32_t"
+      },
+      {
+        "name": "calls",
+        "type": "uint64_t[14]"
+      },
+      {
+        "name": "failed_calls",
+        "type": "uint64_t[14]"
+      },
+      {
+        "name": "logical_payload_bytes",
+        "type": "uint64_t[14]"
+      },
+      {
+        "name": "send_payload_bytes",
+        "type": "uint64_t[14]"
+      },
+      {
+        "name": "receive_posted_bytes",
+        "type": "uint64_t[14]"
+      },
+      {
+        "name": "unresolved_payloads",
+        "type": "uint64_t[14]"
+      },
+      {
+        "name": "counter_overflow_events",
+        "type": "uint64_t"
+      }
+    ],
+    "reset_symbol": "pops_mpi_probe_reset",
+    "reset_signature": "void (void)",
+    "snapshot_symbol": "pops_mpi_probe_snapshot",
+    "snapshot_signature": "int (void *output, size_t output_size)"
+  },
+  "library": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/build/libpops_mpi_probe.dylib",
+    "sha256": "a0716680baf8046db7b612302aac7cbdec64e1f440d14c13a8d4c05435cc5238"
+  },
+  "client": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/probe_client.py",
+    "sha256": "82ea99395a36553ebe99b1f6c325460989c7cff9512322eea74a069fab5098aa"
+  },
+  "load": {
+    "scope": "MPI workers only",
+    "environment": {
+      "DYLD_INSERT_LIBRARIES": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/build/libpops_mpi_probe.dylib"
+    },
+    "mpich_hydra_arguments": [
+      "-genv",
+      "DYLD_INSERT_LIBRARIES",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/build/libpops_mpi_probe.dylib"
+    ],
+    "require_symbols_visible_before_client_load": true
+  },
+  "sources": {
+    "pops_mpi_probe.c": "4f06b15f2611f030c2122df2b871057029c408a31f624eb5b9cefbd4e00c0579",
+    "mpi2_known_counts.c": "f62680e6df8e2e05a360fc7ac319c4f94b3a8701fdbdb0961f44a85b238d642f",
+    "probe_client.py": "82ea99395a36553ebe99b1f6c325460989c7cff9512322eea74a069fab5098aa",
+    "build_and_validate.py": "518b56f6ba3d856c3b829c194b50bf19f12d148460c51b87cf4d4f215fb4d124"
+  },
+  "build": {
+    "library_command": [
+      "/usr/bin/clang",
+      "-std=c11",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-fPIC",
+      "-dynamiclib",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/pops_mpi_probe.c",
+      "-o",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/build/libpops_mpi_probe.dylib",
+      "-I/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/include",
+      "-L/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/lib",
+      "-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/lib",
+      "-Wl,-commons,use_dylibs",
+      "-lmpi",
+      "-lpmpi"
+    ],
+    "control_command": [
+      "/usr/bin/clang",
+      "-std=c11",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/mpi2_known_counts.c",
+      "-o",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/build/mpi2_known_counts",
+      "-I/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/include",
+      "-L/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/lib",
+      "-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/lib",
+      "-Wl,-commons,use_dylibs",
+      "-lmpi",
+      "-lpmpi"
+    ],
+    "compiler_version": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.5.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+    "mpicc_show": "arm64-apple-darwin20.0.0-clang -I/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/include -I/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/include -L/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/lib -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/lib -Wl,-commons,use_dylibs -I/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/include -L/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/lib -lmpi -lpmpi",
+    "platform": "macOS-26.5-arm64-arm-64bit"
+  },
+  "source_inventory": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/source_mpi_inventory.json",
+    "sha256": "e09bbd90fbf6901f54d0ebd1de05e4f2582dc13389840202399b57314fa57301",
+    "source_sha": "49b3088dc16e2e18d9e2a33eaa80134547442f4e"
+  },
+  "control": {
+    "command": [
+      "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/mpiexec.hydra",
+      "-n",
+      "2",
+      "-genv",
+      "DYLD_INSERT_LIBRARIES",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/build/libpops_mpi_probe.dylib",
+      "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/build/mpi2_known_counts"
+    ],
+    "binary": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/build/mpi2_known_counts",
+      "sha256": "a427fafa1b1f28ab70fe57e28d4cbd6cc8d83176b0ba07a4e8c182b76426cd46"
+    },
+    "ranks": 2,
+    "snapshots": [
+      {
+        "rank": 0,
+        "abi_version": 1,
+        "api_count": 14,
+        "calls": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          2,
+          1,
+          1,
+          2,
+          1,
+          1,
+          1
+        ],
+        "failed_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "logical_payload_bytes": [
+          4,
+          4,
+          24,
+          0,
+          16,
+          4,
+          4,
+          44,
+          40,
+          16,
+          0,
+          0,
+          0,
+          0
+        ],
+        "send_payload_bytes": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          40,
+          8,
+          0,
+          0,
+          0,
+          0
+        ],
+        "receive_posted_bytes": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          44,
+          0,
+          8,
+          0,
+          0,
+          0,
+          0
+        ],
+        "unresolved_payloads": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "counter_overflow_events": 0
+      },
+      {
+        "rank": 1,
+        "abi_version": 1,
+        "api_count": 14,
+        "calls": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          2,
+          1,
+          1,
+          2,
+          1,
+          1,
+          1
+        ],
+        "failed_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "logical_payload_bytes": [
+          4,
+          4,
+          24,
+          0,
+          16,
+          4,
+          4,
+          44,
+          40,
+          16,
+          0,
+          0,
+          0,
+          0
+        ],
+        "send_payload_bytes": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          40,
+          8,
+          0,
+          0,
+          0,
+          0
+        ],
+        "receive_posted_bytes": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          44,
+          0,
+          8,
+          0,
+          0,
+          0,
+          0
+        ],
+        "unresolved_payloads": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "counter_overflow_events": 0
+      }
+    ],
+    "stdout_sha256": "ba98258ee822e39945a5849ba42bfb44815bb4f0e8f05b9446fe9820614ef3b2",
+    "stderr": "",
+    "verified": true
+  }
+}

@@ -322,7 +322,8 @@ def _resolved_named_field_runtime_parameter_case(*, target: str):
         transfer.state(state_instance, StateTransfer())
         transfer.field(field_instance, EllipticRecompute())
         layout = AMR(
-            grid=CartesianGrid(frame=frame, cells=(N, N)),
+            # The field contract above is periodic; the state layout must share its topology.
+            grid=CartesianGrid(frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)),
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
             tagging=AMRTagging(
                 rules=(

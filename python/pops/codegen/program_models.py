@@ -40,6 +40,7 @@ class ProgramModelGraph:
         "_owners_by_block",
         "_authorities_by_owner",
         "_models_by_block",
+        "_rhs_coherence_neighbours",
     )
 
     def __init__(
@@ -50,6 +51,7 @@ class ProgramModelGraph:
         owners_by_block: Mapping[str, Any],
         authorities_by_owner: Mapping[Any, Any],
         models_by_block: Mapping[str, Any] | None = None,
+        rhs_coherence_neighbours: Mapping[str, frozenset[str]] | None = None,
     ) -> None:
         if not models_by_owner:
             raise ValueError("ProgramModelGraph requires at least one model owner")
@@ -84,6 +86,14 @@ class ProgramModelGraph:
         if set(routed_models) != set(owners_by_block):
             raise ValueError("ProgramModelGraph block model routes must match owner block routes")
         self._models_by_block = MappingProxyType(routed_models)
+        if rhs_coherence_neighbours is not None:
+            if set(rhs_coherence_neighbours) != set(owners_by_block):
+                raise ValueError("ProgramModelGraph RHS connectivity must cover exactly its blocks")
+            if any(peer not in rhs_coherence_neighbours or name not in rhs_coherence_neighbours[peer]
+                   for name, peers in rhs_coherence_neighbours.items() for peer in peers):
+                raise ValueError("ProgramModelGraph RHS connectivity must be complete and symmetric")
+        self._rhs_coherence_neighbours = (None if rhs_coherence_neighbours is None else
+            MappingProxyType({name: frozenset(peers) for name, peers in rhs_coherence_neighbours.items()}))
 
     @classmethod
     def from_resolved_blocks(cls, blocks: Any) -> ProgramModelGraph:
@@ -109,7 +119,7 @@ class ProgramModelGraph:
         modules: dict[Any, Any] = {}
         authorities: dict[Any, Any] = {}
         routes: dict[str, Any] = {}
-        lowered_by_authority: dict[tuple[int, tuple[str, ...]], tuple[Any, Any]] = {}
+        lowered_by_authority: dict[tuple[Any, ...], tuple[Any, Any]] = {}
         block_models: dict[str, Any] = {}
         for block, owner, canonical in source_blocks:
             if block.name in routes:
@@ -122,13 +132,22 @@ class ProgramModelGraph:
                     "ProgramModelGraph distinct authoring model authorities collide at canonical "
                     "owner %s" % canonical
                 )
-            authority_key = (id(block.model), block.state_spaces)
+            operation_plan = getattr(block, "resolved_operations", None)
+            from pops.codegen._resolved_operation_ownership import require_block_plan_owner
+
+            require_block_plan_owner(
+                operation_plan, block.instance_owner_qid,
+                where="Program block %r" % block.name,
+                required=operation_plan is not None or bool(block.instance_owner_qid))
+            authority_key = (id(block.model), block.state_spaces,
+                             None if operation_plan is None else operation_plan.identity.token)
             lowered = lowered_by_authority.get(authority_key)
             if lowered is None:
                 lowered = lower_and_validate(
                     block.model,
                     facade=block.model,
                     state_space=block.state_spaces[0],
+                    resolved_operations=operation_plan,
                 )
                 lowered_by_authority[authority_key] = lowered
             emit_model, source_module = lowered
@@ -143,13 +162,20 @@ class ProgramModelGraph:
             authorities[canonical] = owner
             routes[block.name] = canonical
             block_models[block.name] = emit_model
+        from pops.codegen._rhs_coherence import resolved_rhs_neighbours
         return cls(
             models_by_owner=models,
             source_modules_by_owner=modules,
             owners_by_block=routes,
             authorities_by_owner=authorities,
             models_by_block=block_models,
+            rhs_coherence_neighbours=resolved_rhs_neighbours(blocks),
         )
+
+    @property
+    def rhs_coherence_neighbours(self) -> Mapping[str, frozenset[str]] | None:
+        """Resolved boundary connectivity; None retains conservative unknown semantics."""
+        return self._rhs_coherence_neighbours
 
     @property
     def models_by_owner(self) -> Mapping[Any, Any]:

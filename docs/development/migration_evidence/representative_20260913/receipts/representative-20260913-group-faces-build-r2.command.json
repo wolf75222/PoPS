@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/cmake",
+    "--build",
+    "build/migration-native",
+    "--parallel",
+    "2",
+    "--target",
+    "test_generated_amr_system_block",
+    "test_system_interface_core_session"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "dfc70e1efbe239e47786a702730ce402e6233002",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T13:25:09.811408+00:00",
+  "environment": {
+    "CCACHE_DIR": "/Users/romaindespoulain/.cache/pops-migration-20260907-ccache",
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2",
+    "CMAKE_BUILD_PARALLEL_LEVEL": "2"
+  }
+}

@@ -1,0 +1,109 @@
+INSTALLED /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py
+NATIVE /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so SHA256 d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518
+FIXTURE /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification8/tests/python/unit/time/test_time_solve_fields_from_state.py SHA256 bf41aed0a74695dd6bb1328a533335e7064b9ef0c95bc1df020f0a559104b5e3 SOURCE_SHA bd583faf196f3c1faeedec489e04d24e959ed00b
+== (A) public IR retains the exact per-stage field provenance ==
+  [OK ] the compiled artifact authenticates the exact publicly-inspected Heun Program
+  [OK ] the compiled Heun IR contains exactly two field solves
+  [OK ] the two field solves consume distinct stage states
+  [OK ] the second field solve consumes the explicit predictor state U1
+  [OK ] field provenance retains two distinct owner-qualified stage-source ids
+  [OK ] the second solve publishes the gradient outputs consumed by the electric source
+  [OK ] R1 consumes both U1 and the fields_1 outcome
+  [OK ] R1 carries the exact field provenance produced from U1
+== (B) field-coupled 2-stage parity through the public runtime ==
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : sffs_public-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.02)
+  interval            : 0 -> 0.02 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : e6a3439970fbc63b
+  run identity        : c9bcf9b8da60b2ec
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.02 / 1
+  elapsed             : 0.003116 s
+  run identity        : c9bcf9b8da60b2ec
+  [OK ] the public field-coupled Program accepted one step
+  [OK ] the compiled artifact authenticates the exact publicly-inspected Forward-Euler Program
+  [OK ] the public Forward-Euler oracle performs exactly one field solve per bound stage state
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : sffs_forward_euler-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.02)
+  interval            : 0 -> 0.02 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : b8e8aacd5f7a1b8a
+  run identity        : d71774cb859a1389
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.02 / 1
+  elapsed             : 0.002294 s
+  run identity        : d71774cb859a1389
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : sffs_forward_euler-case
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : plasma
+  numerics plasma     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.02)
+  interval            : 0 -> 0.02 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : b8e8aacd5f7a1b8a
+  run identity        : 2bc616aff52406c9
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.02 / 1
+  elapsed             : 0.002157 s
+  run identity        : 2bc616aff52406c9
+  [OK ] both public Forward-Euler reference stages accepted exactly one step
+  per-stage parity: max|d| = 4.44e-16
+  [OK ] compiled Heun == public per-stage Forward-Euler reconstruction (max|d| = 4.44e-16)
+  [OK ] mass (sum rho) conserved over the step (|d| = 0.00e+00)
+  [OK ] the 2-stage step actually changed the state
+PASS test_time_solve_fields_from_state

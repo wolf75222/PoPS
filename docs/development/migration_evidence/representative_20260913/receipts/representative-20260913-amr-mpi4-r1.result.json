@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/mpiexec",
+    "-n",
+    "4",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/build/migration-native/bin/test_amr_layout_transfer",
+    "--gtest_output=xml:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-amr-mpi4-r1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T10:06:27.237797+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 26.881692708004266,
+  "source_head_after": "77c1eb300b9a35ed018d0a31c7f7efa0a793c014",
+  "source_status_after": "",
+  "log_sha256": "8a913831b399bbfdc6a193dad5c2ea559393a31e8939647231dbd9674a07ff5a"
+}

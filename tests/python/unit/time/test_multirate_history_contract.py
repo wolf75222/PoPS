@@ -284,9 +284,69 @@ def test_child_clock_history_interpolation_lowers_with_its_qualified_clock_ledge
     child_clock = history["clock"]
 
     assert child_clock != program.clock.qualified_id
-    assert "ctx.store_history" in source
-    assert 'ctx.rotate_histories("%s")' % child_clock in source
+    # Only the child tick owns publication: a macro store first would leave a pending .1
+    # window which the first .05 child store correctly refuses to overwrite.
+    stores = [line for line in source.splitlines() if "ctx.store_history(" in line]
+    assert len(stores) == 1
+    scope = source.index("auto logical_evaluation_scope_")
+    store = source.index(stores[0])
+    rotate = source.index('ctx.rotate_histories("%s")' % child_clock)
+    assert scope < store < rotate
+    assert source.count('ctx.rotate_histories("%s")' % child_clock) == 1
     assert "ctx.interpolate_history_linear" in source
+
+
+def test_child_history_retains_explicit_amr_capability_refusal():
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    with pytest.raises(
+        NotImplementedError, match="AMR logical-clock subcycling with child-clock histories"
+    ):
+        emit_cpp_program(_child_owned_interpolated_program(), model=None, target="amr_system")
+
+
+def test_child_automatic_history_does_not_suppress_primary_or_manual_stores():
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    program = Program("history_publication_owners")
+    primary = typed_state(program, "fluid", state_name="U")
+    program.keep_history(primary, depth=2)
+    program.store_history("explicit", primary.n, depth=2)
+    program.commit(primary.next, program.value("copy", 1 * primary.n, at=primary.next.point))
+    source = emit_cpp_program(program, model=None, target="system")
+    stores = [line for line in source.splitlines() if "ctx.store_history(" in line]
+    assert len(stores) == 2
+    assert any('"fluid.U"' in line for line in stores)
+    assert any('"explicit"' in line for line in stores)
+    assert source.index(stores[-1]) < source.index("ctx.rotate_histories(")
+
+
+@pytest.mark.parametrize("sites", [0, 2])
+def test_child_automatic_history_requires_one_publication_site(sites):
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    program = Program("history_publication_sites")
+    block, declared = state_refs(program, "fluid", state_name="U")
+    macro = program.state(block[declared])
+    clock = Clock("fast", owner=program.owner_path)
+    child = program.state(block[declared], clock=clock)
+    program.keep_history(child, depth=2)
+    if sites == 0:
+        # The clock itself has a valid relation, but another block cannot own this ring's store.
+        other_block, other_declared = state_refs(program, "other", state_name="U")
+        other = program.state(other_block[other_declared], clock=clock)
+        program.subcycle(
+            other.n, clock=clock, within=program.clock, count=2,
+            body_fn=lambda P, value: P.value("other_copy", 1 * value),
+        )
+    for _ in range(sites):
+        program.subcycle(
+            child.n, clock=clock, within=program.clock, count=2,
+            body_fn=lambda P, value: P.value("copy", 1 * value),
+        )
+    program.commit(macro.next, program.value("macro_copy", 1 * macro.n, at=macro.next.point))
+    with pytest.raises(ValueError, match="exactly one matching subcycle"):
+        emit_cpp_program(program, model=None, target="system")
 
 
 def test_dense_history_interpolation_lowering_fails_closed_but_amr_uses_shared_linear_service():

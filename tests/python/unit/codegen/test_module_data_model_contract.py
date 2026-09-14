@@ -161,7 +161,7 @@ def test_pure_module_declarers_return_canonical_operator_handles():
         "source", signature=(state,) >> model.Rate(state),
         kind="local_source")
     def source(_state):
-        return "source"
+        return _state
 
     rate = module.rate_operator(
         "rate", state_space=module.state_handle(state), sources=[])
@@ -169,7 +169,9 @@ def test_pure_module_declarers_return_canonical_operator_handles():
         assert isinstance(handle, model.OperatorHandle)
         assert module.operator_handle(handle.name) == handle
         assert handle.owner_path == module.operator_registry().owner_path
-    assert module.operator_registry().get("source").body.__name__ == "source"
+    captured = module.operator_registry().get("source").body
+    assert isinstance(captured, tuple) and len(captured) == 1
+    assert captured[0].handle == module.state_handle(state)
 
 
 def test_module_family_registries_issue_and_authenticate_all_declaration_handles():
@@ -297,7 +299,7 @@ def test_manifest_is_structured_deeply_frozen_json_and_copy_out():
 
     manifest = module.manifest()
     entry = manifest.operators.describe("fields_from_state")
-    assert manifest.schema_version == 8
+    assert manifest.schema_version == 9
     assert entry.to_dict()["signature"] == model.Signature((state,), fields).to_data()
     assert json.loads(manifest.to_json()) == manifest.to_dict()
 

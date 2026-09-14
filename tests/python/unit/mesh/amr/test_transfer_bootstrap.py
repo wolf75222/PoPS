@@ -87,7 +87,8 @@ from pops.lib.amr import (
     StateTransfer,
 )
 from pops.model import Handle, OwnerPath, ParamHandle
-from pops.numerics.reconstruction import WENO5
+from pops.numerics.reconstruction import MUSCL, WENO5
+from pops.numerics.reconstruction.limiters import VanLeer
 from pops.numerics.riemann import Rusanov
 from pops.numerics.spatial import FiniteVolume
 from pops.numerics.variables import Conservative
@@ -338,6 +339,26 @@ def test_public_transfer_object_derives_all_state_routes_and_hides_internal_buil
     assert "AMRTransferBuilder" not in module.__all__
 
 
+def test_muscl_two_destination_halos_keep_the_second_order_parent_stencil():
+    plan, _, state, _ = _layout()
+    method = FiniteVolume(
+        flux=Handle("F", kind="flux", owner=state.owner_path),
+        variables=Conservative(state),
+        reconstruction=MUSCL(VanLeer()),
+        riemann=Rusanov(),
+    )
+    assert (method.formal_order, method.ghost_depth) == (2, 2)
+    authored = AMRTransfer()
+    authored.state(state, StateTransfer())
+    resolved = authored.resolve(
+        plan, (SimpleNamespace(rates=(SimpleNamespace(method=method),)),))
+    coarse_fine = resolved.for_subject(state, COARSE_FINE_FILL)
+    assert coarse_fine.action.route.options.to_data()["native_route"] == (
+        "conservative_coarse_fine")
+    assert coarse_fine.action.capabilities.order == 2
+    assert coarse_fine.action.capabilities.ghost_depth == (2,)
+
+
 def test_public_transfer_selects_real_fifth_order_route_for_weno():
     plan, _, state, _ = _layout()
     flux = Handle("F", kind="flux", owner=state.owner_path)
@@ -460,7 +481,7 @@ def test_builtin_cell_transfers_resolve_exact_rank_with_ratio_three(
         == "linear_time_interpolation"
     assert temporal.action.capabilities.ghost_depth == (0,)
     assert resolved.nesting_requirement.minimum_buffer == tuple(
-        1 for _ in range(dimension)
+        2 for _ in range(dimension)
     )
 
 

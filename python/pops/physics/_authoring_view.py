@@ -15,6 +15,7 @@ from pops._cartesian_axes import flattened_axis_values
 from ._modelpkg import model as _model
 from .aux import roles_for
 from pops._ir.visitors import _dependencies
+from pops._ir.symbolic import freeze_symbolic_metadata
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -51,14 +52,41 @@ class _OperatorViewMixin(_HyperbolicModel):
         read = sorted(expanded & aux_set)
         return {"aux": read} if read else {}
 
-    def state_space(self, name: str = "U") -> Any:
+    def _source_callback_expressions(self) -> list[Any]:
+        """All formulas emitted on the default source's native provider role."""
+        expressions = list(self._source or ())
+        if self._src_freq is not None:
+            expressions.append(self._src_freq)
+        expressions.extend(expression for row in (self._src_jac or ()) for expression in row)
+        return expressions
+
+    def _stability_callback_expressions(self) -> list[Any]:
+        """Wave and timestep formulas evaluated through the physical-flux role."""
+        expressions = flattened_axis_values(self._eig)
+        if self._wave_speeds is not None:
+            expressions.extend(flattened_axis_values(self._wave_speeds))
+        if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
+            for direction in self._ws_jacobian["rows"]:
+                expressions.extend(expression for row in self._ws_jacobian["rows"][direction]
+                                   for expression in row)
+        if self._roe_rows is not None:
+            expressions.extend(flattened_axis_values(self._roe_rows))
+        if self._roe_jacobian is not None:
+            for direction in self._flux:
+                expressions.extend(expression for row in self._roe_jacobian[direction]
+                                   for expression in row)
+        expressions.extend(expression for expression in (self._stab_speed, self._stab_dt)
+                           if expression is not None)
+        return expressions
+
+    def state_space(self, name: str | None = None) -> Any:
         """Typed :class:`pops.model.StateSpace` view of the conservative state: its
         components and canonical physical roles. Derived; carries no data."""
         role_list = roles_for(self.cons_names, self.cons_roles)
         roles = dict(zip(self.cons_names, role_list, strict=True))
         metadata = self._state_space_metadata
         return _model.StateSpace(
-            name=name,
+            name=metadata["name"] if name is None else name,
             components=tuple(self.cons_names),
             roles=roles,
             layout=metadata["layout"],
@@ -68,6 +96,10 @@ class _OperatorViewMixin(_HyperbolicModel):
             units=metadata["units"],
             frame=metadata["frame"],
             clock=metadata["clock"],
+            support=metadata.get("support"),
+            sampling=metadata.get("sampling", "unspecified"),
+            value_shape=metadata.get("value_shape"),
+            domain=metadata.get("domain", "real"),
         )
 
     def field_space(self, name: str = "fields") -> Any:
@@ -80,7 +112,7 @@ class _OperatorViewMixin(_HyperbolicModel):
             name=name, components=tuple(self._provider_components), layout="cell"
         )
 
-    def operator_registry(self, state_name: str = "U") -> Any:
+    def operator_registry(self, state_name: str | None = None) -> Any:
         """Typed :class:`pops.model.OperatorRegistry` derived from this model.
 
         Lowers the PDE shortcuts into typed operators (ids follow registration order):
@@ -91,6 +123,8 @@ class _OperatorViewMixin(_HyperbolicModel):
         ``(State) -> State``. The implicit defaults surface as ``flux_default`` /
         ``source_default`` / ``fields_from_state``. Pure view: no hash / codegen impact.
         """
+        if state_name is None:
+            state_name = self._state_space_metadata["name"]
         cache = self._operator_registry_cache
         cached = cache.get(state_name)
         if cached is not None:
@@ -102,21 +136,7 @@ class _OperatorViewMixin(_HyperbolicModel):
         def reads_fields(exprs: Any) -> bool:
             return bool(self._aux_requirements(exprs))
 
-        stability_exprs = flattened_axis_values(self._eig)
-        if self._wave_speeds is not None:
-            stability_exprs.extend(flattened_axis_values(self._wave_speeds))
-        if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
-            for direction in self._ws_jacobian["rows"]:
-                stability_exprs.extend(
-                    expression for row in self._ws_jacobian["rows"][direction] for expression in row
-                )
-        if self._roe_rows is not None:
-            stability_exprs.extend(flattened_axis_values(self._roe_rows))
-        if self._roe_jacobian is not None:
-            for direction in self._flux:
-                stability_exprs.extend(
-                    expression for row in self._roe_jacobian[direction] for expression in row
-                )
+        stability_exprs = self._stability_callback_expressions()
 
         # Flux divergence (grid_operator: State -> Rate(State)).
         if self._flux:
@@ -141,6 +161,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     },
                     requirements=self._aux_requirements(exprs),
                     source=None,
+                    body=freeze_symbolic_metadata(self._flux),
                 )
             )
         for nm in sorted(self._flux_terms):
@@ -165,12 +186,14 @@ class _OperatorViewMixin(_HyperbolicModel):
                     },
                     requirements=self._aux_requirements(exprs),
                     source=None,
+                    body=freeze_symbolic_metadata(term),
                 )
             )
 
         # Local sources (local_source: State[, Fields] -> Rate(State)).
         if self._source is not None:
-            rf = reads_fields(self._source)
+            source_exprs = self._source_callback_expressions()
+            rf = reads_fields(source_exprs)
             reg.register(
                 _model.Operator(
                     "source_default",
@@ -184,9 +207,10 @@ class _OperatorViewMixin(_HyperbolicModel):
                         "supports_device": True,
                         "default": True,
                     },
-                    requirements=self._aux_requirements(self._source),
+                    requirements=self._aux_requirements(source_exprs),
                     lowering={"source": "default"},
                     source=None,
+                    body=freeze_symbolic_metadata(self._source),
                 )
             )
             # ``source_term("default", ...)`` returns a readable ``default`` handle,
@@ -210,6 +234,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     },
                     requirements=self._aux_requirements(exprs),
                     source=None,
+                    body=freeze_symbolic_metadata(exprs),
                 )
             )
 
@@ -233,6 +258,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     },
                     requirements=self._aux_requirements(coeffs),
                     source=None,
+                    body=freeze_symbolic_metadata(self._linear_sources[nm]),
                 )
             )
 
@@ -251,7 +277,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     capabilities={"local": True, "supports_device": True, "fail_closed": True},
                     requirements=self._aux_requirements(exprs + [valid_if]),
                     source=None,
-                    body={"expressions": tuple(exprs), "valid_if": valid_if},
+                    body=freeze_symbolic_metadata({"expressions": tuple(exprs), "valid_if": valid_if}),
                 )
             )
 
@@ -274,7 +300,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     requirements={"elliptic_operator": "poisson"},
                     lowering={"field_provider": {"key": "fields_from_state"}},
                     source=None,
-                    body=self._elliptic,
+                    body=freeze_symbolic_metadata(self._elliptic),
                 )
             )
         for nm in sorted(self._elliptic_fields):
@@ -291,7 +317,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                         "gradient_sign": info["gradient_sign"],
                     },
                     source=None,
-                    body=info["rhs"],
+                    body=freeze_symbolic_metadata(info["rhs"]),
                 )
             )
 
@@ -306,6 +332,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     capabilities={"local": True, "idempotent": True, "supports_device": True},
                     requirements=self._aux_requirements(self._proj),
                     source=None,
+                    body=freeze_symbolic_metadata(self._proj),
                 )
             )
 
@@ -320,6 +347,11 @@ class _OperatorViewMixin(_HyperbolicModel):
                     needs = needs or (self._source is not None and reads_fields(self._source))
                 elif s in self._source_terms:
                     needs = needs or reads_fields(self._source_terms[s])
+            if cfg["flux"]:
+                flux_names = cfg["fluxes"] or ["flux_default"]
+                for flux_name in flux_names:
+                    dependency = reg.get(flux_name)
+                    needs = needs or bool(dependency.capabilities.get("requires_fields", False))
             reg.register(
                 _model.Operator(
                     nm,

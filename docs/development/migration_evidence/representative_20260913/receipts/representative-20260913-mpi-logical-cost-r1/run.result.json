@@ -1,0 +1,32 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/mpiexec.hydra",
+    "-n",
+    "2",
+    "-genv",
+    "OMP_NUM_THREADS",
+    "2",
+    "-genv",
+    "OMP_PROC_BIND",
+    "false",
+    "-genv",
+    "DYLD_INSERT_LIBRARIES",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/m7-mpi-probe/build/libpops_mpi_probe.dylib:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-pmpi-finalize-export.dylib",
+    "-genv",
+    "POPS_MPI_METRIC_OUTPUT_DIR",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-mpi-logical-cost-r1",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/build/migration-native/bin/test_amr_layout_transfer",
+    "--gtest_filter=AmrLayoutTransfer.ActiveCompositeMeasureStageRebindingRetryAndRestartFence",
+    "--gtest_output=xml:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-mpi-logical-cost-r1/native.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "d9be0f671f8c0e80acb21050a8b8e27f3885c4e6",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T10:49:16.949422+00:00",
+  "environment": {},
+  "exit_code": 0,
+  "elapsed_seconds": 4.363322582968976,
+  "source_head_after": "d9be0f671f8c0e80acb21050a8b8e27f3885c4e6",
+  "source_status_after": "",
+  "log_sha256": "0f9e9304bdb6dd621a89dfff0f014302879bbad37ffbb305d52ef37b3a02c0c0"
+}

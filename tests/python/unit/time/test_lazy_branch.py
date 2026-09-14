@@ -12,6 +12,19 @@ def _copy(program, value, name):
     return program.value(name, 1 * value, at=value.point)
 
 
+def test_branch_result_authority_comes_from_arms_not_foreign_condition_block():
+    program = Program("cross-block-condition")
+    condition_state = typed_state(program, "condition_owner")
+    result_state = typed_state(program, "result_owner")
+    selected = program.branch(program.norm2(condition_state) > 0,
+        lambda T: _copy(T,result_state,"active_result"),
+        lambda T: _copy(T,result_state,"inactive_result"))
+    assert selected.state_ref == result_state.state_ref
+    assert selected.block is result_state.block
+    assert selected.state_ref != condition_state.state_ref
+    validate_program_regions(program)
+
+
 def test_branch_captures_two_typed_lazy_regions_and_exact_result_signature():
     program = Program("lazy-branch")
     state = typed_state(program, "fluid")

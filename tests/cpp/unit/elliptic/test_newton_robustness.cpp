@@ -46,10 +46,6 @@ struct NoProviders {
 
 inline constexpr NoProviders no_providers{};
 
-pops::ExecutionLane test_execution_lane() {
-  return pops::ExecutionLane::world("pops.test.newton-robustness");
-}
-
 template <class Ranked, class Value>
 Ranked filled_ranked(Value value) {
   Ranked result{};
@@ -334,6 +330,10 @@ static constexpr Real kDt = 0.05;
 // les preuves de robustesse du Newton generalise). SetUpTestSuite : construit une fois par suite.
 class NewtonRobustnessTest : public ::testing::Test {
  protected:
+  // Outcomes borrow their execution lane until consume(); world() ensures MPI is initialized.
+  pops::ExecutionLane execution_lane_ = pops::ExecutionLane::world("pops.test.newton-robustness");
+  const pops::ExecutionLane& test_execution_lane() const noexcept { return execution_lane_; }
+
   static void SetUpTestSuite() {
     dom_ = new pops::Box<kDim>{pops::Index<kDim>{}, filled_ranked<pops::Index<kDim>>(3)};
     ba_ = new Layout(std::vector<pops::Box<kDim>>{*dom_});
@@ -1083,6 +1083,7 @@ TEST(PreparedLocalNonlinear, EveryFailureClassIsExplicitAndLeavesTheGuessUntouch
 }
 
 TEST(LocalNonlinearCollective, SignedLargeIndicesPreservePriorityAndLexicographicOrder) {
+  const auto execution_lane = pops::ExecutionLane::world("pops.test.newton-robustness");
   pops::Index<kDim> negative{};
   pops::Index<kDim> positive{};
   for (int axis = 0; axis < kDim; ++axis) {
@@ -1105,8 +1106,8 @@ TEST(LocalNonlinearCollective, SignedLargeIndicesPreservePriorityAndLexicographi
     pops::for_each_cell(statistics.box(local), FillFailureStatistics{statistics.fab(local).view(),
                                                                      recoverable, fatal, false});
 
-  auto location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8,
-                                                                 test_execution_lane());
+  auto location =
+      pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8, execution_lane);
   ASSERT_TRUE(location.found);
   EXPECT_EQ(location.priority, fatal);
   EXPECT_EQ(location.index, positive);
@@ -1115,12 +1116,12 @@ TEST(LocalNonlinearCollective, SignedLargeIndicesPreservePriorityAndLexicographi
   for (std::size_t local = 0; local < statistics.local_size(); ++local)
     pops::for_each_cell(statistics.box(local), FillFailureStatistics{statistics.fab(local).view(),
                                                                      recoverable, fatal, true});
-  location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8,
-                                                            test_execution_lane());
+  location =
+      pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8, execution_lane);
   ASSERT_TRUE(location.found);
   EXPECT_EQ(location.index, negative);
   EXPECT_EQ(location.component, 7);
   EXPECT_THROW((void)pops::collective_first_local_nonlinear_failure(statistics, fatal + 1, 10, 8,
-                                                                    test_execution_lane()),
+                                                                    execution_lane),
                std::runtime_error);
 }

@@ -1,0 +1,37 @@
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 19%]
+........................................................................ [ 26%]
+........................................................................ [ 32%]
+........................................................................ [ 39%]
+........................................................................ [ 45%]
+.................................F...................................... [ 52%]
+........................................................................ [ 58%]
+........................................................................ [ 65%]
+........................................................................ [ 71%]
+........................................................................ [ 78%]
+........................................................................ [ 84%]
+........................................................................ [ 91%]
+........................................................................ [ 97%]
+...........................                                              [100%]
+=================================== FAILURES ===================================
+_____________ test_diff_rejects_implicit_variable_stringification ______________
+
+    def test_diff_rejects_implicit_variable_stringification():
+>       with pytest.raises(TypeError, match="Var, declaration Handle"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'Var, declaration Handle'
+E         Actual message: 'diff variable must be a Var, QuantityRef, declaration Handle, or non-empty string'
+
+tests/python/unit/codegen/test_ir_strict_scalar_boundaries.py:47: AssertionError
+=============================== warnings summary ===============================
+tests/python/unit/codegen/test_program_source_kernel_reuse.py::test_native_shared_source_helper_preserves_two_block_updates[False]
+tests/python/unit/codegen/test_program_source_kernel_reuse.py::test_native_shared_source_helper_preserves_two_block_updates[True]
+  tests/python/unit/codegen/test_program_source_kernel_reuse.py:279: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/python/unit/codegen/test_ir_strict_scalar_boundaries.py::test_diff_rejects_implicit_variable_stringification
+1 failed, 1106 passed, 30 deselected, 2 warnings in 949.39s (0:15:49)

@@ -125,6 +125,7 @@ _SSPRK3_KEY = (
     (Fraction(1, 6), Fraction(1, 6), Fraction(2, 3)), (0, 1, Fraction(1, 2)),
 )
 _KNOWN_SSP = {
+    (((0,),), (1,), (0,)): SSPCertificate(Fraction(1), "one forward Euler step"),
     _SSPRK2_KEY: SSPCertificate(Fraction(1), "exact Shu-Osher convex decomposition"),
     _SSPRK3_KEY: SSPCertificate(Fraction(1), "exact Shu-Osher convex decomposition"),
 }
@@ -164,6 +165,32 @@ def certify_runge_kutta(tableau: Any) -> MethodCertificate:
     b = tuple(exact_fraction(x, "tableau.b") for x in tableau.b)
     c = tuple(exact_fraction(x, "tableau.c") for x in tableau.c)
     return _certificate_from_coefficients(A, b, c)
+
+
+@dataclass(frozen=True, slots=True)
+class ImplicitMethodProperties:
+    order: int | UnknownOrder
+    abscissae: tuple[Fraction, ...]
+    flux_weights: tuple[Fraction, ...]
+    # An implicit stability function is generally rational. Never publish the
+    # truncated explicit polynomial as a stability certificate.
+    stability_status: str = "unverified"
+
+
+@dataclass(frozen=True, slots=True)
+class ImplicitMethodCertificate:
+    A: tuple[tuple[Fraction, ...], ...]
+    b: tuple[Fraction, ...]
+    c: tuple[Fraction, ...]
+    properties: ImplicitMethodProperties
+
+
+def certify_implicit_runge_kutta(tableau: Any) -> ImplicitMethodCertificate:
+    A = _dense(tableau)
+    b = tuple(exact_fraction(x, "tableau.b") for x in tableau.b)
+    c = tuple(exact_fraction(x, "tableau.c") for x in tableau.c)
+    return ImplicitMethodCertificate(A, b, c, ImplicitMethodProperties(
+        _proved_order(A, b, c), c, b))
 
 
 def certify_additive_runge_kutta(tableau: Any) -> AdditiveMethodCertificate:
@@ -233,7 +260,7 @@ def _is_explicit_rate_call(node: Any) -> bool:
     canonical typed handle and lowering metadata; names and debug labels are deliberately ignored.
     """
     if node.kind == "program_value":
-        return node.op == "rhs"
+        return node.op in {"rhs", "diffusive_rhs"}
     if node.kind != "operator_call":
         return False
     operator = node.operator.to_data()
@@ -241,7 +268,7 @@ def _is_explicit_rate_call(node: Any) -> bool:
     lowering = operator.get("lowering", {})
     return (
         handle.get("kind") in {"grid_operator", "local_rate"}
-        and lowering.get("op") == "rhs"
+        and lowering.get("op") in {"rhs", "diffusive_rhs"}
         and lowering.get("value_type") == "rhs"
     )
 

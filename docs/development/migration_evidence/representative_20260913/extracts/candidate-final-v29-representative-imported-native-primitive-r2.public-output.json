@@ -1,0 +1,45 @@
+{
+  "data": {
+    "accepted_steps": 1,
+    "artifact": "pops.artifact.v1:sha256:179383a3a16c6af200af58a5b3e98be814d5b25eed04d0418c8544d2122003ad",
+    "component_binaries": {
+      "left": "76bd38fa7a7f589ffc7e10eeb64d5aa59d5b9fb5d66c47cb45b2039fa7c8cd0c",
+      "right": "615afbecaec2412b51a506de8413d8c5b3d510eb463f93cf475f539bdfec34d2"
+    },
+    "component_binary": "76bd38fa7a7f589ffc7e10eeb64d5aa59d5b9fb5d66c47cb45b2039fa7c8cd0c",
+    "component_id": "migration.arithmetic",
+    "final_time": 0.001,
+    "left": {
+      "block": "left",
+      "component_means": [
+        1.0
+      ],
+      "maximum": 1.196157056080646,
+      "minimum": 0.803842943919354,
+      "shape": [
+        1,
+        16,
+        16
+      ]
+    },
+    "paired_mean_change": 0.0,
+    "right": {
+      "block": "right",
+      "component_means": [
+        3.0
+      ],
+      "maximum": 3.294235584120969,
+      "minimum": 2.705764415879031,
+      "shape": [
+        1,
+        16,
+        16
+      ]
+    },
+    "source_package": "a4c7a05ad76809766002ab586976ff3d4c056ca5100fa972462b92a92de503e7",
+    "workflow": "imported-native-primitive"
+  },
+  "original_log": "candidate-final-v29-representative-imported-native-primitive-r2.log",
+  "original_log_sha256": "eb22f66bf8f69e947721116957e9327347c0a9aee6e74260dd19a4e578d0182e",
+  "schema": "pops.public-cli-output-extract.v1"
+}

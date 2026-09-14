@@ -74,8 +74,11 @@ std::shared_ptr<const component::PreparedExecutionContextV1> prepared_execution(
 
 ProdModel make_model() {
   // alpha=0 : elliptic_rhs nul -> phi=0, parite stricte.
-  return ProdModel{
-      {}, NativeEuler{static_cast<Real>(kGamma)}, NoSource{}, BackgroundDensity{Real(0), Real(0)}};
+  return ProdModel{{},
+                   {},
+                   NativeEuler{static_cast<Real>(kGamma)},
+                   NoSource{},
+                   BackgroundDensity{Real(0), Real(0)}};
 }
 
 template <int Dim>
@@ -208,8 +211,8 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
     }
   }
   for (const auto& row : s.program_flux_ledger_manifest()) {
-    if (row.size() != 13)
-      continue;
+    if (row.size() != 17 || row[13].empty())
+      throw std::runtime_error("accepted AMR face ledger lacks its exact provenance columns");
     const bool coarse = row[10].ends_with("_coarse");
     const double duration = std::stod(row[12]);
     if (coarse) {
@@ -225,8 +228,8 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
     }
   }
   for (const auto& row : s.program_sync_manifest()) {
-    if (row.size() != 7)
-      continue;
+    if (row.size() != 11 || row[7].empty())
+      throw std::runtime_error("accepted AMR synchronization lacks its exact provenance columns");
     if (row[3] == "reflux")
       ++snap.reflux_syncs;
     else if (row[3] == "average_down")
@@ -307,7 +310,7 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
   package.block = pops::prepare_compiled_amr_system_block<pops_generated::Dim>(
       name,
       pops_generated::ProdModel{
-          {},
+          {}, {},
           pops::EulerND<pops_generated::Dim>{static_cast<pops::Real>(gamma)}, pops::NoSource{},
           pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
       limiter, riemann, recon, time, gamma, substeps, stride, pos_floor, weno_epsilon,

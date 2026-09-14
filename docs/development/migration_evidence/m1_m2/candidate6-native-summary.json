@@ -1,0 +1,265 @@
+{
+  "source_sha": "a760245b004008cd464ad44ef7b5c629c3e728db",
+  "dimension": 2,
+  "mpi_enabled": true,
+  "kokkos_backends": [
+    "OPENMP",
+    "SERIAL"
+  ],
+  "compiler": "/usr/bin/clang++",
+  "build_type": "Release",
+  "build_parallelism": 2,
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907",
+    "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907",
+    "POPS_NATIVE_DIM": "2"
+  },
+  "steps": [
+    {
+      "label": "configure",
+      "command": [
+        "rtk",
+        "proxy",
+        "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/cmake",
+        "-S",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2",
+        "-B",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+        "-DCMAKE_C_COMPILER=/usr/bin/clang",
+        "-DCMAKE_PREFIX_PATH=/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907",
+        "-DKokkos_ROOT=/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907",
+        "-DPOPS_NATIVE_DIM=2",
+        "-DPOPS_REAL_TYPE=double",
+        "-DPOPS_BUILD_TESTS=ON",
+        "-DPOPS_BUILD_PYTHON=OFF",
+        "-DPOPS_USE_KOKKOS=ON",
+        "-DPOPS_USE_MPI=ON",
+        "-DPOPS_USE_HDF5=ON"
+      ],
+      "started": 1788821170.146893,
+      "log": "candidate6-native-configure.log",
+      "exit_code": 0,
+      "elapsed_seconds": 10.547070980072021
+    },
+    {
+      "label": "build",
+      "command": [
+        "rtk",
+        "proxy",
+        "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/cmake",
+        "--build",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native",
+        "--clean-first",
+        "--parallel",
+        "2",
+        "--target",
+        "test_narrow_physical_operations",
+        "test_component_interfaces",
+        "test_aux_single_source",
+        "test_nd_transfer",
+        "test_prepared_amr_ghost_fill",
+        "test_nd_cluster",
+        "test_program_context_contract",
+        "test_program_reflux_ledger",
+        "test_amr_synthetic_program_loader_transaction",
+        "test_coupled_fieldsolve",
+        "test_generated_amr_system_block",
+        "test_nd_flux_ledger",
+        "test_native_field_attachment",
+        "test_mpi_prepared_amr_ghost_fill"
+      ],
+      "started": 1788821180.694688,
+      "log": "candidate6-native-build.log",
+      "exit_code": 0,
+      "elapsed_seconds": 145.89539194107056
+    },
+    {
+      "label": "tests",
+      "command": [
+        "rtk",
+        "proxy",
+        "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/ctest",
+        "--test-dir",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native",
+        "--tests-from-file",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate6-native-serial-tests.txt",
+        "--output-on-failure",
+        "--no-tests=error",
+        "--parallel",
+        "1",
+        "--output-junit",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate6-native-tests.xml"
+      ],
+      "started": 1788821387.748559,
+      "log": "candidate6-native-tests.log",
+      "exit_code": 0,
+      "elapsed_seconds": 96.75453805923462
+    },
+    {
+      "label": "mpi",
+      "command": [
+        "rtk",
+        "proxy",
+        "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/ctest",
+        "--test-dir",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native",
+        "-R",
+        "^(test_mpi_prepared_amr_ghost_fill_np3|test_coupled_fieldsolve_np2|test_program_context_contract_np2|test_generated_amr_system_block_np2)$",
+        "--verbose",
+        "--no-tests=error",
+        "--parallel",
+        "1",
+        "--output-junit",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate6-native-mpi.xml"
+      ],
+      "started": 1788821484.505902,
+      "log": "candidate6-native-mpi.log",
+      "exit_code": 0,
+      "elapsed_seconds": 1.001866102218628
+    }
+  ],
+  "status": "passed",
+  "limitations": [
+    "Requested 14-target native matrix only; no Python wheel qualification."
+  ],
+  "start_tracked_bytes_sha256": "99cd6de7f0e3c4226959772160eef826cdf6f090690c484c4f642ac0a8aca810",
+  "compiler_version": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.5.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+  "initial_source_change_receipt": "candidate6-native-initial-source-stop.json",
+  "candidate7_native_source_equivalence": {
+    "native_source_pin": "a760245b004008cd464ad44ef7b5c629c3e728db",
+    "candidate7_source_pin": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+    "exact_changed_path": "python/pops/codegen/program_emit_ops.py",
+    "scope": "One Python model-free projection guard; every other tracked byte must match the initial source fingerprint.",
+    "candidate7_tracked_bytes_sha256": "868f41ae7af143f6d4ae55363ed210f006c270a4c1f8251b569dbc97dd674109",
+    "restored_baseline_tracked_bytes_sha256": "99cd6de7f0e3c4226959772160eef826cdf6f090690c484c4f642ac0a8aca810",
+    "baseline_python_file_sha256": "4df073228b770425820ebeda70cf62f9c401577b162c5759a32e5567e42bd09a",
+    "candidate7_python_file_sha256": "6fea042f9c565dd556746711c9ffd2dd43b9ecbc1422cf9597a8689fe9e0df7d"
+  },
+  "targets": {
+    "test_narrow_physical_operations": "bf1464aab954baac6b197409d74801b014b83733533c3b4f5f8f85c86a327632",
+    "test_component_interfaces": "761da0d69e5ff45e4b0d2494af5d3caf6acbf9dd69edf77498ba10f127e2fbd7",
+    "test_aux_single_source": "7c32abe8e115a9fc31ff28da1528fd4e2fb7b7629ba265a50e50446aede79893",
+    "test_nd_transfer": "c099224e99d107637603509e4f44b5ced7d54b71bc9013f96c2462706c7dbcf1",
+    "test_prepared_amr_ghost_fill": "6d6f1db6f5d1e423a05bade461ce41805a4b47e71e7916033f0164c6b0f5baf6",
+    "test_nd_cluster": "e0ed4e2cd4fd2e702f9dd036c96adc6968d96c30e1130eb715f930892c7b5e93",
+    "test_program_context_contract": "a197789264c9fc1b90e8d9210f0e0225c168096d1606f1af8adcbc73ee0d9956",
+    "test_program_reflux_ledger": "d0c53d7ecae8c535b05c881ed6cdc7ecd8db960edb527d94449222c2736cc3ff",
+    "test_amr_synthetic_program_loader_transaction": "263a9475d520fa3d87376f7e1df1dc2fc13992bce3dbb15d601bc1f643ef1c72",
+    "test_coupled_fieldsolve": "1515f8c046872aa5e7b891765fc720523ff60d82e694a83846793814755af548",
+    "test_generated_amr_system_block": "e6cbf4b6d74a882bf34b240847d17fec91d59a5e44016853d9fe89b1844ce472",
+    "test_nd_flux_ledger": "fea7948a5fff2dfd6b30a2a130406f1ad4a63bb9c4063d317d9c3ff7eb6479ea",
+    "test_native_field_attachment": "bcae0a804ade0bea877861715a224b1f025f8f01e14533ba7d8d2b004515234d",
+    "test_mpi_prepared_amr_ghost_fill": "59e3954fbdb8298e091b6a8ded07aa2e47fcf76d93067f56a68c489debee7122"
+  },
+  "serial": {
+    "name": "(empty)",
+    "tests": "159",
+    "failures": "0",
+    "disabled": "0",
+    "skipped": "3",
+    "hostname": "",
+    "time": "96",
+    "timestamp": "2026-09-08T00:49:47"
+  },
+  "serial_skips": [
+    "ProgramContextContract.AuxiliaryReadRefusesRankDivergentPublicationBeforeNoWorkBranch",
+    "ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection",
+    "ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation"
+  ],
+  "mpi_ctest": {
+    "name": "(empty)",
+    "tests": "4",
+    "failures": "0",
+    "disabled": "0",
+    "skipped": "0",
+    "hostname": "",
+    "time": "0",
+    "timestamp": "2026-09-08T00:51:24"
+  },
+  "mpi_effective_gtests": {
+    "test_mpi_prepared_amr_ghost_fill_np3": 1,
+    "test_coupled_fieldsolve_np2": 1,
+    "test_program_context_contract_np2": 4,
+    "test_generated_amr_system_block_np2": 1
+  },
+  "end_restored_baseline_tracked_bytes_sha256": "99cd6de7f0e3c4226959772160eef826cdf6f090690c484c4f642ac0a8aca810",
+  "verified_end_head": "bd583faf196f3c1faeedec489e04d24e959ed00b",
+  "final_qualification": {
+    "serial_passes": 156,
+    "serial_mpi_only_skips": 3,
+    "effective_mpi_gtests": 7,
+    "mpi_ranks": [
+      2,
+      3
+    ],
+    "remaining_failures": []
+  },
+  "runner_receipts": {
+    "candidate6-native-runner.py": "734bc0bd2fba93cd74cf1aa62069f795eb846287a6e4ea8723de54359d6c5cdd",
+    "candidate6-native-continue.py": "1947142bd8826475bbb9bace9afe0ec8e84d6a598028a37bdd5f77292c3599f8"
+  },
+  "kokkos_version": "5.2.1",
+  "parallel_hdf5_version": "1.14.3",
+  "clean_end": true,
+  "mpi_gtest_xml_details": {
+    "test_mpi_prepared_amr_ghost_fill_np3": {
+      "tests": "1",
+      "failures": "0",
+      "disabled": "0",
+      "errors": "0",
+      "time": "0.098",
+      "timestamp": "2026-09-08T00:51:24.933",
+      "name": "AllTests",
+      "skipped": 0
+    },
+    "test_coupled_fieldsolve_np2": {
+      "tests": "1",
+      "failures": "0",
+      "disabled": "0",
+      "errors": "0",
+      "time": "0.038",
+      "timestamp": "2026-09-08T00:51:25.143",
+      "name": "AllTests",
+      "skipped": 0
+    },
+    "test_program_context_contract_np2": {
+      "tests": "4",
+      "failures": "0",
+      "disabled": "0",
+      "errors": "0",
+      "time": "0.043",
+      "timestamp": "2026-09-08T00:51:25.243",
+      "name": "AllTests",
+      "skipped": 0
+    },
+    "test_generated_amr_system_block_np2": {
+      "tests": "1",
+      "failures": "0",
+      "disabled": "0",
+      "errors": "0",
+      "time": "0.093",
+      "timestamp": "2026-09-08T00:51:25.371",
+      "name": "AllTests",
+      "skipped": 0
+    }
+  },
+  "evidence_sha256": {
+    "candidate6-native-configure.log": "c345615291cc915d42427fff3b9415669d21211c467f6c7fd4e3a09398ef67ca",
+    "candidate6-native-build.log": "81e3224034a4562581f075e735ad04f40f4770b9745606b275851381307d7fee",
+    "candidate6-native-tests.log": "d56cf577959163114c2011c62c6c97299b3393c7ac337eb6b34d06164311e3e3",
+    "candidate6-native-mpi.log": "10c377c6f9373c76cf058b2886e1e28371a8a64e6d84fe44331ffd14c3277bef",
+    "candidate6-native-initial-source-stop.json": "62c615ce678276be40a7ec0345177a876eae0720aa89ead913a2d77c2658c18a",
+    "candidate6-native-tests.xml": "1894bdc428e0510afb616bc9eccc7847f574b3824a66d8792c3f4d0ec25b1f57",
+    "candidate6-native-mpi.xml": "35ccb077a3d239f4beb5a91f4c225fb2697c0b751fc469798bb2139d4d388ed1",
+    "candidate6-native-ctest-inventory.json": "11687ed3402c0cc0db65aa2dc756602b10884250b9efd28b3e68cbfa60c1f2ef",
+    "candidate6-native-serial-tests.txt": "c22b87d70ae6620ba3dbe9d191b6f6647fee4d9ce56f7c803633034a93b51d6c",
+    "candidate6-native-test_mpi_prepared_amr_ghost_fill_np3.xml": "5d6bdbb5c52365c42298e8a16132213b074e56ca6ad17ffd645a50c48dc6b603",
+    "candidate6-native-test_coupled_fieldsolve_np2.xml": "f13aa6157e327054b6de8212990179a3a37f9406f74e79c51f08316272116edd",
+    "candidate6-native-test_program_context_contract_np2.xml": "e1e80d7d18790b0e2172d8deb07472b5aa19ae6c85fa182969466ef99b51e9ba",
+    "candidate6-native-test_generated_amr_system_block_np2.xml": "0535194230452effa7042314650ee9da07551349380611d2c095ef4c2d4128c2"
+  }
+}

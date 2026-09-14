@@ -245,10 +245,18 @@ def _fine_valid_mask(simulation):
 
 
 def _coarse_uncovered_from_fine(fine_valid):
-    covered = fine_valid.reshape(N, 2, N, 2).any(axis=(1, 3))
+    covered = _coarse_coverage_from_fine(fine_valid)
     assert np.any(covered)
     assert np.any(~covered)
     return ~covered
+
+
+def _coarse_coverage_from_fine(fine_valid):
+    children = fine_valid.reshape(N, 2, N, 2)
+    any_child = children.any(axis=(1, 3))
+    all_children = children.all(axis=(1, 3))
+    np.testing.assert_array_equal(any_child, all_children)
+    return all_children
 
 
 @pytest.fixture(scope="module")
@@ -275,6 +283,8 @@ def test_nonlinear_local_imex_executes_on_the_refined_amr_program(
     assert simulation.n_levels() == 2
     fine_valid = _fine_valid_mask(simulation)
     coarse_uncovered = _coarse_uncovered_from_fine(fine_valid)
+    initial_patches = tuple(simulation.patch_boxes())
+    initial_regrid_report = simulation.amr.explain_regrid()
     coarse_before = _level_values(simulation, 0).copy()
     fine_before = _level_values(simulation, 1).copy()
     assert np.count_nonzero(fine_before[fine_valid]) > 0
@@ -288,7 +298,17 @@ def test_nonlinear_local_imex_executes_on_the_refined_amr_program(
     assert report.accepted_steps == simulation.macro_step() == 1
     assert simulation.time() == pytest.approx(DT)
     assert simulation.n_levels() == 2
-    assert np.array_equal(_fine_valid_mask(simulation), fine_valid)
+    accepted_fine_valid = _fine_valid_mask(simulation)
+    accepted_coarse_covered = _coarse_coverage_from_fine(accepted_fine_valid)
+    newly_covered = accepted_coarse_covered & coarse_uncovered
+    newly_refined = accepted_fine_valid & ~fine_valid
+    assert np.all(fine_valid <= accepted_fine_valid)
+    assert np.any(newly_refined)
+    assert np.any(newly_covered)
+    assert tuple(simulation.patch_boxes()) != initial_patches
+    accepted_regrid_report = simulation.amr.explain_regrid()
+    assert accepted_regrid_report.regrid_count == initial_regrid_report.regrid_count + 1
+    assert accepted_regrid_report.topology_epoch == initial_regrid_report.topology_epoch + 1
     coarse_after = _level_values(simulation, 0)
     fine_after = _level_values(simulation, 1)
 
@@ -304,8 +324,15 @@ def test_nonlinear_local_imex_executes_on_the_refined_amr_program(
         rtol=2.0e-11,
         atol=2.0e-12,
     )
+    restricted_fine_after = fine_after.reshape(N, 2, N, 2).mean(axis=(1, 3))
+    np.testing.assert_allclose(
+        restricted_fine_after[newly_covered],
+        coarse_after[newly_covered],
+        rtol=2.0e-11,
+        atol=2.0e-12,
+    )
     assert np.all(np.isfinite(coarse_after[coarse_uncovered]))
-    assert np.all(np.isfinite(fine_after[fine_valid]))
+    assert np.all(np.isfinite(fine_after[accepted_fine_valid]))
     assert np.all(
         coarse_after[coarse_uncovered]
         <= coarse_before[coarse_uncovered] + 2.0e-12

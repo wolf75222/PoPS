@@ -27,6 +27,7 @@ from pops.codegen import _compile_drivers as compile_drivers
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 from tests.python.support.typed_program import program_states
+from tests.python.integration._final_field_program import compiler_model
 
 
 def _skip(msg):
@@ -110,21 +111,35 @@ def _run():
     # Compile the 2-block .so ONCE (production model + compiled Program). Needs compiler + Kokkos.
     try:
         model = passive_model("nb_model")
-        comp = compile_drivers.compile_problem(
-            model=model, time=two_block_program(t, model))
+        program = two_block_program(t, model)
+        comp = compile_drivers.compile_problem(model=model, time=program)
+        blocks = {state.block.local_id: state.block for state in program._time_states.values()}
+        compiled_blocks = {
+            name: compiler_model(model).compile(
+                backend="production",
+                consumer_owner_qid=str(block.instance_owner_path.canonical()),
+            )
+            for name, block in blocks.items()
+        }
     except (RuntimeError, ValueError) as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
     def make_sim(add_order):
         """A System with the two blocks added in @p add_order, each set to its OWN-named IC."""
         sim = System(n=n, L=1.0, periodicity=(True, True))
-        for blk in add_order:
-            try:
-                cm = passive_model("nb_blk_" + blk).compile(backend="production")
-            except RuntimeError as exc:  # no compiler / no Kokkos
-                _skip("model compile could not build the .so: %s" % str(exc)[:160])
-            sim.add_equation(blk, cm, spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                             time=engine.Explicit(method="euler"))
+        # The same authored Module is instantiated at each exact Program block owner. Publish the
+        # complete native package set once; the auxiliary registry is immutable after sealing.
+        sim._batch_native_packages = True
+        try:
+            for blk in add_order:
+                sim.add_equation(
+                    blk, compiled_blocks[blk],
+                    spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                    time=engine.Explicit(method="euler"),
+                )
+        finally:
+            sim._batch_native_packages = False
+        sim._commit_pending_native_packages()
         for blk in add_order:
             sim.set_state(blk, ic[blk][None, :, :])
         return sim

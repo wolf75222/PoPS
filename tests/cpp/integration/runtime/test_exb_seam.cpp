@@ -169,20 +169,20 @@ void install_exb_forward_euler_program(System<kNativeDimension>& system) {
   std::iota(block_map.begin(), block_map.end(), 0);
   system.set_program_block_map(block_map);
 
-  runtime::program::ProgramContext<kNativeDimension> context(&system);
-  context.configure_primary_clock("test.clock.macro");
-  context.install([context](double dt) {
-    context.begin_step(dt);
-    context.set_stage_time(0, 1);
-    MultiFab<kNativeDimension>& state = context.state(0);
-    (void)consume_solve_outcome(context.solve_fields_from_blocks_at(
-        context.boundary_evaluation_point(900), 900, kFieldSlot, {{0, &state}}));
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test.clock.macro");
+  context->install([context](double dt) {
+    context->begin_step(dt);
+    context->set_stage_time(0, 1);
+    MultiFab<kNativeDimension>& state = context->state(0);
+    (void)consume_solve_outcome(context->solve_fields_from_blocks_at(
+        context->boundary_evaluation_point(900), 900, kFieldSlot, {{0, &state}}));
 
-    MultiFab<kNativeDimension>& residual = context.rhs_scratch(1000, 0, state);
-    MultiFab<kNativeDimension>& next = context.scratch_state(2000, 0, state);
-    context.rhs_into(0, state, residual, 3000);
-    context.lincomb(next, Real(1), state, static_cast<Real>(dt), residual);
-    context.lincomb(state, Real(0), state, Real(1), next);
+    MultiFab<kNativeDimension>& residual = context->rhs_scratch(1000, 0, state);
+    MultiFab<kNativeDimension>& next = context->scratch_state(2000, 0, state);
+    context->rhs_into(0, state, residual, 3000);
+    context->lincomb(next, Real(1), state, static_cast<Real>(dt), residual);
+    context->lincomb(state, Real(0), state, Real(1), next);
   });
   system.set_program_block_map(block_map);
 }

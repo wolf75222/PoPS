@@ -1,0 +1,450 @@
+{
+  "schema": "pops.representative-mpi-logical-cost.v1",
+  "selector": "ActiveCompositeMeasureStageRebindingRetryAndRestartFence",
+  "ranks": [
+    {
+      "schema": "pops.mpi-finalize-export.v1",
+      "rank": 0,
+      "world_size": 2,
+      "pid": 73193,
+      "abi_version": 1,
+      "api_count": 14,
+      "snapshot_before_finalize": true,
+      "write_after_finalize": true,
+      "snapshot_status": 0,
+      "finalize_status": 0,
+      "instrumentation_ok": true,
+      "counter_overflow_events": 0,
+      "process_lifetime_peak_rss_bytes": 24477696,
+      "apis": [
+        {
+          "api": "MPI_Allgather",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Allgatherv",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Allreduce",
+          "calls": 671,
+          "failed_calls": 0,
+          "logical_payload_bytes": 39480,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Barrier",
+          "calls": 2,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Bcast",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Gather",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Gatherv",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Irecv",
+          "calls": 4,
+          "failed_calls": 0,
+          "logical_payload_bytes": 256,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 256,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Isend",
+          "calls": 6,
+          "failed_calls": 0,
+          "logical_payload_bytes": 192,
+          "send_payload_bytes": 192,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Sendrecv",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Waitall",
+          "calls": 10,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Cancel",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Comm_dup",
+          "calls": 6,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Comm_free",
+          "calls": 6,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        }
+      ]
+    },
+    {
+      "schema": "pops.mpi-finalize-export.v1",
+      "rank": 1,
+      "world_size": 2,
+      "pid": 73194,
+      "abi_version": 1,
+      "api_count": 14,
+      "snapshot_before_finalize": true,
+      "write_after_finalize": true,
+      "snapshot_status": 0,
+      "finalize_status": 0,
+      "instrumentation_ok": true,
+      "counter_overflow_events": 0,
+      "process_lifetime_peak_rss_bytes": 22773760,
+      "apis": [
+        {
+          "api": "MPI_Allgather",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Allgatherv",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Allreduce",
+          "calls": 671,
+          "failed_calls": 0,
+          "logical_payload_bytes": 39480,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Barrier",
+          "calls": 2,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Bcast",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Gather",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Gatherv",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Irecv",
+          "calls": 6,
+          "failed_calls": 0,
+          "logical_payload_bytes": 192,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 192,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Isend",
+          "calls": 4,
+          "failed_calls": 0,
+          "logical_payload_bytes": 256,
+          "send_payload_bytes": 256,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Sendrecv",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Waitall",
+          "calls": 10,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Cancel",
+          "calls": 0,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Comm_dup",
+          "calls": 6,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        },
+        {
+          "api": "MPI_Comm_free",
+          "calls": 6,
+          "failed_calls": 0,
+          "logical_payload_bytes": 0,
+          "send_payload_bytes": 0,
+          "receive_posted_bytes": 0,
+          "unresolved_payloads": 0
+        }
+      ]
+    }
+  ],
+  "native_oracle_evidence": "Exact two-process command exits zero; combined log has one RUN/OK/PASSED report per process; gtest main returns RUN_ALL_TESTS. One common XML is retained, not separate per-rank XML. Rank identities and counters come from separate PMPI exports.",
+  "run_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-mpi-logical-cost-r1/run.result.json",
+    "sha256": "0ea230cf9b4972c6529eb629e24eb1a9538fbd44c7f1bbfe8d892424862512ef"
+  },
+  "artifact_sha256": {
+    "run.log": "0f9e9304bdb6dd621a89dfff0f014302879bbad37ffbb305d52ef37b3a02c0c0",
+    "rank-0.json": "4d3b8f09c0a418ab4e904de441a1d3b837135226fb36db4b8c479b0508fb6fea",
+    "native.xml": "949270ba59de9c1395483c2fe0e90f84ae7126f563dd6a23f11b0102fc7acc27",
+    "rank-1.json": "4900c9d33078d3f41f428e40a533a7d661bb6c713bf49edb3752f15683c0bb54"
+  },
+  "summed_rank_local_api_metrics": [
+    {
+      "api": "MPI_Allgather",
+      "calls": 0,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Allgatherv",
+      "calls": 0,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Allreduce",
+      "calls": 1342,
+      "failed_calls": 0,
+      "logical_payload_bytes": 78960,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Barrier",
+      "calls": 4,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Bcast",
+      "calls": 0,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Gather",
+      "calls": 0,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Gatherv",
+      "calls": 0,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Irecv",
+      "calls": 10,
+      "failed_calls": 0,
+      "logical_payload_bytes": 448,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 448,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Isend",
+      "calls": 10,
+      "failed_calls": 0,
+      "logical_payload_bytes": 448,
+      "send_payload_bytes": 448,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Sendrecv",
+      "calls": 0,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Waitall",
+      "calls": 20,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Cancel",
+      "calls": 0,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Comm_dup",
+      "calls": 12,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    },
+    {
+      "api": "MPI_Comm_free",
+      "calls": 12,
+      "failed_calls": 0,
+      "logical_payload_bytes": 0,
+      "send_payload_bytes": 0,
+      "receive_posted_bytes": 0,
+      "unresolved_payloads": 0
+    }
+  ],
+  "collective_local_contribution_operand_bytes_sum": 78960,
+  "broadcast_participant_buffer_bytes_sum": 0,
+  "point_to_point_successful_api_send_argument_bytes_sum": 448,
+  "point_to_point_receive_posted_capacity_bytes_sum": 448,
+  "max_rank_process_lifetime_peak_rss_bytes": 24477696,
+  "wire_bytes": null,
+  "speedup": null,
+  "clean_timing": null,
+  "summarizer_sha256": "b166cb146d19a4ff6e503dd646d3f4b4d62fc838ad17a574981712e018229127",
+  "scope": "One whole native executable MPI lifetime through pre-finalize snapshot, including runtime/test setup, assertions, duplicate/free communicators and selected transfer/retry/reprepare; external finalization reporting excluded.",
+  "limits": [
+    "POPS_TEST_EXPECT_RANKS was not set for this measurement, so XML is a shared rank-unattributed file. No claim of separate rank XML is made; both successful process reports and MPI exit status are retained.",
+    "Summed rank-local calls are not unique global collective counts.",
+    "Collective operands and broadcast participant buffers are not network traffic.",
+    "Successful send API argument bytes are not proof of delivery; receive counts are posted capacity. Null/self peers and canceled requests are not separately classified by the unchanged probe.",
+    "Native snapshot/repartition/reprepare is exercised; no public checkpoint file I/O is measured by this native selector.",
+    "Rank RSS is each process lifetime high-water mark, including MPI/Kokkos/test/profiling memory; maxima are not summed into simultaneous memory.",
+    "Instrumentation changes costs; no clean timing distribution or speedup claim follows."
+  ]
+}

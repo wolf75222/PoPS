@@ -12,6 +12,7 @@ class CellTemporalLevelRuntime {
           topology.is_periodic(Face<Dim>{axis, BoundarySide::lower}) &&
           topology.is_periodic(Face<Dim>{axis, BoundarySide::upper});
     integrated_flux_.reserve(configuration.routes.size());
+    retained_full_window_flux_.assign(configuration.routes.size(), false);
     final_residuals_.assign(configuration.routes.size(), nullptr);
     evaluations_.assign(configuration.routes.size(), nullptr);
     for (const auto& route : configuration.routes) {
@@ -158,9 +159,20 @@ class CellTemporalLevelRuntime {
           candidate.begin_tick >= candidate.end_tick ||
           candidate.tick_denominator != configuration_->tick_denominator)
         throw std::invalid_argument("cell-local AMR finalize received a foreign route candidate");
-      for (int axis = 0; axis < Dim; ++axis)
-        pops::saxpy(integrated_flux_[route][static_cast<std::size_t>(axis)], candidate.dt,
-                    (*candidate.integrated_face_fluxes)[static_cast<std::size_t>(axis)]);
+      const bool full_window =
+          candidate.begin_tick == owner_->cell_temporal_interval_begin_tick_ &&
+          candidate.end_tick == owner_->cell_temporal_interval_target_tick_;
+      for (int axis = 0; axis < Dim; ++axis) {
+        auto& accumulated = integrated_flux_[route][static_cast<std::size_t>(axis)];
+        const auto& density = (*candidate.integrated_face_fluxes)[static_cast<std::size_t>(axis)];
+        if (full_window)
+          owner_->copy_valid_(density, accumulated);
+        else
+          pops::saxpy(accumulated, candidate.dt, density);
+      }
+      // The ledger applies the interval duration. A sole full-window batch already
+      // supplies its density; multiplying and dividing it by dt changes rounding.
+      retained_full_window_flux_[route] = full_window;
       final_residuals_[route] = candidate.residual;
     }
   }
@@ -182,8 +194,9 @@ class CellTemporalLevelRuntime {
     for (std::size_t route = 0; route < configuration_->routes.size(); ++route) {
       if (evaluations_[route] == nullptr || final_residuals_[route] == nullptr)
         throw std::logic_error("cell-local AMR final flux lost its route evaluation");
-      for (int axis = 0; axis < Dim; ++axis)
-        pops::scale(integrated_flux_[route][static_cast<std::size_t>(axis)], Real(1) / interval_dt);
+      if (!retained_full_window_flux_[route])
+        for (int axis = 0; axis < Dim; ++axis)
+          pops::scale(integrated_flux_[route][static_cast<std::size_t>(axis)], Real(1) / interval_dt);
     }
     device_fence();
   }
@@ -266,6 +279,7 @@ class CellTemporalLevelRuntime {
   std::array<bool, Dim> periodicity_{};
   std::vector<const level_evaluation_type*> evaluations_;
   std::vector<std::array<field_type, Dim>> integrated_flux_;
+  std::vector<bool> retained_full_window_flux_;
   std::vector<const field_type*> final_residuals_;
   std::optional<FluxExpressionRegistry> prepared_flux_expressions_;
   std::optional<std::vector<std::size_t>> prepared_flux_counts_;

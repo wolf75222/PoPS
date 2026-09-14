@@ -221,3 +221,129 @@ def test_failed_max_steps_run_raises_instead_of_returning_a_success_report():
 
     with pytest.raises(RuntimeError, match="max_steps exhausted before t_end"):
         pops.run(simulation, t_end=2.0, max_steps=1)
+
+
+class _FieldMaterializationNative:
+    def __init__(self, states, slots=None):
+        self.states = states
+        self.slots = tuple(states) if slots is None else slots
+        self.reads = []
+        self.registry_reads = 0
+
+    def field_provider_slots(self):
+        self.registry_reads += 1
+        return self.slots
+
+    def field_provider_materialized(self, slot):
+        self.reads.append(slot)
+        return self.states[slot]
+
+    def _field_topology_report(self, slot):
+        assert slot in self.slots
+        return []  # Preparation does not imply an accepted external topology publication.
+
+
+def test_field_report_reads_live_materialization_independently_of_accepted_topology(monkeypatch):
+    from types import SimpleNamespace
+    from pops.fields import _prepared_field_solver_registry as registry
+    from pops.runtime import _runtime_instance as implementation
+
+    binding = SimpleNamespace(
+        facts=SimpleNamespace(layout={"topology_identity": "recipe"}),
+        resolution=SimpleNamespace(to_data=lambda: {"topology_contract": {}, "component_bindings": []}),
+        to_data=lambda: {"provider": {"provider_id": "geometric_mg"}},
+    )
+    monkeypatch.setattr(registry, "prepared_field_solver_binding_from_data", lambda _data: binding)
+    monkeypatch.setattr(implementation, "_field_solver_configuration", lambda _executor, _slot: {})
+    names = ("builtin", "external", "amr")
+    plans = {name: SimpleNamespace(native_options={"provider_slot": name, "solver_provider": {}})
+             for name in names}
+    install = SimpleNamespace(artifact=SimpleNamespace(plan=SimpleNamespace(field_plans=plans)))
+    native = _FieldMaterializationNative({"builtin": True, "external": False, "amr": False})
+
+    def inspect():
+        reports = implementation._field_provider_evidence(
+            install, SimpleNamespace(qualified_id="layout"), SimpleNamespace(_s=native))
+        assert all(row["patches"] == [] and row["topology_digest"] is None for row in reports)
+        return {row["provider_slot"]: row["materialized"] for row in reports}
+
+    assert inspect() == {"builtin": True, "external": False, "amr": False}
+    assert native.reads == list(names)
+    # A bound external provider can survive numerical rejection without accepted topology rows.
+    # These are facade states; the actual preparation/failure lifecycle has native controls.
+    native.states["external"] = True
+    assert inspect() == {"builtin": True, "external": True, "amr": False}
+    # Failed binding / native invalidation is observed afresh, never inferred from old patches.
+    native.states["external"] = False
+    native.states["builtin"] = False
+    assert inspect() == {"builtin": False, "external": False, "amr": False}
+    assert native.reads == list(names) * 3
+
+
+@pytest.mark.parametrize("value", [0, 1, None, "false", [], {}])
+def test_field_materialization_rejects_non_boolean_native_authority(value):
+    from pops.runtime._runtime_instance import _field_provider_materializations
+
+    native = _FieldMaterializationNative({"electric": value})
+    with pytest.raises(TypeError, match="exact bool"):
+        _field_provider_materializations(native, frozenset({"electric"}))
+    assert native.reads == ["electric"]
+
+
+@pytest.mark.parametrize("slots", [("electric", "electric"), ("foreign",), (), (1,), "electric"])
+def test_field_materialization_rejects_malformed_or_misowned_registry_before_read(slots):
+    from pops.runtime._runtime_instance import _field_provider_materializations
+
+    native = _FieldMaterializationNative({"electric": True}, slots=slots)
+    with pytest.raises((TypeError, ValueError), match="registry"):
+        _field_provider_materializations(native, frozenset({"electric"}))
+    assert native.reads == []
+
+
+def test_field_materialization_requires_native_getter_without_patch_fallback():
+    from types import SimpleNamespace
+    from pops.runtime._runtime_instance import _field_provider_materializations
+
+    native = SimpleNamespace(field_provider_slots=lambda: ("electric",))
+    with pytest.raises(TypeError, match="materialization getter is missing"):
+        _field_provider_materializations(native, frozenset({"electric"}))
+
+
+def test_field_materialization_rejects_multiple_native_owners_before_read():
+    from types import SimpleNamespace
+    from pops.runtime._runtime_instance import _field_provider_materializations
+
+    left = _FieldMaterializationNative({"electric": True})
+    right = _FieldMaterializationNative({"electric": False})
+    with pytest.raises(RuntimeError, match="multiple native owners"):
+        _field_provider_materializations(SimpleNamespace(_engines={"left": left, "right": right}),
+                                        frozenset({"electric"}))
+    assert left.reads == right.reads == []
+
+
+def test_field_materialization_uses_exact_disjoint_native_owners():
+    from types import SimpleNamespace
+    from pops.runtime._runtime_instance import _field_provider_materializations
+
+    left = _FieldMaterializationNative({"electric": True, "private_legacy": False})
+    right = _FieldMaterializationNative({"magnetic": False})
+    executor = SimpleNamespace(_engines={"left": SimpleNamespace(_s=left), "right": right})
+    assert _field_provider_materializations(executor, frozenset({"electric", "magnetic"})) == {
+        "electric": True, "magnetic": False,
+    }
+    assert left.reads == ["electric"] and right.reads == ["magnetic"]
+    assert left.registry_reads == right.registry_reads == 1
+
+
+def test_field_materialization_reads_configured_default_before_native_construction():
+    from types import SimpleNamespace
+    from pops.runtime._runtime_instance import _field_provider_materializations
+
+    native = SimpleNamespace(
+        field_provider_slots=lambda: (),
+        configured_field_provider_slots=lambda: ("pops.system.default-field",),
+        field_provider_materialized=lambda _slot: False,
+    )
+    assert _field_provider_materializations(
+        native, frozenset({"pops.system.default-field"})
+    ) == {"pops.system.default-field": False}

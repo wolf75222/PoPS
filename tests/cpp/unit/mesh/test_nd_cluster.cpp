@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 
 #include <pops/amr/tagging/berger_rigoutsos.hpp>
+#include <pops/amr/regridding/regrid.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -305,4 +307,171 @@ TEST(test_nd_cluster, invalid_or_exhausted_work_budgets_fail_closed) {
   auto identity_exhausted = options<2>({1, 1}, {4, 4});
   identity_exhausted.budget.identity_bytes = 1;
   EXPECT_THROW((void)provider.cluster(shards, identity_exhausted), std::length_error);
+}
+
+namespace {
+
+template <int Dim>
+void prove_nesting_preserves_patch_union_and_periodic_images() {
+  Index<Dim> lower{};
+  Index<Dim> upper{};
+  Extent<Dim> rank_extent{};
+  std::array<int, Dim> minimum{};
+  std::array<int, Dim> maximum{};
+  std::array<int, Dim> ratios{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    upper[axis] = 15;
+    rank_extent[axis] = 1;
+    minimum[axis] = 1;
+    maximum[axis] = 16;
+    ratios[axis] = 2;
+  }
+  const Box<Dim> domain{lower, upper};
+  const mesh::RankSpace<Dim> ranks{lower, rank_extent};
+  auto controls = options<Dim>(minimum, maximum);
+  controls.nesting_buffer.fill(2);
+  controls.budget.recursion_nodes = static_cast<std::size_t>(2 * domain.numPts());
+  controls.budget.cell_visits =
+      static_cast<std::size_t>(domain.numPts()) * controls.budget.recursion_nodes;
+  const auto cluster = [&](std::vector<Box<Dim>> boxes, bool periodic) {
+    const mesh::BoxArray<Dim> patches(std::move(boxes));
+    const hierarchy::LevelLayout<Dim> level(1, domain, patches,
+                                            mesh::Distribution<Dim>::replicated(patches, ranks),
+                                            pops::amr::RefinementRatio<Dim>(ratios), kLayoutBudget);
+    tagging::TagMask<Dim> mask(
+        level, lower, tag_budget(patches.size(), patches.size(), domain.numPts(), domain.numPts()));
+    for (const auto& patch : mask.patches())
+      for (std::size_t ordinal = 0; ordinal < patch.tags.size(); ++ordinal) {
+        std::size_t rest = ordinal;
+        Index<Dim> cell{};
+        for (int axis = 0; axis < Dim; ++axis) {
+          cell[axis] = patch.box.lo[axis] + static_cast<int>(rest % patch.box.length(axis));
+          rest /= static_cast<std::size_t>(patch.box.length(axis));
+        }
+        mask.set(patch.global_patch, cell);
+      }
+    controls.periodic_axes[0] = periodic;
+    return tagging::BergerRigoutsosProvider<Dim>{}.cluster(
+        std::array<tagging::TagMask<Dim>, 1>{mask}, controls);
+  };
+  const auto cells = [](const auto& result) {
+    std::int64_t count = 0;
+    for (const auto& box : result.boxes.boxes())
+      count += box.numPts();
+    return count;
+  };
+  Box<Dim> first = domain;
+  Box<Dim> second = domain;
+  first.hi[0] = 7;
+  second.lo[0] = 8;
+  EXPECT_EQ(cells(cluster({first, second}, false)), domain.numPts());
+  first.hi[0] = 3;
+  second.lo[0] = 12;
+  const auto wrapped = cluster({first, second}, true);
+  EXPECT_EQ(cells(wrapped), domain.numPts() / 4);
+  for (const auto& box : wrapped.boxes.boxes())
+    EXPECT_TRUE(box.hi[0] <= 1 || box.lo[0] >= 14);
+  EXPECT_TRUE(cluster({first}, true).boxes.empty());
+  const auto node_budget = controls.budget.recursion_nodes;
+  controls.budget.recursion_nodes = 1;
+  EXPECT_THROW((void)cluster({first}, true), std::length_error);
+  controls.budget.recursion_nodes = node_budget;
+
+  // A complete union produces identical boxes under these policies; the exact preparation
+  // identity must nevertheless retain both the guaranteed padding and periodic topology.
+  first = domain;
+  const auto physical = cluster({first}, false);
+  const auto periodic = cluster({first}, true);
+  controls.nesting_buffer.fill(0);
+  const auto no_padding = cluster({first}, false);
+  EXPECT_EQ(physical.boxes.boxes(), periodic.boxes.boxes());
+  EXPECT_EQ(physical.boxes.boxes(), no_padding.boxes.boxes());
+  const auto exact = [&](const auto& result) {
+    return pops::amr::regridding::detail::exact_regrid_contract<Dim>(
+        result.identity.source_level, pops::amr::RefinementRatio<Dim>(ratios), result.identity, {},
+        {}, {});
+  };
+  EXPECT_NE(exact(physical), exact(periodic));
+  EXPECT_NE(exact(physical), exact(no_padding));
+}
+
+}  // namespace
+
+TEST(test_nd_cluster, proper_nesting_preserves_parent_seams_and_authenticates_periodic_images) {
+  prove_nesting_preserves_patch_union_and_periodic_images<1>();
+  prove_nesting_preserves_patch_union_and_periodic_images<2>();
+  prove_nesting_preserves_patch_union_and_periodic_images<3>();
+}
+
+TEST(test_nd_cluster, refinement_coverage_is_independent_of_parent_tiles_and_rank_owners) {
+  const Box<2> domain{Index<2>{0, 0}, Index<2>{7, 3}};
+  const mesh::BoxArray<2> mono(std::vector<Box<2>>{domain});
+  const mesh::BoxArray<2> tiled(std::vector<Box<2>>{Box<2>{Index<2>{0, 0}, Index<2>{3, 3}},
+                                                    Box<2>{Index<2>{4, 0}, Index<2>{7, 3}}});
+  const mesh::RankSpace<2> one_rank{Index<2>{0, 0}, Extent<2>{1, 1}};
+  const auto mono_level = replicated_level(domain, mono, one_rank);
+  const auto tiled_level = replicated_level(domain, tiled, one_rank);
+  tagging::TagMask<2> mono_mask(mono_level, Index<2>{0, 0}, tag_budget(1, 1, 32, 32));
+  tagging::TagMask<2> tiled_mask(tiled_level, Index<2>{0, 0}, tag_budget(2, 2, 16, 32));
+
+  // The global rectangle has efficiency 4/6 >= 0.6; clustering its left tile
+  // independently sees only 2/4 and discards the two legitimate untagged cells.
+  const std::array<Index<2>, 4> tags{Index<2>{2, 1}, Index<2>{3, 2}, Index<2>{4, 1},
+                                     Index<2>{4, 2}};
+  for (const auto& cell : tags) {
+    mono_mask.set(cell);
+    tiled_mask.set(cell);
+  }
+  const auto controls = options<2>({1, 1}, {8, 4}, 0.6);
+  const tagging::BergerRigoutsosProvider<2> provider;
+  const auto expected = provider.cluster(std::array{mono_mask}, controls);
+  const auto local_tiled = provider.cluster(std::array{tiled_mask}, controls);
+  EXPECT_EQ(expected.boxes.boxes(), (std::vector<Box<2>>{Box<2>{Index<2>{2, 1}, Index<2>{4, 2}}}));
+  EXPECT_EQ(local_tiled.boxes, expected.boxes);
+  EXPECT_NE(local_tiled.identity.source_level, expected.identity.source_level);
+
+  const mesh::RankSpace<2> ranks{Index<2>{5, -1}, Extent<2>{3, 1}};
+  const hierarchy::LevelLayout<2> partitioned(
+      0, domain, tiled,
+      mesh::Distribution<2>::partitioned(tiled, ranks, {Index<2>{6, -1}, Index<2>{5, -1}}),
+      pops::amr::RefinementRatio<2>{1, 1}, kLayoutBudget);
+  tagging::TagMask<2> right(partitioned, Index<2>{5, -1}, tag_budget(2, 1, 16, 16));
+  tagging::TagMask<2> left(partitioned, Index<2>{6, -1}, tag_budget(2, 1, 16, 16));
+  tagging::TagMask<2> empty(partitioned, Index<2>{7, -1}, tag_budget(2, 0, 16, 0));
+  for (const auto& cell : tags)
+    (cell[0] < 4 ? left : right).set(cell);
+  EXPECT_EQ(provider.cluster(std::array{empty, left, right}, controls).boxes, expected.boxes);
+}
+
+TEST(test_nd_cluster, unbuffered_global_clustering_does_not_refine_parent_coverage_holes) {
+  const Box<1> domain{Index<1>{0}, Index<1>{7}};
+  const mesh::BoxArray<1> patches(
+      std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{2}}, Box<1>{Index<1>{5}, Index<1>{7}}});
+  const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
+  const hierarchy::LevelLayout<1> level(1, domain, patches,
+                                        mesh::Distribution<1>::replicated(patches, ranks),
+                                        pops::amr::RefinementRatio<1>{2}, kLayoutBudget);
+  tagging::TagMask<1> mask(level, Index<1>{0}, tag_budget(2, 2, 3, 6));
+  for (int cell : {0, 1, 2, 5, 6, 7})
+    mask.set(Index<1>{cell});
+  const auto result =
+      tagging::BergerRigoutsosProvider<1>{}.cluster(std::array{mask}, options<1>({1}, {8}, 0.5));
+  EXPECT_EQ(result.boxes.boxes(), patches.boxes());
+}
+
+TEST(test_nd_cluster, sparse_wide_domains_do_not_require_wide_signatures) {
+  const int last = std::numeric_limits<int>::max();
+  const Box<1> domain{Index<1>{0}, Index<1>{last}};
+  const mesh::BoxArray<1> patches(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{0}},
+                                                      Box<1>{Index<1>{last}, Index<1>{last}}});
+  const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
+  const hierarchy::LevelLayout<1> level(1, domain, patches,
+                                        mesh::Distribution<1>::replicated(patches, ranks),
+                                        pops::amr::RefinementRatio<1>{2}, kLayoutBudget);
+  tagging::TagMask<1> mask(level, Index<1>{0}, tag_budget(2, 2, 1, 2));
+  mask.set(Index<1>{0});
+  mask.set(Index<1>{last});
+  const auto result =
+      tagging::BergerRigoutsosProvider<1>{}.cluster(std::array{mask}, options<1>({1}, {8}));
+  EXPECT_EQ(result.boxes.boxes(), patches.boxes());
 }

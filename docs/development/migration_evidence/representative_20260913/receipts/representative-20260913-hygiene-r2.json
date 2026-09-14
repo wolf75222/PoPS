@@ -1,0 +1,19 @@
+{
+  "source": "2bb005f0cdf79f3027167a92931090f6c940ea18",
+  "changed_paths": 1021,
+  "new_paths": 488,
+  "suspicious_generated": [],
+  "new_files_over_1MB": [
+    {
+      "path": "docs/development/migration_evidence/m1_m2/candidate6-native-ctest-inventory.json",
+      "bytes": 1910013
+    }
+  ],
+  "scoped_diff_check": {
+    "exit_code": 0,
+    "output": "",
+    "preserved_authenticated_m0_m2_log": "docs/development/migration_evidence/m1_m2/candidate6-native-mpi.log",
+    "log_sha256": "10c377c6f9373c76cf058b2886e1e28371a8a64e6d84fe44331ffd14c3277bef",
+    "reason": "Only13raw-output trailing whitespace lines; preserve completed M0\u2013M2 evidence bytes."
+  }
+}

@@ -63,6 +63,22 @@ def _descriptor_map(descriptor: Any, method: str) -> dict[str, Any]:
     return data
 
 
+def _immutable_snapshot_sequences(value: Any) -> Any:
+    """Normalize storage mutability, preserving every type, member, value and ordering.
+
+    Layout normalization consumes immutable descriptor data. AuthoringSnapshot deliberately
+    distinguishes list and tuple in live Python objects, while detached_frozen changes the former
+    into the latter. The normalized layout treats both as the same ordered immutable sequence.
+    """
+    if isinstance(value, dict):
+        if set(value) == {"$tuple"}:
+            return [_immutable_snapshot_sequences(item) for item in value["$tuple"]]
+        return {key: _immutable_snapshot_sequences(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_immutable_snapshot_sequences(item) for item in value]
+    return value
+
+
 def _descriptor_snapshot(descriptor: Any, *, handle_resolver: Any = None) -> dict[str, Any]:
     """Use the strict Problem projector lazily, avoiding a mesh -> problem import-time cycle."""
     from pops.problem._snapshot import AuthoringSnapshot
@@ -71,7 +87,7 @@ def _descriptor_snapshot(descriptor: Any, *, handle_resolver: Any = None) -> dic
         {"descriptor": descriptor}, handle_resolver=handle_resolver).to_dict()["descriptor"]
     if not isinstance(snapshot, dict):
         raise TypeError("layout descriptor snapshot must be a canonical mapping")
-    return snapshot
+    return _immutable_snapshot_sequences(snapshot)
 
 
 def _descriptor_geometry(descriptor: Any) -> NormalizedGeometry:
@@ -258,6 +274,7 @@ class LayoutPlanBuilder:
         source_representation: LayoutRepresentation,
         target_representation: LayoutRepresentation,
         reverse_of: LayoutMappingRequirement | None = None,
+        physical_map: Any = None,
     ) -> tuple[LayoutMappingRequirement, ...]:
         """Require a qualified directional data transfer between two materialized layouts."""
         for handle in (source_layout, target_layout):
@@ -285,7 +302,7 @@ class LayoutPlanBuilder:
             reverse_identity = reverse_of.qualified_id
         forward = LayoutMappingRequirement(
             source_layout, target_layout, source_port, target_port,
-            operation, synchronization, reverse_identity,
+            operation, synchronization, reverse_identity, physical_map,
         )
         if reverse_of is not None:
             validate_reverse_mapping(forward, reverse_of)

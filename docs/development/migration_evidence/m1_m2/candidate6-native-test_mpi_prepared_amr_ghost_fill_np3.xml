@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="1" failures="0" disabled="0" errors="0" time="0.098" timestamp="2026-09-08T00:51:24.933" name="AllTests">
+  <testsuite name="test_mpi_prepared_amr_ghost_fill" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="0.098" timestamp="2026-09-08T00:51:24.933">
+    <testcase name="partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate" file="/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/tests/cpp/integration/mpi/test_mpi_prepared_amr_ghost_fill.cpp" line="85" status="run" result="completed" time="0.097" timestamp="2026-09-08T00:51:24.933" classname="test_mpi_prepared_amr_ghost_fill" />
+  </testsuite>
+</testsuites>

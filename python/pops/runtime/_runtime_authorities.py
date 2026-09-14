@@ -12,6 +12,20 @@ from types import MappingProxyType
 from typing import Any, cast
 
 
+def _native_interface_identity_matches(binding: Mapping[str, Any], interface: Any) -> bool:
+    """Compare the complete wire descriptor across a detached JSON plan boundary."""
+    from pops.identity import canonical_bytes
+
+    descriptor = binding.get("native_interface")
+    version = binding.get("interface_version")
+    return (
+        isinstance(descriptor, dict)
+        and type(version) is int
+        and version == interface.version
+        and canonical_bytes(descriptor) == canonical_bytes(interface.to_data())
+    )
+
+
 def _boundary_face_ordinal(value: Any, *, dimension: int, where: str) -> int:
     if not isinstance(value, dict):
         raise TypeError("%s must be one canonical BoundaryHandle identity" % where)
@@ -475,12 +489,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                     "boundary Handle %s changed installed component manifest identity"
                     % row.get("target", {}).get("qualified_id")
                 )
-            interface = row.get("native_interface")
-            if (
-                not isinstance(interface, dict)
-                or interface != installed.interface.to_data()
-                or row.get("interface_version") != installed.interface.version
-            ):
+            if not _native_interface_identity_matches(row, installed.interface):
                 raise ValueError(
                     "boundary Handle %s changed installed interface identity/version"
                     % row.get("target", {}).get("qualified_id")

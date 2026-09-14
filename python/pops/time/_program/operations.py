@@ -83,12 +83,14 @@ class _ProgramCore(
     # --- node construction ---
     def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any, *,
              space: Any = None, field_context: Any = None, state_ref: Any = None,
-             point: Any = None) -> Any:
+             point: Any = None, inherit_state_ref: bool = True) -> Any:
         region = self._current_region()
         validate_input_regions(self, inputs, region, "IR op %r" % op)
         value_inputs = [i for i in inputs if isinstance(i, ProgramValue)]
         if point is None:
             point = value_inputs[0].point if value_inputs else TimePoint(self.clock)
+        from pops.time._evaluation_point import qualify_evaluation_attrs
+        attrs = qualify_evaluation_attrs(self, op, attrs)
         validate_input_clocks(
             value_inputs, point, "IR op %r" % op,
             constructing_synchronize=op == "synchronize")
@@ -114,7 +116,7 @@ class _ProgramCore(
                 origins=(context["caller"], context["factory"]),
                 phase="authoring", transformation="factory_expand",
             )
-        if state_ref is None:
+        if state_ref is None and inherit_state_ref:
             input_refs = {item.state_ref for item in value_inputs if item.state_ref is not None}
             if len(input_refs) == 1:
                 state_ref = next(iter(input_refs))
@@ -269,6 +271,11 @@ class _ProgramCore(
             token = self._replace_value(
                 token, attrs={**token.attrs, "schedule": schedule})
         return self._field_solve_outcome(token)
+
+    def input_fields(self, state: Any, *, for_rate: Any, name: Any = None) -> Any:
+        """Observe the rate's exact runtime inputs for this state and temporal stage."""
+        from .input_fields import input_fields
+        return input_fields(self, state, for_rate=for_rate, name=name)
 
     def _solve_fields(
         self, name: Any, state: Any, *, field: Any,

@@ -8,6 +8,8 @@ is on ROMEO. Pure Python; skips if pops is not importable.
 """
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.physics import Density, Momentum
+from tests.python.support.physics_roles import X_AXIS, Y_AXIS
 
 try:
     from pops import model
@@ -26,7 +28,9 @@ def _op(mod, name):
 def pure_module():
     mod = model.Module("euler_poisson_lorentz_operator_first")
     u = mod.state_space("U", ("rho", "mx", "my"),
-                        roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+                        roles={"rho": Density().native_name,
+                               "mx": Momentum(axis=X_AXIS).native_name,
+                               "my": Momentum(axis=Y_AXIS).native_name})
     fields = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
     mod.aux_fields(B_z="cell_scalar")
     # Operator bodies are plain Expr over the state/field names (evaluated at codegen only).
@@ -34,13 +38,14 @@ def pure_module():
     gx, gy = Var("grad_x", "aux"), Var("grad_y", "aux")
     bz = Var("B_z", "aux")
     cs = sqrt(0.5)  # isothermal sound speed (cs2 = 0.5)
-    mod.operator(name="fields_from_state", signature=(u,) >> fields,
-                 kind="field_operator", expr=rho)
     mod.operator(name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
                  expr={"x": [mx, mx * mx / rho + 0.5 * rho, mx * my / rho],
                        "y": [my, mx * my / rho, my * my / rho + 0.5 * rho]})
     mod.eigenvalues(x=[mx / rho - cs, mx / rho, mx / rho + cs],
                     y=[my / rho - cs, my / rho, my / rho + cs])
+    # The native field-gradient rank follows the already declared spatial flux axes.
+    mod.operator(name="fields_from_state", signature=(u,) >> fields,
+                 kind="field_operator", expr=rho)
     electric = mod.operator(name="electric", signature=(u, fields) >> model.Rate(u),
                             kind="local_source", expr=[Const(0.0), -rho * gx, -rho * gy])
     mod.operator(name="lorentz", signature=(fields,) >> model.LocalLinearOperator(u, u),
@@ -92,7 +97,7 @@ def test_pure_module_program_emits():
     print("OK  a pure operator-first Module + generic macro emits a combined .so source")
 
 
-def test_module_requires_one_state_space():
+def test_module_requires_explicit_state_route():
     mod = model.Module("two_states")
     mod.state_space("U", ("rho",))
     mod.state_space("V", ("n",))
@@ -102,10 +107,10 @@ def test_module_requires_one_state_space():
     except ValueError as exc:
         assert "exact block/state route" in str(exc)
         assert "['U', 'V']" in str(exc)
-    print("OK  a Module to compile must declare exactly one StateSpace")
+    print("OK  a multi-state Module requires an explicit block/state compilation route")
 
 
-def test_decorator_body_rejected():
+def test_callable_without_ir_rejected():
     mod = model.Module("deco")
     u = mod.state_space("U", ("rho",))
     fields = mod.field_space("fields", ("phi",))
@@ -116,16 +121,19 @@ def test_decorator_body_rejected():
         expr=Var("rho", "cons"),
     )
 
-    @mod.operator(name="electric", signature=(u, fields) >> model.Rate(u), kind="local_source")
-    def electric(state, flds):  # a callable body, not an IR expression
+    def electric(state, flds):
         return None
 
+    # Decorators capture symbolic bodies during registration. An uncaptured callable is still
+    # rejected by compilation, which is the missing-IR contract exercised here.
+    mod.operator(name="electric", signature=(u, fields) >> model.Rate(u),
+                 kind="local_source", expr=electric)
     try:
         mod.to_dsl()
-        raise AssertionError("expected a no-IR-body error for a decorator-authored operator")
+        raise AssertionError("expected a no-IR-body error for an uncaptured callable operator")
     except ValueError as exc:
         assert "no IR body" in str(exc)
-    print("OK  a decorator/callable operator body is rejected at compile")
+    print("OK  an uncaptured callable operator body is rejected at compile")
 
 
 def test_multiple_field_operators_lower_distinctly():
@@ -146,12 +154,15 @@ def test_explicit_roles_honored():
     # A non-canonical layout: the StateSpace's explicit roles must reach the dsl model, not be lost.
     mod = model.Module("custom")
     u = mod.state_space("U", ("n", "px", "py"),
-                        roles={"n": "density", "px": "momentum_x", "py": "momentum_y"})
+                        roles={"n": Density().native_name,
+                               "px": Momentum(axis=X_AXIS).native_name,
+                               "py": Momentum(axis=Y_AXIS).native_name})
     n, px, py = Var("n", "cons"), Var("px", "cons"), Var("py", "cons")
     mod.operator(name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
                  expr={"x": [px, px * px / n, px * py / n], "y": [py, px * py / n, py * py / n]})
     m = mod.to_dsl()
-    assert m._m.cons_roles == ["Density", "MomentumX", "MomentumY"], m._m.cons_roles
+    assert [role.native_name for role in m._m.cons_roles] == [
+        "density", "momentum:0", "momentum:1"], m._m.cons_roles
     print("OK  explicit StateSpace roles are mapped through to the dsl model")
 
 
@@ -159,8 +170,8 @@ def main():
     test_explicit_roles_honored()
     test_module_lowers_to_dsl()
     test_pure_module_program_emits()
-    test_module_requires_one_state_space()
-    test_decorator_body_rejected()
+    test_module_requires_explicit_state_route()
+    test_callable_without_ir_rejected()
     test_multiple_field_operators_lower_distinctly()
     print("OK  test_module_compile")
 

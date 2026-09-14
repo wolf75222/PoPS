@@ -44,6 +44,7 @@ import sys
 import tempfile
 
 import numpy as np
+import pops
 
 import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
@@ -115,6 +116,7 @@ def compiled_single(cm, pf, state):
     """Single compiled block (add_equation -> add_native_block) with positivity_floor=pf, seeded with
     the full conservative state, stepped 38 times. Returns the coarse density (flat array)."""
     s = AmrSystem(n=N, L=1.0, periodicity=(True, True))
+    _install_state_routes(s, ("gas",))
     s.set_temporal_relations([2], [1], ["integral_only"])
     s.add_equation(
         "gas",
@@ -124,9 +126,22 @@ def compiled_single(cm, pf, state):
     )
     s.set_conservative_state("gas", state)
     install_forward_euler_program(s)
+    s.mark_bound()
     for _ in range(38):
         s.step(DT)
     return np.asarray(s.density("gas"))
+
+
+def _install_state_routes(system, names):
+    """Declare the complete state composition before the first native package seals it."""
+    model = pops.Model("positivity-floor-state")
+    state = model.state("U", components=("rho", "rho_u", "rho_v"))
+    case = pops.Case("positivity-floor-composition")
+    blocks = {name: case.block(name, model, states=(state,)) for name in names}
+    validated = pops.validate(case)
+    for name, block in blocks.items():
+        system._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
+    return blocks
 
 
 def main():
@@ -183,20 +198,31 @@ def main():
         # --- (3) multi-block: the floor rides the AmrCompiledBlockBuilder slot too --------------------
         # Two compiled blocks switch the single-block AmrCouplerMP for the multi-block AmrRuntime engine:
         # the floor flows through build_multi -> AmrCompiledBlockBuilder -> dispatch_amr_block (a DIFFERENT
-        # routing than (1)-(2)). set_conservative_state is single-block only, so seed the density from
-        # the smooth profile above (u=0). The floor stays inactive, while the exact effective-options
+        # routing than (1)-(2)). Seed both densities from the smooth profile above (u=0).
+        # The floor stays inactive, while the exact effective-options
         # report authenticates its value and the five native steps exercise the compiled builder arity.
         print(
             "== (3) multi-block compiled: positivity_floor threaded through AmrCompiledBlockBuilder =="
         )
         density = smooth_state()[0]
         sm = AmrSystem(n=N, L=1.0, periodicity=(True, True))
+        blocks = _install_state_routes(sm, ("a", "b"))
+        # Each installed consumer carries the exact Case instance identity even when its physical
+        # isothermal formulas are shared with the single-block artifact above.
+        multi = {
+            name: build_iso_model().compile(
+                os.path.join(tmp, "iso_floor_%s_amr.so" % name), INCLUDE,
+                backend="production", target="amr_system",
+                consumer_owner_qid=str(block.instance_owner_path.canonical()),
+            )
+            for name, block in blocks.items()
+        }
         sm.set_temporal_relations([2], [1], ["integral_only"])
         sm.add_equation(
-            "a", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8)
+            "a", multi["a"], spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8)
         )
         sm.add_equation(
-            "b", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8)
+            "b", multi["b"], spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8)
         )
         sm.set_density("a", density.copy())
         sm.set_density("b", density.copy())
@@ -208,6 +234,7 @@ def main():
             "multi-block compiled floor: exact native options retained",
         )
         install_forward_euler_program(sm)
+        sm.mark_bound()
         for _ in range(5):
             sm.step(DT)
         chk(

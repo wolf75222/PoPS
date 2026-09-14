@@ -86,7 +86,8 @@ def _canonical_explicit_rk(t, factory):
     from pops.physics._facade import Model
 
     model = Model(factory.__name__ + "_model")
-    model.conservative_vars("u")
+    (u,) = model.conservative_vars("u")
+    model.flux(x=[u], y=[u])
     rate = model.rate("rate", flux=True, sources=())
     block, state = state_refs(t.Program("refs"), "blk", model=model)
     return factory(block[state], rate=rate)

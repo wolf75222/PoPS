@@ -1012,6 +1012,23 @@ std::vector<std::string> System<Dim>::field_provider_slots() const {
 }
 
 template <int Dim>
+bool System<Dim>::field_provider_materialized(const std::string& provider_slot) const {
+  if (provider_slot == "pops.system.default-field") {
+    if (p_->default_field_)
+      return p_->default_field_->materialized();
+    if (default_field_has_prepared_rhs(*p_))
+      return false;
+    throw std::out_of_range("System field provider slot is unknown: " + provider_slot);
+  }
+  const auto field = p_->named_fields_.find(provider_slot);
+  if (field != p_->named_fields_.end())
+    return field->second->materialized();
+  if (p_->field_plans_.contains(provider_slot))
+    return false;
+  throw std::out_of_range("System field provider slot is unknown: " + provider_slot);
+}
+
+template <int Dim>
 std::vector<std::string> System<Dim>::configured_field_provider_slots() const {
   std::vector<std::string> result;
   if (p_->default_field_ || default_field_has_prepared_rhs(*p_))
@@ -1115,11 +1132,20 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
       throw std::invalid_argument("System history cannot be requalified");
     if (ncomp >= 1 && found->second.front().ncomp() != ncomp)
       throw std::invalid_argument("System history component count changed");
-    while (static_cast<int>(found->second.size()) < depth)
+    auto& samples = histories.slot_sample.at(name);
+    if (samples.size() != found->second.size())
+      throw std::logic_error("System history registration has an invalid sample ledger");
+    const auto tail_sample = histories.initialized.at(name)
+                                 ? runtime::program::HistorySampleIdentity{}
+                                 : runtime::program::HistorySampleIdentity::zero_start();
+    while (static_cast<int>(found->second.size()) < depth) {
       found->second.emplace_back(p_->ba, p_->dm, p_->local_rank, found->second.front().ncomp(),
                                  found->second.front().ghosts());
+      found->second.back().set_val(Real(0));
+    }
     histories.depth[name] = static_cast<int>(found->second.size());
     histories.slot_dt[name].resize(found->second.size(), Real(0));
+    samples.resize(found->second.size(), tail_sample);
     return found->second.front();
   }
   const int components =
@@ -1131,8 +1157,10 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
     ghosts[axis] = 1;
   std::vector<MultiFab<Dim>> ring;
   ring.reserve(static_cast<std::size_t>(depth));
-  for (int slot = 0; slot < depth; ++slot)
+  for (int slot = 0; slot < depth; ++slot) {
     ring.emplace_back(p_->ba, p_->dm, p_->local_rank, components, ghosts);
+    ring.back().set_val(Real(0));
+  }
   auto& stored = histories.histories.emplace(name, std::move(ring)).first->second;
   histories.depth[name] = depth;
   histories.initialized[name] = false;
@@ -1140,6 +1168,8 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
   histories.store_pending[name] = false;
   histories.owner[name] = qualified ? owner : -1;
   histories.slot_dt[name] = std::vector<Real>(static_cast<std::size_t>(depth), Real(0));
+  histories.slot_sample[name] = std::vector<runtime::program::HistorySampleIdentity>(
+      static_cast<std::size_t>(depth), runtime::program::HistorySampleIdentity::zero_start());
   if (qualified) {
     histories.state_identity[name] = state_identity;
     histories.space_identity[name] = space_identity;
@@ -1184,11 +1214,13 @@ std::int64_t System<Dim>::set_analytic_expression_state(
       opcodes, literals,
       [&] {
         require_assembling(p_->lifecycle_, "set_analytic_expression_state");
-        if (space != "cell" || centering != "cell" || projection != "conservative_cell_average")
+        if (space != "cell" || centering != "cell" ||
+            (projection != "conservative_cell_average" && projection != "exact_cell_integral"))
           throw std::invalid_argument(
               "System analytic state requires cell conservative_cell_average projection");
         typename Impl::Species& block = p_->find(name);
         auto programs = analytic::compile_component_programs(opcodes, literals);
+        analytic::validate_cell_program_inputs<Dim>(programs, projection == "exact_cell_integral");
         if (programs.size() != static_cast<std::size_t>(block.ncomp))
           throw std::invalid_argument("System analytic expression component count differs");
         return std::pair<typename Impl::Species*, std::vector<analytic::AnalyticProgram>>{
@@ -1204,8 +1236,8 @@ std::int64_t System<Dim>::set_analytic_expression_state(
     candidate.emplace(prepared.first->U.layout(), prepared.first->U.distribution(),
                       prepared.first->U.local_rank(), prepared.first->U.ncomp(),
                       prepared.first->U.ghosts());
-    materialization.emplace(
-        analytic::prepare_cell_average_materialization(*candidate, p_->geom, prepared.second));
+    materialization.emplace(analytic::prepare_cell_average_materialization(
+        *candidate, p_->geom, prepared.second, projection == "exact_cell_integral"));
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -1597,6 +1629,7 @@ template SolveOutcome System<kNativeDimension>::run_field_publication_outcome_(
     const std::function<SolveReport()>&);
 template void System<kNativeDimension>::set_potential(const std::vector<double>&);
 template std::vector<std::string> System<kNativeDimension>::field_provider_slots() const;
+template bool System<kNativeDimension>::field_provider_materialized(const std::string&) const;
 template std::vector<std::string> System<kNativeDimension>::configured_field_provider_slots() const;
 template void System<kNativeDimension>::set_field_potential(const std::string&,
                                                             const std::vector<double>&);
@@ -1618,6 +1651,7 @@ template std::int64_t System<kNativeDimension>::set_analytic_mapped_state(
     const std::string&, const std::vector<std::vector<std::string>>&,
     const std::vector<std::vector<double>>&,
     const std::vector<runtime::system::AnalyticMappedInput>&, const std::string&);
+
 template std::int64_t System<kNativeDimension>::set_analytic_gaussian_state(
     const std::string&, const RealVector<kNativeDimension>&, double, double, double);
 template int System<kNativeDimension>::n_vars(const std::string&) const;

@@ -40,6 +40,9 @@ from tests.python.support.requirements import (
     repo_include,
     require_native_or_skip,
 )
+# Euler ModelSpec preparation and both distinct isothermal loaders compile on a cold runner.
+# CI completed the Euler checks before the old 300-second process limit expired in DSL compilation.
+POPS_PROCESS_TIMEOUT = 900
 INCLUDE = repo_include()
 fails = 0
 

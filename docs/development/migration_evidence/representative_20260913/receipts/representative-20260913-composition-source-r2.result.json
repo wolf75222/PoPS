@@ -1,0 +1,33 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/codegen/test_tensor_transport_composition.py::test_separate_transport_and_tensor_emit_both_operators_and_required_halos",
+    "tests/python/unit/codegen/test_tensor_transport_composition.py::test_implicit_tensor_partition_is_not_charged_to_explicit_transport_bound",
+    "tests/python/unit/codegen/test_tensor_transport_composition.py::test_competing_native_transport_configurations_are_still_refused",
+    "tests/python/unit/codegen/test_diffusion_program.py::test_scalar_diffusion_public_case_resolves_and_emits_native_faces[euler]",
+    "tests/python/unit/codegen/test_diffusion_program.py::test_combined_transport_retains_native_riemann_and_adds_stability_frequencies[rusanov]",
+    "tests/python/unit/codegen/test_generic_diffusion.py::test_full_tensor_cross_gradient_uses_the_selected_adjoint_realization[2]",
+    "tests/python/unit/codegen/test_amr_tensor_diffusion_codegen.py::test_tensor_composite_implicit_resolves_faces_halos_and_consumed_residual[tensor-2]",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-composition-source-r2.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "712f422a37371d0d62858c1869acb43e51a535e4",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T12:26:01.997956+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/python:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1"
+  },
+  "exit_code": 1,
+  "elapsed_seconds": 16.33812712499639,
+  "source_head_after": "712f422a37371d0d62858c1869acb43e51a535e4",
+  "source_status_after": "",
+  "log_sha256": "d2ce5a987c06b8348384f7643a747d99c9950033de707a03c6290896f314d4e9"
+}

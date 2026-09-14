@@ -18,6 +18,7 @@ from pops.codegen._compiled_artifact import CompiledSimulationArtifact
 from pops.codegen._plans import BindInputs, InstallPlan
 from pops.identity import make_identity
 from pops.model import Handle, OwnerKind, OwnerPath
+from pops.mesh import LayoutMappingOperation, LayoutRepresentation, LayoutSynchronization
 from pops.output._console_monitor import ConsolePresentation
 from pops.output._consumer_contracts import (
     ConsumerGraph,
@@ -38,6 +39,7 @@ from pops.runtime._runtime_plan_contracts import (
     Collective,
     DeterminismGuarantee,
     Fence,
+    LayoutTransfer,
     RuntimePlanningError,
 )
 from pops.runtime._runtime_planning import build_runtime_plans
@@ -624,6 +626,60 @@ def test_owned_exact_consumer_collective_reaches_native_fact_probe(monkeypatch):
         executor.install_runtime_executor(plan, runtime_plan)
 
 
+def _case_field_collective_owner_graph(base, *, field_owner=None, block_name="fluid"):
+    graph = _collective_owner_graph(base, block_name=block_name)
+    node = graph.nodes[0]
+    reference = Handle(
+        "potential", kind="field", owner=field_owner or base.artifact.layout_plan.owner)
+    quantity = replace(
+        node.quantities[0], reference=reference,
+        runtime_resource="declaration:%s" % reference.qualified_id)
+    return ConsumerGraph((replace(node, quantities=(quantity,)),))
+
+
+def test_singleton_case_field_collective_uses_the_same_producer_and_validator_owner(monkeypatch):
+    base = _install()
+    plan = _install_with_consumer_graph(base, _case_field_collective_owner_graph(base))
+    runtime_plan = build_runtime_plans(plan, component_manifests_for_install(plan))
+    assert len(runtime_plan.communication.collectives) == 1
+
+    class NativeFactProbeReached(Exception):
+        pass
+
+    def reached_native_facts():
+        raise NativeFactProbeReached
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", reached_native_facts)
+    with pytest.raises(NativeFactProbeReached):
+        executor.install_runtime_executor(plan, runtime_plan)
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_case_field_collective_refuses_foreign_or_ambiguous_execution_owner(monkeypatch, ambiguous):
+    names = ("first", "second") if ambiguous else ("fluid",)
+    base = _install(names)
+    graph = _case_field_collective_owner_graph(
+        base, block_name=names[0],
+        field_owner=None if ambiguous else OwnerPath.case("foreign-case"))
+    plan = _install_with_consumer_graph(base, graph)
+    with pytest.raises(ValueError, match="no exact block owner"):
+        component_manifests_for_install(plan)
+
+    # Supplying an external manifest cannot bypass the same owner check.
+    resource = graph.nodes[0].quantities[0].runtime_resource
+    manifests = {name: _manifest(name) for name in names}
+    manifests[names[0]] = _collective_component_manifest(names[0], resource=resource)
+    runtime_plan = build_runtime_plans(plan, manifests)
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(RuntimePlanningError) as error:
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert error.value.code == "runtime_collective_without_consumer_owner"
+
+
 def test_unowned_exact_consumer_collective_fails_before_native_fact_probe(monkeypatch):
     plan = _install()
     runtime_plan = build_runtime_plans(
@@ -791,9 +847,26 @@ def test_consumer_collective_requires_exact_communicator_before_native_fact_prob
     assert error.value.code == "runtime_collective_without_consumer_owner"
 
 
+def _ordinary_transfer(mapping_id, source_layout, target_layout):
+    """Build the exact typed Transfer record emitted for conservative averaging."""
+    return LayoutTransfer(
+        mapping_id=mapping_id,
+        provider_id="pops://mapping-provider/%s" % mapping_id,
+        component_id="cell_average",
+        source_layout_id=source_layout,
+        target_layout_id=target_layout,
+        source_subject_id="state:%s" % source_layout,
+        target_subject_id="state:%s" % target_layout,
+        source_representation_uri=LayoutRepresentation.CELL_AVERAGE_V1.value,
+        target_representation_uri=LayoutRepresentation.CELL_AVERAGE_V1.value,
+        operation_abi=int(LayoutMappingOperation.CONSERVATIVE_CELL_AVERAGE_V1),
+        synchronization_uri=LayoutSynchronization.BEFORE_STEP_V1.value,
+    )
+
+
 def test_before_step_transfer_cycle_captures_every_native_source_before_any_apply():
-    first = SimpleNamespace(mapping_id="A-to-B", source="A", target="B")
-    second = SimpleNamespace(mapping_id="B-to-A", source="B", target="A")
+    first = _ordinary_transfer("A-to-B", "A", "B")
+    second = _ordinary_transfer("B-to-A", "B", "A")
     states = {"A": 1, "B": 2}
     events = []
 
@@ -804,11 +877,11 @@ def test_before_step_transfer_cycle_captures_every_native_source_before_any_appl
 
         def capture(self, generation, attempt):
             events.append(("capture", self.transfer.mapping_id, generation, attempt))
-            self.snapshot = states[self.transfer.source]
+            self.snapshot = states[self.transfer.source_layout_id]
 
         def apply(self, generation, attempt):
             events.append(("apply", self.transfer.mapping_id, generation, attempt))
-            states[self.transfer.target] = self.snapshot
+            states[self.transfer.target_layout_id] = self.snapshot
             return object()
 
     class NativeEngine:
@@ -827,8 +900,8 @@ def test_before_step_transfer_cycle_captures_every_native_source_before_any_appl
     native._transfer_routes = tuple(
         multi_executor._NativeTransferRoute(
             transfer=row,
-            source_block=row.source,
-            target_block=row.target,
+            source_block=row.source_layout_id,
+            target_block=row.target_layout_id,
             session=Session(row),
             source_element_count=1,
             destination_element_count=1,
@@ -858,8 +931,8 @@ def test_rejected_multi_layout_attempt_restores_every_child_then_recaptures():
 
     states = {"A": 1, "B": 2}
     events = []
-    first = SimpleNamespace(mapping_id="A-to-B", source="A", target="B")
-    second = SimpleNamespace(mapping_id="B-to-A", source="B", target="A")
+    first = _ordinary_transfer("A-to-B", "A", "B")
+    second = _ordinary_transfer("B-to-A", "B", "A")
 
     class Session:
         def __init__(self, transfer):
@@ -871,11 +944,11 @@ def test_rejected_multi_layout_attempt_restores_every_child_then_recaptures():
 
         def capture(self, generation, attempt):
             events.append(("capture", self.transfer.mapping_id, attempt))
-            self.snapshot = states[self.transfer.source]
+            self.snapshot = states[self.transfer.source_layout_id]
 
         def apply(self, generation, attempt):
             events.append(("apply", self.transfer.mapping_id, attempt))
-            states[self.transfer.target] = self.snapshot
+            states[self.transfer.target_layout_id] = self.snapshot
             return object()
 
         def reject_attempt(self, generation, attempt):
@@ -917,8 +990,8 @@ def test_rejected_multi_layout_attempt_restores_every_child_then_recaptures():
     native._transfer_routes = tuple(
         multi_executor._NativeTransferRoute(
             transfer=row,
-            source_block=row.source,
-            target_block=row.target,
+            source_block=row.source_layout_id,
+            target_block=row.target_layout_id,
             session=Session(row),
             source_element_count=1,
             destination_element_count=1,

@@ -1,0 +1,12 @@
+........................................................................ [ 34%]
+........................................................................ [ 69%]
+.......................................F.......................          [100%]
+=================================== FAILURES ===================================
+_____________ test_emit_requires_lowered_module_provider_authority _____________
+tests/python/unit/codegen/test_module_lowering.py:169: in test_emit_requires_lowered_module_provider_authority
+    with pytest.raises(ValueError, match="exact auxiliary ProviderPack"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE ValueError
+=========================== short test summary info ============================
+FAILED tests/python/unit/codegen/test_module_lowering.py::test_emit_requires_lowered_module_provider_authority
+1 failed, 206 passed in 1.87s

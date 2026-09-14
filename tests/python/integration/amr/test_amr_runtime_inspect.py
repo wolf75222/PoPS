@@ -43,13 +43,21 @@ from tests.python.support.compiled_program import CompiledProgramStub  # noqa: E
 from tests.python.support.explicit_program import install_forward_euler_program  # noqa: E402
 
 
-def _model():
+def _model(name="ne"):
     """A minimal scalar block whose zero elliptic RHS isolates AMR inspection."""
-    return engine.Model(
-        state=engine.Scalar(),
-        transport=engine.ExB(),
-        source=engine.NoSource(),
-        elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
+    from pops.physics import Density
+    from pops.physics._facade import Model
+
+    model = Model("amr-inspect-%s-scalar-advection" % name)
+    (rho,) = model.conservative_vars("n", roles=(Density(),))
+    model.flux(x=[0.3 * rho], y=[0.2 * rho])
+    model.eigenvalues(x=[0.3 + 0.0 * rho], y=[0.2 + 0.0 * rho])
+    model.primitive_vars(rho)
+    model.conservative_from([rho])
+    model.elliptic_rhs(0.0 * rho)
+    return model.compile(
+        backend="production", target="amr_system", name="amr_inspect_%s" % name,
+        consumer_owner_qid="tests.amr-inspect.%s" % name,
     )
 
 
@@ -83,11 +91,21 @@ def _built_amr(regrid_every=2, n=32):
     """A small shared-hierarchy AmrSystem with one refined patch and live regrid counters."""
     sim = AmrSystem(_amr_config(
         n, regrid_every=regrid_every, coarse_max_grid=16))
+    # Native package installation seals the complete state-route set. Register
+    # both authenticated Case instances before attaching either block package.
+    model = pops.Model("amr-runtime-inspect-state")
+    state = model.state("U", components=("n",))
+    case = pops.Case("amr-runtime-inspect")
+    blocks = {name: case.block(name, model, states=(state,)) for name in ("ne", "ni")}
+    validated = pops.validate(case)
+    for name, block in blocks.items():
+        sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
+    sim.set_poisson(bc=engine.Periodic())
     sim.add_equation(
         "ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
     )
     sim.add_equation(
-        "ni", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
+        "ni", model=_model("ni"), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
     )
     sim.set_temporal_relations([2], [1], ["integral_only"])
     install_prepared_threshold_union(sim, (("ne", "n", 0.5), ("ni", "n", 0.5)))
@@ -96,6 +114,7 @@ def _built_amr(regrid_every=2, n=32):
     sim.set_density("ne", ne)
     sim.set_density("ni", np.ones((n, n)))
     install_forward_euler_program(sim)
+    sim.mark_bound()  # seals the installed Program's accepted-state checkpoint capacity
     for _ in range(3):
         sim.step_cfl(0.4)
     return sim
@@ -192,10 +211,11 @@ def test_hierarchy_snapshot_composes_config_envelope_and_live_patches():
     sim = _built_amr(regrid_every=2)
     snap = sim.amr.hierarchy_snapshot()
     assert isinstance(snap, HierarchySnapshot)
-    # Config envelope comes from the native descriptor-free capability facts.
-    assert snap.max_levels == "resource_policy" and snap.ratio == 2
+    # Descriptor-free capabilities cannot claim one hierarchy's authored ratio.
+    assert snap.max_levels == "resource_policy" and snap.ratio is None
     assert snap.config_available == "yes"
     assert any("resource-policy" in note for note in snap.limitations)
+    assert any("selected by the hierarchy" in note for note in snap.limitations)
     # Live parts: the block registry + the patch table.
     assert snap.blocks == ["ne", "ni"]
     assert snap.frozen is False and snap.regrid_every == 2
@@ -258,6 +278,7 @@ def test_explain_reflux_reports_route_requirement():
 # --- explain_checkpoint --------------------------------------------------------
 def test_explain_checkpoint_restartable_for_frozen_single_block():
     sim = AmrSystem(_amr_config(16, regrid_every=0))
+    sim.set_poisson(bc=engine.Periodic())
     sim.add_equation("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
@@ -268,6 +289,7 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
 
 def test_explain_checkpoint_supports_dynamic_regrid():
     sim = AmrSystem(_amr_config(16, regrid_every=3))
+    sim.set_poisson(bc=engine.Periodic())
     sim.add_equation("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
     assert rep.restartable is True and rep.violations == []

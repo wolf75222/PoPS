@@ -47,6 +47,7 @@ class ExactFieldSolverBackend {
                                  PreparedVectorDistribution<Dim> distribution) = 0;
   virtual SolveReport solve(const field_type& warm_start, const ExecutionLane& lane) = 0;
   virtual int maximum_iterations() const noexcept = 0;
+  virtual bool materialized() const noexcept = 0;
   virtual std::string_view provider_identity() const noexcept = 0;
   virtual std::vector<runtime::field::FieldTopologyReportRow> topology_report() const = 0;
 };
@@ -149,6 +150,7 @@ class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> 
     return solver_.solve(warm_start, lane);
   }
   int maximum_iterations() const noexcept override { return solver_.maximum_iterations(); }
+  bool materialized() const noexcept override { return true; }
   std::string_view provider_identity() const noexcept override { return identity_; }
   std::vector<runtime::field::FieldTopologyReportRow> topology_report() const override {
     return {};
@@ -268,6 +270,7 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     return solver_.solve();
   }
   int maximum_iterations() const noexcept override { return 1; }
+  bool materialized() const noexcept override { return true; }
   std::string_view provider_identity() const noexcept override { return identity_; }
   std::vector<runtime::field::FieldTopologyReportRow> topology_report() const override {
     return {};
@@ -471,6 +474,7 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
   }
 
   int maximum_iterations() const noexcept override { return component_->maximum_iterations(); }
+  bool materialized() const noexcept override { return component_->materialized(); }
   std::string_view provider_identity() const noexcept override { return identity_; }
   std::vector<runtime::field::FieldTopologyReportRow> topology_report() const override {
     return component_->topology_report();

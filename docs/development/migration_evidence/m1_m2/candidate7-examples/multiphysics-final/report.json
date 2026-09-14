@@ -1,0 +1,50 @@
+{
+  "schema": "pops.migration.m0.reference-examples.v1",
+  "phase": "candidate",
+  "runner": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification-multiphysics-candidate7/scripts/run_migration_baseline.py",
+  "runner_sha256": "12ad595783560e1d015dc13b007ab0fc3b6ef9b554edb7b1d8858341da8f1114",
+  "source": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification-multiphysics-candidate7",
+  "revision": "7f577333dfc99fdbb642938b94fb26bbe3865b0d",
+  "dirty": false,
+  "platform": "macOS-26.5-arm64-arm-64bit",
+  "python": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python",
+  "installation": {
+    "package": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/__init__.py",
+    "native": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518"
+  },
+  "dimension": 2,
+  "omp_num_threads": 2,
+  "profiles": [
+    {
+      "profile": "multiphysics_full",
+      "command": [
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-candidate7-env/bin/python",
+        "-c",
+        "import runpy,sys; from pops._native_selector import select_native_dimension; select_native_dimension(2); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification-multiphysics-candidate7/scripts/run_installed_example.py",
+        "--runtime-sha256",
+        "d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518",
+        "--example",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-qualification-multiphysics-candidate7/examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py",
+        "--",
+        "--output-dir",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/multiphysics-final/multiphysics_full"
+      ],
+      "mpi_ranks": 1,
+      "returncode": 0,
+      "timeout": false,
+      "seconds": 74.45343079199665,
+      "log": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate7-examples/multiphysics-final/multiphysics_full.log",
+      "log_sha256": "83305204dc740c644de9e41e3fa64e8e05864eb76e03214a714b8debaf4839f2"
+    }
+  ],
+  "selected_profiles": [
+    "multiphysics_full"
+  ],
+  "limitations": [
+    "No GPU qualification",
+    "Reference examples, not a manufactured-solution convergence matrix",
+    "No process-loss tolerance claim"
+  ]
+}

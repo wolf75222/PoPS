@@ -11,11 +11,13 @@
 #include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/program/history_sample_identity_codec.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -137,6 +139,9 @@ reflux::FaceFluxFragment<Dim, program::AmrProgramFacePayload> fragment(
   result.key.clock = {
       role == reflux::FaceLedgerRole::Coarse ? query.levels.coarse : query.levels.fine,
       query.macro_step, pops::amr::Rational(1, 2), 3.5};
+  result.key.temporal_family =
+      "pops.program-flux-family.v1:sha256:"
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
   result.key.stage = "rk.accepted";
   result.key.attempt = query.attempt;
   result.key.role = role;
@@ -225,7 +230,67 @@ void prove_ranked_reflux_and_checkpoint() {
   const std::vector<std::uint8_t> bytes = program::serialize_amr_program_accepted_state(accepted);
   const auto decoded = program::deserialize_amr_program_accepted_state<Dim>(bytes);
   EXPECT_EQ(program::serialize_amr_program_accepted_state(decoded), bytes);
+  ASSERT_TRUE(decoded.face_evidence_provenance);
+  EXPECT_EQ(decoded.face_evidence_provenance->spatial_contract, runtime.spatial_contract());
+  EXPECT_EQ(decoded.face_evidence_provenance->level_count, 2u);
   EXPECT_NO_THROW(program::require_live_amr_program_checkpoint(decoded, runtime));
+
+  // POPSAND5 had no typed temporal-family string. Remove exactly those framed strings to obtain
+  // the frozen legacy layout, then prove an AND6 rewrite retains the empty legacy family.
+  std::vector<std::uint8_t> legacy5 = bytes;
+  const std::string family = decoded.accepted_face_flux[0].front().key.temporal_family;
+  for (;;) {
+    const auto found = std::search(legacy5.begin(), legacy5.end(), family.begin(), family.end());
+    if (found == legacy5.end())
+      break;
+    ASSERT_GE(std::distance(legacy5.begin(), found), 8);
+    const auto frame = found - 8;
+    std::uint64_t size = 0;
+    for (int byte = 0; byte < 8; ++byte)
+      size |= static_cast<std::uint64_t>(*(frame + byte)) << (8 * byte);
+    ASSERT_EQ(size, family.size());
+    legacy5.erase(frame, found + static_cast<std::ptrdiff_t>(family.size()));
+  }
+  legacy5[7] = '5';
+  const auto decoded5 = program::deserialize_amr_program_accepted_state<Dim>(legacy5);
+  for (const auto& axis : decoded5.accepted_face_flux)
+    for (const auto& entry : axis)
+      EXPECT_TRUE(entry.key.temporal_family.empty());
+  const auto rewritten5 = program::serialize_amr_program_accepted_state(decoded5);
+  const auto roundtrip5 = program::deserialize_amr_program_accepted_state<Dim>(rewritten5);
+  EXPECT_EQ(program::serialize_amr_program_accepted_state(roundtrip5), rewritten5);
+  for (const auto& axis : roundtrip5.accepted_face_flux)
+    for (const auto& entry : axis)
+      EXPECT_TRUE(entry.key.temporal_family.empty());
+
+  // V4 ends immediately before the optional V5 origin suffix. Its evidence belonged to the
+  // envelope geometry, so upgrade that exact old image without changing the accepted payload.
+  std::vector<std::uint8_t> legacy = legacy5;
+  legacy.resize(legacy.size() - (5 * sizeof(std::uint64_t) +
+                                 decoded.face_evidence_provenance->spatial_contract.size()));
+  legacy[7] = '4';
+  const auto upgraded = program::deserialize_amr_program_accepted_state<Dim>(legacy);
+  EXPECT_EQ(upgraded.face_evidence_provenance, decoded.face_evidence_provenance);
+  for (const auto& axis : upgraded.accepted_face_flux)
+    for (const auto& entry : axis)
+      EXPECT_TRUE(entry.key.temporal_family.empty());
+
+  // Regridding can remove the former child. Historical contributions remain tied to their
+  // original two-level geometry, while the new accepted envelope describes one live level.
+  auto remapped = decoded;
+  remapped.spatial_contract = "new-single-level-geometry";
+  ++remapped.topology_epoch;
+  ++remapped.materialization_generation;
+  remapped.level_clocks.resize(1);
+  remapped.synchronization_events.push_back({0, 1, 0, "reflux", {0, 3, {0, 1}, 3.0}});
+  const auto historical = program::deserialize_amr_program_accepted_state<Dim>(
+      program::serialize_amr_program_accepted_state(remapped));
+  EXPECT_EQ(historical.face_evidence_provenance, decoded.face_evidence_provenance);
+  EXPECT_EQ(historical.level_clocks.size(), 1u);
+  EXPECT_EQ(historical.accepted_face_flux[0].size(), decoded.accepted_face_flux[0].size());
+  remapped.face_evidence_provenance->level_count = 1;
+  EXPECT_THROW((void)program::serialize_amr_program_accepted_state(remapped),
+               std::invalid_argument);
 
   auto restored = program::restore_amr_program_face_flux_ledger(
       decoded, reflux::FaceFluxLedgerBudget{256, 256, 4});
@@ -241,6 +306,14 @@ void prove_ranked_reflux_and_checkpoint() {
 
   std::vector<std::uint8_t> corrupted = bytes;
   corrupted.front() ^= 0xffU;
+  EXPECT_THROW((void)program::deserialize_amr_program_accepted_state<Dim>(corrupted),
+               std::runtime_error);
+  corrupted = bytes;
+  const auto family_bytes =
+      std::search(corrupted.begin(), corrupted.end(), family.begin(), family.end());
+  ASSERT_NE(family_bytes, corrupted.end());
+  ASSERT_GE(std::distance(corrupted.begin(), family_bytes), 8);
+  std::fill(family_bytes - 8, family_bytes, std::uint8_t{0xff});
   EXPECT_THROW((void)program::deserialize_amr_program_accepted_state<Dim>(corrupted),
                std::runtime_error);
 }
@@ -271,6 +344,133 @@ TEST(test_program_reflux_ledger,
   prove_ranked_reflux_and_checkpoint<1>();
   prove_ranked_reflux_and_checkpoint<2>();
   prove_ranked_reflux_and_checkpoint<3>();
+}
+
+TEST(test_program_reflux_ledger, SingleWindowDensityAvoidsAnExtraTemporalRounding) {
+  const auto query = coarse_key<1>(0);
+  const pops::Real density =
+      pops::Real(1) + pops::Real(21) * std::numeric_limits<pops::Real>::epsilon();
+  for (const double dt : {0.001, 0.0005}) {
+    const auto integrate = [&](pops::Real coarse_density) {
+      reflux::TransactionalFaceFluxLedger<1, program::AmrProgramFacePayload> ledger(kLedgerBudget);
+      auto coarse =
+          fragment(query, query.coarse_face, reflux::FaceLedgerRole::Coarse, 1.0, coarse_density);
+      auto fine = fragment(query, query.coarse_face, reflux::FaceLedgerRole::Fine, 1.0, density);
+      coarse.measure.substep_duration = dt;
+      fine.measure.substep_duration = dt;
+      ledger.begin(query.attempt);
+      ledger.accumulate(std::move(coarse.key), coarse.measure, std::move(coarse.payload));
+      ledger.accumulate(std::move(fine.key), fine.measure, std::move(fine.payload));
+      ledger.commit();
+      return reflux::metric_reflux(ledger, query, ratio_two<1>(),
+                                   reflux::FaceRefinementMapping<1>{}, kMetricBudget, payload_axpy);
+    };
+    const auto retained = integrate(density);
+    ASSERT_EQ(retained.mismatch.size(), 1U);
+    EXPECT_EQ(retained.mismatch[0], pops::Real(0));
+    EXPECT_EQ(retained.coarse_integrated[0], static_cast<pops::Real>(dt) * density);
+
+    // These volatile stores represent the two separate field kernels used by
+    // the former full-window dt*F then (1/dt)*F path. The ledger must still apply
+    // dt, so that unnecessary round trip can create reflux for identical fluxes.
+    volatile pops::Real integrated = static_cast<pops::Real>(dt) * density;
+    volatile pops::Real reconstructed = integrated * (pops::Real(1) / static_cast<pops::Real>(dt));
+    const auto rounded_twice = integrate(reconstructed);
+    EXPECT_NE(rounded_twice.mismatch[0], pops::Real(0));
+  }
+}
+
+TEST(test_program_reflux_ledger, HistoryPublicationIdentityUsesPhysicalWindowsAndExactWire) {
+  using Sample = program::HistorySampleIdentity;
+  using Kind = program::HistorySampleKind;
+  std::vector<Sample> ring(2, Sample::zero_start());
+  const auto first = program::next_history_sample(ring, false, -0.5, .25);
+  EXPECT_EQ(first.kind, Kind::Publication);
+  EXPECT_EQ(first.ordinal, 1u);
+  ring.assign(2, first);  // First-store cold fill is one authentic publication, not two.
+  EXPECT_EQ(program::next_history_sample(ring, true, -0.5, .25), first);
+  EXPECT_THROW((void)program::next_history_sample(ring, true, -.5, .125), std::invalid_argument);
+  std::swap(ring[0], ring[1]);
+  const auto second = program::next_history_sample(ring, false, -0.5, .25);
+  EXPECT_EQ(second.ordinal, 2u);
+  ring[0] = second;
+  std::swap(ring[0], ring[1]);
+  EXPECT_EQ(program::next_history_sample(ring, false, -0.5, .25).ordinal, 3u);
+  // A fine substep has its own physical window; a new window resets its local ordinal.
+  const auto substep = program::next_history_sample(ring, false, -.25, .125);
+  EXPECT_EQ(substep.ordinal, 1u);
+  EXPECT_NE(substep, first);
+  const auto saved = ring;
+  ring[1].ordinal = std::numeric_limits<std::uint64_t>::max();
+  EXPECT_THROW((void)program::next_history_sample(ring, false, -.5, .25), std::overflow_error);
+  EXPECT_EQ(ring[1].ordinal, std::numeric_limits<std::uint64_t>::max());
+  ring = saved;  // Accepted HistoryManager snapshots copy the complete typed ledger.
+  const auto bytes = program::encode_history_sample_identity("prior", 1, ring);
+  EXPECT_EQ(program::decode_history_sample_identity(bytes, "prior", 1, 2), ring);
+  EXPECT_THROW((void)program::decode_history_sample_identity(bytes, "foreign", 1, 2),
+               std::invalid_argument);
+  EXPECT_THROW((void)program::decode_history_sample_identity(bytes, "prior", 0, 2),
+               std::invalid_argument);
+  EXPECT_THROW((void)program::decode_history_sample_identity(bytes, "prior", 1, 3),
+               std::invalid_argument);
+  auto malformed_kind = bytes;
+  malformed_kind[32 + std::string("prior").size()] = 3;
+  EXPECT_THROW((void)program::decode_history_sample_identity(malformed_kind, "prior", 1, 2),
+               std::invalid_argument);
+  auto extra = bytes;
+  extra.push_back(0);
+  EXPECT_THROW((void)program::decode_history_sample_identity(extra, "prior", 1, 2),
+               std::invalid_argument);
+  const auto unknown = program::decode_history_sample_identity({}, "prior", 1, 2);
+  EXPECT_EQ(unknown, std::vector<Sample>(2));
+  EXPECT_FALSE(unknown.front().authenticated());
+  for (double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(),
+                         std::numeric_limits<double>::quiet_NaN()})
+    EXPECT_THROW((void)program::next_history_sample(ring, false, 0.0, invalid),
+                 std::invalid_argument);
+  auto invalid = Sample::zero_start();
+  invalid.ordinal = 1;
+  EXPECT_THROW(invalid.validate(), std::invalid_argument);
+  invalid = first;
+  invalid.start_bits = std::bit_cast<std::uint64_t>(std::numeric_limits<double>::infinity());
+  EXPECT_THROW(invalid.validate(), std::invalid_argument);
+
+  program::AmrProgramAcceptedState<2> state;
+  state.spatial_contract = "tests.history-sample-wire";
+  state.level_clocks = {{0, 3, {0, 1}, .75}, {1, 3, {0, 1}, .75}};
+  state.histories = {{"prior", 0, "state", "cell", "clock", "linear", 2, 1}};
+  Sample publication{std::bit_cast<std::uint64_t>(.5), std::bit_cast<std::uint64_t>(.25), 17,
+                     Kind::Publication};
+  for (int level = 0; level < 2; ++level)
+    for (int slot = 0; slot < 2; ++slot)
+      state.history_slots.push_back({"prior", level, slot, .25, true, 2, publication});
+  const auto current = program::serialize_amr_program_accepted_state(state);
+  const auto restored = program::deserialize_amr_program_accepted_state<2>(current);
+  EXPECT_EQ(restored.history_slots, state.history_slots);
+  // Freeze an actual AND6 history layout by removing only the new per-slot 32-byte records.
+  auto legacy = current;
+  const auto framed =
+      program::encode_history_sample_identity("prior", 0, std::span(&publication, 1));
+  const std::vector<std::uint8_t> record(framed.end() - 32, framed.end());
+  int removed = 0;
+  for (;;) {
+    const auto found = std::search(legacy.begin(), legacy.end(), record.begin(), record.end());
+    if (found == legacy.end())
+      break;
+    legacy.erase(found, found + 32);
+    ++removed;
+  }
+  ASSERT_EQ(removed, 4);
+  legacy[7] = '6';
+  const auto old = program::deserialize_amr_program_accepted_state<2>(legacy);
+  for (const auto& slot : old.history_slots)
+    EXPECT_EQ(slot.sample, Sample{});
+  EXPECT_EQ(program::deserialize_amr_program_accepted_state<2>(
+                program::serialize_amr_program_accepted_state(old))
+                .history_slots,
+            old.history_slots);
+  state.history_slots[0].sample = Sample::zero_start();
+  EXPECT_THROW((void)program::serialize_amr_program_accepted_state(state), std::invalid_argument);
 }
 
 TEST(test_program_reflux_ledger, InvalidCheckpointAndDuplicateFacesRejectBeforeMutation) {

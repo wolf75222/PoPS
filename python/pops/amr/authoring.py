@@ -8,6 +8,7 @@ from fractions import Fraction
 from typing import Any, ClassVar
 
 from pops._ir import Expr
+from pops._ir.quantity import PhysicalDimension, PhysicalSupport
 from pops._ir.visitors import _key
 from pops.mesh._amr.tagging_graph import ConflictPolicy, Hysteresis
 from pops.time import Schedule
@@ -68,6 +69,10 @@ def resolve_transition_ratios(
 
 
 def _strict_key_data(value: Any) -> Any:
+    if type(value) in (PhysicalDimension, PhysicalSupport):
+        # Space keys retain these two physical descriptors as typed values. Their
+        # canonical data preserves rational powers, coordinate order and unknownness.
+        return _strict_key_data(value.to_data())
     if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, float):

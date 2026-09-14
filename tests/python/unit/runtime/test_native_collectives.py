@@ -98,3 +98,21 @@ def test_gather_bytes_rejects_payloads_returned_to_a_non_root(monkeypatch):
 
     with pytest.raises(RuntimeError, match="payloads on a non-root rank"):
         collectives.gather_bytes(world, b"local", root=1)
+
+
+def test_checkpoint_stream_capacity_does_not_become_an_allocation_request():
+    from io import BytesIO
+    from pops.output._checkpoint_collective import _bounded_checkpoint_stream_bytes
+
+    class ShortBoundedReads(BytesIO):
+        def read(self, count):
+            assert 0 < count <= 1024 * 1024
+            return super().read(min(count, 3))
+
+    payload = b"small archive in a large authenticated AMR budget"
+    assert _bounded_checkpoint_stream_bytes(ShortBoundedReads(payload), 85_548_512_521) == payload
+    assert _bounded_checkpoint_stream_bytes(ShortBoundedReads(payload), len(payload)) == payload
+    with pytest.raises(ValueError, match="exceeds its live resource budget"):
+        _bounded_checkpoint_stream_bytes(ShortBoundedReads(payload), len(payload) - 1)
+    with pytest.raises(TypeError, match="no exact bytes"):
+        _bounded_checkpoint_stream_bytes(ShortBoundedReads(b""), 10)

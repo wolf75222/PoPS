@@ -21,6 +21,7 @@ set(POPS_RUNTIME_SYSTEM_SOURCES
     runtime/system/system_program.cpp)
 
 set(POPS_RUNTIME_AMR_SOURCES
+    runtime/amr/amr_layout_transfer.cpp
     runtime/amr/amr_field_solver_builtin.cpp
     runtime/amr/amr_field_solver_component.cpp
     runtime/amr/amr_system.cpp)

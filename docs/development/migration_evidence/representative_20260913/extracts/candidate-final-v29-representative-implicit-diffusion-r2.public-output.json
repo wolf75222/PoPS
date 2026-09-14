@@ -1,0 +1,25 @@
+{
+  "data": {
+    "accepted_steps": 1,
+    "artifact": "pops.artifact.v1:sha256:f93f49ffe496de5c5cf442a8a9e583d8a8f78628c8a0e6cb675cb1c8789be0ef",
+    "final_time": 0.0001,
+    "mean_change": 0.0,
+    "state": {
+      "block": "heat",
+      "component_means": [
+        2.0
+      ],
+      "maximum": 2.384476217445896,
+      "minimum": 1.615523782554104,
+      "shape": [
+        1,
+        16,
+        16
+      ]
+    },
+    "workflow": "implicit-diffusion"
+  },
+  "original_log": "candidate-final-v29-representative-implicit-diffusion-r2.log",
+  "original_log_sha256": "600497e40adad13b2d90e17b2ea65b95f642e21c7a0010e46ee6e89a74c9edc7",
+  "schema": "pops.public-cli-output-extract.v1"
+}

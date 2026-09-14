@@ -35,24 +35,23 @@ def _ref_name(value: Any) -> Any:
     """
     if value is None:
         return None
-    from pops.physics.roles import ComponentRole
+    from pops.physics.roles import ComponentRole, native_role_token
     if isinstance(value, ComponentRole):
-        return type(value).__name__
+        return native_role_token(value)
     return getattr(value, "name", None) or (value if isinstance(value, str) else repr(value))
 
 
 def _role_name(value: Any) -> str | None:
-    """Return the public ComponentRole class name after validating its native token."""
+    """Retain the exact native component role, including its axis or custom label."""
     if value is None:
         return None
     from pops.physics.roles import native_role_token
     try:
-        native_role_token(value)
+        return native_role_token(value)
     except TypeError as exc:
         raise TypeError(
             "diagnostic role must be a typed pops.physics.roles.ComponentRole"
         ) from exc
-    return type(value).__name__
 
 
 def _operation(

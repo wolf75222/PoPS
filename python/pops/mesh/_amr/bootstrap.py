@@ -65,7 +65,7 @@ def _physical_initial_subjects(transfers: ResolvedAMRTransfer) -> tuple[Any, ...
     """Return the unique physical subjects authenticated by an AMR transfer plan."""
     if type(transfers) is not ResolvedAMRTransfer:
         raise TypeError("physical initial subjects require an exact ResolvedAMRTransfer")
-    subjects = {}
+    subjects = {subject.qualified_id: subject for subject in transfers.flat_physical_subjects}
     for entry in transfers.entries:
         for requirement in entry.requirements:
             subject = requirement.subject
@@ -113,6 +113,8 @@ def resolve_bootstrap(
         raise ValueError(
             "ResolvedHierarchy transfer nesting must be derived from the AMRTransfer registry"
         )
+    if transfers.flat_layout_plan is not None and hierarchy.plan.transitions:
+        raise ValueError("flat AMR bootstrap cannot introduce hierarchy transitions")
     selection_rows = tuple(selections)
     if any(type(row) is not BootstrapSelection for row in selection_rows):
         raise TypeError("resolve_bootstrap selections must contain BootstrapSelection values")

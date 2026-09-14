@@ -69,6 +69,114 @@ class PreparedMultiBlockAmrHierarchy {
 
   friend class ::pops::AmrSystem<Dim>;
 
+  // A full restart rebuild constructs a new carrier instead of replacing a child in place.
+  // Carry its installed interface authority through the same strict runtime rematerialization
+  // used by regrid, before the owning System derives the candidate graph and ledger budget.
+  void rematerialize_interface_flux_provider_from_(const PreparedMultiBlockAmrHierarchy& source) {
+    std::shared_ptr<interface_scheduler_type> scheduler;
+    std::string contract;
+    std::exception_ptr failure;
+    try {
+      if (interface_scheduler_ || !interface_provider_contract_.empty() ||
+          source.interface_reconstruction_active_)
+        throw std::logic_error(
+            "AMR interface restart reconstruction requires an empty candidate and complete source");
+      if (source.interface_scheduler_)
+        scheduler = std::make_shared<interface_scheduler_type>();
+      contract = source.interface_provider_contract_;
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    collectively_rethrow_(failure, "AMR restart interface authority allocation failed");
+    if (scheduler) {
+      const auto state_provider = [&](std::size_t block, int level) -> field_type& {
+        return state(block, static_cast<std::size_t>(level));
+      };
+      const auto geometry_provider = [&](int level) {
+        return Geometry<Dim>::from_bounds(primary_->hierarchy().layout(level).domain(),
+                                          source.interface_lower_, source.interface_upper_);
+      };
+      auto rematerialized = source.interface_scheduler_->rematerialized(
+          static_cast<int>(level_count()), state_provider, geometry_provider);
+      scheduler->swap(rematerialized);
+    }
+    interface_scheduler_.swap(scheduler);
+    interface_provider_contract_.swap(contract);
+    interface_lower_ = source.interface_lower_;
+    interface_upper_ = source.interface_upper_;
+  }
+
+  // This is a private preparation scope inside the existing owning System transaction. It cannot
+  // accept state: every temporary prefix is non-executable, and only the original complete route
+  // recipe can qualify the final hierarchy. In particular BindBootstrap is not a runtime bypass.
+  void begin_interface_topology_replacement_() {
+    std::exception_ptr failure;
+    std::optional<interface_scheduler_type> retained;
+    std::string request;
+    try {
+      ExactContractBuilder exact;
+      exact.text("pops.amr-interface-topology-reconstruction")
+          .bytes(collective_contract_)
+          .bytes(interface_provider_contract_)
+          .scalar(static_cast<std::uint64_t>(level_count()))
+          .scalar(static_cast<bool>(interface_scheduler_));
+      request = std::move(exact).release();
+      if (interface_reconstruction_active_)
+        throw std::logic_error("AMR interface topology reconstruction cannot nest");
+      if (interface_scheduler_)
+        retained.emplace(*interface_scheduler_);
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    collectively_rethrow_(failure, "AMR interface reconstruction recipe allocation failed");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("interface-reconstruction"), request}}, *lane_))
+      throw std::invalid_argument("AMR interface reconstruction request differs between ranks");
+    if (retained)
+      retained->require_runtime_rematerialization_ready(static_cast<int>(level_count()));
+    interface_reconstruction_active_ = true;
+    interface_reconstruction_depth_ = level_count();
+    interface_reconstruction_recipe_.swap(retained);
+    if (interface_scheduler_)
+      interface_scheduler_->topology_reconstruction_pending_ = true;
+  }
+
+  void finish_interface_topology_replacement_() {
+    if (!interface_reconstruction_recipe_) {
+      interface_reconstruction_active_ = false;
+      return;
+    }
+    std::exception_ptr failure;
+    try {
+      if (level_count() != interface_reconstruction_depth_)
+        throw std::runtime_error(
+            "multi-block interface replacement changed the active hierarchy depth");
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    collectively_rethrow_(failure, "AMR final interface hierarchy depth differs between ranks");
+    const auto state_provider = [&](std::size_t block, int level) -> field_type& {
+      return state(block, static_cast<std::size_t>(level));
+    };
+    const auto geometry_provider = [&](int level) {
+      return Geometry<Dim>::from_bounds(primary_->hierarchy().layout(level).domain(),
+                                        interface_lower_, interface_upper_);
+    };
+    auto complete = interface_reconstruction_recipe_->rematerialized(
+        static_cast<int>(level_count()), state_provider, geometry_provider);
+    interface_scheduler_->swap(complete);
+    interface_reconstruction_recipe_.reset();
+    interface_reconstruction_active_ = false;
+  }
+
+  void abort_interface_topology_replacement_() noexcept {
+    if (interface_reconstruction_recipe_) {
+      interface_scheduler_->swap(*interface_reconstruction_recipe_);
+      interface_reconstruction_recipe_.reset();
+    }
+    interface_reconstruction_active_ = false;
+  }
+
  public:
   struct AdditionalBlock {
     std::string identity;
@@ -186,8 +294,20 @@ class PreparedMultiBlockAmrHierarchy {
           "prepared multi-block AMR carrier contract differs between MPI ranks");
 
     ExecutionLane lane = ExecutionLane::duplicate_collectively(parent, lane_identity);
+    std::shared_ptr<const ExecutionLane> lane_owner;
+    try {
+      lane_owner = std::make_shared<ExecutionLane>(std::move(lane));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    // Keep both moved and unmoved duplicates alive until every rank can unwind together.
+    if (all_reduce_max(local_error ? 1L : 0L, parent) != 0) {
+      if (parent.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("prepared multi-block AMR lane ownership failed collectively");
+    }
     return PreparedMultiBlockAmrHierarchy(std::move(primary), std::move(primary_identity),
-                                          std::move(additional), std::move(lane),
+                                          std::move(additional), std::move(lane_owner),
                                           std::move(qualified_lane_identity), std::move(contract),
                                           std::move(canonical_program_contract));
   }
@@ -198,7 +318,7 @@ class PreparedMultiBlockAmrHierarchy {
   std::size_t level_count() const noexcept { return primary_->hierarchy().num_levels(); }
   std::uint64_t accepted_revision() const noexcept { return accepted_revision_; }
   std::string_view collective_contract() const noexcept { return collective_contract_; }
-  const ExecutionLane& lane() const noexcept { return lane_; }
+  const ExecutionLane& lane() const noexcept { return *lane_; }
   engine_type& topology_runtime() noexcept { return *primary_; }
   const engine_type& topology_runtime() const noexcept { return *primary_; }
 
@@ -260,7 +380,7 @@ class PreparedMultiBlockAmrHierarchy {
     collectively_rethrow_(local_error, "AMR Program block-map preflight failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-program-map"), result.exact_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument("AMR Program block map differs between MPI ranks");
     return result;
   }
@@ -338,7 +458,7 @@ class PreparedMultiBlockAmrHierarchy {
     }
     collectively_rethrow_(local_error, "prepared AMR coupling installation failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("prepared-multiblock-amr-coupling"), exact}}, lane_))
+            {{std::string_view("prepared-multiblock-amr-coupling"), exact}}, *lane_))
       throw std::invalid_argument("prepared AMR coupling provider differs between MPI ranks");
     couplings_ = std::move(candidate);
   }
@@ -360,7 +480,7 @@ class PreparedMultiBlockAmrHierarchy {
     }
     collectively_rethrow_(local_error, "prepared AMR coupling seal failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("prepared-multiblock-amr-coupling-registry"), exact}}, lane_))
+            {{std::string_view("prepared-multiblock-amr-coupling-registry"), exact}}, *lane_))
       throw std::invalid_argument("prepared AMR coupling registry differs between MPI ranks");
     coupling_registry_contract_.swap(exact);
     couplings_sealed_ = true;
@@ -374,7 +494,8 @@ class PreparedMultiBlockAmrHierarchy {
   }
 
   void install_interface_flux_provider(std::string provider_contract, const Geometry<Dim>& geometry,
-                                       interface_installer_type installer) {
+                                       interface_installer_type installer,
+                                       std::function<void()> after_publication = {}) {
     std::exception_ptr local_error;
     std::string next_contract;
     try {
@@ -394,7 +515,7 @@ class PreparedMultiBlockAmrHierarchy {
                           "prepared AMR interface provider preflight failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-interface-provider"), next_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument(
           "prepared AMR interface provider contracts differ between MPI ranks");
 
@@ -404,6 +525,7 @@ class PreparedMultiBlockAmrHierarchy {
     try {
       if (!interface_scheduler_) {
         interface_scheduler_ = std::make_shared<interface_scheduler_type>();
+        interface_scheduler_->execution_lane_owner_ = lane_;
         created = true;
       }
       accepted_size = interface_scheduler_->size();
@@ -413,24 +535,55 @@ class PreparedMultiBlockAmrHierarchy {
     } catch (...) {
       local_error = std::current_exception();
     }
-    const bool failed = all_reduce_max(local_error ? 1L : 0L, lane_) != 0;
+    const bool failed = all_reduce_max(local_error ? 1L : 0L, *lane_) != 0;
     if (failed) {
       if (interface_scheduler_) {
         interface_scheduler_->rollback_installations(accepted_size);
         if (created)
           interface_scheduler_.reset();
       }
-      if (lane_.size() == 1 && local_error)
+      if (lane_->size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("prepared AMR interface provider installation failed collectively");
     }
+    const auto accepted_lower = interface_lower_;
+    const auto accepted_upper = interface_upper_;
     interface_lower_ = geometry.lower();
     interface_upper_ = geometry.upper();
     interface_provider_contract_.swap(next_contract);
+    local_error = nullptr;
+    try {
+      if (after_publication)
+        after_publication();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, *lane_) != 0) {
+      interface_provider_contract_.swap(next_contract);
+      interface_lower_ = accepted_lower;
+      interface_upper_ = accepted_upper;
+      interface_scheduler_->rollback_installations(accepted_size);
+      if (created)
+        interface_scheduler_.reset();
+      if (lane_->size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(
+          "prepared AMR interface provider accepted-state publication failed collectively");
+    }
   }
 
   bool has_interface_flux_provider() const noexcept {
     return interface_scheduler_ && interface_scheduler_->size() != 0;
+  }
+
+  std::size_t interface_evaluation_count(const std::string& identity, int level) const {
+    if (interface_reconstruction_active_)
+      throw std::logic_error("AMR interface count requires a complete hierarchy boundary");
+    if (!interface_scheduler_)
+      throw std::logic_error("AMR interface count requires an installed interface provider");
+    if (level < 0 || static_cast<std::size_t>(level) >= level_count())
+      throw std::out_of_range("AMR interface count level is outside the active hierarchy");
+    return interface_scheduler_->evaluation_count(identity, level);
   }
 
   std::string_view interface_flux_provider_contract() const noexcept {
@@ -524,38 +677,80 @@ class PreparedMultiBlockAmrHierarchy {
     } catch (...) {
       local_error = std::current_exception();
     }
-    const bool failed = all_reduce_max(local_error ? 1L : 0L, lane_.communicator()) != 0;
+    const bool failed = all_reduce_max(local_error ? 1L : 0L, lane_->communicator()) != 0;
     if (!failed)
       return couplings_.operators.size() +
              (interface_scheduler_ ? interface_scheduler_->size() : 0);
 
     restore_pack_collectively_(rollback, canonical, "candidate coupling rollback");
-    if (lane_.size() == 1 && local_error)
+    if (lane_->size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("prepared AMR coupling failed and rolled back collectively");
+  }
+
+  // Grouped residuals already own detached scratch outputs. Capture exact density directly;
+  // do not recover it through a state update followed by cancellation and division by dt.
+  std::vector<runtime::multiblock::InterfaceFluxSample> capture_interface_residual(
+      const ProgramBlockMap& map, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      std::span<field_type* const> program_states, std::span<field_type* const> program_rhs) {
+    std::vector<field_type*> states, rhs;
+    std::vector<runtime::multiblock::InterfaceFluxSample> samples;
+    std::exception_ptr error;
+    try {
+      require_map_(map);
+      if (program_states.size() != block_count() || program_rhs.size() != block_count())
+        throw std::invalid_argument("shared RHS capture requires a complete Program pointer pack");
+      states.assign(block_count(), nullptr);
+      rhs.assign(block_count(), nullptr);
+      for (std::size_t block = 0; block < block_count(); ++block) {
+        states[map.canonical_indices[block]] = program_states[block];
+        rhs[map.canonical_indices[block]] = program_rhs[block];
+      }
+    } catch (...) {
+      error = std::current_exception();
+    }
+    collectively_rethrow_(error, "shared RHS capture pack failed collectively");
+    if (interface_scheduler_)
+      interface_scheduler_->apply(point, std::span<field_type* const>(states),
+                                  std::span<field_type* const>(rhs), nullptr, &samples);
+    return samples;
+  }
+
+  std::string_view authenticate_interface_sample(
+      const runtime::multiblock::InterfaceFluxSample& sample) const {
+    if (!interface_scheduler_)
+      throw std::invalid_argument("retained shared flux has no live interface provider");
+    return interface_scheduler_->authenticate_sample(sample);
   }
 
   /// Canonical-order convenience used by a provider that already owns the Program map.
   std::size_t apply_coupling_operators_at_level(std::size_t level, Real dt,
                                                 std::span<field_type* const> candidates) {
     ProgramBlockMap map;
-    map.hierarchy_contract = collective_contract_;
-    map.canonical_indices.resize(block_count());
-    for (std::size_t block = 0; block < block_count(); ++block)
-      map.canonical_indices[block] = block;
-    map.exact_contract = canonical_program_contract_;
     runtime::multiblock::BoundaryEvaluationPoint point;
-    point.clock = "pops.prepared-multiblock.direct";
-    point.tick = 0;
-    point.level = static_cast<int>(level);
-    point.substep = 0;
-    point.stage = 0;
-    point.stage_fraction = {0, 1};
-    point.dt = dt;
-    point.physical_time = 0.0;
-    if (interface_scheduler_)
-      throw std::logic_error(
-          "direct AMR coupling application cannot bypass interface accepted-state provenance");
+    std::exception_ptr local_error;
+    try {
+      map.hierarchy_contract = collective_contract_;
+      map.canonical_indices.resize(block_count());
+      for (std::size_t block = 0; block < block_count(); ++block)
+        map.canonical_indices[block] = block;
+      map.exact_contract = canonical_program_contract_;
+      point.clock = "pops.prepared-multiblock.direct";
+      point.tick = 0;
+      point.level = static_cast<int>(level);
+      point.substep = 0;
+      point.stage = 0;
+      point.stage_fraction = {0, 1};
+      point.dt = dt;
+      point.physical_time = 0.0;
+      if (interface_scheduler_)
+        throw std::logic_error(
+            "direct AMR coupling application cannot bypass interface accepted-state provenance");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "prepared AMR direct coupling request preparation failed collectively");
     return apply_program_candidates(map, level, dt, candidates, point, nullptr);
   }
 
@@ -569,20 +764,26 @@ class PreparedMultiBlockAmrHierarchy {
                                      /*require_dt_consensus=*/false,
                                      /*require_sealed_couplings=*/false);
     std::vector<field_type*> accepted;
-    accepted.reserve(block_count());
-    for (std::size_t block = 0; block < block_count(); ++block)
-      accepted.push_back(&state(block, level));
+    std::exception_ptr local_error;
+    try {
+      accepted.reserve(block_count());
+      for (std::size_t block = 0; block < block_count(); ++block)
+        accepted.push_back(&state(block, level));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "prepared AMR publication accepted-pack preparation failed collectively");
     std::vector<field_type> rollback = copy_pack_collectively_(accepted, "publication rollback");
 
-    std::exception_ptr local_error;
     try {
       copy_pack_(canonical, accepted);
     } catch (...) {
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_error ? 1L : 0L, lane_.communicator()) != 0) {
+    if (all_reduce_max(local_error ? 1L : 0L, lane_->communicator()) != 0) {
       restore_pack_collectively_(rollback, accepted, "accepted publication rollback");
-      if (lane_.size() == 1 && local_error)
+      if (lane_->size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("prepared AMR block publication rolled back collectively");
     }
@@ -594,22 +795,34 @@ class PreparedMultiBlockAmrHierarchy {
   std::size_t apply_and_publish_level(std::size_t level, Real dt) {
     preflight_application_level_(level, dt);
     std::vector<field_type*> accepted;
-    accepted.reserve(block_count());
-    for (std::size_t block = 0; block < block_count(); ++block)
-      accepted.push_back(&state(block, level));
+    std::exception_ptr local_error;
+    try {
+      accepted.reserve(block_count());
+      for (std::size_t block = 0; block < block_count(); ++block)
+        accepted.push_back(&state(block, level));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "prepared AMR coupling accepted-pack preparation failed collectively");
     std::vector<field_type> candidates = copy_pack_collectively_(accepted, "coupling candidates");
     std::vector<field_type*> candidate_pack;
-    candidate_pack.reserve(candidates.size());
-    for (field_type& candidate : candidates)
-      candidate_pack.push_back(&candidate);
-    const std::size_t applied = apply_coupling_operators_at_level(level, dt, candidate_pack);
-
     ProgramBlockMap map;
-    map.hierarchy_contract = collective_contract_;
-    map.canonical_indices.resize(block_count());
-    for (std::size_t block = 0; block < block_count(); ++block)
-      map.canonical_indices[block] = block;
-    map.exact_contract = canonical_program_contract_;
+    try {
+      candidate_pack.reserve(candidates.size());
+      for (field_type& candidate : candidates)
+        candidate_pack.push_back(&candidate);
+      map.hierarchy_contract = collective_contract_;
+      map.canonical_indices.resize(block_count());
+      for (std::size_t block = 0; block < block_count(); ++block)
+        map.canonical_indices[block] = block;
+      map.exact_contract = canonical_program_contract_;
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "prepared AMR coupling candidate-pack preparation failed collectively");
+    const std::size_t applied = apply_coupling_operators_at_level(level, dt, candidate_pack);
     publish_program_candidates(map, level, candidate_pack);
     return applied;
   }
@@ -696,10 +909,16 @@ class PreparedMultiBlockAmrHierarchy {
               primary_publication->hierarchy().layout(static_cast<std::size_t>(level)).domain(),
               interface_lower_, interface_upper_);
         };
-        next_interface_scheduler.emplace(interface_scheduler_->rematerialized(
-            static_cast<int>(primary_publication->hierarchy().num_levels()), state_provider,
-            geometry_provider,
-            runtime::multiblock::InterfaceRematerializationAuthority::BindBootstrap));
+        if (interface_reconstruction_recipe_)
+          next_interface_scheduler.emplace(
+              interface_reconstruction_recipe_->rematerialized_reconstruction_prefix_(
+                  static_cast<int>(primary_publication->hierarchy().num_levels()), state_provider,
+                  geometry_provider));
+        else
+          next_interface_scheduler.emplace(interface_scheduler_->rematerialized(
+              static_cast<int>(primary_publication->hierarchy().num_levels()), state_provider,
+              geometry_provider,
+              runtime::multiblock::InterfaceRematerializationAuthority::BindBootstrap));
       }
       next_collective_contract = exact_hierarchy_contract_(
           primary_publication->hierarchy(), primary_publication->spatial_contract(),
@@ -718,7 +937,7 @@ class PreparedMultiBlockAmrHierarchy {
              {std::string_view("prepared-multiblock-amr-next"), next_collective_contract},
              {std::string_view("prepared-multiblock-amr-next-coupling"),
               next_coupling_registry_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument("prepared multi-block AMR regrid differs between MPI ranks");
 
     const bool changes = primary_publication->changes_topology();
@@ -735,37 +954,51 @@ class PreparedMultiBlockAmrHierarchy {
       interface_scheduler_->swap(*next_interface_scheduler);
   }
 
+  /// The scalar Program rebalance seam supplies one remapped carrier. Prepare its replacement
+  /// hierarchy once, then publish topology and all carrier contracts on this owner.
+  void apply_single_block_rebalance(std::size_t level, PreparedRebalanceDecision<Dim> decision,
+                                    field_type remapped_state) {
+    std::optional<PreparedRestore> prepared;
+    std::exception_ptr local_error;
+    std::string decision_contract;
+    try {
+      if (block_count() != 1)
+        throw std::invalid_argument("single-carrier AMR rebalance requires exactly one block");
+      if (accepted_revision_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("multi-block AMR accepted revision overflow");
+      ExactContractBuilder request;
+      request.scalar(static_cast<std::uint64_t>(level))
+          .bytes(decision.source_contract)
+          .bytes(decision.exact_contract);
+      decision_contract = std::move(request).release();
+      auto primary_publication = primary_->prepare_rebalance_publication(level, std::move(decision),
+                                                                         std::move(remapped_state));
+      prepared.emplace(
+          prepare_primary_publication_(std::move(primary_publication), {}, accepted_revision_ + 1));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "single-carrier AMR rebalance preparation failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"single-carrier-amr-rebalance-decision", decision_contract},
+             {"single-carrier-amr-rebalance-next", prepared->collective_contract}},
+            *lane_))
+      throw std::invalid_argument("AMR rebalance decision differs between carrier-lane ranks");
+    execute_prepared_restore(*prepared);
+    publish_prepared_restore(std::move(*prepared));
+  }
+
   Snapshot snapshot() const {
     return {primary_->snapshot(), additional_, accepted_revision_, collective_contract_};
   }
 
   /// Build the entire topology/carrier rollback image without entering the owning lane.
   PreparedRestore prepare_restore(const Snapshot& snapshot) {
-    PreparedRestore prepared;
-    prepared.owner = this;
-    prepared.additional = snapshot.additional;
-    validate_snapshot_carriers_(snapshot.primary.hierarchy, prepared.additional, additional_);
-    prepared.primary_publication.emplace(primary_->prepare_restore_publication(snapshot.primary));
-    if (interface_scheduler_) {
-      const auto state_provider = [&](std::size_t block, int level) -> field_type& {
-        if (block == 0)
-          return const_cast<field_type&>(
-              prepared.primary_publication->hierarchy().state(static_cast<std::size_t>(level)));
-        return prepared.additional.at(block - 1).levels.at(static_cast<std::size_t>(level));
-      };
-      const auto geometry_provider = [&](int level) {
-        return Geometry<Dim>::from_bounds(prepared.primary_publication->hierarchy()
-                                              .layout(static_cast<std::size_t>(level))
-                                              .domain(),
-                                          interface_lower_, interface_upper_);
-      };
-      prepared.interface_scheduler.emplace(interface_scheduler_->rematerialized(
-          static_cast<int>(prepared.primary_publication->hierarchy().num_levels()), state_provider,
-          geometry_provider));
-    }
-    prepared.collective_contract = exact_hierarchy_contract_(
-        prepared.primary_publication->hierarchy(), prepared.primary_publication->spatial_contract(),
-        primary_identity_, prepared.additional, lane_contract_identity_);
+    validate_snapshot_carriers_(snapshot.primary.hierarchy, snapshot.additional, additional_);
+    auto prepared =
+        prepare_primary_publication_(primary_->prepare_restore_publication(snapshot.primary),
+                                     snapshot.additional, snapshot.accepted_revision);
     if (snapshot.exact_collective_contract != prepared.collective_contract) {
       const auto mismatch = std::mismatch(
           snapshot.exact_collective_contract.begin(), snapshot.exact_collective_contract.end(),
@@ -777,22 +1010,6 @@ class PreparedMultiBlockAmrHierarchy {
           " (snapshot bytes=" + std::to_string(snapshot.exact_collective_contract.size()) +
           ", restored bytes=" + std::to_string(prepared.collective_contract.size()) + ")");
     }
-    prepared.canonical_program_contract = exact_canonical_program_contract_(
-        prepared.collective_contract, primary_identity_, prepared.additional);
-    if (couplings_sealed_)
-      prepared.coupling_registry_contract =
-          exact_coupling_registry_contract_(prepared.collective_contract);
-    ExactContractBuilder contract;
-    contract.text("pops.prepared-multiblock-amr.restore")
-        .scalar(std::uint32_t{1})
-        .scalar(std::int32_t{Dim})
-        .bytes(collective_contract_)
-        .bytes(prepared.collective_contract)
-        .scalar(snapshot.accepted_revision);
-    prepared.restore_contract = std::move(contract).release();
-    prepared.accepted_revision = snapshot.accepted_revision;
-    prepared.source_accepted_revision = accepted_revision_;
-    prepared.source_collective_contract = collective_contract_;
     return prepared;
   }
 
@@ -811,7 +1028,7 @@ class PreparedMultiBlockAmrHierarchy {
                           "prepared multi-block AMR restore execution failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-restore"), prepared.restore_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument("prepared multi-block AMR restore differs between MPI ranks");
     prepared.collectively_authenticated = true;
   }
@@ -881,8 +1098,64 @@ class PreparedMultiBlockAmrHierarchy {
   }
 
  private:
+  PreparedRestore prepare_primary_publication_(
+      typename engine_type::PreparedRestorePublication publication,
+      std::vector<AdditionalBlock> additional, std::uint64_t revision) {
+    PreparedRestore prepared;
+    prepared.owner = this;
+    prepared.additional = std::move(additional);
+    prepared.primary_publication.emplace(std::move(publication));
+    if (interface_scheduler_) {
+      const auto state_provider = [&](std::size_t block, int level) -> field_type& {
+        if (block == 0)
+          return const_cast<field_type&>(
+              prepared.primary_publication->hierarchy().state(static_cast<std::size_t>(level)));
+        return prepared.additional.at(block - 1).levels.at(static_cast<std::size_t>(level));
+      };
+      const auto geometry_provider = [&](int level) {
+        return Geometry<Dim>::from_bounds(prepared.primary_publication->hierarchy()
+                                              .layout(static_cast<std::size_t>(level))
+                                              .domain(),
+                                          interface_lower_, interface_upper_);
+      };
+      // A restart parent can fail inside its own accepted transaction while the enclosing
+      // complete-hierarchy reconstruction still owns the original recipe. Restore that parent's
+      // exact prefix through the private non-executable projection, not the live shorter recipe.
+      if (interface_reconstruction_recipe_)
+        prepared.interface_scheduler.emplace(
+            interface_reconstruction_recipe_->rematerialized_reconstruction_prefix_(
+                static_cast<int>(prepared.primary_publication->hierarchy().num_levels()),
+                state_provider, geometry_provider));
+      else
+        prepared.interface_scheduler.emplace(interface_scheduler_->rematerialized(
+            static_cast<int>(prepared.primary_publication->hierarchy().num_levels()),
+            state_provider, geometry_provider));
+    }
+    prepared.collective_contract = exact_hierarchy_contract_(
+        prepared.primary_publication->hierarchy(), prepared.primary_publication->spatial_contract(),
+        primary_identity_, prepared.additional, lane_contract_identity_);
+    prepared.canonical_program_contract = exact_canonical_program_contract_(
+        prepared.collective_contract, primary_identity_, prepared.additional);
+    if (couplings_sealed_)
+      prepared.coupling_registry_contract =
+          exact_coupling_registry_contract_(prepared.collective_contract);
+    ExactContractBuilder contract;
+    contract.text("pops.prepared-multiblock-amr.restore")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .bytes(collective_contract_)
+        .bytes(prepared.collective_contract)
+        .scalar(revision);
+    prepared.restore_contract = std::move(contract).release();
+    prepared.accepted_revision = revision;
+    prepared.source_accepted_revision = accepted_revision_;
+    prepared.source_collective_contract = collective_contract_;
+    return prepared;
+  }
+
   PreparedMultiBlockAmrHierarchy(std::shared_ptr<engine_type> primary, std::string primary_identity,
-                                 std::vector<AdditionalBlock> additional, ExecutionLane lane,
+                                 std::vector<AdditionalBlock> additional,
+                                 std::shared_ptr<const ExecutionLane> lane,
                                  std::string lane_contract_identity,
                                  std::string collective_contract,
                                  std::string canonical_program_contract) noexcept
@@ -1028,9 +1301,9 @@ class PreparedMultiBlockAmrHierarchy {
 
   void collectively_rethrow_(const std::exception_ptr& local_error,
                              std::string_view collective_message) const {
-    if (all_reduce_max(local_error ? 1L : 0L, lane_.communicator()) == 0)
+    if (all_reduce_max(local_error ? 1L : 0L, lane_->communicator()) == 0)
       return;
-    if (lane_.size() == 1 && local_error)
+    if (lane_->size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error(std::string(collective_message));
   }
@@ -1065,6 +1338,8 @@ class PreparedMultiBlockAmrHierarchy {
     std::exception_ptr presence_error;
     std::string presence_contract;
     try {
+      if (interface_reconstruction_active_)
+        throw std::logic_error("AMR Program execution cannot run during hierarchy reconstruction");
       require_map_(map);
       require_level_(level);
       if (require_sealed_couplings && !couplings_sealed_)
@@ -1094,7 +1369,7 @@ class PreparedMultiBlockAmrHierarchy {
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-candidate-pointer-pack"),
               presence_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument("AMR Program candidate pointer packs differ between MPI ranks");
 
     std::exception_ptr local_error;
@@ -1134,7 +1409,7 @@ class PreparedMultiBlockAmrHierarchy {
     collectively_rethrow_(local_error, "AMR Program candidate preflight failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-application"), invocation_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument("AMR Program invocation differs between MPI ranks");
     return canonical;
   }
@@ -1165,7 +1440,7 @@ class PreparedMultiBlockAmrHierarchy {
                           "prepared multi-block AMR level application failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-multiblock-amr-level-application"), invocation_contract}},
-            lane_))
+            *lane_))
       throw std::invalid_argument(
           "prepared multi-block AMR level application differs between MPI ranks");
   }
@@ -1205,11 +1480,11 @@ class PreparedMultiBlockAmrHierarchy {
                                   std::span<field_type* const> destination,
                                   std::string_view purpose) const {
     std::vector<field_type*> source;
-    source.reserve(rollback.size());
-    for (field_type& field : rollback)
-      source.push_back(&field);
     std::exception_ptr local_error;
     try {
+      source.reserve(rollback.size());
+      for (field_type& field : rollback)
+        source.push_back(&field);
       copy_pack_(source, destination);
     } catch (...) {
       local_error = std::current_exception();
@@ -1221,7 +1496,7 @@ class PreparedMultiBlockAmrHierarchy {
   void increment_revision_collectively_() {
     const long exhausted =
         accepted_revision_ == std::numeric_limits<std::uint64_t>::max() ? 1L : 0L;
-    if (all_reduce_max(exhausted, lane_.communicator()) != 0)
+    if (all_reduce_max(exhausted, lane_->communicator()) != 0)
       throw std::overflow_error("multi-block AMR accepted revision overflow");
     ++accepted_revision_;
   }
@@ -1242,12 +1517,15 @@ class PreparedMultiBlockAmrHierarchy {
   std::vector<AdditionalBlock> additional_;
   // Declared before all providers/registries so reverse member destruction releases their callbacks
   // first and frees the communicator last.
-  ExecutionLane lane_;
+  std::shared_ptr<const ExecutionLane> lane_;
   std::string lane_contract_identity_;
   coupling_registry_type couplings_;
   std::string coupling_registry_contract_;
   bool couplings_sealed_ = false;
   std::shared_ptr<interface_scheduler_type> interface_scheduler_;
+  std::optional<interface_scheduler_type> interface_reconstruction_recipe_;
+  std::size_t interface_reconstruction_depth_ = 0;
+  bool interface_reconstruction_active_ = false;
   std::string interface_provider_contract_;
   RealVector<Dim> interface_lower_{};
   RealVector<Dim> interface_upper_{};

@@ -22,7 +22,7 @@ from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
 from pops._manifest_protocol import strict_json_loads
 
 
-UNIFORM_V2_MIGRATION_SCHEMA_VERSION = 4
+UNIFORM_V2_MIGRATION_SCHEMA_VERSION = 6
 UNIFORM_V2_SOURCE_VERSION = 2
 UNIFORM_V2_AUTHORITY_TRANSFERS = (
     "lifecycle_identities",
@@ -33,10 +33,13 @@ UNIFORM_V2_AUTHORITY_TRANSFERS = (
     "program_cadence",
     "history_fill_count",
     "history_persistence",
+    "history_sample_identity_unknown_provenance",
     "consumer_state",
     "embedded_boundary_contract",
     "auxiliary_checkpoint",
     "auxiliary_registry_contract",
+    "accepted_exchange_mailbox",
+    "continuation_transition_plan",
 )
 
 
@@ -454,6 +457,22 @@ def _validate_legacy_v2(payload: Mapping[str, Any]) -> _LegacyUniformV2:
     )
 
 
+def _attest_empty_accepted_exchange_authority(payload: Mapping[str, Any]) -> None:
+    """Require the target authority's native mailbox to carry no trajectory absent from v2."""
+    from pops.runtime._checkpoint_exchanges import validate_checkpoint_continuation_arrays
+
+    _contract, raw, offsets = validate_checkpoint_continuation_arrays(payload)
+    empty_native_image = b"POPSEX01" + bytes(8)
+    images = tuple(
+        raw[int(first) : int(last)].tobytes()
+        for first, last in zip(offsets[:-1], offsets[1:], strict=True)
+    )
+    if not images or any(image != empty_native_image for image in images):
+        raise ValueError(
+            "Uniform v2 migration authority has a non-empty accepted exchange mailbox"
+        )
+
+
 def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     from pops.output._consumer_contracts import ConsumerGraph
     from pops.runtime._checkpoint_manifest import (
@@ -481,6 +500,7 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     from pops.runtime._temporal_restart import TemporalRestartState
     from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
     from pops.runtime._system_io_history import validate_history_slot_dt_payload
+    from pops.runtime._history_sample_identity import identity_key, prepare_identity_payload
     from pops.time._history.persistence import Dense, HistoryPersistence
 
     manifest, restart = inspect_checkpoint_payload_integrity(payload, runtime_kind="uniform")
@@ -491,6 +511,7 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         runtime_kind="Uniform migration authority",
     )
     preflight_uniform_restart(payload)
+    _attest_empty_accepted_exchange_authority(payload)
     spatial = inspect_checkpoint_spatial_contract(payload)
     inspect_checkpoint_embedded_boundary_contract(payload)
     auxiliary_checkpoint = _uint8_vector(payload, "auxiliary_checkpoint", minimum=8)
@@ -514,6 +535,8 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     if _int_vector(payload, "cache_nodes") or _text_vector(payload, "cache_names", nonempty=False):
         raise ValueError("Uniform v2 migration authority must have no scheduled caches")
 
+    from pops.runtime._checkpoint_exchanges import CONTINUATION_CHECKPOINT_KEYS
+
     expected = {
         "pops_checkpoint_version",
         "t",
@@ -535,7 +558,7 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         "runtime_consumer_diagnostics",
         MANIFEST_KEY,
         IDENTITY_KEY,
-    } | set(PROGRAM_CADENCE_CHECKPOINT_KEYS)
+    } | set(PROGRAM_CADENCE_CHECKPOINT_KEYS) | set(CONTINUATION_CHECKPOINT_KEYS)
     block_components: dict[str, tuple[str, ...]] = {}
     for block in blocks:
         ncomp = _int_scalar(payload, "ncomp_" + block, minimum=1)
@@ -563,7 +586,20 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
             raise ValueError("Uniform v2 migration authority must store every history slot")
         if _text_scalar(payload, "history_storage_mode_" + name) != "policy":
             raise ValueError("Uniform v2 migration authority history must use policy storage")
-        validate_history_slot_dt_payload(payload, name, depth, fill_count)
+        slot_dt = validate_history_slot_dt_payload(payload, name, depth, fill_count)
+        sample_key = identity_key(name, None)
+        if sample_key not in payload:
+            raise ValueError(
+                "Uniform v2 migration authority history %r lacks its sample identity" % name
+            )
+        prepare_identity_payload(
+            payload,
+            name,
+            None,
+            depth,
+            initialized=initialized,
+            slot_dt=slot_dt,
+        )
         expected.update(
             {
                 "history_depth_" + name,
@@ -575,6 +611,7 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
                 "history_stored_slots_" + name,
                 "history_storage_mode_" + name,
                 "history_slot_dt_" + name,
+                sample_key,
             }
         )
         regrid_key = "history_regrid_steps_" + name
@@ -876,6 +913,7 @@ def _migrate_payload(
         MANIFEST_KEY,
         _seal_checkpoint_payload_with_identities,
     )
+    from pops.runtime._history_sample_identity import identity_key
 
     block_pairs = tuple((row.source, row.target) for row in mapping.blocks)
     _require_bijection(block_pairs, source.blocks, authority.blocks, where="block mapping")
@@ -944,6 +982,9 @@ def _migrate_payload(
         ):
             raise ValueError("history %r initialization differs from its authority" % row.source)
         output["history_slot_dt_" + row.target] = np.array(source_slot_dt, copy=True)
+        # Frozen v2 did not encode publication windows or ordinals. The authority's identity
+        # describes its own samples, so carrying it onto migrated values would forge provenance.
+        del output[identity_key(row.target, None)]
         for slot in range(source_depth):
             source_values = np.asarray(source.payload["history_%s_%d" % (row.source, slot)])
             target_values = np.empty_like(np.asarray(output["history_%s_%d" % (row.target, slot)]))
@@ -998,6 +1039,8 @@ def _validate_migrated_bytes(
     expected_restart: Any,
     expected_mapping_identity: Any,
 ) -> None:
+    import numpy as np
+
     from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
     from pops.output._consumer_contracts import ConsumerGraph
     from pops.output._checkpoint_collective import decode_checkpoint_bytes
@@ -1013,6 +1056,7 @@ def _validate_migrated_bytes(
     from pops.runtime._runtime_instance import RuntimeInstance
     from pops.runtime._temporal_restart import TemporalRestartState
     from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
+    from pops.runtime._history_sample_identity import identity_key
 
     payload = decode_checkpoint_bytes(raw, resource_budget)
     _, restart = inspect_checkpoint_payload_integrity(payload, runtime_kind="uniform")
@@ -1025,6 +1069,18 @@ def _validate_migrated_bytes(
         runtime_kind="migrated Uniform",
     )
     preflight_uniform_restart(payload)
+    for history in authority.histories:
+        if identity_key(history, None) in payload:
+            raise RuntimeError(
+                "migrated Uniform v2 history must retain explicit unknown sample provenance"
+            )
+    _attest_empty_accepted_exchange_authority(payload)
+    from pops.runtime._checkpoint_exchanges import CONTINUATION_CHECKPOINT_KEYS
+    for key in CONTINUATION_CHECKPOINT_KEYS:
+        if not np.array_equal(np.asarray(payload[key]), np.asarray(authority.payload[key])):
+            raise RuntimeError(
+                "migrated checkpoint continuation authority differs for %s" % key
+            )
     _canonical_zero_float64_array(payload, "phi", authority.spatial.shape)
     auxiliary_checkpoint = _uint8_vector(payload, "auxiliary_checkpoint", minimum=8)
     if auxiliary_checkpoint != authority.auxiliary_checkpoint:
@@ -1091,7 +1147,7 @@ def migrate_uniform_v2_checkpoint(
     """Publish one current checkpoint from a true v2 artifact, entirely offline.
 
     ``current_authority`` is a complete, authenticated v8 checkpoint captured from the exact
-    target runtime. The schema-4 mapping pins both artifact byte streams, their ABI/Program and
+    target runtime. The schema-6 mapping pins both artifact byte streams, their ABI/Program and
     lifecycle identities, the empty natively attested POPSAUX2 image and binary registry-contract
     SHA-256 values, and supplies every semantic correspondence absent from v2. The emitted
     ``checkpoint_migration`` member remains inside the fixed 16 Ki-character envelope reserved by

@@ -146,11 +146,24 @@ def test_scalar_field_ncomp_validates(t):
 
 
 def test_divgrad_codegen(t):
+    import re
+
     src = emit_cpp_program(_divgrad_program(
         t, solver=krylov.BiCGStab(max_iter=200, rel_tol=1e-10)))
     for frag in ("ctx.gradient", "ctx.divergence", "ctx.solve_prepared_linear",
                  "ctx.alloc_scalar_field(2, 1)"):  # the 2-component gradient buffer
         assert frag in src, "the div(grad) solve must contain %r\n%s" % (frag, src)
+    gradient = re.search(r"ctx\.gradient\(\*(\w+), .*\*(\w+)\);", src)
+    divergence = re.search(r"ctx\.divergence\(\*\w+, \*(\w+), \*(\w+)\);", src)
+    assert gradient is not None and divergence is not None
+    assert gradient[1] == divergence[1], "divergence consumes the produced vector"
+    assert gradient[2] != divergence[2], "scalar and vector inputs require distinct halo contracts"
+    preparation = (
+        "auto session_%s = ctx_owner->prepare_mesh_boundary_session(*session_%s, "
+        % (divergence[2], divergence[1]))
+    assert preparation in src, "the vector halo session must use the vector prototype"
+    assert src.index(preparation) < src.index("pops::ApplyFn<"), \
+        "halo preparation must happen outside every operator application"
 
 
 def _analytic_divergence_check():

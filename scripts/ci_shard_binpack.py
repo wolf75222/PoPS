@@ -5,7 +5,7 @@ The pytest gate shards the selected test files across several parallel jobs. Spl
 by file *count* (or a modulo of the sorted list) leaves the shards unbalanced because
 per-file wall time ranges from ~1 s (a pure-Python unit test) to minutes (a test that
 compiles several DSL ``.so`` at runtime). This module assigns files to shards by their
-measured duration so the slowest shard -- the gate's critical path -- is as short as the
+recorded duration weights so the slowest shard -- the gate's critical path -- is as short as the
 partition allows.
 
 Design
@@ -34,18 +34,16 @@ This module is stdlib-only and runs before any ``pip install`` in CI.
 
 Regenerating the timings JSON
 -----------------------------
-CI already uploads per-shard ``timings.*`` artifacts (``gate-python-timings-shard*``) from
-each ``gate-python`` job, and the runner prints ``--durations`` per file. To refresh the
-seed after the test set drifts:
+CI uploads ``gate-python-timings-shard*`` artifacts. The timing plugin records every
+completed setup/call/teardown phase in ``timings.jsonl`` and maintains ``timings.json``
+with per-file sums, completion counts, and the active node. Refresh the seed using:
 
-1. Download the ``gate-python-timings-shard*`` artifacts from a recent full (``ci-full`` or
-   push-to-master) run, which exercises every file including the compiler-gated ones.
-2. For each file, take its per-file wall time (the ``--durations`` line, or the shard
-   ``timings.tsv`` divided across its files) and write ``path -> round(seconds, 1)``.
-3. Merge into ``test_durations.json`` (keep it sorted by key), commit in the SAME PR as any
-   test-set change. Files you cannot measure (compiler-gated: native_loader / mpi compile
-   tests) are estimated from test count and file size and carry ``"_estimated"`` in the
-   sibling ``_meta`` block for provenance; refresh them from a real CI run when possible.
+1. Complete per-file phase receipts, plus an explicit planning allowance for collection,
+   compiler-cache variation and scheduler overhead. Phase sums are not end-to-end wall time.
+2. Partial receipts and the historical ``--durations=20`` output only as lower bounds.
+   Never divide the shard wall time among files or label the selected-file list as timings.
+3. Explicit estimated rows in ``_meta`` for files without complete CI receipts. Preserve
+   existing JSON key order when updating values so the measured changes remain reviewable.
 
 Locally, durations for the non-compiler tests can be measured with the borrowed-``.so``
 recipe (symlink the installed ``_pops*.so`` into ``python/pops/`` and run pytest per file);

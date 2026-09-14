@@ -31,4 +31,12 @@ struct BoundaryEvaluationPoint {
   friend bool operator==(const BoundaryEvaluationPoint&, const BoundaryEvaluationPoint&) = default;
 };
 
+/// Convert a stage fraction relative to one level interval into the exact global AMR clock.
+inline ::pops::amr::ClockStamp clock_stamp_in_window(const BoundaryEvaluationPoint& point,
+                                                     const ::pops::amr::ClockWindow& window) {
+  return {point.level, point.tick,
+          window.begin.phase + point.stage_fraction * (window.end.phase - window.begin.phase),
+          point.physical_time};
+}
+
 }  // namespace pops::runtime::multiblock

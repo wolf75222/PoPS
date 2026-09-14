@@ -1,0 +1,36 @@
+PoPS release runtime | native_sha256=d1eb7da32a5c0a7b2e7433dfdd309d03d4b19a8afaab5f426d03ad5ee875f518
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : tutorial_scalar_advection_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 7
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 32 x 32 cells; 2 levels, ratios (2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.45, max_dt=0.01)
+  interval            : 0 -> 0.1 (max 10000 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : c95ff3c82f88d65b
+  run identity        : 0852c15068282c5d
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 15 / 0
+  final time / step   : 0.1 / 15
+  elapsed             : 1.439186 s
+  run identity        : 0852c15068282c5d
+PoPS OpenMP AMR scalar-advection tutorial finished
+  program          : explicit pops.Program SSPRK2
+  AMR levels       : 2
+  fine patches     : 1
+  completed regrids: 8
+  topology epoch   : 8

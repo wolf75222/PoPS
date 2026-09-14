@@ -17,6 +17,7 @@ from pops.model.provider_pack import (
     ProviderPack,
     build_operator_provider_pack,
     build_provider_pack,
+    compact_auxiliary_provider_pack,
 )
 
 
@@ -301,6 +302,32 @@ class ComponentProviderPacks:
             target, emitter_carrier_snapshot(target), _ATTACH_CAPABILITY))
 
 
+def unbound_emitter_attributes(target: Any) -> dict[str, Any]:
+    """Copy authoring attributes without inheriting another object's compiler binding.
+
+    An existing source binding must remain complete and authenticated. Only the new
+    emitter starts unbound, so a selected operation plan can attach its exact consumer
+    projection without overwriting the source's pack or copying its object witness.
+    """
+    attrs = vars(target)
+    binding_names = (*EMITTER_CARRIER_ATTRS, _WITNESS_ATTR)
+    if any(name in attrs for name in binding_names):
+        require_emitter_provider_carrier(target, where="source of private emitter")
+    return {name: value for name, value in attrs.items()
+            if name not in (*binding_names, "_resolved_operations")}
+
+
+def resolve_emitter_provider_packs(target: Any, module: Any) -> ComponentProviderPacks:
+    """Use the emitter's authenticated selected plan, or its unselected source plan."""
+    plan = getattr(target, "_resolved_operations", None)
+    if plan is None:
+        return resolve_component_provider_packs(module)
+    from .resolved_operations import ResolvedOperationPlan
+    if type(plan) is not ResolvedOperationPlan:
+        raise TypeError("compiler emitter requires an exact resolved operation plan")
+    return plan.require_provider_packs(module)
+
+
 def bind_emitter_provider_packs(target: Any) -> None:
     """Bind the exact Module ProviderPack onto one compiler emitter.
 
@@ -315,7 +342,7 @@ def bind_emitter_provider_packs(target: Any) -> None:
     from pops.model import Module
 
     if callable(bind) and isinstance(module, Module):
-        bind(resolve_component_provider_packs(module))
+        bind(resolve_emitter_provider_packs(target, module))
 
 
 def resolve_component_provider_packs(module: Any) -> ComponentProviderPacks:
@@ -467,40 +494,6 @@ def auxiliary_provider_routes(
     for key in derived:
         visit(key)
     return MappingProxyType(routes), tuple(metadata)
-
-
-def compact_auxiliary_provider_pack(pack: Any) -> ProviderPack:
-    """Project declared :class:`AuxSpace` values to compact native-channel slots.
-
-    A slot is not inferred from a spelling, an axis, or a physics role.  It is
-    assigned once, in declaration order, from the exact owner-qualified
-    ``aux`` and ``field`` rows of the complete provider pack.  The empty pack
-    is valid: a model without auxiliary inputs or field outputs allocates no
-    channel at all.
-    """
-    if type(pack) is not ProviderPack:
-        raise TypeError("auxiliary projection requires an exact ProviderPack")
-    rows = []
-    for key in pack:
-        if key.space_kind not in {"aux", "field"}:
-            continue
-        component_contract = pack.contract(key)
-        if component_contract.centering != "cell" or component_contract.layout != "cell":
-            raise ValueError(
-                "auxiliary carrier accepts only cell-centered cell-layout components; "
-                "%s has centering=%r layout=%r and remains solver-owned"
-                % (key.space, component_contract.centering, component_contract.layout)
-            )
-        # A FieldSpace may deliberately be provided later by the case-owned
-        # field provider.  Its slot is still part of the package ABI, while
-        # availability is verified at bind rather than guessed at codegen.
-        entry = pack.declared_entry(key)
-        rows.append((
-            key,
-            component_contract,
-            type(entry)(entry.producer, entry.available, len(rows)),
-        ))
-    return ProviderPack(rows, capacity=len(rows))
 
 
 def auxiliary_component_slot(pack: Any, *, owner_qid: Any, name: Any) -> int:

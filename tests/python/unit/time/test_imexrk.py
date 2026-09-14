@@ -62,7 +62,11 @@ def test_public_ars222_uses_two_consumed_local_newton_stages():
     consumes = [node for node in nodes if node["op"] == "solve_outcome"]
     assert all(node["attrs"]["action"]["kind"] == "fail_run" for node in consumes)
 
-    generated = emit_cpp_program(program, model=model)
+    from pops.codegen.module_lowering import lower_and_validate
+
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert source_module is model.module
+    generated = emit_cpp_program(program, model=emit_model)
     assert generated.count("pops::prepare_local_nonlinear_problem<1>") == 2
     assert generated.count("pops::solve_prepared_local_nonlinear(prepared_, Gval)") == 2
     assert "for (int it_ = 0;" not in generated

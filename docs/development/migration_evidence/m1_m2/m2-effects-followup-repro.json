@@ -1,0 +1,24 @@
+{
+  "baseline_source": "08a56cb",
+  "baseline_file_sha256": "3fce87417cdd2d7d7db29147f9a61943d50d1f83141924ee18a3a6e3f54b05ca",
+  "patched_file_sha256": "88915bca9ce2c8fb72bd2243e180b26fbb029457100d6c0056ceca6d8662633b",
+  "baseline": {
+    "wave_effects": [],
+    "source_effects": [
+      "fallible"
+    ],
+    "selected_rate_effects": []
+  },
+  "patched": {
+    "wave_effects": [
+      "fallible"
+    ],
+    "source_effects": [
+      "fallible"
+    ],
+    "selected_rate_effects": [
+      "fallible"
+    ]
+  },
+  "scope": "Pure source derivation witness; no native runtime assertion"
+}

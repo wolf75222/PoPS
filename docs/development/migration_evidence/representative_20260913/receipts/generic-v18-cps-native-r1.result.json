@@ -1,0 +1,29 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/ctest",
+    "--test-dir",
+    "build/migration-native",
+    "--output-on-failure",
+    "--no-tests=error",
+    "--parallel",
+    "2",
+    "-L",
+    "cpp-target:test_(amr_synchronized_continuation|amr_multiblock_substeps|amr_multiblock_implicit_transaction|amr_program_field_publication|amr_program_diffusion|collective_step_rejection|amr_layout_transfer|amr_compiled_model|amr_native_loader|program_context_schur_free|component_interfaces|mpi_system_layout_transfer|physical_support_transfer)$",
+    "--output-junit",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/generic-v18-cps-native-r1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "5b81ff0967740e633cd04c6c1603b0c87a96b280",
+  "source_status_before": "",
+  "started_utc": "2026-09-09T20:41:15.848410+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_NATIVE_DIM": "2"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 33.69092066702433,
+  "source_head_after": "5b81ff0967740e633cd04c6c1603b0c87a96b280",
+  "source_status_after": "",
+  "log_sha256": "0316030113f64085891375e137b8ee6799444bfeb012cc4e5db3356da6553792"
+}

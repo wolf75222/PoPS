@@ -335,10 +335,17 @@ def _async_balance_runtime(tmp_path: Path):
         owner=block_subject.owner_path,
         model_owner=OwnerPath.model("adc-686-balance-fixture"),
     )
-    state = Handle(
+    declaration = Handle(
         "rho",
         kind="state",
-        owner=block.owner_path.child(OwnerKind.BLOCK, block.local_id),
+        owner=block.model_owner_path,
+    )
+    state = declaration._with_owner(
+        block.owner_path.child(OwnerKind.BLOCK, block.local_id).instance_of(
+            declaration.owner_path
+        ),
+        declaration_ref=declaration,
+        block_ref=block,
     )
     clock = Clock("detached-async-balance", owner=OwnerPath.consumer("adc-686"))
     schedule = every(1, clock=clock)

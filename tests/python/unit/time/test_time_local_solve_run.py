@@ -24,6 +24,7 @@ ProgramContext + for_each_cell + the existing
 
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -114,21 +115,23 @@ def lorentz_program(name="lorentz_step", model=None, action=None):
 # ---- (A) codegen: pure Python, always runs ----
 print("== (A) typed local-linear solve codegen ==")
 m = lorentz_model()
-src = emit_cpp_program(lorentz_program(model=m), model=m)
+src = emit_cpp_program(lorentz_program(model=m), model=lower_and_validate(m)[0])
 for frag in (
     "pops::for_each_cell(",
     "pops::detail::mat_inverse<3>(",
     "if (solve_failure_ == 0 && !pops::detail::mat_inverse<3>(",
     "pops::Real M_[3][3];",
     "pops::Real Minv_[3][3];",
-    "pops::reduce_max(local_solve_status_",
+    "pops::all_reduce_max(pops::reduce_max_local(local_solve_status_",
+    "= ctx.prepared_execution_lane();",
+    "pops::SolveOutcome::collective_lane(",
     "pops::SolveReport local_solve_report_",
     "pops::SolveOutcome local_solve_outcome_",
     ".consume(pops::SolveConsumption::kAccept)",
     "pops::SolveStatus::kSingular",
     "pops::SolveStatus::kInvalidEvaluation",
-    "auxA(i, j, 3)",
-    "ctx.aux()",
+    "const pops::Real B_z = providers(index, 0);",
+    "ctx.template provider_values_view<1>(",
 ):
     chk(frag in src, "generated local-linear solve kernel has %r" % frag)
 chk(
@@ -159,7 +162,7 @@ Wb = Pbig.solve(
     name="Wb",
 ).consume(action=adctime.FailRun())
 Pbig.commit(endpoint_big, Wb)
-big_src = emit_cpp_program(Pbig, model=big)
+big_src = emit_cpp_program(Pbig, model=lower_and_validate(big)[0])
 chk(
     "pops::detail::mat_inverse<9>(" in big_src and "pops::Real M_[9][9];" in big_src,
     "n_cons=9 emits exact manifest-sized dense storage",
@@ -180,12 +183,15 @@ if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
 print("== (B) end-to-end: implicit Lorentz solve vs analytic rotation ==")
 
 
-def make_sim():
+def make_sim(model):
+    from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
     n = 16
     sim = System(n=n, L=1.0, periodicity=(True, True))
-    # Production-backend DSL model added as a native block; the Program drives the step.
+    # The native block and Program read the same exact physical input authority.
+    (magnetic_key,) = resolve_component_provider_packs(model.module).auxiliary
     try:
-        compiled_model = lorentz_model("lorentz_block").compile(backend="production")
+        compiled_model = model.compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
     sim.add_equation(
@@ -195,14 +201,14 @@ def make_sim():
         time=engine.Explicit(method="euler"),
     )
     bz = 3.0
-    sim.set_magnetic_field(bz * np.ones(n * n))  # constant B_z over the grid
+    sim.stage_auxiliary_input(magnetic_key, bz * np.ones(n * n))
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     mx = 0.5 * rho
     my = -0.2 * rho
     sim.set_state("plasma", np.stack([rho, mx, my]))
-    return sim, bz, np.stack([rho, mx, my])
+    return sim, bz, np.stack([rho, mx, my]), magnetic_key
 
 
 dt = 0.05
@@ -218,7 +224,7 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile fai
 
 chk(compiled.program_name == "lorentz_step", "handle carries the program name")
 
-prog, bz, U0 = make_sim()
+prog, bz, U0, magnetic_key = make_sim(program_model)
 prog.install_program(compiled.so_path)  # dlopen + ABI-key check + pops_install_program(this)
 prog.step(dt)
 U = np.array(prog.get_state("plasma"))
@@ -242,7 +248,7 @@ chk(float(np.abs(U[1] - mx0).max()) > 1e-6, "the step actually rotated the momen
 # Fault injection on the same compiled Program: a non-finite coefficient must be reduced into one
 # invalid-evaluation SolveReport, rejected before commit, and leave the accepted state untouched.
 accepted = np.array(prog.get_state("plasma"))
-prog.set_magnetic_field(np.full(accepted[0].size, np.nan))
+prog.stage_auxiliary_input(magnetic_key, np.full(accepted[0].size, np.nan))
 rejected = None
 try:
     prog.step(dt)

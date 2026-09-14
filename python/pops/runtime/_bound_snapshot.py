@@ -288,8 +288,10 @@ class MultiLayoutBoundSnapshot:
             self, "step_transaction", _freeze(transactions[0], where="step_transaction"))
         object.__setattr__(self, "params", _freeze(
             _data(install_plan.params.rows(), where="params"), where="params"))
+        from pops.runtime._auxiliary_bind import auxiliary_array_evidence
+
         object.__setattr__(self, "aux_evidence", _freeze(
-            _input_evidence(install_plan.aux, where="aux"), where="aux_evidence"))
+            auxiliary_array_evidence(install_plan.aux), where="aux_evidence"))
         object.__setattr__(self, "initial_evidence", _freeze(
             _resolved_initial_evidence(install_plan),
             where="initial_evidence"))
@@ -384,9 +386,9 @@ def _require_exact_install_inputs(engine: Any, compiled: Any, instances: Any,
     to one exact :class:`InstallPlan`; accepting aliases here would let the native runtime consume a
     different object graph while the snapshot claimed the plan's authenticated identity.
     """
-    from pops.codegen._plans import require_install_plan
+    from pops.runtime._layout_install_projection import require_install_authority
 
-    plan = require_install_plan(install_plan)
+    plan = require_install_authority(install_plan)
     expected = (
         ("compiled artifact", compiled, plan.artifact),
         ("instances", instances, plan.instances),
@@ -406,6 +408,9 @@ def _require_exact_install_inputs(engine: Any, compiled: Any, instances: Any,
 def _build_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any,
                     aux: Any, params: Any, *, layout: str,
                     install_plan: Any = None) -> BoundSnapshot:
+    from pops.runtime._auxiliary_bind import auxiliary_array_evidence
+    from pops.runtime._layout_install_projection import LayoutInstallProjection
+
     plan = None
     if install_plan is not None:
         plan = _require_exact_install_inputs(
@@ -426,13 +431,15 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any
     snapshot = BoundSnapshot(
         semantic_identity=semantic,
         artifact_identity=artifact,
-        layout={"kind": layout},
+        layout={"kind": layout, **(
+            {"layout_identity": plan.layout_id} if plan is not None
+            and type(plan) is LayoutInstallProjection else {})},
         blocks=_block_rows(engine, instances),
         field_plans={name: _data(value, where="field_plan[%r]" % name)
                      for name, value in sorted((field_plans or {}).items())},
         step_transaction=_transaction_data(compiled),
         params=rows,
-        aux_evidence=_input_evidence(aux or {}, where="aux"),
+        aux_evidence=auxiliary_array_evidence(aux or {}),
         initial_evidence=(
             _resolved_initial_evidence(plan)
             if plan is not None

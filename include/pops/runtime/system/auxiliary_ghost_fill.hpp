@@ -219,8 +219,8 @@ inline bool exact_contract_agrees(std::string_view contract, const ExecutionLane
 /// Host-mirror allocation/copy is itself rank-local and fallible, so every rank completes that
 /// inspection phase (or reports its failure) before the communicator enters the value consensus.
 template <int Dim>
-void require_finite_auxiliary_groups(const AuxiliaryStorageGroups<Dim>& groups,
-                                     const ExecutionLane* lane, std::string_view label) {
+bool auxiliary_groups_are_finite(const AuxiliaryStorageGroups<Dim>& groups,
+                                 const ExecutionLane* lane) {
   long local_nonfinite = 0;
   std::exception_ptr local_error;
   try {
@@ -243,7 +243,13 @@ void require_finite_auxiliary_groups(const AuxiliaryStorageGroups<Dim>& groups,
       local_error, lane, "auxiliary candidate finite-value inspection failed collectively");
   const long nonfinite = lane ? all_reduce_max(local_nonfinite, lane->communicator())
                               : all_reduce_max(local_nonfinite);
-  if (nonfinite != 0)
+  return nonfinite == 0;
+}
+
+template <int Dim>
+void require_finite_auxiliary_groups(const AuxiliaryStorageGroups<Dim>& groups,
+                                     const ExecutionLane* lane, std::string_view label) {
+  if (!auxiliary_groups_are_finite(groups, lane))
     throw std::runtime_error(std::string(label) +
                              " rejected: candidate valid/ghost image contains non-finite values");
 }

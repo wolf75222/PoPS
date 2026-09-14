@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pytest
 
 from pops.domain import Rectangle
@@ -143,7 +144,11 @@ def test_hyqmom15_relaxation_matches_matlab_through_native_program(
 
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     artifact.verify()
-    simulation = pops.bind(artifact, initial_state={"plasma": initial})
+    simulation = pops.bind(
+        artifact,
+        initial_state={"plasma": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(simulation, t_end=DT, max_steps=1)
 
     assert report.accepted_steps == 1
@@ -152,9 +157,34 @@ def test_hyqmom15_relaxation_matches_matlab_through_native_program(
     ).reshape(initial.shape)
     np.testing.assert_allclose(actual, expected, rtol=3.0e-11, atol=3.0e-11)
 
+    # The native transform deliberately extends the strictly positive MATLAB-reference domain:
+    # normalization and variance use ``small`` as their floor, so a zero-density transport
+    # undershoot is a finite repairable input.  Recombination retains the authored density and
+    # therefore maps this exact zero-density input to the all-zero moment vector.
+    repairable = initial.copy()
+    repairable[0, :, :] = 0.0
+    repaired = pops.bind(
+        artifact,
+        initial_state={"plasma": repairable},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    repaired_report = pops.run(repaired, t_end=DT, max_steps=1)
+    assert repaired_report.accepted_steps == 1
+    repaired_state = np.asarray(
+        repaired.state_global("plasma"), dtype=np.float64
+    ).reshape(repairable.shape)
+    assert np.isfinite(repaired_state).all()
+    np.testing.assert_array_equal(repaired_state, np.zeros_like(repaired_state))
+
+    # ``valid_if`` is exactly rho > -small.  The boundary value is the first finite density the
+    # transform refuses, and the enclosing native step must retain its pre-attempt image.
     invalid = initial.copy()
-    invalid[0, :, :] = 0.0
-    rejected = pops.bind(artifact, initial_state={"plasma": invalid})
+    invalid[0, :, :] = -relaxation.small
+    rejected = pops.bind(
+        artifact,
+        initial_state={"plasma": invalid},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     with pytest.raises(RuntimeError, match="relaxation15|local_transform"):
         pops.run(rejected, t_end=DT, max_steps=1)
     unchanged = np.asarray(

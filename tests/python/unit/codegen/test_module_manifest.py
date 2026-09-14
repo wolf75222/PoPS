@@ -56,7 +56,7 @@ def _two_fluid_module():
 def test_manifest_schema_and_spaces():
     module = _small_module()
     manifest = module.manifest()
-    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 8
+    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 9
     assert manifest.name == "m"
     assert manifest.to_dict()["owner_path"] == module.owner_path.canonical().to_data()
     assert manifest.state_spaces["U"]["components"] == ("rho", "mx", "my")
@@ -176,7 +176,7 @@ def test_to_json_round_trips_through_json_loads():
     manifest = _small_module().manifest()
     blob = manifest.to_json()
     restored = json.loads(blob)
-    assert restored["schema_version"] == 8
+    assert restored["schema_version"] == 9
     assert restored["name"] == "m"
     assert restored["operators"][0]["name"] == "fields_from_state"
     assert restored == manifest.to_dict()

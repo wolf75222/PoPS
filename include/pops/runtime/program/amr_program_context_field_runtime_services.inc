@@ -129,6 +129,9 @@ void require_hierarchy_tensor_binding_(int program_block, int components) const 
 }
 
 void synchronize_resource_generation_() const {
+  if (resource_epoch_ != runtime_->topology_epoch() ||
+      resource_generation_ != runtime_->materialization_generation())
+    prepared_resources_.clear();
   if (interface_flux_ledger_ &&
       interface_flux_ledger_->topology_epoch() != runtime_->topology_epoch())
     interface_flux_commit_guard_.reset();
@@ -200,8 +203,9 @@ void refresh_resources_() const {
       if (manager.histories.empty() || live_levels == 0 || !exact_metadata(manager.depth) ||
           !exact_metadata(manager.initialized) || !exact_metadata(manager.fill_count) ||
           !exact_metadata(manager.store_pending) || !exact_metadata(manager.slot_dt) ||
-          !exact_metadata(manager.owner) || !exact_metadata(manager.state_identity) ||
-          !exact_metadata(manager.space_identity) || !exact_metadata(manager.clock_identity) ||
+          !exact_metadata(manager.slot_sample) || !exact_metadata(manager.owner) ||
+          !exact_metadata(manager.state_identity) || !exact_metadata(manager.space_identity) ||
+          !exact_metadata(manager.clock_identity) ||
           !exact_metadata(manager.interpolation_identity))
         throw std::runtime_error(
             "AMR Program topology changed while retained histories still name the prior layouts");
@@ -213,6 +217,7 @@ void refresh_resources_() const {
             manager.depth.at(key) != static_cast<int>(ring.size()) || manager.initialized.at(key) ||
             manager.fill_count.at(key) != 0 || manager.store_pending.at(key) ||
             manager.slot_dt.at(key).size() != ring.size() ||
+            manager.slot_sample.at(key).size() != ring.size() ||
             !std::all_of(
                 manager.slot_dt.at(key).begin(), manager.slot_dt.at(key).end(),
                 [](Real dt) { return dt == Real(0); }) ||
@@ -266,8 +271,8 @@ void refresh_resources_() const {
     } catch (...) {
       provisional_error = std::current_exception();
     }
-    rethrow_accepted_history_remap_collective_failure_(provisional_error,
-                                                       prepared_execution_lane());
+    collectively_rethrow_exception(provisional_error, prepared_execution_lane(),
+                                   "AMR Program accepted history remap failed collectively");
     history_flux_expressions_.swap(provisional_flux);
   }
   scratches_.clear();
@@ -280,8 +285,8 @@ void refresh_resources_() const {
   // synchronize_resource_generation_ may allocate a ledger after its own prepared-lane work.
   // Converge that local tail failure before refresh_accepted_hierarchy_state_after_remap_ enters
   // its later temporal/subcycling collectives; the enclosing AcceptedSnapshot owns rollback.
-  rethrow_accepted_history_remap_collective_failure_(synchronization_error,
-                                                     prepared_execution_lane());
+  collectively_rethrow_exception(synchronization_error, prepared_execution_lane(),
+                                 "AMR Program accepted history remap failed collectively");
   if (active_level_ >= nlev())
     active_level_ = 0;
 }
@@ -305,8 +310,9 @@ static field_type make_scratch_(const field_type& prototype, int ncomp, Extent<D
 }
 
 struct CoupledJacvecLevelScratch {
-  std::array<std::unique_ptr<field_type>, 2> residual;
-  std::array<std::unique_ptr<field_type>, 2> coupled;
+  std::vector<std::unique_ptr<field_type>> residual;
+  std::vector<std::unique_ptr<field_type>> coupled;
+  std::vector<field_type*> program_candidates;
 };
 
 struct CoupledJacvecScratch {
@@ -328,13 +334,18 @@ void prepare_coupled_jacvec_scratch_() const {
   std::unique_ptr<CoupledJacvecScratch> candidate;
   std::exception_ptr preparation_error;
   try {
-    if (facade_->n_blocks() == 2) {
+    if (facade_->n_blocks() >= 2) {
       candidate = std::make_unique<CoupledJacvecScratch>();
       candidate->topology_epoch = topology_epoch;
       candidate->materialization_generation = materialization_generation;
       candidate->levels.resize(runtime_->hierarchy().num_levels());
-      for (std::size_t level = 0; level < candidate->levels.size(); ++level)
-        for (int runtime_block = 0; runtime_block < 2; ++runtime_block) {
+      for (std::size_t level = 0; level < candidate->levels.size(); ++level) {
+        auto& workspace = candidate->levels[level];
+        const auto blocks = static_cast<std::size_t>(facade_->n_blocks());
+        workspace.residual.resize(blocks);
+        workspace.coupled.resize(blocks);
+        workspace.program_candidates.resize(blocks);
+        for (int runtime_block = 0; runtime_block < facade_->n_blocks(); ++runtime_block) {
           const field_type& prototype =
               facade_->prepared_amr_block_state(runtime_block, static_cast<int>(level));
           auto residual = std::make_unique<field_type>(prototype.layout(), prototype.distribution(),
@@ -345,11 +356,10 @@ void prepare_coupled_jacvec_scratch_() const {
                                                       prototype.ghosts());
           residual->set_val(Real(0));
           coupled->set_val(Real(0));
-          candidate->levels[level].residual[static_cast<std::size_t>(runtime_block)] =
-              std::move(residual);
-          candidate->levels[level].coupled[static_cast<std::size_t>(runtime_block)] =
-              std::move(coupled);
+          workspace.residual[static_cast<std::size_t>(runtime_block)] = std::move(residual);
+          workspace.coupled[static_cast<std::size_t>(runtime_block)] = std::move(coupled);
         }
+      }
     }
   } catch (...) {
     preparation_error = std::current_exception();
@@ -375,10 +385,17 @@ CoupledJacvecLevelScratch& require_coupled_jacvec_scratch_(
   const int first_runtime = sys_block(first_block);
   const int second_runtime = sys_block(second_block);
   auto& level = coupled_jacvec_scratch_->levels[static_cast<std::size_t>(active_level_)];
+  const auto blocks = static_cast<std::size_t>(n_blocks());
+  if (first_runtime == second_runtime || level.residual.size() != blocks ||
+      level.coupled.size() != blocks || level.program_candidates.size() != blocks)
+    throw std::logic_error("AMR coupled Jacobian scratch differs from its complete carrier");
+  for (std::size_t block = 0; block < blocks; ++block)
+    if (!level.residual[block] || !level.coupled[block])
+      throw std::logic_error("AMR coupled Jacobian complete carrier scratch is incomplete");
   const auto require_block = [&](int runtime_block, const field_type& state,
                                  const field_type& result) {
     const std::size_t index = static_cast<std::size_t>(runtime_block);
-    if (runtime_block < 0 || runtime_block >= 2 || !level.residual[index] || !level.coupled[index])
+    if (runtime_block < 0 || index >= blocks || !level.residual[index] || !level.coupled[index])
       throw std::logic_error("AMR coupled Jacobian block scratch is incomplete");
     const field_type& prepared_state = *level.coupled[index];
     const field_type& prepared_result = *level.residual[index];
@@ -396,22 +413,28 @@ CoupledJacvecLevelScratch& require_coupled_jacvec_scratch_(
 }
 
 field_type& persistent_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
-                                const field_type& prototype, int ncomp, Extent<Dim> ghosts) const {
+                                const field_type& prototype, int ncomp, Extent<Dim> ghosts,
+                                bool reset = true) const {
   if (value_id < 0 || subslot < 0)
     throw std::invalid_argument("AMR Program scratch identity must be non-negative");
   refresh_resources_();
   const int runtime_owner = scratch_prototype_owner_(prototype);
   const ScratchKey key{kind, active_level_, runtime_owner, value_id, subslot};
   auto found = scratches_.find(key);
-  if (found == scratches_.end())
+  if (found == scratches_.end()) {
+    if (!reset)
+      throw std::logic_error("AMR Program retained scalar has no live producer in this attempt");
     found = scratches_.emplace(key, make_scratch_(prototype, ncomp, ghosts)).first;
+  }
   field_type& result = found->second;
   if (result.layout() != prototype.layout() || result.distribution() != prototype.distribution() ||
       result.local_rank() != prototype.local_rank() || result.ncomp() != ncomp ||
       result.ghosts() != ghosts)
     throw std::runtime_error("AMR Program scratch identity changed its exact field contract");
-  result.set_val(Real(0));
-  clear_active_flux_expression_(result);
+  if (reset) {
+    result.set_val(Real(0));
+    clear_active_flux_expression_(result);
+  }
   return result;
 }
 
@@ -432,7 +455,7 @@ int scratch_prototype_owner_(const field_type& prototype) const {
       record(runtime_block);
   }
   for (const auto& [key, scratch] : scratches_)
-    if (&prototype == &scratch)
+    if (&prototype == &scratch && std::get<1>(key) == active_level_)
       record(std::get<2>(key));
   const auto& manager = runtime_state().hist_;
   for (const auto& [key, ring] : manager.histories) {

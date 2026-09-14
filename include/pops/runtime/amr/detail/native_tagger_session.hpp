@@ -8,7 +8,7 @@
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
-#include <pops/runtime/program/step_transaction.hpp>
+#include <pops/runtime/program/collective_step_rejection.hpp>
 
 #include <algorithm>
 #include <array>
@@ -50,40 +50,18 @@ class NativeTaggerSession {
       std::uint32_t periodic_axes, const ExecutionLane& lane) {
     const CommunicatorView communicator = lane.communicator();
     std::optional<std::unique_ptr<NativeTaggerSession>> candidate;
-    enum class ExceptionKind : long { None = 0, StepRejected = 1, Ordinary = 2 };
-    ExceptionKind exception_kind = ExceptionKind::None;
-    std::string rejection_payload;
-    std::exception_ptr local_error;
-    try {
-      if (comm_active() && !communicator.active())
-        throw std::invalid_argument(
-            "native AMR Tagger requires an explicit active execution communicator");
-      candidate.emplace(prepare_local_(std::move(component), std::move(spec), program,
-                                       fields_by_level, layouts, budgets, topology_generation,
-                                       periodic_axes, lane));
-    } catch (const ::pops::runtime::program::StepAttemptRejected& rejected) {
-      try {
-        rejection_payload = encode_step_rejection_(rejected);
-        exception_kind = ExceptionKind::StepRejected;
-      } catch (...) {
-        exception_kind = ExceptionKind::Ordinary;
-        local_error = std::current_exception();
-      }
-    } catch (...) {
-      exception_kind = ExceptionKind::Ordinary;
-      local_error = std::current_exception();
-    }
-    const long ordinary = exception_kind == ExceptionKind::Ordinary ? 1L : 0L;
-    const long rejected = exception_kind == ExceptionKind::StepRejected ? 1L : 0L;
-    if (all_reduce_max(ordinary, communicator) != 0) {
-      if (communicator.size() == 1 && local_error)
-        std::rethrow_exception(local_error);
-      throw std::runtime_error("native AMR Tagger preparation failed on another rank");
-    }
-    if (all_reduce_max(rejected, communicator) != 0)
-      throw_collective_rejection_(rejection_payload, rejected, communicator);
+    ::pops::runtime::program::collective_step_rejection_phase(
+        communicator, rejection_contract_, "native AMR Tagger preparation failed on another rank",
+        [&] {
+          if (comm_active() && !communicator.active())
+            throw std::invalid_argument(
+                "native AMR Tagger requires an explicit active execution communicator");
+          candidate.emplace(prepare_local_(std::move(component), std::move(spec), program,
+                                           fields_by_level, layouts, budgets, topology_generation,
+                                           periodic_axes, lane));
+        });
     std::string rank_budget_contract;
-    local_error = nullptr;
+    std::exception_ptr local_error;
     try {
       rank_budget_contract =
           tagging_detail::exact_rank_ordered_budget_contract(budgets, communicator);
@@ -137,36 +115,14 @@ class NativeTaggerSession {
       throw std::runtime_error("native AMR Tagger collective execution preflight failed");
 
     Level& level = storage_->levels[level_index];
-    enum class ExceptionKind : long { None = 0, StepRejected = 1, Ordinary = 2 };
-    ExceptionKind exception_kind = ExceptionKind::None;
-    std::string rejection_payload;
-    std::exception_ptr local_error;
-    try {
-      for (Patch& patch : level.patches)
-        execute_patch_(*storage_, patch, layout.domain(), spacing, level_index, tick,
-                       physical_time);
-      device_fence();
-    } catch (const ::pops::runtime::program::StepAttemptRejected& rejected) {
-      try {
-        rejection_payload = encode_step_rejection_(rejected);
-        exception_kind = ExceptionKind::StepRejected;
-      } catch (...) {
-        exception_kind = ExceptionKind::Ordinary;
-        local_error = std::current_exception();
-      }
-    } catch (...) {
-      exception_kind = ExceptionKind::Ordinary;
-      local_error = std::current_exception();
-    }
-    const long ordinary = exception_kind == ExceptionKind::Ordinary ? 1L : 0L;
-    const long rejected = exception_kind == ExceptionKind::StepRejected ? 1L : 0L;
-    if (all_reduce_max(ordinary, storage_->communicator) != 0) {
-      if (storage_->communicator.size() == 1 && local_error)
-        std::rethrow_exception(local_error);
-      throw std::runtime_error("native AMR Tagger failed on another rank");
-    }
-    if (all_reduce_max(rejected, storage_->communicator) != 0)
-      throw_collective_rejection_(rejection_payload, rejected, storage_->communicator);
+    ::pops::runtime::program::collective_step_rejection_phase(
+        storage_->communicator, rejection_contract_, "native AMR Tagger failed on another rank",
+        [&] {
+          for (Patch& patch : level.patches)
+            execute_patch_(*storage_, patch, layout.domain(), spacing, level_index, tick,
+                           physical_time);
+          device_fence();
+        });
 
     if (level.replicated) {
       std::size_t offset = 0;
@@ -296,130 +252,8 @@ class NativeTaggerSession {
     bool prepared = false;
   };
 
-  struct StepRejectionEnvelope {
-    SolveStatus status = SolveStatus::kInvalidEvaluation;
-    ::pops::runtime::program::StepAttemptDisposition disposition =
-        ::pops::runtime::program::StepAttemptDisposition::kReject;
-    std::uint32_t reason_code = 0;
-    std::string phase{};
-    std::string detail{};
-  };
-
-  static void append_u64_(std::string& bytes, std::uint64_t value) {
-    for (int shift = 56; shift >= 0; shift -= 8)
-      bytes.push_back(static_cast<char>((value >> shift) & 0xffu));
-  }
-
-  static std::uint64_t read_u64_(std::string_view bytes, std::size_t& cursor) {
-    if (cursor > bytes.size() || bytes.size() - cursor < 8)
-      throw std::runtime_error("collective AMR Tagger rejection envelope is truncated");
-    std::uint64_t value = 0;
-    for (int byte = 0; byte < 8; ++byte)
-      value = (value << 8u) | static_cast<unsigned char>(bytes[cursor++]);
-    return value;
-  }
-
-  static void append_text_(std::string& bytes, std::string_view value) {
-    append_u64_(bytes, static_cast<std::uint64_t>(value.size()));
-    bytes.append(value.data(), value.size());
-  }
-
-  static std::string read_text_(std::string_view bytes, std::size_t& cursor) {
-    const std::uint64_t encoded_size = read_u64_(bytes, cursor);
-    if (encoded_size > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
-      throw std::overflow_error("collective AMR Tagger rejection text exceeds size_t");
-    const std::size_t size = static_cast<std::size_t>(encoded_size);
-    if (cursor > bytes.size() || size > bytes.size() - cursor)
-      throw std::runtime_error("collective AMR Tagger rejection text is truncated");
-    std::string result(bytes.substr(cursor, size));
-    cursor += size;
-    return result;
-  }
-
-  static std::string encode_step_rejection_(
-      const ::pops::runtime::program::StepAttemptRejected& rejected) {
-    std::string bytes("pops.amr-tagger.step-rejection.v1");
-    append_u64_(bytes, static_cast<std::uint64_t>(rejected.status()));
-    append_u64_(bytes, static_cast<std::uint64_t>(rejected.disposition()));
-    append_u64_(bytes, rejected.reason_code());
-    append_text_(bytes, rejected.phase());
-    append_text_(bytes, rejected.detail());
-    return bytes;
-  }
-
-  static StepRejectionEnvelope decode_step_rejection_(std::string_view bytes) {
-    constexpr std::string_view prefix = "pops.amr-tagger.step-rejection.v1";
-    if (!bytes.starts_with(prefix))
-      throw std::runtime_error("collective AMR Tagger rejection has another schema");
-    std::size_t cursor = prefix.size();
-    const std::uint64_t status = read_u64_(bytes, cursor);
-    const std::uint64_t disposition = read_u64_(bytes, cursor);
-    const std::uint64_t reason_code = read_u64_(bytes, cursor);
-    if (status > static_cast<std::uint64_t>(SolveStatus::kSafeguardFailure) ||
-        disposition >
-            static_cast<std::uint64_t>(::pops::runtime::program::StepAttemptDisposition::kReject) ||
-        reason_code > std::numeric_limits<std::uint32_t>::max())
-      throw std::runtime_error("collective AMR Tagger rejection has invalid typed fields");
-    StepRejectionEnvelope result;
-    result.status = static_cast<SolveStatus>(status);
-    result.disposition = static_cast<::pops::runtime::program::StepAttemptDisposition>(disposition);
-    result.reason_code = static_cast<std::uint32_t>(reason_code);
-    result.phase = read_text_(bytes, cursor);
-    result.detail = read_text_(bytes, cursor);
-    if (cursor != bytes.size() || result.phase.empty() || result.detail.empty())
-      throw std::runtime_error("collective AMR Tagger rejection envelope is incomplete");
-    return result;
-  }
-
-  [[noreturn]] static void throw_collective_rejection_(const std::string& rejection_payload,
-                                                       long rejected,
-                                                       const CommunicatorView& communicator) {
-    std::string selected_payload;
-    if (all_reduce_min(rejected, communicator) != 0) {
-      if (!all_ranks_agree_exact_ordered_byte_pairs(
-              {{"amr-tagger-step-rejection", rejection_payload}}, communicator))
-        throw std::runtime_error("collective AMR Tagger rejection fields differ between ranks");
-      selected_payload = rejection_payload;
-    } else {
-      const long local_root = rejected != 0 ? static_cast<long>(communicator.rank())
-                                            : static_cast<long>(communicator.size());
-      const long root = all_reduce_min(local_root, communicator);
-      if (root < 0 || root >= static_cast<long>(communicator.size()))
-        throw std::runtime_error("collective AMR Tagger rejection lost its typed envelope");
-      const bool authoritative = communicator.rank() == root;
-      const long invalid_length =
-          authoritative && rejection_payload.size() >
-                               static_cast<std::size_t>(std::numeric_limits<long>::max())
-              ? 1L
-              : 0L;
-      if (all_reduce_max(invalid_length, communicator) != 0)
-        throw std::length_error("collective AMR Tagger rejection exceeds long capacity");
-      const long encoded_length = all_reduce_max(
-          authoritative ? static_cast<long>(rejection_payload.size()) : 0L, communicator);
-      if (encoded_length <= 0)
-        throw std::runtime_error("collective AMR Tagger rejection envelope is empty");
-      long allocation_failed = 0;
-      try {
-        if (authoritative)
-          selected_payload = rejection_payload;
-        selected_payload.resize(static_cast<std::size_t>(encoded_length));
-      } catch (...) {
-        allocation_failed = 1;
-      }
-      if (all_reduce_max(allocation_failed, communicator) != 0)
-        throw std::bad_alloc();
-      broadcast_bytes_inplace(selected_payload.data(), selected_payload.size(),
-                              static_cast<int>(root), communicator);
-      const long mismatch = rejected != 0 && rejection_payload != selected_payload ? 1L : 0L;
-      if (all_reduce_max(mismatch, communicator) != 0)
-        throw std::runtime_error(
-            "collective AMR Tagger rejection fields differ between rejecting ranks");
-    }
-    const StepRejectionEnvelope envelope = decode_step_rejection_(selected_payload);
-    throw ::pops::runtime::program::StepAttemptRejected(envelope.status, envelope.disposition,
-                                                        envelope.reason_code, envelope.phase,
-                                                        envelope.detail);
-  }
+  static constexpr ::pops::runtime::program::StepRejectionContract rejection_contract_{
+      "pops.amr-tagger.step-rejection.v1", "amr-tagger-step-rejection", true, true};
 
   static void require_component_status_(int transport_code, const PopsComponentStatusV1& status,
                                         std::string_view phase) {

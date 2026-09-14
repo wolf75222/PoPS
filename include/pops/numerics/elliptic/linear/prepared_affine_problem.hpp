@@ -9,6 +9,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/linear/collective_prepared_owner.hpp>
 #include <pops/numerics/elliptic/linear/prepared_vector_metric.hpp>
 #include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/parallel/comm.hpp>
@@ -106,9 +107,12 @@ struct MaterializePreparedNullspaceBasisKernel {
   int component;
   bool masked;
   bool covered;
+  int component_count = 1;
   POPS_HD void operator()(const Index<Dim>& index) const {
-    const Real basis = masked ? mask(index, 0) : Real(1);
-    values(index, component) = basis * (covered ? coverage(index, 0) : Real(1));
+    for (int offset = 0; offset < component_count; ++offset) {
+      const Real basis = masked ? mask(index, offset) : Real(1);
+      values(index, component + offset) = basis * (covered ? coverage(index, 0) : Real(1));
+    }
   }
 };
 
@@ -1115,7 +1119,8 @@ class PreparedNullspacePolicy {
           for_each_cell(materialized.box(local),
                         detail::MaterializePreparedNullspaceBasisKernel<Dim>{
                             materialized.fab(local).view(), mask_values, coverage_values,
-                            basis.field_component, mask != nullptr, coverage != nullptr});
+                            basis.field_component, mask != nullptr, coverage != nullptr,
+                            basis.component_count});
         }
       }
 
@@ -1126,7 +1131,10 @@ class PreparedNullspacePolicy {
       metric_scratch.assign(metric.reduction_scratch_value_count(), 0.0);
       for (std::size_t left = 0; left < plan_.bases.size(); ++left) {
         for (std::size_t right = left; right < plan_.bases.size(); ++right) {
-          if (plan_.bases[left].field_component == plan_.bases[right].field_component &&
+          if (plan_.bases[left].field_component <
+                  plan_.bases[right].field_component + plan_.bases[right].component_count &&
+              plan_.bases[right].field_component <
+                  plan_.bases[left].field_component + plan_.bases[left].component_count &&
               plan_.bases[left].measure(first_level_) != plan_.bases[right].measure(first_level_))
             throw std::invalid_argument(
                 "prepared nullspace bases disagree on the single-field cell measure");
@@ -1452,7 +1460,7 @@ struct KrylovCollectivePayload {
       4u * kFingerprintBytes + sizeof(int) + kMaximumGhostBytes + 3u * sizeof(std::uint8_t) +
       8u * sizeof(std::uint64_t) + kSnapshotBytes;
   static constexpr std::size_t kControlsBytes =
-      kFingerprintBytes + 2u * sizeof(std::uint64_t) + sizeof(int);
+      kFingerprintBytes + 2u * sizeof(std::uint64_t) + sizeof(int) + 3u * sizeof(std::uint8_t);
   static constexpr std::size_t kFieldContractBytes = sizeof(int) + kMaximumGhostBytes;
   static constexpr std::size_t kMaximumKnownPayloadBytes =
       kPreparedProblemAccessBytes + kWorkspaceStateBytes + kControlsBytes +
@@ -1711,6 +1719,41 @@ class PreparedAffineLinearProblem {
   static_assert(std::is_nothrow_move_constructible_v<OperatorSnapshotProbe>);
   static_assert(std::is_nothrow_move_constructible_v<PreparedVectorDistribution<Dim>>);
   static_assert(std::is_nothrow_move_constructible_v<PreparedVectorMetric<Dim>>);
+
+  /// Exact, already-owned inputs for the collective shared-owner factory. Construct this record
+  /// in the factory callback, including provider conversions and any allocating function copies.
+  struct ConstructionInputs {
+    std::reference_wrapper<const MultiFab<Dim>> prototype;
+    PreparedAffineOperatorProvider<Dim> operator_provider;
+    PreparedLinearPreconditioner<Dim> preconditioner;
+    LinearOperatorProperties properties;
+    KrylovFootprint<Dim> footprint;
+    PreparedNullspacePolicy<Dim> nullspace_policy;
+    OperatorSnapshotProbe snapshot_probe;
+    PreparedResourceFn freeze_resources;
+    PreparedVectorDistribution<Dim> vector_distribution;
+    PreparedVectorMetric<Dim> metric{};
+  };
+
+  /// All parent ranks must enter this factory in canonical order. The callback performs local
+  /// work only; prepare collective context authorities before entry and keep their borrows alive.
+  template <class Prepare,
+            class Allocator = std::allocator<std::optional<PreparedAffineLinearProblem>>>
+  [[nodiscard]] static std::shared_ptr<PreparedAffineLinearProblem> make_shared_collectively(
+      const ExecutionCommunicator& parent, std::string_view lane_identity, Prepare&& prepare,
+      const Allocator& allocator = {}) {
+    static_assert(std::is_nothrow_move_constructible_v<ConstructionInputs>);
+    auto candidate =
+        detail::prepare_shared_candidate<PreparedAffineLinearProblem, ConstructionInputs>(
+            parent, std::forward<Prepare>(prepare), allocator);
+    auto& input = candidate.inputs;
+    candidate.owner->emplace(parent, lane_identity, input.prototype.get(),
+                             std::move(input.operator_provider), std::move(input.preconditioner),
+                             input.properties, input.footprint, std::move(input.nullspace_policy),
+                             std::move(input.snapshot_probe), std::move(input.freeze_resources),
+                             std::move(input.vector_distribution), std::move(input.metric));
+    return {candidate.owner, std::addressof(**candidate.owner)};
+  }
 
   PreparedAffineLinearProblem(const MultiFab<Dim>& prototype,
                               PreparedAffineOperatorProvider<Dim> operator_provider,
@@ -2248,6 +2291,8 @@ class PreparedAffineLinearProblem {
       detail::fingerprint_mix(hash, basis.recipe_identity);
       detail::fingerprint_mix(
           hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(basis.field_component)));
+      detail::fingerprint_mix(
+          hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(basis.component_count)));
       detail::fingerprint_mix(hash, static_cast<std::uint64_t>(basis.masks.size()));
       for (std::size_t level = 0; level < basis.masks.size(); ++level) {
         const auto& mask = basis.masks[level];

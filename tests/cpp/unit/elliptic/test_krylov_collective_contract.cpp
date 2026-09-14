@@ -1124,6 +1124,18 @@ int run_krylov_collective_contract(int argc, char** argv) {
         },
         "collective contract differs"));
   }
+  if (n_ranks() > 1) {
+    TestKrylovControls controls = valid;
+    if (rank == 0)
+      controls.failure_actions.iteration_limit = SolveAction::kRejectAttempt;
+    const long calls_before = operator_calls.load(std::memory_order_relaxed);
+    require(uniformly_rejected(
+        [&] {
+          (void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+        },
+        "collective contract differs"));
+    require(operator_calls.load(std::memory_order_relaxed) == calls_before);
+  }
   {
     const TestField& local_rhs = rank == 0 ? iterate : rhs;
     require(uniformly_rejected(

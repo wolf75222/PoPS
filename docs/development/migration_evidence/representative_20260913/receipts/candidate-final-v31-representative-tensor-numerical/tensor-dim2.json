@@ -1,0 +1,36 @@
+{
+  "schema": "pops.tensor-diffusion.v1",
+  "rows": [
+    {
+      "dimension": 2,
+      "cells_per_axis": 16,
+      "l2_rate_error": 0.8457951814998375,
+      "inventory_error": 5.204170427930421e-18,
+      "entropy_before": 13.088859016062854,
+      "entropy_after": 13.08769092191551,
+      "accepted_steps": 1
+    },
+    {
+      "dimension": 2,
+      "cells_per_axis": 32,
+      "l2_rate_error": 0.2175645986426829,
+      "inventory_error": 9.107298248878237e-18,
+      "entropy_before": 13.115814218379299,
+      "entropy_after": 13.115505266089649,
+      "accepted_steps": 1
+    },
+    {
+      "dimension": 2,
+      "cells_per_axis": 64,
+      "l2_rate_error": 0.05477702262968171,
+      "inventory_error": 2.0599841277224584e-18,
+      "entropy_before": 13.122694017852808,
+      "entropy_after": 13.122615683939435,
+      "accepted_steps": 1
+    }
+  ],
+  "orders": [
+    1.958864515998907,
+    1.989801068835823
+  ]
+}

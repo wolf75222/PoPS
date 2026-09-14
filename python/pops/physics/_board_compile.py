@@ -13,11 +13,24 @@ class _BoardCompileMixin(_BoardModel):
     def __pops_compiler_lowering__(self) -> Any:
         """Pair the executable formula emitter with its operator-first authority."""
         from pops.codegen._compiler_lowering import CompilerLowering
+        from pops.model.state_symbols import native_formula_view
 
+        source_module = self.module
+        emitter = self._dsl
+        if self._multi_module is None:
+            emitter = native_formula_view(
+                self._dsl, source_module, quantity_handles=tuple(self._states.values()))
+
+        from pops.codegen.diffusion_lowering import prepare_diffusion_carrier
+        prepare_diffusion_carrier(emitter, source_module,
+                                  quantity_handles=tuple(self._states.values()))
+        from pops.codegen.state_storage_lowering import prepare_source_storage_carrier
+        prepare_source_storage_carrier(emitter, source_module)
         return CompilerLowering(
-            emit_model=self._dsl,
-            source_module=self.module,
+            emit_model=emitter,
+            source_module=source_module,
             facade=self,
+            owns_emitter=self._multi_module is None,
         )
 
 

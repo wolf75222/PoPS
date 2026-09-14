@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <pops/runtime/system/field_topology_report.hpp>
+
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/identity/prepared_provider_options.hpp>
@@ -87,6 +89,7 @@ class ExactAmrFieldSolver {
   virtual void install_nullspace(
       PreparedFieldNullspace<Dim> prepared,
       std::vector<PreparedVectorDistribution<Dim>> level_distributions) = 0;
+  virtual std::vector<field::FieldTopologyReportRow> topology_report() const { return {}; }
   virtual int maximum_iterations() const noexcept = 0;
   virtual SolveReport solve(const ExecutionLane& lane) = 0;
 };

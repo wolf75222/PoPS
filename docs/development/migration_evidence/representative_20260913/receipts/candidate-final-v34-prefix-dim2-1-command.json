@@ -1,0 +1,25 @@
+{
+  "source": "175b0883f9f0752f5710ef3db2c7d7d6802e400a",
+  "command": [
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v34-dim2-env/bin/python",
+    "-m",
+    "pip",
+    "install",
+    "--ignore-installed",
+    "--no-deps",
+    "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v34-wheel-dim2/pops-1.0.0-cp312-cp312-macosx_26_0_arm64.whl"
+  ],
+  "environment": {
+    "PYTHONNOUSERSITE": "1",
+    "PYTHONPATH": "",
+    "POPS_NATIVE_DIM": "2",
+    "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v34-dim2-env/lib/python3.12/site-packages/pops/include",
+    "POPS_INCLUDE_DIR": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-candidate-final-v34-dim2-env/lib/python3.12/site-packages/pops/include",
+    "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+    "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908",
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_REQUIRE_NATIVE_TESTS": "1"
+  },
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate"
+}

@@ -87,6 +87,9 @@ def _archive_byte_capacity(
 
 
 def _program_for_install(install_plan: Any) -> tuple[Any, dict[str, int]]:
+    from pops.runtime._layout_install_projection import LayoutInstallProjection
+    if type(install_plan) is LayoutInstallProjection:
+        install_plan.verify()
     artifact = install_plan.artifact
     program_handle = artifact.program
     if program_handle is None or getattr(program_handle, "program", None) is None:
@@ -200,6 +203,7 @@ def _history_capacity(
                     "history_init_" + suffix,
                     "history_fill_count_" + suffix,
                     "history_slot_dt_" + suffix,
+                    "history_sample_identity_" + suffix,
                 )
             )
             for slot in range(depth):
@@ -208,6 +212,11 @@ def _history_capacity(
                     if level is None
                     else "history_%s_level_%d_%d" % (name, level, slot)
                 )
+            # POPSHID1: fixed magic/name-length/level/depth, exact UTF-8 name, four u64 per slot.
+            identity_bytes = _add(32, len(name.encode("utf-8")), where="history identity header")
+            identity_bytes = _add(identity_bytes, _mul(depth, 32, where="history identity slots"),
+                                  where="history identity bytes")
+            data_bytes = _add(data_bytes, identity_bytes, where="history identity budget")
             values = _mul(level_cells, ncomp, where="history scalar budget")
             values = _mul(values, depth, where="history scalar budget")
             data_bytes = _add(
@@ -451,6 +460,9 @@ def _checkpoint_member_names(
         "program_last_dt",
     )
     runtime = (
+        "program_exchange_state",
+        "program_exchange_offsets",
+        "continuation_transition_plan",
         "runtime_consumer_graph",
         "runtime_consumer_cursors",
         "runtime_consumer_diagnostics",
@@ -500,6 +512,8 @@ def _checkpoint_member_names(
             SPATIAL_CONTRACT_KEY,
             *cadence,
             "program_accepted_state_source_authority",
+            "program_history_flux_snapshot_state",
+            "program_history_flux_snapshot_offsets",
             *history_names,
         ]
         for block in block_names:
@@ -535,6 +549,7 @@ def _common_budget(
     auxiliary_components: int,
     accepted_program_bytes: int,
     source_authority_bytes: int,
+    history_flux_snapshot_bytes: int,
     structural_bytes: int,
     field_provider_manifest_characters: int,
     program: Any,
@@ -591,6 +606,17 @@ def _common_budget(
         _mul(len(cells), auxiliary_metadata_bytes, where="auxiliary metadata budget"),
         where="auxiliary checkpoint payload budget",
     )
+    from pops.runtime._checkpoint_exchanges import exchange_checkpoint_byte_capacity
+    from pops.runtime._continuation_transitions import prepare_bind_continuation
+    prepare_bind_continuation(
+        owner, install_plan, program=program, block_names=tuple(block_nvars_by_name),
+        field_names=field_names)
+    from pops.output._checkpoint_collective import checkpoint_topology
+    exchange_bytes = exchange_checkpoint_byte_capacity(
+        program, cells=cells, dimension=len(shape),
+        rank_capacity=max(rank_capacity, checkpoint_topology(owner).size),
+        resolved_plan=install_plan.artifact.plan)
+    owner._checkpoint_exchange_byte_capacity = exchange_bytes
     program_bytes = _mul(
         accepted_program_bytes,
         1,
@@ -612,6 +638,8 @@ def _common_budget(
         cache_bytes,
         auxiliary_bytes,
         program_bytes,
+        history_flux_snapshot_bytes,
+        exchange_bytes,
         source_authority_bytes,
         structural_bytes,
         migration_bytes,
@@ -630,10 +658,13 @@ def _common_budget(
     )
     consumer_identity, consumer_count, consumer_data = _consumer_evidence(install_plan)
     temporal_manifest = program.temporal_manifest()
+    from pops.runtime._layout_install_projection import LayoutInstallProjection
     control_data = {
         "artifact": install_plan.artifact.artifact_identity.token,
         "bind": install_plan.bind_identity.token,
         "runtime_kind": runtime_kind,
+        "layout_identity": (install_plan.layout_id
+                            if type(install_plan) is LayoutInstallProjection else None),
         "blocks": list(zip(block_names, block_nvars, strict=True)),
         "block_variables": {
             name: list(owner._s.variable_names(name, "conservative")) for name in block_names
@@ -643,6 +674,9 @@ def _common_budget(
         "history_storage": [list(row) for row in history_evidence],
         "cache": cache_evidence,
         "temporal": temporal_manifest,
+        "continuation": owner._continuation_transition_plan.to_data(),
+        "accepted_exchange_bytes": exchange_bytes,
+        "history_flux_snapshot_bytes": history_flux_snapshot_bytes,
         "consumer_graph": consumer_data,
         "consumer_identity": consumer_identity,
         "consumer_count": consumer_count,
@@ -684,6 +718,7 @@ def _common_budget(
             "auxiliary": [auxiliary_metadata_bytes, auxiliary_components],
             "accepted_program_bytes": accepted_program_bytes,
             "source_authority_bytes": source_authority_bytes,
+            "history_flux_snapshot_bytes": history_flux_snapshot_bytes,
             "structural_bytes": structural_bytes,
             "field_provider_manifest_characters": field_provider_manifest_characters,
             "members": list(names),
@@ -706,6 +741,7 @@ def _common_budget(
             text_bytes,
             accepted_program_bytes,
             source_authority_bytes,
+            history_flux_snapshot_bytes,
             migration_bytes,
             1,
         ),
@@ -735,6 +771,7 @@ def install_uniform_checkpoint_resource_budget(owner: Any, install_plan: Any) ->
         auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
         accepted_program_bytes=0,
         source_authority_bytes=0,
+        history_flux_snapshot_bytes=0,
         structural_bytes=0,
         field_provider_manifest_characters=0,
         program=program,
@@ -773,6 +810,21 @@ def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> Non
     )
     source_authority_bytes = _capacity(
         program_state[1], where="native source Program authority capacity", positive=True
+    )
+    snapshot_capacity_provider = getattr(
+        owner._s, "_checkpoint_program_history_flux_snapshot_capacity", None
+    )
+    if not callable(snapshot_capacity_provider):
+        raise TypeError("AMR native history-flux snapshot capacity is unavailable")
+    snapshot_shard_capacity = _capacity(
+        snapshot_capacity_provider(), where="native history-flux snapshot shard capacity"
+    )
+    # Capture compacts every live ownership shard into one rank-independent native image. Its
+    # carrier therefore has exactly one payload vector and the canonical [0, size] offsets pair.
+    history_flux_snapshot_bytes = _add(
+        snapshot_shard_capacity,
+        2 * 8,
+        where="history-flux snapshot archive capacity",
     )
     artifact = install_plan.artifact
     field_slots, field_manifest_characters, field_manifest_bytes = (
@@ -824,6 +876,7 @@ def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> Non
         auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
         accepted_program_bytes=accepted_capacity,
         source_authority_bytes=source_authority_bytes,
+        history_flux_snapshot_bytes=history_flux_snapshot_bytes,
         structural_bytes=structural_bytes,
         field_provider_manifest_characters=field_manifest_characters,
         program=program,
@@ -869,6 +922,7 @@ def install_layout_checkpoint_resource_budget(
         auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
         accepted_program_bytes=0,
         source_authority_bytes=0,
+        history_flux_snapshot_bytes=0,
         structural_bytes=0,
         field_provider_manifest_characters=0,
         program=program,
@@ -970,8 +1024,11 @@ def aggregate_checkpoint_resource_budgets(
     archive_bytes = _archive_byte_capacity(
         total, tuple(member_names), where="multi-layout container archive budget"
     )
+    kinds = {row.runtime_kind for row in rows}
+    if kinds not in ({"uniform"}, {"amr"}):
+        raise ValueError("multi-layout checkpoint needs one authenticated runtime family")
     return CheckpointResourceBudget(
-        "multi_layout_uniform",
+        "multi_layout_uniform" if kinds == {"uniform"} else "multi_layout_amr",
         len(member_names),
         manifest,
         max(maximum_array, text_bytes),

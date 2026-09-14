@@ -41,10 +41,16 @@ def resolved_amr_plan(
     block_names=("fluid",),
     parameters=(),
     tag_parameter=None,
+    auxiliary_names=(),
     cells=8,
     name="phase-record-amr",
 ):
-    """Resolve one complete public AMR case with one conservative state per block."""
+    """Resolve one complete public AMR case with one conservative state per block.
+
+    ``auxiliary_names`` declares the same ordinary provider components on the source model that
+    feeds ``resolve``.  This keeps source-only fixtures aligned with the resolved ProviderPack
+    consumed by artifact introspection.
+    """
     names = tuple(block_names)
     if not names or any(not isinstance(block, str) or not block for block in names):
         raise TypeError("block_names must contain non-empty strings")
@@ -56,11 +62,18 @@ def resolved_amr_plan(
     if tag_parameter is not None and (
             not isinstance(tag_parameter, str) or not tag_parameter):
         raise TypeError("tag_parameter must be a non-empty parameter name or None")
+    auxiliary_names = tuple(auxiliary_names)
+    if any(not isinstance(auxiliary, str) or not auxiliary for auxiliary in auxiliary_names):
+        raise TypeError("auxiliary_names must contain non-empty strings")
+    if len(set(auxiliary_names)) != len(auxiliary_names):
+        raise ValueError("auxiliary_names contains a duplicate")
 
     frame = Rectangle(name + "-domain", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
     case = pops.Case(name + "-case-" + "-".join(names))
     model = Model(name + "-model", frame=frame)
+    for auxiliary in auxiliary_names:
+        model.aux(auxiliary)
     parameter_handles = {}
     for declaration in declarations:
         handle = model.param(declaration)

@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260908/bin/python",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "--tb=short",
+    "tests/python/unit/codegen/test_compile_link_flags.py",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/representative-20260913-model-link-source-r1.xml"
+  ],
+  "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate",
+  "source_head_before": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+  "source_status_before": "",
+  "started_utc": "2026-09-13T12:43:33.565684+00:00",
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "PYTHONPATH": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-final-candidate/python:/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/completion-runtime-dependencies",
+    "PYTHONNOUSERSITE": "1"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 0.6575807090266608,
+  "source_head_after": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+  "source_status_after": "",
+  "log_sha256": "f75f441e390e1d57a5128bcabdc4c5a7679e65ea222d2596e4c952b20c6db153"
+}

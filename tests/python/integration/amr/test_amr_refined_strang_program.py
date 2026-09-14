@@ -9,6 +9,12 @@ The two local shears are nilpotent, so each authored Euler subflow is also its
 exact exponential.  Their ordering therefore has a closed-form matrix oracle.
 Running two accepted macro steps additionally proves that stage scratch from the
 first step cannot leak into the next accepted state.
+
+The marker is narrow enough that the resolved three-cell transition reach produces
+three nonempty temporal histories at N=16: initially fine, refined after the first
+interval, and refined only after the second interval.  The final regrid covers the
+domain by construction, so "uncovered" below means uncovered during both physical
+intervals rather than absent from the final post-step topology.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import pops
+from tests.python.support.native_execution_context import artifact_execution_context
 import pops.lib.time as libtime
 import pytest
 from pops.amr import (
@@ -202,7 +209,10 @@ def _resolved(native_cxx):
                 center={x_axis: 0.5, y_axis: 0.5},
                 background=0.0,
                 amplitude=1.0,
-                inverse_width=100.0,
+                # The cell-average threshold tags the central 2x2 coarse core.  The resolved
+                # StateTransfer contract then contributes buffer=2 and lookahead=1, so each
+                # materialization expands retained coverage by three parent cells per side.
+                inverse_width=200.0,
             ),
             projection=ConservativeCellAverage(),
         )
@@ -220,7 +230,7 @@ def _resolved(native_cxx):
         ),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
-            rules=(Tag(ValueExpr(marker_state) > case.value(threshold)), Buffer(cells=1)),
+            rules=(Tag(ValueExpr(marker_state) > case.value(threshold)), Buffer(cells=0)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),
@@ -286,53 +296,108 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
         simulation = pops.bind(
             artifact,
             initial_values={oscillator_state: initial},
+            resources={"execution_context": artifact_execution_context(artifact)},
         )
         assert simulation.n_levels() == 2
         assert simulation.patch_boxes()
         assert simulation.installed_program_hash()
         initial_fine_valid = _fine_valid_mask(simulation).copy()
+        initial_boxes = tuple(simulation.patch_boxes())
         report = pops.run(
             simulation,
             t_end=NSTEPS * DT,
             max_steps=NSTEPS,
             console=False,
         )
-        return simulation, report, initial_fine_valid
+        return simulation, report, initial_fine_valid, initial_boxes
 
-    simulation, report, initial_fine_valid = run_once()
+    simulation, report, initial_fine_valid, initial_boxes = run_once()
     evolved = np.asarray(
         simulation.block_level_state_global("oscillator", 0),
         dtype=np.float64,
     ).reshape(initial.shape)
     fine_valid = _fine_valid_mask(simulation)
-    initially_covered = _coarse_coverage(initial_fine_valid)
-    coarse_covered = _coarse_coverage(fine_valid)
-    newly_covered = coarse_covered & ~initially_covered
-    assert np.all(initial_fine_valid <= fine_valid)
-    assert np.any(initially_covered)
-    assert np.any(newly_covered)
-    assert np.any(coarse_covered)
-    assert np.any(~coarse_covered)
 
-    # The initial tagging pass already materializes the core fine patch. The every(1) regrid expands
-    # that patch after the first accepted coarse step. Initial fine cells therefore take four
-    # ratio-2 substeps; newly refined cells inherit one full coarse step and then take the two fine
-    # substeps of the second interval. Uncovered coarse cells take two full Strang steps.
+    # Replaying the same immutable artifact one accepted interval at a time exposes the exact
+    # topology that owned the second interval.  The uninterrupted two-step call above remains the
+    # primary trajectory; the split invocation is also a deterministic continuation witness.
+    replay = pops.bind(
+        artifact,
+        initial_values={oscillator_state: initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    replay_initial_fine_valid = _fine_valid_mask(replay).copy()
+    replay_initial_boxes = tuple(replay.patch_boxes())
+    first_report = pops.run(replay, t_end=DT, max_steps=1, console=False)
+    middle_fine_valid = _fine_valid_mask(replay).copy()
+    middle_boxes = tuple(replay.patch_boxes())
+    second_report = pops.run(replay, t_end=NSTEPS * DT, max_steps=1, console=False)
+    replay_fine_valid = _fine_valid_mask(replay)
+    final_boxes = tuple(replay.patch_boxes())
+    replay_state = np.asarray(
+        replay.block_level_state_global("oscillator", 0), dtype=np.float64,
+    ).reshape(initial.shape)
+    replay_fine = np.asarray(
+        replay.block_level_state_global("oscillator", 1), dtype=np.float64,
+    ).reshape(2, 2 * N, 2 * N)
+
+    np.testing.assert_array_equal(replay_initial_fine_valid, initial_fine_valid)
+    np.testing.assert_array_equal(replay_fine_valid, fine_valid)
+    np.testing.assert_array_equal(replay_state, evolved)
+    assert replay_initial_boxes == initial_boxes
+    assert final_boxes == tuple(simulation.patch_boxes())
+
+    initially_covered = _coarse_coverage(initial_fine_valid)
+    middle_covered = _coarse_coverage(middle_fine_valid)
+    coarse_covered = _coarse_coverage(fine_valid)
+    first_regrid_covered = middle_covered & ~initially_covered
+    last_regrid_covered = coarse_covered & ~middle_covered
+    assert np.all(initial_fine_valid <= middle_fine_valid)
+    assert np.all(middle_fine_valid <= fine_valid)
+    assert np.any(initially_covered)
+    assert np.any(first_regrid_covered)
+    assert np.any(last_regrid_covered)
+    # These cells remained coarse for both physical intervals.  The second accepted regrid runs
+    # after the final interval and materializes their children from the already evolved W^2 U.
+    uncovered_during_evolution = ~middle_covered
+    np.testing.assert_array_equal(last_regrid_covered, uncovered_during_evolution)
+
+    # The exact boxes and counts follow from the central 2x2 tag core and the authenticated
+    # transition reach of three parent cells.  They also prove that both accepted regrids changed
+    # topology and that the three temporal-history categories all have real support.
+    assert initial_boxes == ((1, (8, 8), (23, 23)),)
+    assert middle_boxes == ((1, (2, 2), (29, 29)),)
+    assert final_boxes == ((1, (0, 0), (31, 31)),)
+    assert np.count_nonzero(initially_covered) == 64
+    assert np.count_nonzero(first_regrid_covered) == 132
+    assert np.count_nonzero(last_regrid_covered) == 60
+    assert np.count_nonzero(initial_fine_valid) == 256
+    assert np.count_nonzero(middle_fine_valid) == 784
+    assert np.count_nonzero(fine_valid) == 1024
+
+    # Let W be one width-DT Strang step and F be the two width-DT/2 substeps owned by
+    # level 1. Initial fine cells take F twice. Cells introduced by the first accepted regrid take
+    # W then F. Children introduced by the final accepted regrid inherit W twice.  Their outer
+    # parent ring has one equal-valued periodic neighbour on each axis, so the monotonized-central
+    # prolongation slope is exactly zero even where the other neighbour has a different history.
     coarse_expected = np.linalg.matrix_power(_strang_matrix(DT), NSTEPS) @ initial[:, 0, 0]
     initial_fine_expected = (
         np.linalg.matrix_power(_strang_matrix(0.5 * DT), 2 * NSTEPS) @ initial[:, 0, 0]
     )
-    new_fine_expected = (
+    first_regrid_expected = (
         np.linalg.matrix_power(_strang_matrix(0.5 * DT), 2 * (NSTEPS - 1))
         @ _strang_matrix(DT)
         @ initial[:, 0, 0]
     )
+    last_regrid_expected = coarse_expected
 
     assert report.accepted_steps == simulation.macro_step() == NSTEPS
+    assert first_report.accepted_steps == second_report.accepted_steps == 1
+    assert replay.macro_step() == NSTEPS
     assert simulation.n_levels() == 2
     assert simulation.patch_boxes()
     assert np.isfinite(evolved).all()
-    coarse_actual = evolved[:, ~coarse_covered]
+    coarse_actual = evolved[:, uncovered_during_evolution]
     np.testing.assert_allclose(
         coarse_actual,
         np.broadcast_to(coarse_expected[:, None], coarse_actual.shape),
@@ -346,18 +411,18 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
         rtol=0.0,
         atol=2.0e-13,
     )
-    newly_covered_actual = evolved[:, newly_covered]
+    first_regrid_actual = evolved[:, first_regrid_covered]
     np.testing.assert_allclose(
-        newly_covered_actual,
-        np.broadcast_to(new_fine_expected[:, None], newly_covered_actual.shape),
+        first_regrid_actual,
+        np.broadcast_to(first_regrid_expected[:, None], first_regrid_actual.shape),
         rtol=0.0,
         atol=2.0e-13,
     )
-
     fine = np.asarray(
         simulation.block_level_state_global("oscillator", 1),
         dtype=np.float64,
     ).reshape(2, 2 * N, 2 * N)
+    np.testing.assert_array_equal(replay_fine, fine)
     assert np.isfinite(fine[:, fine_valid]).all()
     initial_fine_actual = fine[:, initial_fine_valid]
     np.testing.assert_allclose(
@@ -366,11 +431,19 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
         rtol=0.0,
         atol=2.0e-13,
     )
-    new_fine_valid = fine_valid & ~initial_fine_valid
-    new_fine_actual = fine[:, new_fine_valid]
+    first_regrid_fine_valid = middle_fine_valid & ~initial_fine_valid
+    first_regrid_fine_actual = fine[:, first_regrid_fine_valid]
     np.testing.assert_allclose(
-        new_fine_actual,
-        np.broadcast_to(new_fine_expected[:, None], new_fine_actual.shape),
+        first_regrid_fine_actual,
+        np.broadcast_to(first_regrid_expected[:, None], first_regrid_fine_actual.shape),
+        rtol=0.0,
+        atol=2.0e-13,
+    )
+    last_regrid_fine_valid = fine_valid & ~middle_fine_valid
+    last_regrid_fine_actual = fine[:, last_regrid_fine_valid]
+    np.testing.assert_allclose(
+        last_regrid_fine_actual,
+        np.broadcast_to(last_regrid_expected[:, None], last_regrid_fine_actual.shape),
         rtol=0.0,
         atol=2.0e-13,
     )
@@ -389,13 +462,6 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
     sync = simulation._executor.program_sync_manifest()
     assert any(row[3] == "average_down" for row in sync)
 
-    # A fresh bind of the same immutable artifact must reproduce the accepted image exactly.
-    # This catches stage/candidate storage escaping the previous Program execution.
-    replay, replay_report, replay_initial_fine_valid = run_once()
-    replay_state = np.asarray(
-        replay.block_level_state_global("oscillator", 0),
-        dtype=np.float64,
-    ).reshape(initial.shape)
-    assert replay_report.accepted_steps == NSTEPS
-    np.testing.assert_array_equal(replay_initial_fine_valid, initial_fine_valid)
-    np.testing.assert_array_equal(replay_state, evolved)
+    # The bitwise replay comparisons above catch stage/candidate storage escaping the first
+    # Program execution while also proving that splitting the public run call does not alter the
+    # accepted topology or either level's dense state image.

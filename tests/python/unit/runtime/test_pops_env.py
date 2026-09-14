@@ -162,8 +162,11 @@ def test_env_state_surfaced_in_inspect():
 def test_inspect_without_env_is_empty_not_faked():
     # A handle built outside compile_problem carries no env -> {} (documented absence, not a default).
     model = _compiled_model()
+    # Use a unique fixture identity so the exact owner lookup cannot collide with another
+    # same-named Program context retained by this module's typed fixture registry.
+    program = _program("inspect_without_env")
     component = CompiledProblem(
-        "/tmp/x/problem.so", _program(), model, model.abi_key, "c++", "c++23"
+        "/tmp/x/problem.so", program, model, model.abi_key, "c++", "c++23"
     )
     bare = typed_compiled_artifact(component, model)
     assert bare.codegen_env is None

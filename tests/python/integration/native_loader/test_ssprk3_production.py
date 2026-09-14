@@ -32,6 +32,7 @@ from tests.python.support.requirements import (
     repo_include,
     require_native_or_skip,
 )
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -124,7 +125,11 @@ def _compile_and_run(method: str, cxx: str):
     resolved, instance = _resolved(method, cxx)
     artifact = pops.compile(resolved)
     artifact.verify()
-    simulation = pops.bind(artifact, initial_values={instance: _initial_state()})
+    simulation = pops.bind(
+        artifact,
+        initial_values={instance: _initial_state()},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(simulation, t_end=NSTEPS * DT, max_steps=NSTEPS)
     assert report.accepted_steps == simulation.macro_step() == NSTEPS
     assert simulation.program_report().program_hash == artifact.program_hash

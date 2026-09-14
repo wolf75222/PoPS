@@ -241,8 +241,12 @@ class _SystemUnifiedInstall(_System):
         if route == "analytic_expression":
             from pops.runtime._analytic_expression_lowering import lower_analytic_components
 
+            # Authenticate the declared point expression and every parameter dependency even
+            # when its explicit integral owns materialization.
+            if "cell_integrals" in source:
+                lower_analytic_components(source["components"], frame_id=source["frame_id"], bindings=params)
             lowered = lower_analytic_components(
-                source["components"],
+                source.get("cell_integrals", source)["components"],
                 frame_id=source["frame_id"],
                 bindings=params,
             )
@@ -250,7 +254,8 @@ class _SystemUnifiedInstall(_System):
                 name,
                 "cell",
                 "cell",
-                "conservative_cell_average",
+                "exact_cell_integral" if "cell_integrals" in source
+                else "conservative_cell_average",
                 [list(opcodes) for opcodes, _ in lowered],
                 [list(literals) for _, literals in lowered],
             )
@@ -370,6 +375,8 @@ class _SystemUnifiedInstall(_System):
             install_plan = _require_exact_install_inputs(
                 self, compiled, instances, field_plans, aux, params, install_plan
             )
+            from pops.runtime._continuation_transitions import prepare_bind_continuation
+            prepare_bind_continuation(self, install_plan)
             compiled = install_plan.artifact
             instances = install_plan.instances
             params = install_plan.params
@@ -606,15 +613,19 @@ class _SystemUnifiedInstall(_System):
         An already-lowered ``Spatial`` value and ``None`` are accepted only within this private
         install pipeline.
         """
+        from pops.runtime._state_storage import StateStorageSpatial
+
         if spatial is None:
             return Spatial()
+        if type(spatial) is StateStorageSpatial:
+            return spatial
         if isinstance(spatial, Spatial):
             return spatial
         runtime_spatial = getattr(spatial, "runtime_spatial", None)
         if callable(runtime_spatial):
             first, second = runtime_spatial(), runtime_spatial()
-            if type(first) is not Spatial or type(second) is not Spatial:
-                raise TypeError("runtime_spatial() must return an exact private Spatial value")
+            if type(first) not in (Spatial, StateStorageSpatial) or type(second) is not type(first):
+                raise TypeError("runtime_spatial() must return an exact private spatial adapter")
             if first != second:
                 raise ValueError("runtime_spatial() must be deterministic")
             return first
@@ -646,6 +657,10 @@ class _SystemUnifiedInstall(_System):
         from pops.codegen.loader import CompiledModel  # late import (codegen <-> __init__ cycle)
 
         if not isinstance(model, CompiledModel):
+            return
+        from pops.runtime._state_storage import require_state_storage_model
+
+        if require_state_storage_model(model, spatial, where="pops.bind"):
             return
         from pops.runtime.routes import check_riemann_requirement_contract
 

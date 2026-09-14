@@ -46,7 +46,7 @@ def test_module_builders_return_exact_operator_handles() -> None:
         kind="local_rate",
     )
     def explicit_rhs(current, solved_fields):
-        return current, solved_fields
+        return current
 
     assert declarations["alpha"].default == 1.0
     assert aux["B_z"].kind == "cell_scalar"

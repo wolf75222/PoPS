@@ -36,7 +36,7 @@ class _MultiSpeciesMixin(_BoardModel):
         if self._multi_module is not None:
             if extra is None:
                 return None
-            return self._add_species(extra[0], components=extra[1], roles=extra[2])
+            return self._add_species(extra[0], components=extra[1], roles=extra[2], template=extra[3])
         from .. import model as _model
         candidate = _model.Module(self.name, owner=self.owner_path)
         # Promotion changes the state-space view, not parameter ownership.
@@ -44,11 +44,11 @@ class _MultiSpeciesMixin(_BoardModel):
         promoted = {}
         for nm, h in self._species.items():
             promoted[nm] = self._declare_species_on(
-                candidate, nm, h.components, dict(h.roles))
+                candidate, nm, h.components, dict(h.roles), template=h.space)
         result = None
         if extra is not None:
-            name, components, roles = extra
-            result = self._declare_species_on(candidate, name, components, roles)
+            name, components, roles, template = extra
+            result = self._declare_species_on(candidate, name, components, roles, template=template)
             promoted[name] = result
         self._migrate_first_species_local_transforms(candidate, promoted)
         self._multi_module = candidate
@@ -56,7 +56,8 @@ class _MultiSpeciesMixin(_BoardModel):
         self._states.update(promoted)
         return result
 
-    def _add_species(self, name: Any, components: Any = (), roles: Any = None) -> Any:
+    def _add_species(self, name: Any, components: Any = (), roles: Any = None, *,
+                     template: Any = None) -> Any:
         """Add one typed StateSpace to the multi-block Module atomically."""
         name = require_name(name, "species name")
         comps = normalize_components(components, "species %s state" % name)
@@ -65,19 +66,29 @@ class _MultiSpeciesMixin(_BoardModel):
             raise ValueError("species %r is already declared" % name)
         module = self._multi_module
         with atomic_attrs((module, "_state_spaces"), (self, "_species"), (self, "_states")):
-            handle = self._declare_species_on(module, name, comps, role_map)
+            handle = self._declare_species_on(module, name, comps, role_map, template=template)
             self._species[handle.name] = handle
             self._states[handle.name] = handle
         return handle
 
     def _declare_species_on(self, module: Any, name: Any, components: Any,
-                            roles: Any) -> StateHandle:
+                            roles: Any, *, template: Any = None) -> StateHandle:
         """Build one complete typed species on an unpublished/guarded Module."""
         name = require_name(name, "species name")
         comps = normalize_components(components, "species %s state" % name)
         role_map = normalize_roles(roles, comps, "species %s" % name)
         canon = {component: _canon_role(role) for component, role in role_map.items()}
-        space = module.state_space(name, comps, roles=canon)
+        if template is None:
+            space = module.state_space(name, comps, roles=canon,
+                frame="model" if self._frame is None else self._frame.canonical_id)
+        else:
+            # Promotion must preserve the physical type referenced by already
+            # returned QuantityRef leaves, including its exact registered object
+            # identity. Reconstructing an equal Space would invalidate old handles.
+            if template.name != name or template.components != comps:
+                raise ValueError("promoted species must preserve its exact StateSpace declaration")
+            space = module._declare_descriptor(
+                module._state_spaces, module._state_handles, template, "StateSpace", "state")
         vars_ = module.state_symbols(space)
         return StateHandle(
             name, comps, vars_, role_map, owner=self.owner_path, space=space)
@@ -87,6 +98,7 @@ class _MultiSpeciesMixin(_BoardModel):
     ) -> dict[str, Any]:
         """Validate one exact block-local symbolic map without mutating a registry."""
         from pops._ir import Var, _children, _wrap
+        from pops._ir.quantity import QuantityRef
         from pops.model.state_symbols import state_component_symbol
 
         name = require_name(name, "local_transform name")
@@ -114,6 +126,7 @@ class _MultiSpeciesMixin(_BoardModel):
             for component in on.space.components
         }
         aux_reads = set()
+        state_handle = self._multi_module.state_handle(on.space)
         seen = set()
         stack = [*wrapped, predicate]
         while stack:
@@ -121,6 +134,19 @@ class _MultiSpeciesMixin(_BoardModel):
             if id(node) in seen:
                 continue
             seen.add(id(node))
+            if isinstance(node, QuantityRef):
+                if node.handle != state_handle or node.space != on.space:
+                    foreign_space = state_spaces.get(node.handle.local_id)
+                    if (foreign_space is not None and node.handle != state_handle
+                            and node.handle == self._multi_module.state_handle(foreign_space)):
+                        raise ValueError(
+                            "local_transform(%r) on StateSpace %r reads component %r from "
+                            "StateSpace %r; a local transform may read only its exact on= state"
+                            % (name, on.space.name, node.component, foreign_space.name))
+                    raise ValueError(
+                        "local_transform(%r) on StateSpace %r reads unauthenticated quantity %r; "
+                        "a local transform may read only its exact on= state"
+                        % (name, on.space.name, node.handle.local_id))
             if isinstance(node, Var):
                 if node.kind in ("cons", "prim") and node.name not in allowed_symbols:
                     foreign = known_symbols.get(node.name)
@@ -293,6 +319,9 @@ class _MultiSpeciesMixin(_BoardModel):
                     % (name, h.name, len(comp_values), h.name, len(h.components)))
             output_specs.append((h, comp_values))
         caps = {}
+        if self._frame is not None:
+            caps["storage_axes"] = self._ranked_frame_axes(where="joint state storage")
+            caps["storage_frame"] = self._frame.canonical_id
         if preserves is not None:
             caps["preserves"] = preserves
         if dissipates is not None:

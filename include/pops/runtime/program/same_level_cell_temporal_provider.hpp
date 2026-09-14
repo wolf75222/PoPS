@@ -16,6 +16,7 @@
 
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
+#include <Kokkos_MathematicalFunctions.hpp>
 #endif
 
 #include <algorithm>
@@ -514,7 +515,10 @@ struct SameLevelTransportEulerDeviceView {
       return CellTemporalStageOutcome::failed(0x756002u);
 
     for (int component = 0; component < components; ++component) {
-      const Real next = cell.stage(index, component) + dt * cell.residual(index, component);
+      // Match the generated Forward Euler axpy, including the selected compiler
+      // contraction mode. Its increment is added directly to the copied stage.
+      Real next = cell.stage(index, component);
+      next += dt * cell.residual(index, component);
       std::array<Real, std::size_t{2} * Dim> integrated_faces{};
       bool finite = finite_device_value(next);
       for (int axis = 0; axis < Dim; ++axis) {

@@ -35,6 +35,7 @@ from .local import DenseLU
 from .nonlinear import LocalNewton, Newton
 from .preconditioners import preconditioners
 from .scopes import Hierarchy, Level, SolveScope
+from ._composite_field import CompositeFieldGMRES
 from .providers import (
     CompositeTensorFAC,
     PreparedHierarchyConvergenceContract,
@@ -56,7 +57,7 @@ from .providers import (
 solvers = SimpleNamespace(
     CG=CG, BiCGStab=BiCGStab, GMRES=GMRES, Richardson=Richardson,
     Newton=Newton, LocalNewton=LocalNewton, DenseLU=DenseLU,
-    CompositeTensorFAC=CompositeTensorFAC,
+    CompositeTensorFAC=CompositeTensorFAC, CompositeFieldGMRES=CompositeFieldGMRES,
 )
 
 __all__ = [
@@ -65,7 +66,7 @@ __all__ = [
     "CartesianCG", "GeometricMG", "FFT",
     "CG", "BiCGStab", "GMRES", "Richardson",
     "Newton", "LocalNewton", "DenseLU",
-    "SolveScope", "Level", "Hierarchy", "CompositeTensorFAC",
+    "SolveScope", "Level", "Hierarchy", "CompositeTensorFAC", "CompositeFieldGMRES",
     "PreparedHierarchyConvergenceContract", "PreparedHierarchyFlatExecution",
     "PreparedHierarchyKrylovFallback",
     "PreparedHierarchySolverProvider", "PreparedHierarchySolverUseFacts",

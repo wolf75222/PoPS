@@ -77,7 +77,12 @@ class _RuntimeProbe:
     (_runtime_executor._UniformNativeProvider, _runtime_executor._AdaptiveNativeProvider),
 )
 def test_native_executors_install_signed_geometry_before_compiled_blocks(provider: type) -> None:
-    source = inspect.getsource(provider.install)
+    if provider is _runtime_executor._AdaptiveNativeProvider:
+        from pops.runtime._runtime_executor import _install_adaptive_native_engine
+        assert "_install_adaptive_native_engine(plan)" in inspect.getsource(provider.install)
+        source = inspect.getsource(_install_adaptive_native_engine)
+    else:
+        source = inspect.getsource(provider.install)
     assert source.index("install_embedded_boundary(engine") < source.index(
         "engine._install_compiled("
     )

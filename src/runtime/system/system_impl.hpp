@@ -151,6 +151,8 @@ struct System<Dim>::Impl {
   std::optional<runtime::system::PreparedAuxiliaryGhostTransport<Dim>> auxiliary_ghost_transport_;
 
   block_store_type blocks_;
+  typename SystemInterfaceProvider<Dim>::CoreEvaluator prepared_boundary_group_core_;
+  typename SystemInterfaceProvider<Dim>::CoreFaceEvaluator prepared_boundary_group_faces_;
   std::vector<Species>& sp = blocks_.blocks;
   std::vector<PreparedBoundaryHookContract> prepared_boundary_hook_contracts_;
   boundary_registry_type boundary_registry_;
@@ -746,6 +748,8 @@ struct System<Dim>::Impl {
 
   std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
   bool external_step_transaction_committed_ = false;
+  bool external_restart_transaction_ = false;
+  std::vector<std::unique_ptr<AcceptedSnapshot>> parent_step_transactions_;
 
   explicit Impl(const SystemConfig<Dim>& config)
       : domain_(config),
@@ -849,6 +853,10 @@ struct System<Dim>::Impl {
   template <class Function>
   decltype(auto) execute_step_transaction(Function&& function) {
     AcceptedSnapshot snapshot(*this);
+    if (!external_step_transaction_) {
+      program_.accepted_exchanges_.clear();
+      program_.begin_step_projection_report();
+    }
     try {
       return std::forward<Function>(function)();
     } catch (...) {

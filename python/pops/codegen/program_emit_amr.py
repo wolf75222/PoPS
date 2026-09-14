@@ -75,9 +75,20 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
     blocks = program._block_indices()
     ordered_blocks = sorted(blocks, key=blocks.get)
 
-    def contains_flux(values: Any, block: Any) -> bool:
+    def flux_basis_count(value: Any) -> int:
+        if value.op == "rhs":
+            return 1 if value.attrs.get("flux", True) else 0
+        if value.op == "diffusive_rhs":
+            from pops.codegen.program_emit_diffusion import diffusive_flux_basis_count
+
+            return diffusive_flux_basis_count(value)
+        return 0
+
+    def contains_rhs(values: Any, block: Any, *, flux_only: bool = False) -> bool:
         for value in values:
-            if value.op == "rhs" and value.block == block and value.attrs.get("flux", True):
+            if value.op in {"rhs", "diffusive_rhs"} and value.block == block and (
+                not flux_only or flux_basis_count(value) != 0
+            ):
                 return True
             for key in (
                 "cond_block",
@@ -88,7 +99,9 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                 "false_block",
             ):
                 nested = value.attrs.get(key)
-                if isinstance(nested, (list, tuple)) and contains_flux(nested, block):
+                if isinstance(nested, (list, tuple)) and contains_rhs(
+                    nested, block, flux_only=flux_only
+                ):
                     return True
         return False
 
@@ -160,8 +173,8 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                     if value.op == "while":
                         expression = environment.get(value.inputs[0].id, {})
                         if (
-                            contains_flux(value.attrs["cond_block"], block)
-                            or contains_flux(value.attrs["body_block"], block)
+                            contains_rhs(value.attrs["cond_block"], block, flux_only=True)
+                            or contains_rhs(value.attrs["body_block"], block, flux_only=True)
                             or (value.block == block and expression)
                         ):
                             raise ValueError(
@@ -185,10 +198,14 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
 
                     expression = {}
                     if value.block == block:
-                        if value.op == "rhs" and value.attrs.get("flux", True):
-                            expression = {(value.id, next_basis): {0: Fraction(1)}}
-                            next_basis += 1
-                            basis_count += 1
+                        multiplicity = flux_basis_count(value)
+                        if multiplicity:
+                            expression = {
+                                (value.id, next_basis + offset): {0: Fraction(1)}
+                                for offset in range(multiplicity)
+                            }
+                            next_basis += multiplicity
+                            basis_count += multiplicity
                         elif value.op == "history":
                             # A history read is a second live FluxExpression basis at the AMR
                             # commit boundary.  It was authored in an earlier accepted step, but
@@ -268,7 +285,11 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
         stored = {name: source for (candidate, name), source in stored_histories.items()
                   if candidate == block}
         read = {name for candidate, name in read_histories if candidate == block}
-        if stored.keys() & read:
+        # Pure state histories have no flux ancestry. Inspect structured regions too: branch and
+        # loop results can carry real RHS values through attrs rather than ordinary input edges.
+        # Keep the existing conservative retained bound whenever any actual RHS exists, including
+        # source-only RHS calls; only a proved RHS-free block can retain its zero analyzed budget.
+        if stored.keys() & read and contains_rhs(program._values, block):
             bases, terms = budgets[index]
             # The current RHS and its retained lag are independently authenticated at the AMR
             # attempt boundary.  A source-only RHS still needs that pair: whether it contributes
@@ -286,8 +307,9 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                     if value.id in seen:
                         return 0
                     seen.add(value.id)
-                    if value.op == "rhs":
-                        return 1
+                    multiplicity = flux_basis_count(value)
+                    if multiplicity:
+                        return multiplicity
                     return sum(source_bases(input_value, seen) for input_value in value.inputs)
 
                 source_count = max(1, source_bases(source, set()))
@@ -313,6 +335,14 @@ def _emit_flux_expression_budget(program: Any) -> str:
         )
 
     has_flux = any(rhs > 0 for rhs, _ in budgets)
+    # One retained basis can carry at most one sample of each installed physical interface.
+    # Summing endpoint bounds is conservative (a paired sample is counted twice), and includes
+    # every declared readable history lag. The scheduler supplies the independent route ceiling.
+    interface_samples = sum(rhs for rhs, _ in budgets)
+    interface_identity_characters = (
+        len(program._ir_hash()) + len("shared-rhs/") + len(str(2**31 - 1))
+        + len("program-rhs-group") if interface_samples else 0
+    )
     return (
         "// Frozen-IR FluxExpression budgets in exact pops_program_block_name order.\n"
         f'extern "C" bool pops_program_has_flux_expression() {{ return '
@@ -320,13 +350,10 @@ def _emit_flux_expression_budget(program: Any) -> str:
         f'extern "C" int pops_program_flux_expression_budget_count() {{ return {count}; }}\n'
         + lookup("pops_program_flux_rhs_basis_bound", rhs_bounds)
         + lookup("pops_program_flux_coefficient_term_bound", coefficient_bounds)
-        # Generated Program IR currently has no interface-coupling node.  The explicit zero is an
-        # authenticated finite authority, not absence of metadata; hand-authored Program DSOs must
-        # export their own exact non-zero bound when they call apply_coupling_operators().
         + 'extern "C" std::uint64_t '
-        "pops_program_interface_coupling_application_bound() { return UINT64_C(0); }\n"
+        f"pops_program_interface_coupling_application_bound() {{ return UINT64_C({interface_samples}); }}\n"
         + 'extern "C" std::uint64_t '
-        "pops_program_interface_coupling_identity_character_bound() { return UINT64_C(0); }\n"
+        f"pops_program_interface_coupling_identity_character_bound() {{ return UINT64_C({interface_identity_characters}); }}\n"
         + _emit_checkpoint_shape_metadata(program)
     )
 
@@ -528,6 +555,34 @@ def _emit_amr_program_provider_register(provider_plan_install: str) -> str:
     )
 
 
+def _emit_flux_temporal_family_install(program: Any) -> str:
+    from pops.codegen.program_emit_diffusion import _diffusive_flux_families
+    from pops.codegen.program_emit_kernels import _named_fluxes
+    from pops.codegen.program_emit_ops import _rhs_flux_temporal_family
+    from pops.codegen.program_emit_field_routes import _walk_program_nodes
+
+    blocks = program._block_indices()
+    rows = []
+    for value in _walk_program_nodes(tuple(program._values)):
+        if value.op == "rhs" and value.attrs.get("flux", True):
+            named = _named_fluxes(value)
+            requested = value.attrs.get("sources")
+            provider = 3 if named is not None else (0 if requested is None or "default" in requested else 1)
+            rows.append((blocks[value.block], value.id, provider,
+                         _rhs_flux_temporal_family(value, named)))
+        elif value.op == "diffusive_rhs":
+            constitutive, transport = _diffusive_flux_families(value)
+            rows.append((blocks[value.block], value.id, 4, constitutive))
+            if transport is not None:
+                rows.append((blocks[value.block], value.id, 1, transport))
+    rows.sort(key=lambda row: row[:3])
+    if len({row[:3] for row in rows}) != len(rows):
+        raise ValueError("AMR flux temporal-family table aliases one resolved producer")
+    encoded = ", ".join("{%d, %d, %d, %s}" % (block, rhs, provider, json.dumps(family))
+                        for block, rhs, provider, family in rows)
+    return "  ctx.install_flux_temporal_families({%s});\n" % encoded if rows else ""
+
+
 def _emit_amr_install(
     program: Any,
     target: Any,
@@ -566,6 +621,7 @@ def _emit_amr_install(
     if target != "amr_system":
         return ""
     flux_expression_budget = _emit_flux_expression_budget(program)
+    flux_temporal_families = _emit_flux_temporal_family_install(program)
     provider_register = _emit_amr_program_provider_register(provider_plan_install)
     if cell_local_time is not None:
         cell_local_contract, cell_local_routes = cell_local_time
@@ -593,23 +649,6 @@ def _emit_amr_install(
             "  }, ctx_owner);\n"
             "}\n"
         )
-
-    def walk(values: Any) -> Any:
-        for value in values:
-            yield value
-            if value.op == "post_synchronization":
-                continue
-            for key in (
-                "cond_block",
-                "body_block",
-                "apply_block",
-                "residual_block",
-                "true_block",
-                "false_block",
-            ):
-                nested = value.attrs.get(key)
-                if isinstance(nested, (list, tuple)):
-                    yield from walk(nested)
 
     post_sync_src = post_synchronization if post_synchronization else ""
     post_sync_field = (
@@ -640,7 +679,11 @@ def _emit_amr_install(
 
     transform_guard = ""
     transform_refresh_guard = ""
-    if any(value.op == "local_transform" for value in walk(program._values)):
+    # Installation and hierarchy refresh must use the same authenticated phase
+    # classification as resolution, including the composite solve's internal Q maps.
+    from pops.codegen._resolution import _uses_local_transform
+
+    if _uses_local_transform(program):
         transform_guard = (
             "  auto _require_local_transform_level_contract = [ctx_owner]() {\n"
             "    auto& ctx = *ctx_owner;\n"
@@ -651,6 +694,13 @@ def _emit_amr_install(
             "  _require_local_transform_level_contract();\n"
         )
         transform_refresh_guard = "    _require_local_transform_level_contract();\n"
+    has_maps = any(value.op in ("layout_map_export", "layout_map_import")
+                   for value in program._values)
+    from pops.codegen.program_emit_hierarchy_regions import hierarchy_region_solves
+    has_hierarchy_regions = bool(hierarchy_region_solves(program))
+    has_continuations = has_maps or has_hierarchy_regions
+    if has_maps and hierarchy_bodies is not None:
+        raise NotImplementedError("AMR mapping and field barriers require one combined region schedule")
     if hierarchy_bodies is None:
         phase_fields = "    std::function<void(double)> step;\n" + post_sync_field
         phase_initializers = (
@@ -660,21 +710,54 @@ def _emit_amr_install(
             "      }\n"
             + post_sync_initializer
         )
-        installed_driver = (
-            "    auto _advance_level = [&](double level_dt) {\n"
-            "      _refresh_level_programs();\n"
-            "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
-            "    };\n"
-            "    ctx.advance_hierarchy(dt, _advance_level);\n"
-            + post_sync_driver
-        )
+        if has_continuations:
+            installed_driver = (
+                "    ctx.advance_mapping_hierarchy(dt, [=](double level_dt) {\n"
+                "      auto& ctx = *ctx_owner;\n"
+                "      const auto topology = ctx.program_resource_topology();\n"
+                "      if (*_level_program_epoch != topology.epoch ||\n"
+                "          *_level_program_generation != topology.generation ||\n"
+                "          _level_programs->size() != static_cast<std::size_t>(topology.levels))\n"
+                '        throw std::logic_error("AMR continuation level resources lost their exact hierarchy generation");\n'
+                "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
+                "    }, ctx_owner, [=]() {\n"
+                "      auto& ctx = *ctx_owner;\n"
+                + post_sync_driver +
+                "    });\n"
+            )
+        else:
+            installed_driver = (
+                "    auto _advance_level = [&](double level_dt) {\n"
+                "      _refresh_level_programs();\n"
+                "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
+                "    };\n"
+                "    ctx.advance_hierarchy(dt, _advance_level);\n"
+                + post_sync_driver
+            )
     else:
-        gather, solve, publish = hierarchy_bodies
+        if len(hierarchy_bodies) == 4:
+            gather, solve, observe, publish = hierarchy_bodies
+        else:
+            gather, solve, publish = hierarchy_bodies
+            observe = None
+        spatial_solve = any(value.op == "solve_spatial_nonlinear" for value in program._values)
+        direct_field_solve = any("hierarchy_field_identity" in value.attrs for value in program._values)
+        hierarchy_solve_driver = (
+            # The spatial solve checks out each prepared level itself for predictor
+            # reconciliation and every residual/JVP. A surrounding level-0 checkout
+            # would remove that envelope from the registry before its first traversal.
+            "        _level_programs->front().solve(hierarchy_dt);\n"
+            if spatial_solve else
+            "        ctx.with_program_attempt_level(0, [&]() {\n"
+            "          _level_programs->front().solve(hierarchy_dt);\n"
+            "        });\n"
+        )
         phase_fields = (
             "    std::function<void(double)> step;\n"
             "    std::function<void(double)> gather;\n"
             "    std::function<void(double)> solve;\n"
             "    std::function<void(double)> publish;\n"
+            + ("    std::function<void(double)> observe;\n" if observe is not None else "")
             + post_sync_field
         )
         phase_initializers = (
@@ -694,41 +777,52 @@ def _emit_amr_install(
             "        auto& ctx = *ctx_owner;\n"
             "        (void)dt;\n" + publish + "\n"
             "      }\n"
+            + (",\n      [=](double dt) {\n"
+               "        auto& ctx = *ctx_owner;\n"
+               "        (void)dt;\n" + observe + "\n      }\n" if observe is not None else "")
             + post_sync_initializer
         )
         installed_driver = (
             "    auto _advance_hierarchy = [&](double hierarchy_dt) {\n"
             "      _refresh_level_programs();\n"
-            "      // The subcycling engine invokes this body once per level. The candidate tower\n"
-            "      // is complete before the root callback, so gather/solve/publish run there once.\n"
+            "      // The synchronized engine prepares every complete level envelope before this callback.\n"
+            "      // Gather/solve/publish run once through the root callback.\n"
             "      if (ctx.level() != 0)\n"
             "        return;\n"
-            "      const int _nlev = ctx.program_resource_topology().levels;\n"
-            "      if (ctx.uses_prepared_krylov_fallback()) {\n"
+            "      const int _nlev = ctx.program_resource_topology().levels;\n" +
+            ("      if (false) {\n" if spatial_solve or direct_field_solve
+             else "      if (ctx.uses_prepared_krylov_fallback()) {\n") +
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
-            "          ctx.with_program_resource_level(_k, [&]() {\n"
+            "          ctx.with_program_attempt_level(_k, [&]() {\n"
             "            _level_programs->at(static_cast<std::size_t>(_k)).step(hierarchy_dt);\n"
             "          });\n"
             "        }\n"
             "      } else {\n"
             "        // Gather every level before the unique hierarchy-scoped solve.\n"
+            "        ctx.with_synchronized_field_gather([&]() {\n"
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
-            "          ctx.with_program_resource_level(_k, [&]() {\n"
+            "          ctx.with_program_attempt_level(_k, [&]() {\n"
             "            _level_programs->at(static_cast<std::size_t>(_k)).gather(hierarchy_dt);\n"
             "          });\n"
             "        }\n"
-            "        ctx.with_program_resource_level(0, [&]() {\n"
-            "          _level_programs->front().solve(hierarchy_dt);\n"
             "        });\n"
+            + hierarchy_solve_driver
+            + ("        ctx.begin_staged_field_publications();\n"
+               "        for (int _k = 0; _k < _nlev; ++_k) {\n"
+               "          ctx.with_program_attempt_level(_k, [&]() {\n"
+               "            _level_programs->at(static_cast<std::size_t>(_k)).observe(hierarchy_dt);\n"
+               "          });\n"
+               "        }\n"
+               "        ctx.publish_staged_field_components();\n" if observe is not None else "") +
             "        // The composite solution is complete before any level reconstructs or commits.\n"
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
-            "          ctx.with_program_resource_level(_k, [&]() {\n"
+            "          ctx.with_program_attempt_level(_k, [&]() {\n"
             "            _level_programs->at(static_cast<std::size_t>(_k)).publish(hierarchy_dt);\n"
             "          });\n"
             "        }\n"
             "      }\n"
             "    };\n"
-            "    ctx.advance_synchronized_hierarchy(dt, _advance_hierarchy);\n"
+            "    ctx.advance_synchronized_hierarchy(dt, _advance_hierarchy, true);\n"
             + post_sync_driver
         )
 
@@ -748,22 +842,41 @@ def _emit_amr_install(
         "      std::numeric_limits<std::uint64_t>::max());\n"
         "  auto _level_program_generation = std::make_shared<std::uint64_t>(\n"
         "      std::numeric_limits<std::uint64_t>::max());\n"
-        "  auto _refresh_level_programs = [=]() {\n"
+        "  auto _refresh_level_programs = [=](bool force = false) {\n"
+        "    if (force) {\n"
+        "      *_level_program_epoch = std::numeric_limits<std::uint64_t>::max();\n"
+        "      *_level_program_generation = std::numeric_limits<std::uint64_t>::max();\n"
+        "    }\n"
         "    auto& ctx = *ctx_owner;\n"
         "    const auto topology = ctx.program_resource_topology();\n"
         "    const std::uint64_t epoch = topology.epoch;\n"
         "    const std::uint64_t generation = topology.generation;\n"
         "    const int levels = topology.levels;\n"
         + transform_refresh_guard
-        + "    if (*_level_program_epoch == epoch &&\n"
-        "        *_level_program_generation == generation &&\n"
-        "        _level_programs->size() == static_cast<std::size_t>(levels))\n"
+        + "    const auto& lane = ctx.prepared_execution_lane();\n"
+        "    const bool stale = force || *_level_program_epoch != epoch ||\n"
+        "        *_level_program_generation != generation ||\n"
+        "        _level_programs->size() != static_cast<std::size_t>(levels);\n"
+        "    if (pops::all_reduce_max(stale ? 1L : 0L, lane) == 0)\n"
         "      return;\n"
-        "    _level_programs->clear();\n"
-        "    _level_programs->reserve(static_cast<std::size_t>(levels));\n"
+        # Same-generation restore destroys scratch borrows too. Invalidate before any throwing
+        # preparation so a failed restore cannot execute the previous, now dangling captures.
+        "    *_level_program_epoch = std::numeric_limits<std::uint64_t>::max();\n"
+        "    *_level_program_generation = std::numeric_limits<std::uint64_t>::max();\n"
+        "    std::vector<_PopsAmrLevelProgram> next;\n"
+        "    std::exception_ptr allocation_error;\n"
+        "    try { next.reserve(static_cast<std::size_t>(levels)); }\n"
+        "    catch (...) { allocation_error = std::current_exception(); }\n"
+        "    pops::collectively_rethrow_exception(allocation_error, lane,\n"
+        '        "AMR Program level resource allocation failed collectively");\n'
         "    ctx.for_each_program_resource_level([&](int) {\n"
-        "      _level_programs->emplace_back(_make_level_program());\n"
+        "      std::exception_ptr level_error;\n"
+        "      try { next.emplace_back(_make_level_program()); }\n"
+        "      catch (...) { level_error = std::current_exception(); }\n"
+        "      pops::collectively_rethrow_exception(level_error, lane,\n"
+        '          "AMR Program level resource capture failed collectively");\n'
         "    });\n"
+        "    _level_programs->swap(next);\n"
         "    *_level_program_epoch = epoch;\n"
         "    *_level_program_generation = generation;\n"
         "  };\n"
@@ -782,12 +895,16 @@ def _emit_amr_install(
         "pops::AmrSystem<pops::kNativeDimension>* sys) {\n"
         + "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
         "  auto& ctx = *ctx_owner;\n"
+        + flux_temporal_families
         + transform_guard
         + level_resources
         + "\n  ctx.install([=](double dt) {\n"
         "    auto& ctx = *ctx_owner;\n"
-        "    _refresh_level_programs();\n"
+        # Map continuations use the bundles materialized at install/regrid/restart.
+        # Their collective level region checks the exact generation before use.
+        + ("" if has_continuations else "    _refresh_level_programs();\n")
         + installed_driver
-        + "  }, ctx_owner, _refresh_level_programs);\n"
+        + "  }, ctx_owner, [=]() { _refresh_level_programs(); },\n"
+        "     [=]() { _refresh_level_programs(true); });\n"
         "}\n"
     )

@@ -295,9 +295,13 @@ def _sample_grids(
 ) -> tuple[FloatArray, FloatArray | None, FloatArray | None]:
     if rank == 1:
         return x_values, None, None
+    if y_values is None:
+        raise ValueError("rank-two and rank-three sampling require y coordinates")
     if rank == 2:
         xx, yy = np.meshgrid(x_values, y_values, indexing="xy")
         return xx, yy, None
+    if rank != 3 or z_values is None:
+        raise ValueError("rank-three sampling requires z coordinates")
     zz, yy, xx = np.meshgrid(z_values, y_values, x_values, indexing="ij")
     return xx, yy, zz
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
@@ -104,12 +104,21 @@ class StagePoint:
     The unqualified :attr:`time` accessor is therefore defined only when every coordinate agrees.
     """
 
-    name: str
+    name: str = field(compare=False)
     _coordinates: tuple[tuple[str, TimePoint], ...]
+    _identity_key: tuple[str, int | str] = field(repr=False)
     __pops_ir_immutable__ = True
 
-    def __init__(self, name: str, partitions: Mapping[str, TimePoint]) -> None:
+    def __init__(self, name: str, partitions: Mapping[str, TimePoint], *,
+                 identity: int | None = None) -> None:
         object.__setattr__(self, "name", _name(name, where="StagePoint name"))
+        if identity is not None and (
+                isinstance(identity, bool) or not isinstance(identity, int) or identity < 0):
+            raise ValueError("StagePoint identity must be a Python int >= 0 or None")
+        # Long-form stages retain their historical name/coordinate identity. Program.stage
+        # supplies a structural ordinal instead: its display label is never a cache key.
+        object.__setattr__(self, "_identity_key", (
+            ("named", name) if identity is None else ("fresh", identity)))
         if not isinstance(partitions, Mapping) or not partitions:
             raise TypeError("StagePoint partitions must be a non-empty mapping")
         coordinates = []
@@ -121,6 +130,12 @@ class StagePoint:
             coordinates.append((partition, point))
         coordinates.sort(key=lambda item: item[0])
         object.__setattr__(self, "_coordinates", tuple(coordinates))
+
+    @property
+    def identity(self) -> int | None:
+        """Program-local structural identity, or None for legacy named coordinates."""
+        kind, value = self._identity_key
+        return int(value) if kind == "fresh" else None
 
     @property
     def partitions(self) -> Mapping[str, TimePoint]:
@@ -145,13 +160,16 @@ class StagePoint:
         return first
 
     def to_data(self) -> dict[str, Any]:
-        return {
+        data = {
             "schema_version": 1,
             "name": self.name,
             "partitions": {
                 name: point.to_data() for name, point in self._coordinates
             },
         }
+        if self.identity is not None:
+            data["identity"] = self.identity
+        return data
 
 
 def point_clock(point: Any, where: str) -> Clock:

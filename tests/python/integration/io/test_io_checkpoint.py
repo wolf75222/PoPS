@@ -25,6 +25,11 @@ from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtim
 from pops.solvers.elliptic import CartesianCG
 from tests.python.support.explicit_program import install_forward_euler_program
 
+# This indivisible two-block/Poisson scenario compiles its native packages and explicit
+# Program before stepping. A successful cold CI run took 291 s, leaving no reliable
+# headroom under the default 300 s process limit. Keep the full scenario bounded.
+POPS_PROCESS_TIMEOUT = 600
+
 fails = 0
 
 
@@ -46,28 +51,33 @@ def chk(cond, label):
 
 
 def build(n=16):
-    """Deux blocs couples par le Poisson, dont un cadence en hold-then-catch-up STRIDE=2."""
+    """Deux blocs isothermes chargent le Poisson ; le second conserve sa cadence STRIDE=2."""
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="xy")
     ions = 1.0 + 0.4 * np.exp(-50.0 * ((X - 0.4) ** 2 + (Y - 0.5) ** 2))
     slow = 1.0 + 0.3 * np.exp(-50.0 * ((X - 0.6) ** 2 + (Y - 0.5) ** 2))
     sim = System(_system_config(n))
     sim.set_poisson(rhs="charge_density", solver=CartesianCG(), bc=Periodic())
-    sim.add_equation("ions",
-                  engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
-                            transport=engine.IsothermalFlux(),
-                            source=engine.PotentialForce(charge=1.0),
-                            elliptic=engine.BackgroundDensity(
-                                alpha=1.0, n0=float(ions.mean()))),
-                  spatial=engine.Spatial(limiter=Minmod()), time=engine.Explicit())
-    sim.add_equation("slow",
-                  engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
-                            transport=engine.IsothermalFlux(),
-                            source=engine.PotentialForce(charge=-1.0),
-                            elliptic=engine.BackgroundDensity(
-                                alpha=-1.0, n0=float(slow.mean()))),
-                  spatial=engine.Spatial(limiter=Minmod()),
-                  time=engine.Explicit(stride=2))
+    sim._batch_native_packages = True
+    try:
+        sim.add_equation("ions",
+                      engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                                transport=engine.IsothermalFlux(),
+                                source=engine.NoSource(),
+                                elliptic=engine.BackgroundDensity(
+                                    alpha=1.0, n0=float(ions.mean()))),
+                      spatial=engine.Spatial(limiter=Minmod()), time=engine.Explicit())
+        sim.add_equation("slow",
+                      engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                                transport=engine.IsothermalFlux(),
+                                source=engine.NoSource(),
+                                elliptic=engine.BackgroundDensity(
+                                    alpha=-1.0, n0=float(slow.mean()))),
+                      spatial=engine.Spatial(limiter=Minmod()),
+                      time=engine.Explicit(stride=2))
+    finally:
+        sim._batch_native_packages = False
+    sim._commit_pending_native_packages()
     sim.set_density("ions", ions.ravel())
     sim.set_density("slow", slow.ravel())
     install_forward_euler_program(sim)

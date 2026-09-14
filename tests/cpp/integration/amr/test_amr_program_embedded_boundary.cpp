@@ -303,6 +303,16 @@ void prove_program_embedded_boundary_contract(const std::string& mode) {
     statuses[static_cast<std::size_t>(level)] = &status;
     status_masks[static_cast<std::size_t>(level)] = mask;
     write_status(status, *mask, pops::Real(0), std::numeric_limits<pops::Real>::quiet_NaN());
+    EXPECT_EQ(
+        context->pointwise_level_status_max(0, status, mask, context->prepared_execution_lane()),
+        pops::Real(0));
+    if (level == 0) {
+      // This producer has not visited the fine level yet: a hierarchy-wide request must
+      // still refuse missing evidence, while the qualified current-level guard succeeds.
+      EXPECT_THROW(
+          context->pointwise_status_max(0, status, mask, context->prepared_execution_lane()),
+          std::runtime_error);
+    }
   });
   EXPECT_EQ(context->pointwise_status_max(0, *statuses[0], status_masks[0],
                                           context->prepared_execution_lane()),
@@ -314,6 +324,15 @@ void prove_program_embedded_boundary_contract(const std::string& mode) {
                                           context->prepared_execution_lane()),
             pops::Real(3))
       << mode;
+
+  context->for_each_program_resource_level([&](int level) {
+    EXPECT_EQ(context->pointwise_level_status_max(0, *statuses[level], status_masks[level],
+                                                  context->prepared_execution_lane()),
+              level == 0 ? pops::Real(0) : pops::Real(3));
+    EXPECT_THROW(context->pointwise_level_status_max(0, *statuses[level], statuses[level],
+                                                     context->prepared_execution_lane()),
+                 std::invalid_argument);
+  });
 
   // Restore finite accepted state, then give inactive valid cells and all allocated ghosts unique
   // sentinels.  A terminal direct facade publication may change only active valid cells.

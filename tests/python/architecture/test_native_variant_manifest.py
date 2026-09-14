@@ -1,10 +1,12 @@
 """Architecture contract for the closed native-variant manifest."""
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.machinery
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -24,6 +26,64 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PYTEST_CONFTEST = ROOT / "tests" / "python" / "conftest.py"
 SERIAL_PARENT_MPI_SMOKE = ROOT / "tests" / "cmake" / "run_serial_parent_mpi_target.cmake"
 HDF5_WITHOUT_MPI_SMOKE = ROOT / "tests" / "cmake" / "expect_hdf5_without_mpi_rejected.cmake"
+
+
+@pytest.mark.parametrize("launcher", ["m4", "ci", "ctest"])
+def test_mpi_script_bootstraps_preserve_direct_script_imports_and_arguments(
+    launcher, tmp_path, monkeypatch
+):
+    if launcher == "m4":
+        spec = importlib.util.spec_from_file_location(
+            "_m4_bootstrap_regression", ROOT / "scripts/run_m4_gate.py"
+        )
+        assert spec is not None and spec.loader is not None
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        monkeypatch.setattr(runner.shutil, "which", lambda _: "/usr/bin/mpiexec")
+        bootstrap = runner._mpi_python_command("mpiexec", 2, "probe.py")[5]
+    elif launcher == "ci":
+        source = CI_WORKFLOW.read_text(encoding="utf-8")
+        match = re.search(r'^\s*native_script_bootstrap="(.*)"$', source, re.MULTILINE)
+        assert match is not None
+        bootstrap = match.group(1)
+    else:
+        source = PYTHON_CMAKE.read_text(encoding="utf-8")
+        match = re.search(r'set\(_pops_py_mpi_bootstrap\s+("(?:\\.|[^"\\])*")\)', source)
+        assert match is not None
+        bootstrap = ast.literal_eval(match.group(1))
+
+    # Keep the package import path separate from the script directory, as in installed CI.
+    # The selector stub proves ordering without loading a native extension or launching MPI.
+    package_root = tmp_path / "installed"
+    package = package_root / "pops"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "_native_selector.py").write_text(
+        "selected = None\ndef select_native_dimension(dimension):\n"
+        "    global selected\n    selected = dimension\n",
+        encoding="utf-8",
+    )
+    script_dir = tmp_path / "mpi scripts"
+    script_dir.mkdir()
+    (script_dir / "_compile_once.py").write_text(
+        "from pops._native_selector import selected\nassert selected == 2\n",
+        encoding="utf-8",
+    )
+    script = script_dir / "probe.py"
+    script.write_text(
+        "import _compile_once\nimport sys\nfrom pathlib import Path\n"
+        "assert __name__ == '__main__'\n"
+        "assert sys.argv == [__file__, '--proof', 'value with spaces'], sys.argv\n"
+        "assert Path(sys.path[0]) == Path(__file__).resolve().parent\n",
+        encoding="utf-8",
+    )
+    environment = {**os.environ, "PYTHONPATH": str(package_root), "POPS_NATIVE_DIM": "2"}
+    script_argument = str(script.relative_to(tmp_path) if launcher == "ci" else script)
+    result = subprocess.run(
+        [sys.executable, "-c", bootstrap, script_argument, "--proof", "value with spaces"],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _writer():
@@ -230,7 +290,7 @@ assert str(source_python) not in unselected
     assert root_residue.is_file()
 
 
-def test_ci_consumes_only_the_authenticated_dim2_native_variant():
+def test_ci_consumes_only_authenticated_explicit_native_variants():
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     conftest = PYTEST_CONFTEST.read_text(encoding="utf-8")
 
@@ -242,7 +302,7 @@ def test_ci_consumes_only_the_authenticated_dim2_native_variant():
         assert retired_root_contract not in workflow
 
     for required_contract in (
-        "pops-module-dim2-",
+        "pops-module-dim${{ matrix.dimension }}-",
         "pops-module-openmp-dim2-",
         "--exclude='_native/***'",
         "scripts/verify_installed_native.py",
@@ -252,14 +312,11 @@ def test_ci_consumes_only_the_authenticated_dim2_native_variant():
         "build-mpi/python-package/pops/_native/dim2/",
         '--expect-dim "$POPS_NATIVE_DIM" --expect-mpi --expect-parallel-hdf5',
         "_pops = select_native_dimension(2)",
-        "select_native_dimension(2); import runpy, sys",
+        "select_native_dimension(2); import os, runpy, sys",
     ):
         assert required_contract in workflow
 
     native_jobs = (
-        ("gate-python-prewarm", "gate-python-build"),
-        ("gate-python-build", "gate-python"),
-        ("gate-python", "gate-python-compile-cache"),
         ("gate-python-compile-cache", "gate-mpi-prewarm"),
         ("gate-mpi-prewarm", "gate"),
         ("mpi", "gate-openmp-prewarm"),
@@ -271,6 +328,15 @@ def test_ci_consumes_only_the_authenticated_dim2_native_variant():
         if next_job is not None:
             job = job.split(f"\n  {next_job}:\n", 1)[0]
         assert 'POPS_NATIVE_DIM: "2"' in job, job_name
+
+    build = workflow.split("\n  gate-python-build:\n", 1)[1].split("\n  gate-python:\n", 1)[0]
+    assert 'POPS_NATIVE_DIM: ${{ matrix.dimension }}' in build
+    assert 'dimension: ${{ fromJSON(needs.set-mode.outputs.python_dimensions) }}' in build
+    authentication = build.split("- name: Authenticate Dim=${{ matrix.dimension }} Python native variant", 1)[1]
+    authentication, upload = authentication.split("- name: Upload Python module artifact", 1)
+    assert "scripts/verify_installed_native.py" in authentication
+    assert '--expect-dim "$POPS_NATIVE_DIM" --expect-serial' in authentication
+    assert "name: gate-python-build-kokkos-py-dim${{ matrix.dimension }}" in upload
 
     assert 'value = environment.get("POPS_NATIVE_DIM")' in conftest
     assert 'select_native_dimension(native_dimension)' in conftest
@@ -380,7 +446,7 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
     )
     assert "from pops._native_selector import select_native_dimension" in source
     assert "select_native_dimension(int(os.environ[\\\"POPS_NATIVE_DIM\\\"]))" in source
-    assert "runpy.run_path(sys.argv[1], run_name=\\\"__main__\\\")" in source
+    assert "runpy.run_path(sys.argv[0], run_name=\\\"__main__\\\")" in source
     assert source.count("pops_add_mpi_pytest_entrypoint(\"") == 1
     assert 'NAME "pops_python_mpi_${_pops_py_mpi_stem}_np2"' in source
     assert "PROCESSORS 2" in source

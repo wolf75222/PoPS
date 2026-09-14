@@ -66,6 +66,7 @@ def test_plugin_provider_registers_resolves_and_emits_without_dispatcher_changes
     prelude = []
     node = SimpleNamespace(
         id=17,
+        region=0,
         op="solve_linear",
         attrs={
             "preconditioner_provider": provider.authority(),
@@ -122,9 +123,9 @@ def test_plugin_provider_registers_resolves_and_emits_without_dispatcher_changes
         },
     })
     assert _prepared_native_components(program) == (
+        nullspace_component,
         method.native_component,
         provider.native_component,
-        nullspace_component,
     )
     assert _prepared_native_component_includes(program) == (
         "#include <pops/numerics/elliptic/linear/generic_krylov.hpp>  "

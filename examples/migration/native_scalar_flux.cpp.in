@@ -1,0 +1,68 @@
+#include <pops/runtime/config/generated_component_abi.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+
+namespace {
+
+int evaluate(void*, const PopsNumericalFluxRequestV1* request,
+             PopsNumericalFluxResultV1* result) {
+  if (request == nullptr || result == nullptr ||
+      request->left.component_count != 1 ||
+      request->right.component_count != 1 ||
+      result->normal_flux.component_count != 1) {
+    return 2;
+  }
+
+  const auto* left = static_cast<const double*>(request->left.data);
+  const auto* right = static_cast<const double*>(request->right.data);
+  const auto* normal = static_cast<const double*>(request->normals.data);
+  auto* flux = static_cast<double*>(result->normal_flux.data);
+  const std::size_t points = request->left.extents[0];
+
+  for (std::size_t point = 0; point < points; ++point) {
+    const std::size_t left_offset = point * request->left.axis_strides[0];
+    const std::size_t right_offset = point * request->right.axis_strides[0];
+    const std::size_t normal_offset = point * request->normals.axis_strides[0];
+    const std::size_t output_offset =
+        point * result->normal_flux.axis_strides[0];
+    const double signed_speed = normal[normal_offset];
+    const double left_flux = signed_speed * left[left_offset];
+    const double right_flux = signed_speed * right[right_offset];
+    flux[output_offset] =
+        0.5 * (left_flux + right_flux) -
+        0.5 * std::abs(signed_speed) *
+            (right[right_offset] - left[left_offset]);
+    result->stability_bounds[point] = std::abs(signed_speed);
+    result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
+  }
+
+  result->status = {sizeof(PopsComponentStatusV1), 0,
+                    POPS_COMPONENT_CONTINUE_V1, nullptr};
+  return 0;
+}
+
+const PopsNumericalFluxApiV1 flux_table = {
+    {sizeof(PopsNumericalFluxApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+     POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, nullptr, nullptr},
+    &evaluate};
+const PopsComponentInterfaceEntryV1 interface_entry = {
+    POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
+    sizeof(PopsNumericalFluxApiV1), &flux_table};
+const PopsComponentApiV1 component_api = {
+    sizeof(PopsComponentApiV1),
+    POPS_COMPONENT_PROTOCOL_ABI_V1,
+    POPS_ABI_KEY_LITERAL,
+    POPS_COMPONENT_CATALOG_SHA256_V1,
+    @COMPONENT_ID@,
+    @SEMANTIC_DIGEST@,
+    @MANIFEST_DIGEST@,
+    1,
+    &interface_entry};
+
+}  // namespace
+
+extern "C" const PopsComponentApiV1* pops_component_interface_v1() {
+  return &component_api;
+}

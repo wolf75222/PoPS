@@ -1,17 +1,12 @@
 """Foundational immutable values shared by temporal graph records."""
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal
-from enum import Enum
-from fractions import Fraction
 from typing import Any, ClassVar, cast
 
-from pops.identity.scalar import ScalarLiteral, scalar_data
-from pops.model.ownership import OwnerPath
 from pops.time.points import Clock, StagePoint, TimePoint
+from pops.time.canonical_data import CanonicalData as CanonicalData, strict_data as strict_data
 
 
 def nonempty(value: Any, *, where: str) -> str:
@@ -24,45 +19,6 @@ def node_id(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError("ProgramGraph node_id must be a non-negative Python int")
     return value
-
-
-def strict_data(value: Any, *, where: str) -> Any:
-    if isinstance(value, CanonicalData):
-        return value.to_data()
-    if value is None or isinstance(value, (bool, str)):
-        return value
-    if isinstance(value, (int, float, Decimal, Fraction, ScalarLiteral)):
-        return {"scalar": scalar_data(value)}
-    if isinstance(value, Enum):
-        return {
-            "enum": "%s.%s.%s"
-            % (type(value).__module__, type(value).__qualname__, value.name)
-        }
-    if isinstance(value, OwnerPath):
-        return {"owner_path": value.canonical().to_data()}
-    if isinstance(value, (Clock, TimePoint, StagePoint)):
-        return value.to_data()
-    if isinstance(value, Mapping):
-        if any(not isinstance(key, str) or not key for key in value):
-            raise TypeError("%s mapping keys must be non-empty strings" % where)
-        return {
-            key: strict_data(item, where="%s.%s" % (where, key))
-            for key, item in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [
-            strict_data(item, where="%s[%d]" % (where, index))
-            for index, item in enumerate(value)
-        ]
-    canonical = getattr(value, "canonical_identity", None)
-    if callable(canonical):
-        return strict_data(canonical(), where=where)
-    to_data = getattr(value, "to_data", None)
-    if callable(to_data) and getattr(value, "__pops_ir_immutable__", False) is True:
-        return strict_data(to_data(), where=where)
-    raise TypeError(
-        "%s contains mutable/opaque %s; provide canonical immutable data"
-        % (where, type(value).__name__))
 
 
 def _canonical_int(value: Any) -> int | None:
@@ -211,21 +167,6 @@ def validate_synchronization_relation_data(
                     "history_interpolation provider does not match exactly one retained history"
                 )
     return data
-
-
-@dataclass(frozen=True, slots=True, init=False)
-class CanonicalData:
-    """Hashable canonical-data snapshot used for semantic node metadata."""
-
-    _json: str
-
-    def __init__(self, value: Any, *, where: str = "ProgramGraph metadata") -> None:
-        data = strict_data(value, where=where)
-        object.__setattr__(
-            self, "_json", json.dumps(data, sort_keys=True, separators=(",", ":")))
-
-    def to_data(self) -> Any:
-        return json.loads(self._json)
 
 
 @dataclass(frozen=True, slots=True)

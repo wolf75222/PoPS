@@ -385,8 +385,8 @@ def test_module_lowering_retains_typed_contract_producer_and_availability():
         lambda module: module.field_space("electric", ("phi",), units=("V",)),
     ),
 )
-def test_module_spaces_refuse_opaque_units_until_a_typed_protocol_exists(declare):
-    with pytest.raises(TypeError, match="Space units are unsupported"):
+def test_module_spaces_refuse_opaque_units_in_the_typed_dimension_protocol(declare):
+    with pytest.raises(TypeError, match="Space units require PhysicalDimension values"):
         declare(Module("opaque-units"))
 
 

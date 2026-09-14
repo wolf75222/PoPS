@@ -56,25 +56,34 @@ _CACHE_ACTIONS = frozenset(
 )
 
 
-def schedule_lowering_cache_required(lowered: Any, *, where: str) -> bool:
-    """Derive cache authority from one exact native schedule lowering contract."""
+def schedule_lowering_cache_required(
+    lowered: Any, *, where: str, retained_output: bool = False,
+) -> bool:
+    """Derive native cache use; retained ProviderPack outputs own their storage."""
     if type(lowered) is not ScheduleLoweringIR:
         raise TypeError(
             "Schedule.native_schedule_ir() at %s must return an exact ScheduleLoweringIR, got %s"
             % (where, type(lowered).__name__)
         )
     actions = lowered.off.before_due + lowered.off.after_due + lowered.off.off_cadence
-    return any(action in _CACHE_ACTIONS for action in actions)
+    cache_actions = _CACHE_ACTIONS
+    if retained_output:
+        cache_actions = cache_actions - {ScheduleAction.STORE, ScheduleAction.RESTORE}
+    return any(action in cache_actions for action in actions)
 
 
-def native_schedule_cache_required(schedule: Any, *, where: str) -> bool:
+def native_schedule_cache_required(
+    schedule: Any, *, where: str, retained_output: bool = False,
+) -> bool:
     """Derive cache authority from the exact lowering contract consumed by code generation."""
     if not isinstance(schedule, Schedule):
         raise TypeError(
             "schedule at %s must implement the Schedule interface; got %s"
             % (where, type(schedule).__name__)
         )
-    return schedule_lowering_cache_required(schedule.native_schedule_ir(where=where), where=where)
+    return schedule_lowering_cache_required(
+        schedule.native_schedule_ir(where=where), where=where, retained_output=retained_output
+    )
 
 
 @stable_component_identity("pops://time/schedule/trigger")

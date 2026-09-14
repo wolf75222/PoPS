@@ -51,6 +51,7 @@ from pops.time import (
     TimePoint,
     every,
 )
+from pops.time import evaluation_partition
 
 
 DEFAULT_CELLS = 8
@@ -241,9 +242,10 @@ def _guarded_imex_program(
     explicit_rate = program.value(
         "imex-euler_k_exp_0", explicit_operator(stage, fields), at=point,
     )
-    implicit_rate = program.value(
-        "imex-euler_k_imp_0", program.apply(linear, stage), at=point,
-    )
+    with evaluation_partition(program, "implicit"):
+        implicit_rate = program.value(
+            "imex-euler_k_imp_0", program.apply(linear, stage), at=point,
+        )
     candidate = program.value(
         "imex-euler_step",
         temporal.n + program.dt * explicit_rate + program.dt * implicit_rate,

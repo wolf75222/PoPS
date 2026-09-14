@@ -100,6 +100,17 @@ class InitialConditionRegistry(FreezableRegistry):
             )
         return builder.resolve()
 
+    def for_subjects(self, subjects: Any) -> InitialConditionRegistry:
+        """Select exact registered initials belonging to one layout."""
+        selected = frozenset(subject.qualified_id for subject in subjects)
+        missing = selected - self._conditions.keys()
+        if missing:
+            raise ValueError("layout initial conditions are missing: %s" % sorted(missing))
+        projected = InitialConditionRegistry(self.owner_path, self._resolver)
+        projected._conditions = {key: value for key, value in self._conditions.items()
+                                 if key in selected}
+        return projected
+
     def resolve_amr(
         self,
         *,

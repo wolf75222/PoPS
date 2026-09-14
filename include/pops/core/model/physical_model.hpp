@@ -2,7 +2,9 @@
 /// @brief C++20 concepts defining the contract of the physics layer.
 ///
 /// Concept hierarchy:
-///   PhysicalModel: minimal contract (flux, source, wave speed, elliptic RHS).
+///   PhysicalStateFor: exact-ranked state metadata, with no mandatory operations.
+///   PhysicalTransportFor / PhysicalSourceFor / PhysicalEllipticRhsFor: pointwise operations.
+///   PhysicalModel: compatibility aggregate (flux, source, wave speed, elliptic RHS).
 ///   HasPrimitiveVars: optional extension (primitive variables + cons<->prim conversions).
 ///   HyperbolicPhysicalModel: complete hyperbolic brick (flux + conversions + Variables).
 ///   HyperbolicModel: compat alias for HyperbolicPhysicalModel.
@@ -68,28 +70,51 @@ POPS_HD constexpr int provider_count() {
   return provider_count_for<M, kNativeDimension>();
 }
 
-/// Minimal contract of a physical model.
-///
-/// Requires: State, a non-negative exact provider count, n_vars, flux(u,p,dir),
-/// source(u,p), elliptic_rhs(u). All these methods must be POPS_HD if called
-/// in kernels (not checked by the concept; responsibility of the author).
-/// Finite-volume execution additionally instantiates the hyperbolic methods with the exact
-/// The numerical flux may receive its qualified opaque carrier, while source, stability, and
-/// projection use the same compact value protocol.
-/// Do not confuse with HyperbolicPhysicalModel which adds the variables and conversions.
+/// Metadata shared by exact-ranked operation consumers. A storage association does not imply
+/// transport, source, elliptic, or recovery capabilities; each selected consumer checks its own.
 template <class M, int Dim>
-concept PhysicalModelFor =
+concept PhysicalStateFor = (Dim >= 1 && Dim <= 3) && requires {
+  typename M::State;
+  requires(M::dimension == Dim);
+  { M::n_vars } -> std::convertible_to<int>;
+};
+
+/// Pointwise transport spelling retained by the aggregate model adapter. Numerical-flux
+/// consumers additionally bind the existing PhysicalFluxView/PhysicalFlux contract, which supports
+/// statically selected axes and the qualified opaque provider carrier.
+template <class M, int Dim>
+concept PhysicalTransportFor =
+    PhysicalStateFor<M, Dim> && requires { requires(provider_count_for<M, Dim>() >= 0); } &&
     requires(const M m, const typename M::State u,
              const ProviderValues<provider_count_for<M, Dim>()> providers, int dir) {
-      typename M::State;
-      requires(M::dimension == Dim);
-      requires(provider_count_for<M, Dim>() >= 0);
-      { M::n_vars } -> std::convertible_to<int>;
       { m.flux(u, providers, dir) } -> std::same_as<typename M::State>;
       { m.max_wave_speed(u, providers, dir) } -> std::convertible_to<Real>;
+    };
+
+/// Local source evaluation consumes exactly its declared provider pack. No flux, wave-speed,
+/// primitive-variable, or elliptic method is needed by the source materialization kernel.
+template <class M, int Dim>
+concept PhysicalSourceFor =
+    PhysicalStateFor<M, Dim> && requires { requires(provider_count_for<M, Dim>() >= 0); } &&
+    requires(const M m, const typename M::State u,
+             const ProviderValues<provider_count_for<M, Dim>()> providers) {
       { m.source(u, providers) } -> std::same_as<typename M::State>;
+    };
+
+/// Existing scalar problem-load observation. This is a pointwise load contract, not a claim
+/// that an arbitrary field problem has a supported solver or discretization.
+template <class M, int Dim>
+concept PhysicalEllipticRhsFor =
+    PhysicalStateFor<M, Dim> && requires(const M m, const typename M::State u) {
       { m.elliptic_rhs(u) } -> std::convertible_to<Real>;
     };
+
+/// Compatibility aggregate used by existing CompositeModel consumers. Its methods are the
+/// conjunction of meaningful operation contracts; new consumers select only the needed contract.
+/// Device-callable methods must still be POPS_HD (not checked by C++ concepts).
+template <class M, int Dim>
+concept PhysicalModelFor =
+    PhysicalTransportFor<M, Dim> && PhysicalSourceFor<M, Dim> && PhysicalEllipticRhsFor<M, Dim>;
 
 template <class M>
 concept PhysicalModel = PhysicalModelFor<M, kNativeDimension>;
@@ -132,26 +157,23 @@ concept PhysicalModel = PhysicalModelFor<M, kNativeDimension>;
 
 /// OPTIONAL trait: stability speed lambda* replacing max_wave_speed in the block CFL.
 template <class M>
-concept HasStabilitySpeed =
-    requires(const M m, const typename M::State u,
-             const ProviderValues<provider_count<M>()> providers, int dir) {
-      { m.stability_speed(u, providers, dir) } -> std::convertible_to<Real>;
+concept HasStabilitySpeed = requires(const M m, const typename M::State u,
+                                     const ProviderValues<provider_count<M>()> providers, int dir) {
+  { m.stability_speed(u, providers, dir) } -> std::convertible_to<Real>;
 };
 
 /// OPTIONAL trait: local source frequency mu [1/s] (bound dt <= cfl / max mu, without h).
 template <class M>
-concept HasSourceFrequency =
-    requires(const M m, const typename M::State u,
-             const ProviderValues<provider_count<M>()> providers) {
-      { m.source_frequency(u, providers) } -> std::convertible_to<Real>;
+concept HasSourceFrequency = requires(const M m, const typename M::State u,
+                                      const ProviderValues<provider_count<M>()> providers) {
+  { m.source_frequency(u, providers) } -> std::convertible_to<Real>;
 };
 
 /// OPTIONAL trait: direct admissible step per cell (bound dt <= min stability_dt, without cfl).
 template <class M>
-concept HasStabilityDt =
-    requires(const M m, const typename M::State u,
-             const ProviderValues<provider_count<M>()> providers) {
-      { m.stability_dt(u, providers) } -> std::convertible_to<Real>;
+concept HasStabilityDt = requires(const M m, const typename M::State u,
+                                  const ProviderValues<provider_count<M>()> providers) {
+  { m.stability_dt(u, providers) } -> std::convertible_to<Real>;
 };
 
 /// Trait OPTIONNEL : PROJECTION PONCTUELLE post-pas U -> project(U, aux) (ADC-177). Le stepper
@@ -161,13 +183,14 @@ concept HasStabilityDt =
 /// de voisin) ; les formules elles-memes (realisabilite, clamps -- ecrits en max/min via abs/sign)
 /// restent cote cas, seul le hook est coeur. POPS_HD obligatoire (evaluee dans un kernel).
 template <class M>
-concept HasPointwiseProjection =
-    requires(const M m, const typename M::State u,
-             const ProviderValues<provider_count<M>()> providers) {
-      { m.project(u, providers) } -> std::same_as<typename M::State>;
+concept HasPointwiseProjection = requires(const M m, const typename M::State u,
+                                          const ProviderValues<provider_count<M>()> providers) {
+  { m.project(u, providers) } -> std::same_as<typename M::State>;
 };
 
-/// OPTIONAL extension of a PhysicalModel: primitive variables + cons<->prim conversions.
+/// OPTIONAL state conversion contract: primitive variables + cons<->prim conversions.
+/// Source-only and transport-only laws can use the existing prepared recovery consumer without
+/// acquiring unrelated flux, source, or elliptic methods.
 ///
 /// Lets the spatial operator reconstruct in primitive variables (rho, u, p) rather than
 /// conservative (more robust for Euler: positivity of rho and p), and centralizes the
@@ -177,7 +200,8 @@ concept HasPointwiseProjection =
 /// The spatial operator then reconstructs in primitive form (more robust: rho/p positivity).
 template <class M>
 concept HasPrimitiveVars =
-    PhysicalModel<M> && requires(const M m, const typename M::State u, const typename M::Prim p) {
+    PhysicalStateFor<M, kNativeDimension> &&
+    requires(const M m, const typename M::State u, const typename M::Prim p) {
       typename M::Prim;
       { m.to_primitive(u) } -> std::same_as<typename M::Prim>;
       { m.to_conservative(p) } -> std::same_as<typename M::State>;

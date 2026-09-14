@@ -40,6 +40,7 @@ mpi_variants = [2]
 name = "test_amr_multiblock_implicit_transaction"
 sources = ["tests/cpp/integration/amr/test_amr_multiblock_implicit_transaction.cpp"]
 labels = ["integration", "amr", "medium"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_amr_multiblock_regrid_union"
@@ -47,9 +48,28 @@ sources = ["tests/cpp/integration/amr/test_amr_multiblock_regrid_union.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
+name = "test_amr_hierarchy_barrier_continuation"
+sources = ["tests/cpp/integration/amr/test_amr_hierarchy_barrier_continuation.cpp"]
+labels = ["integration", "amr", "medium"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_amr_hierarchy_field_scratch"
+sources = ["tests/cpp/integration/amr/test_amr_hierarchy_field_scratch.cpp"]
+labels = ["integration", "amr", "medium"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_amr_synchronized_continuation"
+sources = ["tests/cpp/integration/amr/test_amr_synchronized_continuation.cpp"]
+labels = ["integration", "amr", "medium"]
+mpi_variants = [2]
+
+[[cpp.suite]]
 name = "test_amr_multiblock_substeps"
 sources = ["tests/cpp/integration/amr/test_amr_multiblock_substeps.cpp"]
 labels = ["integration", "amr", "medium"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_amr_named_field"
@@ -64,6 +84,12 @@ labels = ["integration", "amr", "medium"]
 [[cpp.suite]]
 name = "test_amr_program_diffusion"
 sources = ["tests/cpp/integration/amr/test_amr_program_diffusion.cpp"]
+labels = ["integration", "amr", "medium"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_amr_program_field_publication"
+sources = ["tests/cpp/integration/amr/test_amr_program_field_publication.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
@@ -118,6 +144,18 @@ name = "test_mpi_amr_compiled_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_compiled_parity.cpp"]
 labels = ["backend", "mpi", "medium"]
 mpi_rank_parity = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_exchange_batches"
+sources = ["tests/cpp/integration/mpi/test_mpi_exchange_batches.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [3]
+
+[[cpp.suite]]
+name = "test_mpi_amr_spatial_norm"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
 
 [[cpp.suite]]
 name = "test_mpi_amr_distributed_coarse"
@@ -356,6 +394,7 @@ labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
 name = "test_amr_synthetic_program_loader_transaction"
 sources = ["tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp"]
 labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_amr_native_loader"
@@ -516,6 +555,11 @@ labels = ["unit", "parallel", "fast"]
 mpi_variants = [1, 2]
 
 [[cpp.suite]]
+name = "test_native_field_attachment"
+sources = ["tests/cpp/unit/runtime/test_native_field_attachment.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_platform_manifest"
 sources = ["tests/cpp/unit/runtime/test_platform_manifest.cpp"]
 labels = ["unit", "runtime", "small"]
@@ -588,6 +632,12 @@ labels = ["unit", "elliptic", "fast"]
 [[cpp.suite]]
 name = "test_coupled_fieldsolve"
 sources = ["tests/cpp/unit/elliptic/test_coupled_fieldsolve.cpp"]
+labels = ["unit", "elliptic", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_composite_general_field"
+sources = ["tests/cpp/unit/elliptic/test_composite_general_field.cpp"]
 labels = ["unit", "elliptic", "fast"]
 mpi_variants = [2]
 
@@ -884,6 +934,11 @@ sources = ["tests/cpp/unit/mesh/test_sync_residence.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_diffusion"
+sources = ["tests/cpp/unit/runtime/test_prepared_diffusion.cpp"]
+labels = ["unit", "numerics", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_diffusion"
 sources = ["tests/cpp/unit/numerics/test_diffusion.cpp"]
 labels = ["unit", "numerics", "fast"]
@@ -979,6 +1034,11 @@ sources = ["tests/cpp/unit/physics/test_aux_single_source.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
+name = "test_narrow_physical_operations"
+sources = ["tests/cpp/unit/physics/test_narrow_physical_operations.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
 name = "test_composite_fac_variable_eps"
 sources = ["tests/cpp/unit/physics/test_composite_fac_variable_eps.cpp"]
 labels = ["unit", "physics", "fast"]
@@ -1021,6 +1081,18 @@ labels = ["unit", "runtime", "fast"]
 [[cpp.suite]]
 name = "test_generated_amr_system_block"
 sources = ["tests/cpp/unit/runtime/test_generated_amr_system_block.cpp"]
+labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_generated_stability_speed"
+sources = ["tests/cpp/unit/runtime/test_generated_stability_speed.cpp"]
+labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_system_interface_core_session"
+sources = ["tests/cpp/unit/runtime/test_system_interface_core_session.cpp"]
 labels = ["unit", "runtime", "fast"]
 mpi_variants = [2]
 
@@ -1076,6 +1148,12 @@ sources = ["tests/cpp/unit/runtime/test_spatial_discretisation.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
+name = "test_collective_step_rejection"
+sources = ["tests/cpp/unit/runtime/test_collective_step_rejection.cpp"]
+labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
 name = "test_step_attempt_rejected_amr_link"
 sources = ["tests/cpp/unit/runtime/test_step_attempt_rejected_amr_link.cpp"]
 labels = ["unit", "runtime", "amr", "fast"]
@@ -1097,6 +1175,12 @@ labels = ["unit", "runtime", "fast"]
 
 # Exact-cover fence: these CMake-registered targets predate the manifest-driven sharder.
 # They remain real CTest coverage and therefore must be selected, built, and run by one shard.
+[[cpp.suite]]
+name = "test_amr_layout_transfer"
+sources = ["tests/cpp/unit/runtime/test_amr_layout_transfer.cpp"]
+labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
+
 [[cpp.suite]]
 name = "test_amr_transfer_properties"
 sources = ["tests/cpp/integration/amr/test_amr_transfer_properties.cpp"]
@@ -1131,11 +1215,23 @@ labels = ["integration", "runtime", "medium"]
 name = "test_prepared_hyperbolic_boundary"
 sources = ["tests/cpp/unit/mesh/test_prepared_hyperbolic_boundary.cpp"]
 labels = ["unit", "mesh", "fast"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_prepared_stream_executor"
 sources = ["tests/cpp/unit/runtime/test_prepared_stream_executor.cpp"]
 labels = ["unit", "runtime", "accelerator", "fast"]
+
+[[cpp.suite]]
+name = "test_prepared_resource_cache"
+sources = ["tests/cpp/unit/runtime/test_prepared_resource_cache.cpp"]
+labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_physical_support_transfer"
+sources = ["tests/cpp/unit/runtime/test_physical_support_transfer.cpp"]
+labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
 name = "test_program_reflux_ledger"
@@ -1156,6 +1252,11 @@ labels = ["integration", "runtime", "amr", "medium"]
 name = "test_cell_temporal_program_route"
 sources = ["tests/cpp/integration/amr/test_cell_temporal_program_route.cpp"]
 labels = ["integration", "runtime", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_prepared_spatial_residual"
+sources = ["tests/cpp/unit/runtime/test_prepared_spatial_residual.cpp"]
+labels = ["unit", "runtime", "elliptic", "fast"]
 
 [[cpp.suite]]
 name = "test_residual_operator"
@@ -1327,3 +1428,19 @@ labels = ["unit", "python", "time", "fast"]
 name = "pops_python_architecture"
 path = "tests/python/architecture"
 labels = ["quality", "python", "architecture", "fast"]
+
+[[cpp.suite]]
+name = "test_amr_transition_invariants"
+sources = ["tests/cpp/integration/amr/test_amr_transition_invariants.cpp"]
+labels = ["integration", "amr", "nd", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_history_flux_snapshot"
+sources = ["tests/cpp/unit/runtime/test_amr_history_flux_snapshot.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_mpi_transition_invariants"
+sources = ["tests/cpp/integration/mpi/test_mpi_transition_invariants.cpp"]
+labels = ["backend", "mpi", "amr", "nd", "medium"]
+mpi_nproc = [2, 4]

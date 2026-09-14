@@ -7,6 +7,7 @@ from typing import Any, cast
 from pops.codegen._rhs_coherence import (
     groupable_default_rhs,
     plan_rhs_coherence,
+    resolved_rhs_neighbours,
     uses_default_flux,
 )
 
@@ -401,7 +402,8 @@ def validate_shared_interface_program(
             )
 
     values = list(program._values)
-    coherence = plan_rhs_coherence(program, values, block_key=_block_name)
+    coherence = plan_rhs_coherence(program, values, block_key=_block_name,
+        neighbours=resolved_rhs_neighbours(blocks))
     hierarchy = None if resolved_hierarchy is None else resolved_hierarchy.plan
     implicit_jacvec_ids = _validate_shared_interface_jacvec_pairs(
         program, target=target, hierarchy=hierarchy, neighbours=neighbours,

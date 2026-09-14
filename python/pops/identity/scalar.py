@@ -23,6 +23,25 @@ _BINARY64_EXACT_INTEGER_MAX = 1 << 53
 _CPP_TYPE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
 
 
+def native_binary64(value: Any, *, where: str) -> float:
+    """Decode exactly one canonical finite binary64 value; no loose numeric fallback."""
+    if not isinstance(value, Mapping) or set(value) != {"binary64"} \
+            or not isinstance(value["binary64"], str):
+        raise TypeError("%s must be one canonical binary64 value" % where)
+    try:
+        result = float.fromhex(value["binary64"])
+    except (OverflowError, ValueError):
+        raise ValueError("%s contains an invalid binary64 payload" % where) from None
+    if not math.isfinite(result):
+        raise ValueError("%s must be finite" % where)
+    if value["binary64"] != result.hex():
+        raise ValueError(
+            "%s binary64 payload is not canonical; expected %r"
+            % (where, result.hex())
+        )
+    return result
+
+
 def _finite_real_token(value: Any, *, description: str) -> str:
     """Round @p value once at the explicit ``pops::Real`` target boundary."""
     try:

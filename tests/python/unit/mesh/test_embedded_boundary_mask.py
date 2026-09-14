@@ -15,6 +15,9 @@ from tests.python.support.explicit_program import install_forward_euler_program
 
 import numpy as np
 
+# Cold native model and Program compilation can exceed the default 300-second budget.
+POPS_PROCESS_TIMEOUT = 900
+
 try:
     from pops.runtime._engine_descriptors import (
         BackgroundDensity, Explicit, FluidState, IsothermalFlux, Model, NoSource, Periodic, Spatial,

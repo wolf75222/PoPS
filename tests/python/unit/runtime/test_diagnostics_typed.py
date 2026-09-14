@@ -48,7 +48,7 @@ def test_norm_accepts_typed_norm_kind(cls, kind):
     assert n.options()["norm"] == kind
     assert n.options()["scheme"] == "norm"
     assert n.options()["block"] == "ne"
-    assert n.options()["role"] == "Density"
+    assert n.options()["role"] == "density"
     assert n.capabilities().to_dict()["norm_kind"] == kind
 
 
@@ -145,10 +145,10 @@ def test_balance_ledger_selects_exact_native_component_terms():
     execution = balance.diagnostic_execution()
     operation, = execution["operations"]
 
-    assert execution["role"] == "Density"
+    assert execution["role"] == "density"
     assert operation["automatic_terms"] == ["projection", "reflux"]
     assert operation["balance_component"] == 0
-    assert balance.options()["role"] == "Density"
+    assert balance.options()["role"] == "density"
     assert ledger.to_data()["role"] == "Density"
     assert ledger.to_data()["component"] == 0
     assert ledger.to_data()["automatic_terms"] == ["projection", "reflux"]
@@ -174,7 +174,7 @@ def test_integral_is_a_sum_reduction():
     assert isinstance(mass, Descriptor)
     assert mass.category == "diagnostic_integral"
     assert mass.options()["scheme"] == "integral"
-    assert mass.options()["role"] == "Density"
+    assert mass.options()["role"] == "density"
     assert mass.options()["block"] is None
     assert mass.options()["coefficient"] == (-2.0).hex()
     assert mass.capabilities().to_dict()["reduction"] == "sum"

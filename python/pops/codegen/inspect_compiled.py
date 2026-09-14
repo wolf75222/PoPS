@@ -343,10 +343,42 @@ def _field_output_components_by_block(compiled: Any) -> dict[str, tuple[str, ...
     return {owner: tuple(components) for owner, components in produced.items()}
 
 
-def _build_aux_arguments(model_rows: Any, produced_by_block: Any) -> dict[str, dict[str, Any]]:
+def _auxiliary_packs_by_block(compiled: Any) -> dict[str, Any]:
+    """Read detached provider authority, including consumed Program field publications."""
+    from pops.model.provider_pack import ProviderPack
+
+    result = {}
+    for block in getattr(getattr(compiled, "plan", None), "blocks", ()):
+        operations = block.resolved_operations
+        if operations is not None:
+            result[block.name] = ProviderPack.from_data(
+                operations.to_data()["provider_evidence"]["auxiliary"])
+    return result
+
+
+def _build_aux_arguments(
+    model_rows: Any, produced_by_block: Any, auxiliary_packs: Any = None
+) -> dict[str, dict[str, Any]]:
     """Build external aux inputs without letting one block exempt another block's homonym."""
     aux_args: dict[str, dict[str, Any]] = {}
     for row in model_rows:
+        pack = (auxiliary_packs or {}).get(row.block_name)
+        if pack is not None:
+            # A cell carrier is not necessarily an input: the exact resolved producer
+            # may be a consumed field solve or a derived provider. Keep all homonyms
+            # with a runtime-input entry, and never infer ownership from the spelling.
+            declared = {key.component for key in pack}
+            if declared != set(row.provider_components):
+                raise ValueError(
+                    "compiled block %r auxiliary metadata differs from its resolved ProviderPack"
+                    % row.block_name)
+            for key in pack:
+                entry = pack.declared_entry(key)
+                if entry.producer == "runtime_input" and entry.available and entry.slot is not None:
+                    aux_args.setdefault(key.component, {"layout": "cell", "required": True})
+            continue
+        # Low-level/legacy artifacts without resolved operation metadata retain their
+        # declared input contract and exact legacy field-output routes.
         produced = frozenset(produced_by_block.get(row.block_name, ()))
         for name in row.provider_components:
             if name not in produced:
@@ -404,7 +436,7 @@ def _build_arguments(
     param_args = build_parameter_arguments(compiled, params)
 
     produced_by_block = _field_output_components_by_block(compiled)
-    aux_args = _build_aux_arguments(model_rows, produced_by_block)
+    aux_args = _build_aux_arguments(model_rows, produced_by_block, _auxiliary_packs_by_block(compiled))
 
     outputs = {}
     if program is not None:

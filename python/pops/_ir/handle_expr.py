@@ -34,6 +34,19 @@ class ValueExpr(Expr):
                 % type(handle).__name__)
         self.handle = handle
 
+    def __getitem__(self, component: str | int) -> Expr:
+        """Select an exact named or indexed component of the declaration's Space."""
+        from .quantity import QuantityRef
+
+        components = tuple(getattr(getattr(self.handle, "space", None), "components", ()))
+        if type(component) is int:
+            if not 0 <= component < len(components):
+                raise IndexError("ValueExpr component index is outside its typed Space")
+            component = components[component]
+        elif type(component) is not str:
+            raise TypeError("ValueExpr component must be a name or non-negative integer index")
+        return QuantityRef(self.handle, component)
+
     def eval(self, env: Any) -> Any:
         key = self.handle.qualified_id
         if key not in env:

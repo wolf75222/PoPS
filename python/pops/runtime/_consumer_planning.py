@@ -31,6 +31,7 @@ from ._consumer_effects import (
     PublicationTarget,
 )
 from ._runtime_plan_contracts import RuntimePlanBundle, refuse
+from ._consumer_ownership import consumer_block_owner
 
 
 def _schedule_coordinate(manifest: ConsumerManifest, moment: ConsumerMoment) -> int | None:
@@ -268,8 +269,10 @@ def require_consumer_collective_ownership(
     if not isinstance(communicator_id, str) or not communicator_id:
         raise TypeError("collective ownership requires an exact communicator identity")
     calls = {row.identity.token: row for row in runtime_plan.calls}
+    block_ids = tuple(sorted({row.block_id for row in runtime_plan.calls}))
     expectations = tuple(
-        (manifest, quantity, operation, strategy)
+        (manifest, quantity, operation, strategy, consumer_block_owner(
+            quantity.reference, block_ids, case_owner=manifest.handle.owner_path))
         for manifest in graph.nodes
         for quantity, operation, strategy in consumer_collective_requirements(manifest)
     )
@@ -296,10 +299,9 @@ def require_consumer_collective_ownership(
         )
         owners = tuple(
             (manifest.qualified_id, quantity.identity.token)
-            for manifest, quantity, operation, strategy in expectations
+            for manifest, quantity, operation, strategy, block_owner in expectations
             if call is not None
-            and getattr(quantity.reference.block_ref, "qualified_id", None)
-            == call.block_id
+            and block_owner == call.block_id
             and quantity.layout_id == call.layout_id
             and quantity.runtime_resource == collective.resource
             and operation == collective.operation

@@ -15,6 +15,7 @@ _MODEL_OWNER_SENSITIVE_OPS = frozenset(
         "local_transform",
         "solve_local_linear",
         "solve_local_nonlinear",
+        "solve_spatial_nonlinear",
         "coupled_rate",
         "solve_coupled_implicit",
         "condensed_coeffs",
@@ -122,6 +123,7 @@ def check_model_owner_dispatch(program: Any, model: Any) -> None:
 def _check_amr_flux_weights(program: Any) -> None:
     """Prove every conservative contribution reaches a commit as exact ``weight * dt * flux``."""
     from pops.codegen.program_emit_kernels import _coeff_metadata_terms
+    from pops.codegen.program_emit_diffusion import diffusive_flux_basis_count
 
     values = list(all_ops(program))
     stored_histories: dict[str, list[Any]] = {}
@@ -163,6 +165,10 @@ def _check_amr_flux_weights(program: Any) -> None:
             if value.op == "rhs":
                 current: object | frozenset[int] = (
                     frozenset({0}) if value.attrs.get("flux", True) else frozenset())
+            elif value.op == "diffusive_rhs":
+                current = (
+                    frozenset({0}) if diffusive_flux_basis_count(value) else frozenset()
+                )
             elif value.op == "history":
                 current = merged([
                     powers.get(source.id, frozenset())
@@ -190,6 +196,20 @@ def _check_amr_flux_weights(program: Any) -> None:
                     powers.get(value.attrs[key].id, frozenset())
                     for key in ("true_result", "false_result")
                 ])
+            elif value.op == "solve_spatial_nonlinear":
+                # One direct Q(solved) commit permits the composite adapter to consume
+                # the previous-stage weighted fragments before its implicit inverse.
+                # Its numerical seed and iterative residual carry no accepted quadrature.
+                from pops.time._program.spatial_solve import (
+                    validate_spatial_request, validate_spatial_commit,
+                )
+                validate_spatial_request(program, value)
+                validate_spatial_commit(program, value)
+                current = powers.get(value.inputs[0].id, frozenset())
+            elif (value.op == "solve_outcome_component" and value.inputs
+                  and value.inputs[0].op == "solve_outcome" and value.inputs[0].inputs
+                  and value.inputs[0].inputs[0].op == "solve_spatial_nonlinear"):
+                current = powers.get(value.inputs[0].id, frozenset())
             elif value.op in alias_first_input and value.inputs:
                 current = powers.get(value.inputs[0].id, frozenset())
             else:

@@ -343,105 +343,67 @@ def _assert_snapshot(
             )
 
 
+def _continued_metadata_for_rank_change(
+    source: dict[str, Any], control: dict[str, Any]
+) -> dict[str, Any]:
+    """Authenticate newly produced origins against an independent target-rank execution."""
+
+    expected = json.loads(json.dumps(source))
+    changed = 0
+    for kind in ("flux_ledger", "synchronization"):
+        if len(expected[kind]) != len(control[kind]):
+            raise AssertionError("target-rank control changed the %s evidence count" % kind)
+        for source_row, control_row in zip(expected[kind], control[kind], strict=True):
+            source_origin, control_origin = source_row["origin"], control_row["origin"]
+            source_identity = source_origin["spatial_identity"]
+            control_identity = control_origin["spatial_identity"]
+            prefix = "pops.amr-program.face-evidence-space.v1:sha256:"
+            for identity in (source_identity, control_identity):
+                if (
+                    not isinstance(identity, str)
+                    or not identity.startswith(prefix)
+                    or len(identity[len(prefix):]) != 64
+                    or any(value not in "0123456789abcdef" for value in identity[len(prefix):])
+                ):
+                    raise AssertionError("rank-change control lacks an exact spatial identity")
+            if source_identity == control_identity:
+                raise AssertionError("rank-change evidence did not authenticate changed ownership")
+            # The exact native spatial contract includes rank-space extents and owners, so fresh
+            # one-rank evidence cannot reuse the two-rank digest.  Every other origin/physical
+            # field must still match the uninterrupted two-rank reference exactly.
+            source_origin["spatial_identity"] = control_identity
+            changed += 1
+    if changed == 0:
+        raise AssertionError("rank-change control produced no ownership-bearing face evidence")
+    if expected != control:
+        raise AssertionError(
+            "target-rank control changed nonidentity AMR metadata:\nexpected=%r\nactual=%r"
+            % (expected, control)
+        )
+    return expected
+
+
 def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
-    """Extract the opaque persistent-tagging bytes and their authenticated offset."""
-    encoded = (
-        bytes(payload)
-        if isinstance(payload, (bytes, bytearray, memoryview))
-        else np.asarray(payload, dtype=np.uint8).reshape(-1).tobytes()
-    )
-    cursor = 0
+    """Read the versioned tagging prefix; native restore authenticates the full image."""
+    from tests.python.support.amr_accepted_state import accepted_tagging_hysteresis_span
 
-    def read_size() -> int:
-        nonlocal cursor
-        if cursor + 8 > len(encoded):
-            raise AssertionError("accepted-state payload is truncated before a size field")
-        value = int.from_bytes(encoded[cursor : cursor + 8], "little")
-        cursor += 8
-        return value
-
-    def skip_string() -> None:
-        nonlocal cursor
-        size = read_size()
-        cursor += size
-        if cursor > len(encoded):
-            raise AssertionError("accepted-state string is truncated")
-
-    if encoded[:8] != b"POPSAND4":
-        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4")
-    cursor = 8
-    cursor += 8  # native dimension
-    skip_string()  # exact spatial contract
-    cursor += 2 * 8  # topology epoch, materialization generation
-    level_count = read_size()
-    clock_bytes = level_count * 40
-    if cursor + clock_bytes > len(encoded):
-        raise AssertionError("accepted-state level clocks are truncated")
-    cursor += clock_bytes
-    logical_clock_count = read_size()
-    for _ in range(logical_clock_count):
-        name_size = read_size()
-        if cursor + name_size + 8 > len(encoded):
-            raise AssertionError("accepted-state logical-clock map is truncated")
-        cursor += name_size + 8
-    history_count = read_size()
-    for _ in range(history_count):
-        skip_string()
-        cursor += 8  # Program owner
-        for _identity in range(4):
-            skip_string()
-        cursor += 2 * 8  # depth, component count
-    history_slot_count = read_size()
-    for _ in range(history_slot_count):
-        skip_string()
-        cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
-    pending_count = read_size()
-    for _ in range(pending_count):
-        skip_string()
-        cursor += 12 * 8  # two encoded i32, four u64, three i64, two real, consumed
-    if cursor > len(encoded):
-        raise AssertionError("accepted-state pending history remaps are truncated")
-    history_flux_size = read_size()
-    cursor += history_flux_size
-    if cursor > len(encoded):
-        raise AssertionError("accepted-state history-flux payload is truncated")
-    cursor += 8  # CellTemporalPartitionKind
-    provider_size = read_size()
-    cursor += provider_size
-    cursor += 3 * 8  # topology epoch, synchronization tick, tick denominator
-    cell_count = read_size()
-    cursor += cell_count * 32  # level, cell id, rung, accepted tick (four i64 words)
-    if cursor > len(encoded):
-        raise AssertionError("accepted-state temporal partition is truncated")
-    tagging_size = read_size()
-    if cursor + tagging_size > len(encoded):
-        raise AssertionError("accepted-state persistent-tagging payload is truncated")
-    return encoded[cursor : cursor + tagging_size], cursor
+    encoded = (bytes(payload) if isinstance(payload, (bytes, bytearray, memoryview))
+               else np.asarray(payload, dtype=np.uint8).reshape(-1).tobytes())
+    return accepted_tagging_hysteresis_span(encoded, dimension=2)
 
 
 def _accepted_tagging_hysteresis(payload: Any) -> bytes:
-    """Extract the opaque persistent-tagging bytes from exact-ranked accepted-state v4."""
     tagging, _ = _accepted_tagging_hysteresis_span(payload)
     return tagging
 
 
 def _replace_accepted_tagging_hysteresis(payload: Any, replacement: bytes) -> bytes:
-    """Return the same POPSAND4 image with only its final tagging payload replaced."""
-    encoded = (
-        bytes(payload)
-        if isinstance(payload, (bytes, bytearray, memoryview))
-        else np.asarray(payload, dtype=np.uint8).reshape(-1).tobytes()
-    )
-    tagging, offset = _accepted_tagging_hysteresis_span(encoded)
-    size_offset = offset - 8
-    if size_offset < 0:
-        raise AssertionError("accepted-state tagging size precedes the payload")
-    return (
-        encoded[:size_offset]
-        + len(replacement).to_bytes(8, "little")
-        + replacement
-        + encoded[offset + len(tagging) :]
-    )
+    """Replace only the tagging frame, preserving every trailing accepted authority byte."""
+    from tests.python.support.amr_accepted_state import replace_accepted_tagging_hysteresis
+
+    encoded = (bytes(payload) if isinstance(payload, (bytes, bytearray, memoryview))
+               else np.asarray(payload, dtype=np.uint8).reshape(-1).tobytes())
+    return replace_accepted_tagging_hysteresis(encoded, replacement, dimension=2)
 
 
 def _assert_active_tagging_hysteresis(encoded: bytes) -> None:
@@ -667,10 +629,29 @@ def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> 
         require_current_flux_ledger=True,
     )
 
+    # Keep checkpoint-origin equality above exact: those accepted bytes still describe the
+    # original two-rank execution.  New continuation evidence instead authenticates its current
+    # rank ownership.  A fresh one-rank control runs the same complete 3+3-step trajectory, while
+    # the saved two-rank arrays remain the bit-for-bit state/history oracle for both executions.
+    control = _runtime(bit_identical=False)
+    _advance(control, CHECKPOINT_STEPS)
+    _advance(control, CONTINUATION_STEPS)
+    control_metadata, _control_arrays = _capture_arrays(
+        control, prefix="final", require_current_flux_ledger=False
+    )
+    continued_metadata = _continued_metadata_for_rank_change(metadata["final"], control_metadata)
+    _assert_snapshot(
+        control,
+        expected_metadata=continued_metadata,
+        expected_arrays=arrays,
+        prefix="final",
+        require_current_flux_ledger=False,
+    )
+
     _advance(runtime, CONTINUATION_STEPS)
     _assert_snapshot(
         runtime,
-        expected_metadata=metadata["final"],
+        expected_metadata=continued_metadata,
         expected_arrays=arrays,
         prefix="final",
         require_current_flux_ledger=False,

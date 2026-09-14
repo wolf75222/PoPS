@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops._ir import _wrap
+from pops._ir import _children, _wrap
+from pops._ir.quantity import QuantityRef
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -22,6 +23,18 @@ class _RecoveryMixin(_HyperbolicModel):
         ``rho=rho > 0`` or ``p=p >= p_floor``.  The generated C++ brick reports the first failing
         primitive component, and the prepared recovery chain refuses to publish that candidate.
         """
+        self._declare_recovery_admissibility(constraints)
+
+    def _declare_recovery_admissibility(
+        self, constraints: Any, *, primitive_quantities: Any = (),
+    ) -> None:
+        """Retain predicates after checking explicitly nominated primitive coordinates.
+
+        The public blackboard nominates its selected coordinate objects. Their qualified
+        references remain in the scientific formulas until the private emitter binding;
+        component spelling alone cannot establish this authority.
+        """
+        self._guard_mutable("declare recovery admissibility")
         if not self.prim_state:
             raise ValueError(
                 "recovery_admissibility: call primitive_vars(...) first so constraints have "
@@ -43,6 +56,13 @@ class _RecoveryMixin(_HyperbolicModel):
                 % (unknown_components, list(self.prim_state))
             )
 
+        quantities = tuple(primitive_quantities)
+        if any(not isinstance(value, QuantityRef)
+               or value.handle.kind != "state"
+               or value.handle.owner_path != self.owner_path
+               or value.component not in primitive_names for value in quantities):
+            raise ValueError("recovery primitive quantities require owned selected state coordinates")
+
         prepared = {}
         for component in self.prim_state:
             if component not in constraints:
@@ -53,7 +73,20 @@ class _RecoveryMixin(_HyperbolicModel):
                     "recovery_admissibility[%r] requires a typed symbolic Boolean expression"
                     % component
                 )
-            unknown_dependencies = sorted(set(predicate.deps()) - primitive_names)
+            qualified_dependencies = set()
+            stack = [predicate]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, QuantityRef):
+                    if not any(node.handle == value.handle and node.space == value.space
+                               and node.index == value.index for value in quantities):
+                        raise ValueError(
+                            "recovery_admissibility[%r] reads a qualified quantity outside the "
+                            "owned selected primitive state: %s" % (component, node.qualified_id))
+                    qualified_dependencies.add(node.qualified_id)
+                stack.extend(_children(node))
+            unknown_dependencies = sorted(
+                set(predicate.deps()) - primitive_names - qualified_dependencies)
             if unknown_dependencies:
                 raise ValueError(
                     "recovery_admissibility[%r] reads values outside the primitive state: %s"
@@ -62,3 +95,4 @@ class _RecoveryMixin(_HyperbolicModel):
             prepared[component] = predicate
 
         self._recovery_admissibility = prepared
+        self._invalidate_authoring_views()

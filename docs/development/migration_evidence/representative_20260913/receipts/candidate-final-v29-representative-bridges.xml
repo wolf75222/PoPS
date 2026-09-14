@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="6" time="441.421" timestamp="2026-09-13T12:27:32.824521+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_public_composite_field" name="test_public_joint_field_amr_full_resolution_matrix" time="203.721"><properties><property name="public_composite_field_matrix" value="{'resolutions': (16, 32, 64), 'l2': [[0.004217922316061719, 0.0034855386583357672, 0.06406691971811236, 0.1887496977434409, 1.0331257308813493], [0.0011168755674034322, 0.0009143395431190247, 0.016224927950254448, 0.050167721725864305, 0.2610997975333931], [0.0002873650510113636, 0.00023562998769152867, 0.0040801748319610675, 0.014454971143194729, 0.06532744658670261]], 'orders': [[1.9170640622236657, 1.930579709097459, 1.9813675569555995, 1.9116430067827161, 1.9843425961039305], [1.958511943438459, 1.9562068576122429, 1.991509194820688, 1.7951936935363026, 1.9988401827017588]]}" /></properties></testcase><testcase classname="tests.python.integration.runtime.test_public_composite_field" name="test_public_joint_field_publication_rollback_and_same_instance_retry[16]" time="107.775" /><testcase classname="tests.python.integration.runtime.test_public_tensor_diffusion" name="test_public_variable_rotated_tensor_cross_gradient_full_matrix" time="13.209"><failure message="ValueError: tensor diffusion requires two prepared halos per axis">tests/python/integration/runtime/test_public_tensor_diffusion.py:101: in test_public_variable_rotated_tensor_cross_gradient_full_matrix
+    report = pops.run(runtime, t_end=dt, max_steps=1, console=False)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/_api.py:114: in run
+    return instance._run(**dict(controls))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py:1677: in _run
+    step_report = self._accepted_controller_step(
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py:1581: in _accepted_controller_step
+    return self._accepted_step_transaction(
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py:1385: in _accepted_step_transaction
+    return self._accepted_step_transaction_body(
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py:1430: in _accepted_step_transaction_body
+    result, attempts = advance()
+                       ^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py:1567: in advance
+    report = prepared_run.run_prepared_attempt(sequence)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_step_strategy.py:873: in run_prepared_attempt
+    return run_prepared_step_attempt(sequence)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_step_strategy.py:960: in run_prepared_step_attempt
+    sequence.execute()
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_step_strategy.py:400: in execute
+    reported = self._attempt()
+               ^^^^^^^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_step_strategy.py:533: in attempt
+    _native_attempt(engine, native, lambda: native.step(dt), fixed_dt_grid=accepted_grid)
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_step_strategy.py:316: in _native_attempt
+    raise error
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_step_strategy.py:302: in _native_attempt
+    result = advance()
+             ^^^^^^^^^
+../PoPS-migration-20260908-candidate-final-v29-dim2-env/lib/python3.12/site-packages/pops/runtime/_step_strategy.py:533: in &lt;lambda&gt;
+    _native_attempt(engine, native, lambda: native.step(dt), fixed_dt_grid=accepted_grid)
+                                            ^^^^^^^^^^^^^^^
+E   ValueError: tensor diffusion requires two prepared halos per axis</failure></testcase><testcase classname="tests.python.integration.runtime.test_temporal_method_order_matrix" name="test_native_temporal_order_matrix[imex_ars222]" time="0.188"><failure message="AssertionError: assert (0 + 3) == 6&#10; +  where 0 = &lt;built-in method count of list object at 0x10ca8f840&gt;('rhs')&#10; +    where &lt;built-in method count of list object at 0x10ca8f840&gt; = ['state', 'linear_combine', 'linear_source', 'source', 'linear_combine', 'apply', ...].count&#10; +  and   3 = &lt;built-in method count of list object at 0x10ca8f840&gt;('apply')&#10; +    where &lt;built-in method count of list object at 0x10ca8f840&gt; = ['state', 'linear_combine', 'linear_source', 'source', 'linear_combine', 'apply', ...].count">tests/python/integration/runtime/test_temporal_method_order_matrix.py:130: in test_native_temporal_order_matrix
+    assert operations.count("rhs") + operations.count("apply") == evaluations
+E   AssertionError: assert (0 + 3) == 6
+E    +  where 0 = &lt;built-in method count of list object at 0x10ca8f840&gt;('rhs')
+E    +    where &lt;built-in method count of list object at 0x10ca8f840&gt; = ['state', 'linear_combine', 'linear_source', 'source', 'linear_combine', 'apply', ...].count
+E    +  and   3 = &lt;built-in method count of list object at 0x10ca8f840&gt;('apply')
+E    +    where &lt;built-in method count of list object at 0x10ca8f840&gt; = ['state', 'linear_combine', 'linear_source', 'source', 'linear_combine', 'apply', ...].count</failure></testcase><testcase classname="tests.python.integration.runtime.test_temporal_method_order_matrix" name="test_split_native_failure_restores_complete_accepted_envelope" time="15.060"><properties><property name="failure" value="step attempt rejected during local_transform: solve status=invalid_evaluation (transform 'invalid_subflow' rejected a non-finite or out-of-domain state)" /></properties></testcase><testcase classname="tests.python.unit.codegen.test_migration_public_workflows" name="test_native_advection_matches_python_law_on_two_distinct_profiles" time="100.687"><properties><property name="imported_primitive_conformance" value="{&quot;bytes&quot;: 16009, &quot;path&quot;: &quot;/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v29-representative-bridges-pytest/test_native_advection_matches_0/imported-primitive-conformance.json&quot;, &quot;sha256&quot;: &quot;077ad9ce325945a3eba7dab5b552ed93e46f679bd5949b0c45ad01c40b0c3330&quot;}" /></properties></testcase></testsuite></testsuites>

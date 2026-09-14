@@ -327,14 +327,17 @@ class AMRTransfer:
                     "transfer subjects outside state/field/block require an explicit plan layout"
                 ) from exc
         normalized = layout_plan.normalized(layout)
+        if not normalized.adaptive:
+            raise ValueError("AMRTransfer requires an adaptive layout")
         dimension = normalized.geometry.dimension
         authenticated_dimension = normalized.capabilities.get("dim")
         if dimension not in (1, 2, 3) or authenticated_dimension != dimension:
             raise ValueError(
                 "AMR layout geometry and manifest must authenticate one dimension from {1,2,3}"
             )
-        if not normalized.adaptive or not normalized.transition_ratios:
-            raise ValueError("AMRTransfer requires an adaptive layout with level transitions")
+        if not normalized.transition_ratios and subject.kind in {"state", "field", "block"}:
+            if layout_plan.layout_for(subject) != layout:
+                raise ValueError("flat AMR transfer subject belongs to another layout")
         transition_ratios = tuple(
             _ranked_axis_values(
                 ratio,
@@ -389,6 +392,12 @@ class AMRTransfer:
     def _resolved_spatial_accuracy(
         subject: Handle, numerics: tuple[Any, ...], dimension: int
     ) -> tuple[int, tuple[int, ...]] | None:
+        from pops.numerics.diffusion import Diffusion, TensorDiffusion
+        from pops.numerics.named_flux import NamedCenteredDivergence
+        from pops.numerics.plan import ResolvedRateMethod
+        from pops.model.signatures import Signature
+        from pops.model.spaces import RateSpace, StateSpace
+
         methods = []
         for plan in numerics:
             for rate in getattr(plan, "rates", ()):
@@ -396,6 +405,37 @@ class AMRTransfer:
                 variables = getattr(method, "variables", None)
                 state = getattr(variables, "options", {}).get("state") \
                     if variables is not None else None
+                if type(method) is Diffusion or type(method) is TensorDiffusion:
+                    state = method.law.state
+                    if method.transport is not None:
+                        transport_state = method.transport.variables.options.get("state")
+                        if transport_state != state:
+                            raise ValueError(
+                                "combined diffusion transport must authenticate the exact "
+                                "constitutive state"
+                            )
+                if type(method) is NamedCenteredDivergence:
+                    # This storage-only method has no reconstruction.variables. Its resolved
+                    # rate retains the registered Rate(State) target and exact block owner.
+                    if type(rate) is not ResolvedRateMethod:
+                        raise TypeError("named centered AMR accuracy requires a resolved rate")
+                    operator = rate.rate
+                    signature = operator.signature
+                    if (not isinstance(signature, Signature)
+                            or not isinstance(signature.output, RateSpace)
+                            or not isinstance(signature.output.base_space, StateSpace)
+                            or not signature.inputs
+                            or signature.inputs[0] != signature.output.base_space):
+                        raise ValueError("named centered AMR rate has no exact Rate(State) target")
+                    base = signature.output.base_space
+                    if any(flux.owner_path != operator.owner_path
+                           or not isinstance(flux.signature, Signature)
+                           or flux.signature.output != signature.output
+                           or not flux.signature.inputs or flux.signature.inputs[0] != base
+                           for flux in method.flux):
+                        raise ValueError("named centered AMR fluxes disagree with their rate target")
+                    state = subject if (subject.owner_path == operator.owner_path
+                                        and subject.local_id == base.name) else None
                 if isinstance(state, Handle) and state.qualified_id == subject.qualified_id:
                     methods.append(method)
         if not methods:
@@ -653,6 +693,11 @@ class AMRTransfer:
                         CanonicalOptions({"native_route": policy.native_route}),
                     ),
                 )
+        if not resolver._requirements:
+            physical_subjects = tuple(subject for subject, _, _ in self._states) + tuple(
+                subject for subjects, _, _ in self._faces for subject in subjects
+            ) + tuple(subject for subject, _, _ in self._nodes)
+            return resolver._resolve_flat(physical_subjects)
         return resolver.resolve()
 
 
@@ -751,6 +796,38 @@ class AMRTransferBuilder:
             layout=layout,
             materializer=materializer,
         )
+
+    def _resolve_flat(self, physical_subjects: tuple[Any, ...]) -> ResolvedAMRTransfer:
+        """Retain level-zero ownership without inventing an inter-level action."""
+        if self._requirements:
+            raise ValueError("flat AMR transfer cannot discard existing requirements")
+        dimensions = set()
+        for subject in physical_subjects:
+            layout = self._layout_plan.normalized(self._layout_plan.layout_for(subject))
+            if not layout.adaptive or layout.transition_ratios or len(layout.levels) != 1:
+                raise ValueError("empty AMR transfer requires an authenticated flat adaptive layout")
+            dimensions.add(layout.geometry.dimension)
+        if len(dimensions) != 1:
+            raise ValueError("flat AMR physical subjects require one exact layout dimension")
+        dimension = dimensions.pop()
+        # Policies remain typed and target-compatible even though no level edge uses them.
+        for provider in self._providers.values():
+            for route in provider.routes:
+                if dimension not in route.capabilities.dimensions:
+                    raise ValueError("flat AMR transfer provider does not support the layout dimension")
+                _ranked_axis_values(route.capabilities.ghost_depth, dimension=dimension,
+                                    where="flat AMR transfer provider ghost_depth", minimum=0)
+        subjects = tuple(sorted(physical_subjects, key=lambda value: value.qualified_id))
+        nesting = NestingRequirementSource(
+            Handle("flat_" + make_identity("amr-flat-transfer-source", {
+                "layout_plan_id": self._layout_plan.qualified_id,
+                "physical_subjects": [subject.canonical_identity() for subject in subjects],
+            }).token, kind="amr_transfer_requirement", owner=self._layout_plan.owner),
+            (0,) * dimension, 0,
+        )
+        return ResolvedAMRTransfer(self._layout_plan.qualified_id, (), (), nesting,
+                                   flat_physical_subjects=subjects,
+                                   flat_layout_plan=self._layout_plan)
 
     def resolve(self) -> ResolvedAMRTransfer:
         if not self._requirements:

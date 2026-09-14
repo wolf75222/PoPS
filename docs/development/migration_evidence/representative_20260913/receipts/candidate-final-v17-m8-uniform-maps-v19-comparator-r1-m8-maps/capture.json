@@ -1,0 +1,232 @@
+{
+  "archive": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v17-m8-uniform-maps-v19-comparator-r1-m8-maps/arrays.npz",
+    "sha256": "78b841bfb25d04559eb762da447dfd89afd82e5cd756c3562b60a914e4089ccd"
+  },
+  "arrays": {
+    "nx16_nv12__actual_moment": {
+      "bytes": 128,
+      "dtype": "<f8",
+      "provenance": "native returned array",
+      "sha256": "34ef60040d40fe837dd73155ab3e0e0ac5c3ce9c45acd47ea0be1f2fb244b903",
+      "shape": [
+        16
+      ]
+    },
+    "nx16_nv12__actual_pullback": {
+      "bytes": 1536,
+      "dtype": "<f8",
+      "provenance": "native returned array",
+      "sha256": "87201589cd10a6fa76cd0f95a5b8bd457a3174c73b095dafc00cb2ad76999182",
+      "shape": [
+        12,
+        16
+      ]
+    },
+    "nx16_nv12__reference_inputs_distribution": {
+      "bytes": 1536,
+      "dtype": "<f8",
+      "provenance": "pure helper, not state readback",
+      "sha256": "02cdc272da9df71b0813930fa0eb9552962e43ca0ca9b1da57a8736fe2ae6fae",
+      "shape": [
+        12,
+        16
+      ]
+    },
+    "nx16_nv12__reference_inputs_field": {
+      "bytes": 128,
+      "dtype": "<f8",
+      "provenance": "pure helper, not state readback",
+      "sha256": "1369fdd1132f52f7d0a69d7c76d5b82639c60d4410275607c25b6bb9cea3f7fe",
+      "shape": [
+        16
+      ]
+    },
+    "nx16_nv12__reference_oracle_moment": {
+      "bytes": 128,
+      "dtype": "<f8",
+      "provenance": "independent analytic helper oracle",
+      "sha256": "3136c737de39edc55375172d8b837c9e31718776d68398baecc4d951c606718e",
+      "shape": [
+        16
+      ]
+    },
+    "nx32_nv24__actual_moment": {
+      "bytes": 256,
+      "dtype": "<f8",
+      "provenance": "native returned array",
+      "sha256": "263b3f40b001bb4ae26bcfb6bc5f1e2ba496156c6347d5629280f016be60a2ee",
+      "shape": [
+        32
+      ]
+    },
+    "nx32_nv24__actual_pullback": {
+      "bytes": 6144,
+      "dtype": "<f8",
+      "provenance": "native returned array",
+      "sha256": "d39800af24bec4679b90ba26ed4b0c206cd56098adfb2a62ceb2c99b91cd6cc7",
+      "shape": [
+        24,
+        32
+      ]
+    },
+    "nx32_nv24__reference_inputs_distribution": {
+      "bytes": 6144,
+      "dtype": "<f8",
+      "provenance": "pure helper, not state readback",
+      "sha256": "80b3b72c8847046d11992f7ae2e1aef8c9e63ffb28a84acc1a213da77d62e35c",
+      "shape": [
+        24,
+        32
+      ]
+    },
+    "nx32_nv24__reference_inputs_field": {
+      "bytes": 256,
+      "dtype": "<f8",
+      "provenance": "pure helper, not state readback",
+      "sha256": "f7f3ed9f54c58cc36a79c635acb6527cad33d84a9cc0a0f1900e63f322478e1b",
+      "shape": [
+        32
+      ]
+    },
+    "nx32_nv24__reference_oracle_moment": {
+      "bytes": 256,
+      "dtype": "<f8",
+      "provenance": "independent analytic helper oracle",
+      "sha256": "a4cb1aef9694f048d5e716a8fb665002aadd8d5152dd3ed2cc36e9d866dc08d2",
+      "shape": [
+        32
+      ]
+    },
+    "nx64_nv48__actual_moment": {
+      "bytes": 512,
+      "dtype": "<f8",
+      "provenance": "native returned array",
+      "sha256": "2cc3a4e9a5675862e2003115f3d5b65bbc07b812f92cae1729bbbbd96a3bd797",
+      "shape": [
+        64
+      ]
+    },
+    "nx64_nv48__actual_pullback": {
+      "bytes": 24576,
+      "dtype": "<f8",
+      "provenance": "native returned array",
+      "sha256": "dc87b42ac0e9534fe71aa2c9e47bd9709afdd446f45b6eadfc88dbee1b80285c",
+      "shape": [
+        48,
+        64
+      ]
+    },
+    "nx64_nv48__reference_inputs_distribution": {
+      "bytes": 24576,
+      "dtype": "<f8",
+      "provenance": "pure helper, not state readback",
+      "sha256": "27372ae28c3abe7dcb164b42434b35649589b281b48fef5d848f9429502b8683",
+      "shape": [
+        48,
+        64
+      ]
+    },
+    "nx64_nv48__reference_inputs_field": {
+      "bytes": 512,
+      "dtype": "<f8",
+      "provenance": "pure helper, not state readback",
+      "sha256": "b5eae7bd42f195e699366f873fa6cbc6f832171ee66df93ab124c9d7b33a695a",
+      "shape": [
+        64
+      ]
+    },
+    "nx64_nv48__reference_oracle_moment": {
+      "bytes": 512,
+      "dtype": "<f8",
+      "provenance": "independent analytic helper oracle",
+      "sha256": "5bdb8813e5ad2e8e0237fb8cd9e0616ad33baddeff539b90647ac5799de6def0",
+      "shape": [
+        64
+      ]
+    }
+  },
+  "comparison_contract": {
+    "atol": 3e-13,
+    "rtol": 0
+  },
+  "config": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v17-m8-uniform-maps-v19-comparator-r1-capture-config.json",
+    "sha256": "967f23596bb2591fb155c19f6b168a8d539b633df97795b68c84093b12df5fc9"
+  },
+  "fixture_module": {
+    "function_source_sha256": {
+      "_polynomial_cell_averages": "872f2eda169e749c4117b5d72171f7359a16920d1418de29bd531bd7935e1097",
+      "_power_average": "a179db9d81727e4277c4c65c316ade5832ee36dfab676012fab46c133d99579a",
+      "_restrict_phase": "4a6f8589694844b5bc482be319a642afce6cb9114c949641fe05a7dbc0a83273",
+      "_restrict_x": "2ac8484b20990f7b34e28af7d76a10f5909b8a6f9ef256c6c347cdd2bba31c13",
+      "native_property_maps": "f5f53ab47995459babe651019808a7c6be15c17ee2087ac6abea2c1e4026f1a7"
+    },
+    "git_blob": "095392057cfb0c0fbfc744253966e4a3ddbf2d83",
+    "path": "tests/python/integration/runtime/test_physical_mapping_transfer_properties.py",
+    "sha256": "45cbd353ae755277d109fcf9f0310509331429c00da54006f0187838ae590275"
+  },
+  "limitations": "Uniform reference restriction only. No AMR/MPI/vector/signed-weight credit. After-proof and whole-module success must be authenticated separately.",
+  "nested_pairs": [
+    [
+      [
+        16,
+        12
+      ],
+      [
+        32,
+        24
+      ]
+    ],
+    [
+      [
+        32,
+        24
+      ],
+      [
+        64,
+        48
+      ]
+    ]
+  ],
+  "qualification_credit": false,
+  "refinements": [
+    [
+      16,
+      12
+    ],
+    [
+      32,
+      24
+    ],
+    [
+      64,
+      48
+    ]
+  ],
+  "runner_command": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v17-m8-uniform-maps-v19-comparator-r1-command.json",
+    "sha256": "b474853da8a48587f35abd563717e4b1842e3f8b3f914a774f305af6cdf2c901"
+  },
+  "runner_proof_before": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260908-evidence/candidate-final-v17-m8-uniform-maps-v19-comparator-r1-proof-before.json",
+    "sha256": "f1a0a98c549f3d37b15be7ffedf7d3cf8a89efeb9664946ca7178258b6158a5e"
+  },
+  "schema": "pops.m8-uniform-map-arrays.v19",
+  "source": "ea8caed55550289c8f02f2479d7855967c1bf8e7",
+  "support": {
+    "backend": "CPU float64",
+    "components": 1,
+    "dimension": 2,
+    "quadrature": "uniform positive weights 4/nv",
+    "ranks": 1,
+    "v": [
+      -2,
+      2
+    ],
+    "x": [
+      0,
+      1
+    ]
+  }
+}

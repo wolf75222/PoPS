@@ -312,6 +312,9 @@ class HaloExchange {
     pinned_buffer_type host_receive{};
   };
 
+ public:
+  // CUDA launchers name these POD jobs and functors from a generated namespace.
+  // Exchange storage and mutation remain private.
   struct KernelJob {
     int destination_lower[Dim]{};
     execution_index_type destination_extent[Dim]{};
@@ -360,6 +363,7 @@ class HaloExchange {
     }
   };
 
+ private:
   KernelJob lower_job_(const job_type& job) const {
     const std::size_t execution_max =
         static_cast<std::size_t>(std::numeric_limits<execution_index_type>::max());

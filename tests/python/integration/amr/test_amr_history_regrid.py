@@ -3,11 +3,12 @@
 
 An AB2 Program on a 2-level AMR system with ``regrid_every>0``. Two precise assertions:
 
-  (i)  NULL regrid (the active criterion tags the full positive domain, so every scheduled rebuild
-       preserves the exact full-domain fine boxes) -> the trajectory equals a no-regrid-window run
-       to round-off: a layout-identical rebuild is not a topology replacement and must not remap
-       either the history ring or its lagged interface-flux authority (the bitwise native invariant
-       is locked by the C++ test_amr_history_ring.RegridRemapKeepsSlotsConsistent case);
+  (i)  NULL physical regrid (the active criterion tags the full positive domain, so every scheduled
+       rebuild preserves the exact full-domain fine boxes) -> the trajectory equals a
+       no-regrid-window run to round-off. The accepted rematerialization still advances the exact
+       topology epoch while retaining the layout-identical history and lagged interface-flux data
+       (the bitwise native invariant is locked by the C++
+       test_amr_history_ring.RegridRemapKeepsSlotsConsistent case);
   (ii) REAL regrid (a moving scalar-advection front tags cells) -> the run is stable (finite, coarse mass
        conserved to round-off) and after the regrids EVERY prev(k) global buffer is defined on the NEW
        layout (its flat size == the current sum_k ncomp*nf_k*nf_k) -- the layout-consistency invariant.
@@ -126,29 +127,40 @@ def _coarse_density(runtime):
 def test_null_regrid_matches_no_regrid_to_roundoff(
     native_cxx, isolated_native_cache, kokkos_root,
 ):
-    """(i) Full-domain tagging makes each scheduled rebuild topology-null.
+    """(i) Full-domain tagging makes each scheduled rebuild physical-layout-null.
 
-    The exact invariant is structural: the dynamic schedule evaluates topology-null regrids while
-    its public ``patch_boxes`` stay equal to the bootstrap boxes; the comparison run has the same
-    bootstrap hierarchy but no regrid inside this six-step window. ``regrid_count`` counts accepted
-    topology replacements, not schedule evaluations, so both counters remain unchanged. This does
-    not claim that an empty tag set preserves a frozen seed.
+    The exact invariant is structural: the dynamic schedule accepts layout-identical
+    rematerializations while its public ``patch_boxes`` stay equal to the bootstrap boxes; the
+    comparison run has the same bootstrap hierarchy but no regrid inside this six-step window.
+    ``regrid_count`` and ``topology_epoch`` advance once per accepted scheduled publication, even
+    when its physical boxes are unchanged. This does not claim that an empty tag set preserves a
+    frozen seed.
     """
     del isolated_native_cache, kokkos_root
     u0 = _blob(amp=0.2)
-    a = _build(regrid_every=2, refine_thr=0.0, u0=u0, tag="null_a", native_cxx=native_cxx)
+    regrid_every = 2
+    a = _build(
+        regrid_every=regrid_every,
+        refine_thr=0.0,
+        u0=u0,
+        tag="null_a",
+        native_cxx=native_cxx,
+    )
     b = _build(regrid_every=0, refine_thr=0.0, u0=u0, tag="null_b", native_cxx=native_cxx)
     initial_boxes = tuple(a.patch_boxes())
-    dynamic_regrids_before = a.amr.explain_regrid().regrid_count
-    comparison_regrids_before = b.amr.explain_regrid().regrid_count
+    dynamic_before = a.amr.explain_regrid()
+    comparison_before = b.amr.explain_regrid()
     assert int(a.n_levels()) == 2
     assert initial_boxes == tuple(b.patch_boxes())
     _advance(a, NSTEPS)
     _advance(b, NSTEPS)
-    dynamic_regrids_after = a.amr.explain_regrid().regrid_count
-    comparison_regrids_after = b.amr.explain_regrid().regrid_count
-    assert dynamic_regrids_after == dynamic_regrids_before
-    assert comparison_regrids_after == comparison_regrids_before
+    dynamic_after = a.amr.explain_regrid()
+    comparison_after = b.amr.explain_regrid()
+    scheduled_regrids = NSTEPS // regrid_every
+    assert dynamic_after.regrid_count == dynamic_before.regrid_count + scheduled_regrids
+    assert dynamic_after.topology_epoch == dynamic_before.topology_epoch + scheduled_regrids
+    assert comparison_after.regrid_count == comparison_before.regrid_count
+    assert comparison_after.topology_epoch == comparison_before.topology_epoch
     assert tuple(a.patch_boxes()) == initial_boxes == tuple(b.patch_boxes())
     da = float(np.abs(_coarse_density(a) - _coarse_density(b)).max())
     assert da < 1e-9, "null-regrid trajectory mismatch: max|d| = %.3e" % da

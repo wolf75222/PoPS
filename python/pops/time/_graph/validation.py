@@ -98,7 +98,7 @@ def _solve_arity(node: Any) -> int:
             "solve_fields", "solve_fields_from_blocks"):
         return 1
     if node.kind == "program_value" and node.op in (
-            "solve_local_linear", "solve_local_nonlinear"):
+            "solve_local_linear", "solve_local_nonlinear", "solve_spatial_nonlinear"):
         return 1
     if node.kind == "program_value" and node.op == "solve_coupled_implicit":
         attrs = _payload_attrs(node.attrs.to_data())
@@ -112,7 +112,7 @@ def _is_solve_token(node: Any) -> bool:
             or (kind == "program_value"
                 and node.op in (
                     "solve_fields", "solve_fields_from_blocks", "solve_local_linear",
-                    "solve_local_nonlinear", "solve_coupled_implicit")))
+                    "solve_local_nonlinear", "solve_coupled_implicit", "solve_spatial_nonlinear")))
 
 
 def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where: str) -> None:

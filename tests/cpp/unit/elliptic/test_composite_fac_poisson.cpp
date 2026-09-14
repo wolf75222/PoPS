@@ -323,10 +323,10 @@ TEST(CompositeFacPoissonTest, partitioned_singular_nullspace_accepts_periodic_me
   });
   const pops::mesh::RankSpace<Dim> rank_space{pops::Index<Dim>{},
                                               ranked<pops::Extent<Dim>, Dim>(std::int64_t{1})};
-  const pops::mesh::Distribution<Dim> coarse_distribution = pops::mesh::Distribution<Dim>::partitioned(
-      coarse_layout, rank_space, {pops::Index<Dim>{}});
-  const pops::mesh::Distribution<Dim> fine_distribution = pops::mesh::Distribution<Dim>::partitioned(
-      fine_layout, rank_space, {pops::Index<Dim>{}});
+  const pops::mesh::Distribution<Dim> coarse_distribution =
+      pops::mesh::Distribution<Dim>::partitioned(coarse_layout, rank_space, {pops::Index<Dim>{}});
+  const pops::mesh::Distribution<Dim> fine_distribution =
+      pops::mesh::Distribution<Dim>::partitioned(fine_layout, rank_space, {pops::Index<Dim>{}});
   std::array<bool, Dim> periodic{};
   periodic.fill(true);
   pops::RealVector<Dim> coarse_spacing{};
@@ -346,9 +346,14 @@ TEST(CompositeFacPoissonTest, partitioned_singular_nullspace_accepts_periodic_me
   preparation.parent_child_patch_pairs = 16;
   preparation.interpolation_regions = 128;
   preparation.local_scratch_cells = 16'384;
-  preparation.same_level_halo = {
-      pops::mesh::BoxArrayValidationBudget{16, 256}, 4096, 4096, 64, 16, 1'000'000, 1'000'000,
-      1'000'000};
+  preparation.same_level_halo = {pops::mesh::BoxArrayValidationBudget{16, 256},
+                                 4096,
+                                 4096,
+                                 64,
+                                 16,
+                                 1'000'000,
+                                 1'000'000,
+                                 1'000'000};
   preparation.parent_gather = {64, 16, 1'000'000, 1'000'000, 1'000'000};
   preparation.fine_restriction = {64, 16, 1'000'000, 1'000'000, 1'000'000};
   pops::elliptic::amr::CompositeFacBuildRequest<Dim> request{
@@ -448,8 +453,7 @@ TEST(CompositeFacPoissonTest, mg_singular_nullspace_uses_composite_active_covera
       for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
            ++ordinal) {
         const auto index = index_from_ordinal<Dim>(fab.box(), ordinal);
-        host(storage_ordinal(fab.grown_box(), index)) =
-            region.contains(index) ? inside : outside;
+        host(storage_ordinal(fab.grown_box(), index)) = region.contains(index) ? inside : outside;
       }
       fab.copy_from_host(host);
     }
@@ -474,4 +478,36 @@ TEST(CompositeFacPoissonTest, nonfinite_composite_residual_fails_closed) {
   const pops::SolveReport report = solver.solve();
   EXPECT_EQ(report.status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(report.action, pops::SolveAction::kFailRun);
+}
+
+TEST(CompositeFacPoissonTest, periodic_corner_refinement_prepares_complete_ghost_partition) {
+  constexpr int Dim = 2;
+  const auto coarse_geometry = geometry<Dim>(64);
+  const auto fine_geometry = coarse_geometry.refine(pops::Extent<Dim>{2, 2});
+  auto coarse =
+      request(coarse_geometry,
+              pops::mesh::BoxArray<Dim>{std::vector<pops::Box<Dim>>{coarse_geometry.domain()}});
+  auto fine =
+      request(fine_geometry, pops::mesh::BoxArray<Dim>{std::vector<pops::Box<Dim>>{pops::Box<Dim>{
+                                 pops::Index<Dim>{0, 0}, pops::Index<Dim>{47, 47}}}});
+  for (auto* level : {&coarse, &fine}) {
+    pops::RealVector<Dim> spacing{};
+    for (int axis = 0; axis < Dim; ++axis)
+      spacing[axis] = level->geometry.spacing(axis);
+    level->boundary = pops::PhysicalBoundaryConditions<Dim>{
+        pops::BoundaryTopology<Dim>::axis_periodic({true, true}), {}, spacing};
+  }
+  pops::elliptic::mg::CompositeFacBuildRequest<Dim> hierarchy{
+      {std::move(coarse), std::move(fine)}, {pops::amr::RefinementRatio<Dim>{{2, 2}}}};
+  const auto lane = pops::ExecutionLane::world("tests.fac.periodic-corner");
+  pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane, {},
+                                                      pops::Real(1));
+  install_nullspace(solver, 2);
+  solver.rhs_level(0).set_val(pops::Real(1));
+  solver.rhs_level(1).set_val(pops::Real(1));
+  solver.phi_level(0).set_val(pops::Real(1));
+  solver.phi_level(1).set_val(pops::Real(1));
+  const auto report = solver.solve();
+  EXPECT_TRUE(report.solved()) << report.reason;
+  EXPECT_LE(report.residual_norm, pops::Real(1e-12));
 }

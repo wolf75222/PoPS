@@ -17,6 +17,7 @@ from typing import Any
 
 from pops.identity import Identity, canonical_sha256
 from pops.identity.semantic import semantic_identity, semantic_value
+from pops.model.ownership import _definition_fingerprint_scope
 from pops.problem._snapshot_canonical import _canonical
 
 #: Bumped when the full snapshot's canonical shape changes. The compile-only projection has its own
@@ -151,6 +152,7 @@ class AuthoringSnapshot:
             self.hash[:12], self.semantic_identity.hexdigest[:12], self.artifact_hash[:12])
 
 
+@_definition_fingerprint_scope()
 def build_problem_snapshot(problem: Any) -> Any:
     """Build the :class:`AuthoringSnapshot` of @p problem (the frozen input to the compile cache key).
 
@@ -188,6 +190,7 @@ def build_problem_snapshot(problem: Any) -> Any:
     )
 
 
+@_definition_fingerprint_scope()
 def build_authoring_snapshot(
     problem: Any,
     *,

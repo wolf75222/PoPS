@@ -47,6 +47,7 @@ UPSTREAM_BOUNDARIES = {
     "pops/runtime/amr/prepared_tagging_execution.hpp",
     "pops/runtime/dynamic/component_loader.hpp",
     "pops/runtime/dynamic/prepared_execution_context.hpp",
+    "pops/runtime/program/collective_step_rejection.hpp",
     "pops/runtime/program/step_transaction.hpp",
 }
 LOCAL_INCLUDE = re.compile(r'^\s*#\s*include\s*<(?P<path>pops/[^>]+)>', re.MULTILINE)

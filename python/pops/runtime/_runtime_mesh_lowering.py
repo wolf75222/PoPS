@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import math
-from typing import Any
+from typing import Any, cast
 
 from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 from pops._geometry_contracts import cartesian_geometry_contract
@@ -245,11 +245,12 @@ def flow_bootstrap_tagging(
                 raise ValueError(
                     "pops.bind: native tag leaves require a qualified subject identity"
                 )
-            variable = node.get("variable", indicator.get("local_id"))
+            implicit_field_component = subject_kind == "field" and "variable" not in node
+            variable = node.get(
+                "variable", indicator.get("local_id") if subject_kind == "state" else None)
             threshold = node.get("threshold")
             if (
-                not isinstance(variable, str)
-                or not variable
+                (not implicit_field_component and (not isinstance(variable, str) or not variable))
                 or isinstance(threshold, bool)
                 or not isinstance(threshold, (int, float))
             ):
@@ -267,6 +268,24 @@ def flow_bootstrap_tagging(
                     raise ValueError(
                         "pops.bind: native field tag leaf has no authenticated field plan"
                     )
+                if implicit_field_component:
+                    from pops.fields import FieldOutput
+
+                    potential_outputs = tuple(
+                        output for output in getattr(plan.operator, "outputs", ())
+                        if type(output) is FieldOutput
+                    )
+                    if len(potential_outputs) != 1 or (
+                        potential_outputs[0].source is not None
+                        and potential_outputs[0].source != plan.operator.unknown
+                    ):
+                        raise ValueError(
+                            "pops.bind: native field tag leaf requires one authenticated "
+                            "scalar FieldOutput"
+                        )
+                    # The solved unknown and its published component may have
+                    # different diagnostic names. The exact field plan owns this map.
+                    variable = potential_outputs[0].name
                 options = getattr(plan, "native_options", None)
                 output = options.get("output_route") if isinstance(options, Mapping) else None
                 components = output.get("components") if isinstance(output, Mapping) else None
@@ -300,7 +319,7 @@ def flow_bootstrap_tagging(
                     subject_kind,
                     subject_identity,
                     block_name,
-                    variable,
+                    cast(str, variable),
                     field_component_index,
                     leaf_op,
                     float(threshold),

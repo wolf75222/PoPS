@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 
@@ -19,7 +20,7 @@
 
 namespace pops {
 
-/// Persistent nonlinear/Krylov storage for a scalar field carried by an exact AMR hierarchy.
+/// Persistent nonlinear/Krylov storage for one ordered field vector carried by an exact AMR hierarchy.
 ///
 /// Covered parent cells are excluded from every scalar product through immutable active-cell masks;
 /// level cell measures keep the Krylov norm physically consistent across refinement.  Residual, JVP
@@ -45,9 +46,12 @@ class AmrFieldNewtonKrylovWorkspace final {
         cell_measures_.size() != layouts.size())
       throw std::invalid_argument(
           "AMR field Newton requires one active mask and cell measure per level");
+    const int components = layouts.front() ? layouts.front()->ncomp() : 0;
+    if (components <= 0)
+      throw std::invalid_argument("AMR field Newton requires nonempty vector components");
     for (std::size_t level = 0; level < layouts.size(); ++level) {
       if (layouts[level] == nullptr || active_cells_[level] == nullptr ||
-          layouts[level]->ncomp() != 1 || active_cells_[level]->ncomp() != 1 ||
+          layouts[level]->ncomp() != components || active_cells_[level]->ncomp() != 1 ||
           !same_layout_(*layouts[level], *active_cells_[level]) ||
           !finite_(cell_measures_[level]) || !(cell_measures_[level] > Real(0)))
         throw std::invalid_argument(
@@ -96,6 +100,7 @@ class AmrFieldNewtonKrylovWorkspace final {
     auto&& gauge_provider = apply_gauge;
     gauge_provider(iterate_);
     residual_provider(iterate_, residual_, 0);
+    project_unknowns_(residual_);
     Kokkos::fence();
 
     SolveReport report;
@@ -149,6 +154,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         lincomb_(trial_, Real(1), iterate_, step, correction_);
         gauge_provider(trial_);
         residual_provider(trial_, trial_residual_, iteration + 1);
+        project_unknowns_(trial_residual_);
         Kokkos::fence();
         ++report.evaluations;
         const Real trial_norm = norm_(trial_residual_, lane);
@@ -220,6 +226,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       bool cycle_converged = false;
       for (int column = 0; column < cycle; ++column) {
         apply_jvp(iterate, basis_[static_cast<std::size_t>(column)], work_, nonlinear_iteration);
+        project_unknowns_(work_);
         Kokkos::fence();
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
@@ -270,6 +277,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         return result;
       }
       apply_jvp(iterate, correction_, image_, nonlinear_iteration);
+      project_unknowns_(image_);
       Kokkos::fence();
       ++result.evaluations;
       lincomb_(linear_residual_, Real(1), rhs, Real(-1), image_);
@@ -303,12 +311,28 @@ class AmrFieldNewtonKrylovWorkspace final {
     return true;
   }
 
+  // Covered/EB-inactive cells remain available to the operator but are not Krylov DOFs.
+  // Project both defects and JVP images so corrections cannot evolve those stored values.
+  void project_unknowns_(hierarchy_type& fields) const {
+    for (std::size_t level = 0; level < fields.size(); ++level)
+      for (std::size_t local = 0; local < fields[level].local_size(); ++local) {
+        const auto values = fields[level].fab(local).view();
+        const auto active = std::as_const(*active_cells_[level]).fab(local).view();
+        const int components = fields[level].ncomp();
+        for_each_cell(fields[level].box(local), [=] POPS_HD(const Index<Dim>& cell) {
+          if (!(active(cell, 0) >= Real(0.5)))
+            for (int component = 0; component < components; ++component)
+              values(cell, component) = Real(0);
+        });
+      }
+  }
+
   static hierarchy_type make_hierarchy_(std::span<const field_type* const> layouts) {
     hierarchy_type result;
     result.reserve(layouts.size());
     for (const field_type* layout : layouts)
-      result.emplace_back(layout->layout(), layout->distribution(), layout->local_rank(), 1,
-                          Extent<Dim>{});
+      result.emplace_back(layout->layout(), layout->distribution(), layout->local_rank(),
+                          layout->ncomp(), Extent<Dim>{});
     return result;
   }
 
@@ -322,14 +346,14 @@ class AmrFieldNewtonKrylovWorkspace final {
       throw std::invalid_argument(std::string("AMR field Newton ") + role +
                                   " has the wrong level count");
     for (std::size_t level = 0; level < fields.size(); ++level)
-      if (fields[level] == nullptr || fields[level]->ncomp() != 1 ||
+      if (fields[level] == nullptr || fields[level]->ncomp() != iterate_[level].ncomp() ||
           !same_layout_(*fields[level], iterate_[level]))
         throw std::invalid_argument(std::string("AMR field Newton ") + role +
                                     " differs from its prepared exact-ranked hierarchy");
   }
 
   static void copy_field_(const field_type& source, field_type& destination) {
-    if (!same_layout_(source, destination) || source.ncomp() != 1 || destination.ncomp() != 1)
+    if (!same_layout_(source, destination) || source.ncomp() != destination.ncomp())
       throw std::invalid_argument("AMR field Newton vector layouts differ");
     lincomb(destination, Real(1), source, Real(0), source);
   }
@@ -389,16 +413,14 @@ class AmrFieldNewtonKrylovWorkspace final {
       throw std::invalid_argument("AMR field Newton dot hierarchy size differs");
     Real local_result = Real(0);
     for (std::size_t level = 0; level < left.size(); ++level) {
-      for (std::size_t local = 0; local < left[level].local_size(); ++local)
-        local_result += cell_measures_[level] *
-                        for_each_cell_reduce_sum(left[level].box(local),
-                                                 mf_arith_detail::MeasuredDotKernel<Dim>{
-                                                     left[level].fab(local).view(),
-                                                     right[level].fab(local).view(),
-                                                     active_cells_[level]->fab(local).view(),
-                                                     {},
-                                                     0,
-                                                     false});
+      // A replicated level has one physical owner. Counting every replica weights
+      // mixed replicated/distributed hierarchies differently across MPI sizes.
+      if (left[level].distribution().replicated() &&
+          left[level].local_rank() != left[level].rank_space().coordinate(0))
+        continue;
+      for (int component = 0; component < left[level].ncomp(); ++component)
+        local_result += cell_measures_[level] * dot_active_local(left[level], right[level],
+                                                                 component, active_cells_[level]);
     }
     return static_cast<Real>(all_reduce_sum(local_result, lane));
   }

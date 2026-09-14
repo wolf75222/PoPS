@@ -49,6 +49,12 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         for transform in (getattr(self, "_local_transforms", {}) or {}).values():
             out += [_wrap(e) for e in transform["expressions"]]
             out.append(_wrap(transform["valid_if"]))
+        for law in (getattr(self, "_diffusive_laws", {}) or {}).values():
+            out.extend(law["variables"])
+            out.extend(expression for tensor in law["tensors"] for row in tensor for expression in row)
+            out.extend(expression for row in law["jacobian"] for expression in row)
+        for law in (getattr(self,"_drift_laws",{}) or {}).values():
+            out.extend((law["density"],law["mobility"],law["potential"]))
         for term in (getattr(self, "_flux_terms", {}) or {}).values():
             out += [_wrap(e) for e in flattened_axis_values(term)]
         if self.cons_from is not None:

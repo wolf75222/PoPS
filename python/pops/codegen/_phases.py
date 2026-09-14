@@ -4,9 +4,21 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from pops.model.ownership import _definition_fingerprint_scope
 
-def _field_topology_rematerializer_validated(field_plans: Any, amr_transfer: Any) -> bool:
-    """Authenticate exact EllipticRecompute authority for every resolved field plan."""
+
+def _field_topology_rematerializer_validated(
+    field_plans: Any,
+    amr_transfer: Any,
+    field_subjects: Mapping[str, Any],
+) -> bool:
+    """Authenticate exact EllipticRecompute authority for every resolved field plan.
+
+    ``AMRTransfer.field`` is registered against the Case field handle returned by ``Case.field``.
+    The install plan's operator unknown remains the block-qualified model field storage that the
+    elliptic equation solves.  Those are intentionally different authorities, so the transfer
+    lookup must use the Case registration paired with the plan name.
+    """
     if not field_plans:
         return True
     if amr_transfer is None:
@@ -18,8 +30,12 @@ def _field_topology_rematerializer_validated(field_plans: Any, amr_transfer: Any
         NativeAMRMaterializationKind,
     )
 
-    for plan in field_plans.values():
-        subject = plan.operator.unknown
+    if not isinstance(field_subjects, Mapping):
+        raise TypeError("field topology rematerializer subjects must be a mapping")
+    for name in field_plans:
+        subject = field_subjects.get(name)
+        if subject is None:
+            return False
         try:
             entry = amr_transfer.for_subject(subject, COARSE_FINE_FILL)
         except KeyError:
@@ -51,6 +67,7 @@ def validate(problem: Any) -> Any:
     return problem
 
 
+@_definition_fingerprint_scope()
 def resolve(
     problem: Any,
     *,
@@ -93,12 +110,6 @@ def resolve(
             message="one RuntimeInstance cannot mix Uniform and AMR layout families",
         )
     adaptive = next(iter(adaptive_families))
-    if adaptive and len(layout_plan.layouts) != 1:
-        _refuse_runtime(
-            layout_plan,
-            gate="heterogeneous_amr_runtime_unavailable",
-            message="heterogeneous AMR layouts have no proved common regrid/transfer runtime",
-        )
     target = "amr_system" if adaptive else "system"
     if time is not None and problem._time is not None and time is not problem._time:
         raise ValueError("pops.resolve received two competing time-program authorities")
@@ -117,7 +128,7 @@ def resolve(
     validate_program_layout_reads(problem, layout_plan, time=resolved_time)
     if len(layout_plan.layouts) > 1:
         co_layout_ops = {
-            "coupled_rate", "solve_coupled_implicit", "solve_fields_from_blocks",
+            "solve_coupled_implicit", "solve_fields_from_blocks",
             "field_solve_from_blocks",
         }
         present = sorted({
@@ -142,13 +153,27 @@ def resolve(
 
     validate_program_spatial_dimension(resolved_time, resolved_dimension(native_layouts))
     validate_layout_mapping_components(layout_plan, components)
-    if len(layout_plan.layouts) > 1 and tuple(problem.layout_subjects().fields):
+    from pops.codegen._physical_mapping_resolution import validate_physical_mapping_geometry
+    validate_physical_mapping_geometry(layout_plan)
+    from pops.fields.operator import FieldOperator
+    legacy_fields = any(isinstance(row.operator, FieldOperator)
+                        for _name, row in problem._field_registry.resolved_items(problem.resolve))
+    has_physical_maps = any(row.requirement.physical_map is not None for row in layout_plan.mappings)
+    if len(layout_plan.layouts) > 1 and (legacy_fields or (
+            tuple(problem.layout_subjects().fields) and not has_physical_maps)):
         _refuse_runtime(
             layout_plan,
             gate="multi_layout_field_operator_unavailable",
             message=("FieldOperator storage/solve has no per-layout compiled partition yet; "
                      "refusing before artifact creation"),
         )
+    if len(layout_plan.layouts) > 1 and any(
+            value.op in ("coupled_rate", "matrix_free_operator") for value in resolved_time._values):
+        from pops.codegen.program_slicing import slice_program
+        for layout_row in layout_plan.layouts:
+            selected_names = tuple(row.subject.local_id for row in layout_plan.assignments
+                if row.subject_kind == "block" and row.layout == layout_row.handle)
+            slice_program(resolved_time, selected_names)
     resolved_layout = resolved_layouts.single() if len(resolved_layouts.rows) == 1 \
         else resolved_layouts
 
@@ -217,6 +242,7 @@ def resolve(
     bootstrap_plan = None
     amr_execution = None
     amr_providers = {}
+    layout_amr_authorities = {}
     if target == "system" and len(problem.initials):
         initial_condition_plan = problem.initials.resolve_plan(
             layout_plan=layout_plan,
@@ -229,13 +255,7 @@ def resolve(
             ResolvedAMRAuthorities,
         )
 
-        adaptive_layout = resolved_layouts.single()
-        if not isinstance(adaptive_layout, AMRLayoutResolver):
-            raise TypeError(
-                "adaptive layout providers must implement "
-                "resolve_amr_authorities(AMRResolutionContext)"
-            )
-
+        from pops.codegen._layout_amr_authorities import ResolvedLayoutAMRAuthorities
         from pops.model import Handle
 
         def resolve_amr_handle(value: Any) -> Any:
@@ -243,27 +263,43 @@ def resolve(
                 return value
             return problem.resolve(value)
 
-        context = AMRResolutionContext(
-            owner=problem.owner_path.canonical(),
-            layout_plan=layout_plan,
-            numerics=tuple(
-                block.numerics for block in blocks if block.numerics is not None),
-            initials=problem.initials,
-            program=resolved_time,
-            resolve=resolve_amr_handle,
-            components=tuple(components),
-        )
-        resolved_amr = adaptive_layout.resolve_amr_authorities(context)
-        if type(resolved_amr) is not ResolvedAMRAuthorities:
-            raise TypeError(
-                "layout resolve_amr_authorities() must return exact ResolvedAMRAuthorities"
+        block_layouts = {row.subject.local_id: row.layout.qualified_id
+                         for row in layout_plan.assignments if row.subject_kind == "block"}
+        for row in layout_plan.layouts:
+            layout_id = row.handle.qualified_id
+            adaptive_layout = resolved_layouts.descriptor(row.handle)
+            if not isinstance(adaptive_layout, AMRLayoutResolver):
+                raise TypeError("adaptive layout providers must implement "
+                                "resolve_amr_authorities(AMRResolutionContext)")
+            projection = layout_plan.project(row.handle)
+            subjects = tuple(subject for subject in initial_subjects
+                             if layout_plan.layout_for(subject) == row.handle)
+            context = AMRResolutionContext(
+                owner=problem.owner_path.canonical(),
+                layout_plan=projection,
+                numerics=tuple(block.numerics for block in blocks
+                               if block.numerics is not None
+                               and block_layouts[block.name] == layout_id),
+                initials=problem.initials.for_subjects(subjects),
+                program=resolved_time,
+                resolve=resolve_amr_handle,
+                components=tuple(components),
             )
-        resolved_hierarchy = resolved_amr.hierarchy
-        amr_transfer = resolved_amr.transfer
-        initial_condition_plan = resolved_amr.initial_conditions
-        bootstrap_plan = resolved_amr.bootstrap
-        amr_execution = resolved_amr.execution
-        amr_providers = resolved_amr.providers
+            resolved_amr = adaptive_layout.resolve_amr_authorities(context)
+            if type(resolved_amr) is not ResolvedAMRAuthorities:
+                raise TypeError("layout resolve_amr_authorities() must return exact ResolvedAMRAuthorities")
+            layout_amr_authorities[layout_id] = ResolvedLayoutAMRAuthorities(projection, resolved_amr)
+        if len(layout_amr_authorities) == 1:
+            resolved_amr = next(iter(layout_amr_authorities.values())).authorities
+            resolved_hierarchy = resolved_amr.hierarchy
+            amr_transfer = resolved_amr.transfer
+            initial_condition_plan = resolved_amr.initial_conditions
+            bootstrap_plan = resolved_amr.bootstrap
+            amr_execution = resolved_amr.execution
+            amr_providers = resolved_amr.providers
+        else:
+            initial_condition_plan = problem.initials.resolve_plan(
+                layout_plan=layout_plan, expected_subjects=tuple(initial_subjects))
     # Boundary producers depend on the resolved layout and, for adaptive states, on the exact AMR
     # transfer authority.  Compose them only after both authorities exist, then carry the single
     # executable GhostProducerPlan through compile/install.
@@ -276,13 +312,19 @@ def resolve(
             numerics=compose_boundary_plans(
                 block.numerics,
                 layout_plan=layout_plan,
-                amr_transfer=amr_transfer,
+                amr_transfer=(layout_amr_authorities[
+                    block_layouts[block.name]].authorities.transfer
+                    if layout_amr_authorities else None),
             ),
         )
         for block in blocks
     )
     from pops.mesh.boundaries.composition import compose_shared_interfaces
     blocks = compose_shared_interfaces(blocks, layout_plan=layout_plan)
+    from pops.codegen._resolved_block_operations import build_block_resolved_operations
+
+    blocks = tuple(replace(block, resolved_operations=build_block_resolved_operations(
+        block, resolved_time)) for block in blocks)
     from pops.codegen._interface_validation import (
         validate_prepared_boundary_jacvec,
         validate_shared_interface_program,
@@ -297,6 +339,13 @@ def resolve(
     )
     field_plans = capture_field_plans(
         problem, detached_frozen, target=target, layout=detached_layout)
+    from pops.codegen.program_field_plan import capture_program_field_plans
+
+    program_field_plans = capture_program_field_plans(
+        problem, detached_frozen, target=target, layout_plan=layout_plan, program=resolved_time)
+    from pops.codegen._physical_mapping_resolution import validate_physical_mapping_program
+    validate_physical_mapping_program(layout_plan, resolved_time, program_field_plans,
+                                      resolve=problem.resolve)
     from pops.codegen.program_emit_field_routes import validate_program_field_routes
     validate_program_field_routes(resolved_time, field_plans)
     snapshot = prepare_problem_snapshot(
@@ -308,16 +357,20 @@ def resolve(
         from pops.mesh._amr import FrozenHierarchy
         from pops.runtime.amr_program_support import AMRProgramSupportContext
 
-        if resolved_hierarchy is None:
+        hierarchies = tuple(value.authorities.hierarchy.plan
+                            for value in layout_amr_authorities.values())
+        if not hierarchies:
             raise TypeError("resolved AMR hierarchy evidence is missing")
-        hierarchy = resolved_hierarchy.plan
         amr_program_context = AMRProgramSupportContext(
-            hierarchy_level_count=hierarchy.level_count,
-            frozen_hierarchy=type(hierarchy.regrid) is FrozenHierarchy,
+            hierarchy_level_count=max(hierarchy.level_count for hierarchy in hierarchies),
+            frozen_hierarchy=all(type(hierarchy.regrid) is FrozenHierarchy for hierarchy in hierarchies),
             shared_block_interfaces=has_shared_interfaces,
             field_routes_validated=True,
-            topology_rematerializer_validated=
-                _field_topology_rematerializer_validated(field_plans, amr_transfer),
+            topology_rematerializer_validated=all(
+                _field_topology_rematerializer_validated(
+                    field_plans, value.authorities.transfer,
+                    {name: problem.resolve(handle) for name, handle in problem.fields().items()})
+                for value in layout_amr_authorities.values()),
         )
 
     evidence = resolve_capability_evidence(
@@ -325,17 +378,18 @@ def resolve(
         module_abi_key=None, amr_program_context=amr_program_context)
     amr_requirements = None
     amr_capabilities = None
-    if bootstrap_plan is not None:
-        if resolved_hierarchy is None or amr_transfer is None \
-                or initial_condition_plan is None:
-            raise RuntimeError("resolved AMR bootstrap lost an authenticated authority")
+    if layout_amr_authorities:
         amr_requirements = {
-            "hierarchy": resolved_hierarchy.identity.to_data(),
-            "transfer": amr_transfer.identity.to_data(),
-            "initial_conditions": initial_condition_plan.identity.to_data(),
-            "bootstrap": bootstrap_plan.identity.to_data(),
-        }
-        amr_capabilities = bootstrap_plan.inspect()
+            layout_id: {"hierarchy": row.authorities.hierarchy.identity.to_data(),
+                        "transfer": row.authorities.transfer.identity.to_data(),
+                        "initial_conditions": row.authorities.initial_conditions.identity.to_data(),
+                        "bootstrap": row.authorities.bootstrap.identity.to_data()}
+            for layout_id, row in layout_amr_authorities.items()}
+        amr_capabilities = {layout_id: row.authorities.bootstrap.inspect()
+                            for layout_id, row in layout_amr_authorities.items()}
+        if len(layout_amr_authorities) == 1:
+            amr_requirements = next(iter(amr_requirements.values()))
+            amr_capabilities = next(iter(amr_capabilities.values()))
     consumer_graph = (
         None if problem._consumers is None
         else problem._consumers.resolve(
@@ -344,19 +398,24 @@ def resolve(
     from pops.output._restart_provider import RestartAuthority
     restart_authority = RestartAuthority.from_consumer_graph(consumer_graph)
     lowering_coverage = layout_lowering_coverage(layout_plan)
-    if bootstrap_plan is not None:
-        from pops.codegen._amr_lowering_coverage import amr_lowering_coverage
-        from pops.codegen.lowering_coverage import LoweringCoverageReport
+    from pops.codegen._resolved_block_operations import operation_coverage
+    from pops.codegen.lowering_coverage import LoweringCoverageReport
 
-        amr_coverage = amr_lowering_coverage(
-            resolved_hierarchy=resolved_hierarchy,
-            transfer=amr_transfer,
-            bootstrap=bootstrap_plan,
-            execution=amr_execution,
-        )
+    lowering_coverage = LoweringCoverageReport((
+        *lowering_coverage.rows, *operation_coverage(blocks).rows,
+        *(row for plan in program_field_plans.values() for row in plan.coverage.rows)))
+    if layout_amr_authorities:
+        from pops.codegen._amr_lowering_coverage import amr_lowering_coverage
         lowering_coverage = LoweringCoverageReport((
             *lowering_coverage.rows,
-            *amr_coverage.rows,
+            *((replace(row, source="amr-layout:%s:%s" % (layout_id, row.source))
+               if len(layout_amr_authorities) > 1 else row)
+              for layout_id, authority in layout_amr_authorities.items()
+              for row in amr_lowering_coverage(
+                  resolved_hierarchy=authority.authorities.hierarchy,
+                  transfer=authority.authorities.transfer,
+                  bootstrap=authority.authorities.bootstrap,
+                  execution=authority.authorities.execution).rows),
         ))
     return ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
@@ -368,6 +427,7 @@ def resolve(
         },
         time=resolved_time, blocks=blocks, bind_schema=bind_schema,
         compile_values=compile_values, field_plans=field_plans, consumer_graph=consumer_graph,
+        program_field_plans=program_field_plans,
         restart_authority=restart_authority,
         libraries=(),
         requirements={"tokens": tuple(evidence["requirements"]),
@@ -383,7 +443,8 @@ def resolve(
         component_inputs=tuple(components),
         resolved_hierarchy=resolved_hierarchy, amr_transfer=amr_transfer,
         initial_condition_plan=initial_condition_plan, bootstrap_plan=bootstrap_plan,
-        amr_execution=amr_execution, amr_providers=amr_providers)
+        amr_execution=amr_execution, amr_providers=amr_providers,
+        layout_amr_authorities=layout_amr_authorities)
 
 
 def compile(plan: Any) -> Any:
@@ -488,6 +549,9 @@ def bind(artifact: Any, inputs: Any) -> Any:
         raise TypeError("internal bind phase requires an exact authenticated BindInputs record")
     artifact.verify()
     inputs.verify()
+    from pops.runtime._auxiliary_bind import validate_auxiliary_bind_inputs
+
+    validate_auxiliary_bind_inputs(artifact, inputs.aux)
     plan = artifact.plan
     adaptive = any(row.adaptive for row in plan.layout_plan.layouts)
     if adaptive and plan.initial_condition_plan is None:

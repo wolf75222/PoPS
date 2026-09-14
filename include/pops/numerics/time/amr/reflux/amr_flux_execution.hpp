@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <pops/runtime/program/profiler.hpp>
+
 #include <pops/amr/transfer/temporal_interpolation_provider.hpp>
 #include <pops/amr/transfer/transfer_provider.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -97,7 +99,8 @@ template <int Dim, class MemorySpace>
 void execute_average_down_collectively(
     const ::pops::runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime, std::size_t fine_level,
     const MultiFab<Dim, MemorySpace>& fine, MultiFab<Dim, MemorySpace>& parent,
-    const ExecutionLane& lane) {
+    const ExecutionLane& lane, ::pops::runtime::program::Profiler* profiler = nullptr) {
+  ::pops::runtime::program::ProfileOperation profile(profiler, "average_down");
   using field_type = MultiFab<Dim, MemorySpace>;
   using transfer_job = ::pops::mesh::parallel::RegionTransferJob<Dim>;
   using transfer_plan = ::pops::mesh::parallel::RegionTransferPlan<Dim>;
@@ -224,6 +227,8 @@ void execute_average_down_collectively(
     return parent.fab_global(job.destination_patch).view();
   };
   transport->execute(source, destination);
+  if (profile.active())
+    Kokkos::fence();
 }
 
 }  // namespace pops::numerics::time::amr

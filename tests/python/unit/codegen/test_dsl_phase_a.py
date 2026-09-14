@@ -42,6 +42,8 @@ def build_euler(name="euler_pa"):
         "E": Energy(),
     })
     rho, rhou, rhov, E = U
+    # The EOS metadata is explicit; a parameter's name does not declare its constitutive law.
+    m._dsl.gamma(GAMMA)
     g = m.value(m.param(ConstParam("gamma", GAMMA)))
     u = m.primitive("u", rhou / rho)
     v = m.primitive("v", rhov / rho)

@@ -1,0 +1,2361 @@
+{
+  "changed_paths": [
+    "python/pops/codegen/_artifact_identity.py",
+    "python/pops/codegen/_compile_drivers.py",
+    "python/pops/codegen/compile_link_flags.py",
+    "python/pops/physics/_facade_compile.py",
+    "tests/python/integration/runtime/test_tensor_transport_composition.py",
+    "tests/python/unit/codegen/test_compile_link_flags.py"
+  ],
+  "decision": "Reuse v32 native factory3 and source composition16 successes at their original sources. All C++ files under include/src/tests/cpp are identical. New model linker flags normalize Darwin load metadata; both artifact-spec producers include these flags to invalidate old Darwin artifact-cache entries. Semantic equation identity is distinct from artifact-spec/cache identity and full binary identity; no strict identity guard is removed. Non-Darwin flags remain unchanged.",
+  "from": "2bb005f0cdf79f3027167a92931090f6c940ea18",
+  "to": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+  "unchanged_cpp_file_count": 586,
+  "unchanged_cpp_inventory": [
+    {
+      "git_blob": "28ccbb4490c36dbda2a7ce48a7b93fab366642e7",
+      "path": "include/pops/amr/hierarchy/amr_hierarchy.hpp"
+    },
+    {
+      "git_blob": "f72cdcc94ce7497a97e16a98e543438c84ab67e3",
+      "path": "include/pops/amr/hierarchy/hierarchy_plan.hpp"
+    },
+    {
+      "git_blob": "75efa0b47ca70624a2ccd79737f3703dc6667069",
+      "path": "include/pops/amr/hierarchy/level_layout.hpp"
+    },
+    {
+      "git_blob": "e77f29378caab2f8b9c2d309f810efb9fafc0839",
+      "path": "include/pops/amr/refinement_ratio.hpp"
+    },
+    {
+      "git_blob": "3c0463d7c4c429d2b3434254c3895c29f0af8bd5",
+      "path": "include/pops/amr/reflux/face_flux_ledger.hpp"
+    },
+    {
+      "git_blob": "48c867b92854e775fbd2d9c422e817dba2340f9b",
+      "path": "include/pops/amr/reflux/metric_reflux.hpp"
+    },
+    {
+      "git_blob": "c1ef27fe104bd2d709233dfd4b9be2c3fa980d48",
+      "path": "include/pops/amr/regridding/regrid.hpp"
+    },
+    {
+      "git_blob": "51c3b39753356948873f68fac1ba66bb85338558",
+      "path": "include/pops/amr/tagging/berger_rigoutsos.hpp"
+    },
+    {
+      "git_blob": "2fe4b9b123c467836436f36f0e5ad4341208b470",
+      "path": "include/pops/amr/tagging/clustering_provider.hpp"
+    },
+    {
+      "git_blob": "299a0a59345d481d3d298abbacf5ecaa8a88eee2",
+      "path": "include/pops/amr/tagging/tag_mask.hpp"
+    },
+    {
+      "git_blob": "fd60fd6032fbc8c7a1e78b9f14c8caa9b7a38d58",
+      "path": "include/pops/amr/transfer/temporal_interpolation_provider.hpp"
+    },
+    {
+      "git_blob": "542b8b77e3224d2d51e81101e0acab8e7d42813b",
+      "path": "include/pops/amr/transfer/transfer_provider.hpp"
+    },
+    {
+      "git_blob": "dea058aa84338c8d6679aeef2c216df46bd358d6",
+      "path": "include/pops/core/foundation/allocator.hpp"
+    },
+    {
+      "git_blob": "b0d1eb2cf9afd7da9d0a697f2e26b4bd5b377544",
+      "path": "include/pops/core/foundation/cold.hpp"
+    },
+    {
+      "git_blob": "bfc4187166cac7aff5fed5b7edeeddb91b4b1393",
+      "path": "include/pops/core/foundation/kokkos_env.hpp"
+    },
+    {
+      "git_blob": "7c560f25e4cf5ace557639119e9756a00afff215",
+      "path": "include/pops/core/foundation/native_dimension.hpp"
+    },
+    {
+      "git_blob": "90acb3c159b01dabb92178bac29515cd12e8d188",
+      "path": "include/pops/core/foundation/types.hpp"
+    },
+    {
+      "git_blob": "5cd5d60e64a9744286f7c6b72101ab65a0d26a74",
+      "path": "include/pops/core/foundation/validation.hpp"
+    },
+    {
+      "git_blob": "8e87f90f90e80010eb2137b0cde95e8c737cbb0a",
+      "path": "include/pops/core/identity/canonical_value.hpp"
+    },
+    {
+      "git_blob": "926acee2820f231679f52fcdaf884e132ce44096",
+      "path": "include/pops/core/identity/prepared_provider.hpp"
+    },
+    {
+      "git_blob": "18a1bb89cd6125862a020431acd596a6e02eb8c8",
+      "path": "include/pops/core/identity/prepared_provider_options.hpp"
+    },
+    {
+      "git_blob": "92ce118a0ce16fbbf26ad14602a57f89872483b6",
+      "path": "include/pops/core/identity/sha256.hpp"
+    },
+    {
+      "git_blob": "d47bd1bb6c34ab66b7648c7d8dfdadb3aefd547f",
+      "path": "include/pops/core/model/coupled_system.hpp"
+    },
+    {
+      "git_blob": "ee54872f55bfcb0873890846b5a2b6e9e05245ac",
+      "path": "include/pops/core/model/equation_block.hpp"
+    },
+    {
+      "git_blob": "212138061b19a1bca41ebfcca4d4e7e2c627d112",
+      "path": "include/pops/core/model/native_call.hpp"
+    },
+    {
+      "git_blob": "2274c8b1e4e8a9408e04f7db39ac06ad0998cf89",
+      "path": "include/pops/core/model/physical_model.hpp"
+    },
+    {
+      "git_blob": "dcbcd9281a694a1bb7f07d1ff19223c4e2cb6ddf",
+      "path": "include/pops/core/state/state.hpp"
+    },
+    {
+      "git_blob": "48a5edeac9b36bd63f5fe3e7cd05da759044969f",
+      "path": "include/pops/core/state/variables.hpp"
+    },
+    {
+      "git_blob": "87c51d8192baa7665785ed0e16c953decffa8e05",
+      "path": "include/pops/coupling/amr/amr_coupler_mp.hpp"
+    },
+    {
+      "git_blob": "d382b3d5e493c89b8374409d63aff7622c1e85bc",
+      "path": "include/pops/coupling/amr/amr_diagnostics.hpp"
+    },
+    {
+      "git_blob": "7b5a6a3ae2320c077dca644317887be4feca0788",
+      "path": "include/pops/coupling/amr/amr_regrid_coupler.hpp"
+    },
+    {
+      "git_blob": "4bcbb1babb00bb1946902963672855bad1f973de",
+      "path": "include/pops/coupling/base/aux_fill.hpp"
+    },
+    {
+      "git_blob": "3996fe7cb37e4d7c4ad7b61e97d1d9c707579712",
+      "path": "include/pops/coupling/base/elliptic_rhs.hpp"
+    },
+    {
+      "git_blob": "116c798c65ca428ab0452ff4edf8edef10ae74aa",
+      "path": "include/pops/coupling/source/coupled_source.hpp"
+    },
+    {
+      "git_blob": "d0a0d347f18c6575f369a594d7f26d0cb81e2db0",
+      "path": "include/pops/coupling/source/coupled_source_program.hpp"
+    },
+    {
+      "git_blob": "f3db2bcb2e5d9c4cb2e86ca17208be0fa37659e6",
+      "path": "include/pops/coupling/source/coupling_operator.hpp"
+    },
+    {
+      "git_blob": "e34b4f406fc096af156549a29068971acfaa80bb",
+      "path": "include/pops/coupling/system/amr_system_coupler.hpp"
+    },
+    {
+      "git_blob": "2e7729f77d193fca21e2e284c606a52c8dd695b0",
+      "path": "include/pops/diagnostics/fallback_diagnostics.hpp"
+    },
+    {
+      "git_blob": "13a5c7fda4529849d01eb07816348b6ab05a4858",
+      "path": "include/pops/diagnostics/runtime_diagnostics.hpp"
+    },
+    {
+      "git_blob": "354b7fdb44740de95e963bdc1cecc66ead58c07c",
+      "path": "include/pops/mesh/boundary/fill_boundary.hpp"
+    },
+    {
+      "git_blob": "3a1197dc1b4761094c56ba6988c351bd3c3f421a",
+      "path": "include/pops/mesh/boundary/halo_exchange.hpp"
+    },
+    {
+      "git_blob": "eddcbe9e4b37f621a9a7eb29d461509150074755",
+      "path": "include/pops/mesh/boundary/halo_schedule.hpp"
+    },
+    {
+      "git_blob": "7f61103b112a12bb42048332244121b3252d81cf",
+      "path": "include/pops/mesh/boundary/nd_boundary_schedule.hpp"
+    },
+    {
+      "git_blob": "76e11f7559dc31ea4d6a1876f5d0f684fedc4aa3",
+      "path": "include/pops/mesh/boundary/periodicity.hpp"
+    },
+    {
+      "git_blob": "5adac0f6e10860a1f6aed7325d727dcbbe4ad22a",
+      "path": "include/pops/mesh/boundary/physical_bc.hpp"
+    },
+    {
+      "git_blob": "a5031ce3455710b87a90f30aae947c60d0bc557a",
+      "path": "include/pops/mesh/boundary/prepared_boundary_component.hpp"
+    },
+    {
+      "git_blob": "206b7e6432e82ac38d657f3136aaf750a5c35160",
+      "path": "include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp"
+    },
+    {
+      "git_blob": "783d12613941a4257a9827af58a56e5fa952f714",
+      "path": "include/pops/mesh/execution/for_each.hpp"
+    },
+    {
+      "git_blob": "0bdcdbc1b9bfda05573866462ebce1868bf39799",
+      "path": "include/pops/mesh/geometry/coordinate_map.hpp"
+    },
+    {
+      "git_blob": "337e11ddc1c3976fbfa198e24114c579b325a4cb",
+      "path": "include/pops/mesh/geometry/geometry.hpp"
+    },
+    {
+      "git_blob": "97ae81e9ba4b675691289b22e0815ea1435f70f3",
+      "path": "include/pops/mesh/geometry/prepared_metric_provider.hpp"
+    },
+    {
+      "git_blob": "8cfb39e6601f10e7bcbfb2a75ad91e140e4d1d62",
+      "path": "include/pops/mesh/index/box.hpp"
+    },
+    {
+      "git_blob": "9f05222ab1856151bfa5d2af154d01affa666661",
+      "path": "include/pops/mesh/index/box_hash.hpp"
+    },
+    {
+      "git_blob": "261c14a09fb23af5fdcc5a7be41439ebbd72c7ef",
+      "path": "include/pops/mesh/index/entity_index.hpp"
+    },
+    {
+      "git_blob": "d9c7f18b71818b8ab57a42a4adc442b3e3734fea",
+      "path": "include/pops/mesh/index/extent.hpp"
+    },
+    {
+      "git_blob": "6433ea13ffeed8333afcd78fd7ab3cc79243db2c",
+      "path": "include/pops/mesh/index/index.hpp"
+    },
+    {
+      "git_blob": "5a3d28b6a20ddbd85717bff74ec511fa17b4fa7a",
+      "path": "include/pops/mesh/index/real_vector.hpp"
+    },
+    {
+      "git_blob": "ca0fd1bec6d2c3c4c2132521d63ff33ce0ba3edf",
+      "path": "include/pops/mesh/layout/box_array.hpp"
+    },
+    {
+      "git_blob": "9256e2fb8a3b50f6193cf9ba0813d31c9bec6602",
+      "path": "include/pops/mesh/layout/copy_schedule.hpp"
+    },
+    {
+      "git_blob": "510847c3781c27c072cb698aa8e075568145ff02",
+      "path": "include/pops/mesh/layout/distribution.hpp"
+    },
+    {
+      "git_blob": "6cdcb42347669bc38eb739eed5d19dc44a407e3d",
+      "path": "include/pops/mesh/layout/field_distribution.hpp"
+    },
+    {
+      "git_blob": "668d79dad0959b4d0bad487baa3a6f626c7903d9",
+      "path": "include/pops/mesh/layout/rank_space.hpp"
+    },
+    {
+      "git_blob": "327b43b554f02b552c2a1c21116ffbf10eb12fb6",
+      "path": "include/pops/mesh/layout/refinement.hpp"
+    },
+    {
+      "git_blob": "adb18f203366f9eec821d25dd2b70d77db30f3f9",
+      "path": "include/pops/mesh/nd_proof/local_neighbors.hpp"
+    },
+    {
+      "git_blob": "116103b633e32ee534d8eb487e1818d6ef7cb048",
+      "path": "include/pops/mesh/nd_proof/periodicity.hpp"
+    },
+    {
+      "git_blob": "976fa98333e6d9215e141518f0c5c8ba580697be",
+      "path": "include/pops/mesh/nd_proof/translation_exchange.hpp"
+    },
+    {
+      "git_blob": "d3dd5e10a91cb7401fce9f1fb2a4a8998479ae2e",
+      "path": "include/pops/mesh/nd_proof/translation_schedule.hpp"
+    },
+    {
+      "git_blob": "b3f65fefa2c275926d76f9d4a0aac5e08a53a656",
+      "path": "include/pops/mesh/parallel/region_transfer.hpp"
+    },
+    {
+      "git_blob": "57d74a87988813ef9acc2a3718767161c990d2eb",
+      "path": "include/pops/mesh/storage/fab.hpp"
+    },
+    {
+      "git_blob": "2dc16db8c3be4e2b4294145d8f60f795c34f8221",
+      "path": "include/pops/mesh/storage/field_replica_consensus.hpp"
+    },
+    {
+      "git_blob": "9a2c5b5060d084af7ef8d5369dbce4aa8ba89f08",
+      "path": "include/pops/mesh/storage/field_view.hpp"
+    },
+    {
+      "git_blob": "38434cc0f07895265aa8ea0a3cdc8d5de088729d",
+      "path": "include/pops/mesh/storage/mf_arith.hpp"
+    },
+    {
+      "git_blob": "49d7bf0180b7a11ae1030addb614cd4a60a0445c",
+      "path": "include/pops/mesh/storage/multifab.hpp"
+    },
+    {
+      "git_blob": "ab4be43c871c75024416958f88d3061f96028600",
+      "path": "include/pops/mesh/topology/boundary_topology.hpp"
+    },
+    {
+      "git_blob": "5ded24bfe734e8fc89e588bb8c51650bc06851fa",
+      "path": "include/pops/numerics/diffusion/bernoulli.hpp"
+    },
+    {
+      "git_blob": "2c3590a979615c0b0ce93964c6770b2cb9884532",
+      "path": "include/pops/numerics/diffusion/prepared_diffusion.hpp"
+    },
+    {
+      "git_blob": "e5b48dccdf2e1689c668926ebb35b746c00212a3",
+      "path": "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp"
+    },
+    {
+      "git_blob": "34933deeaf99010f09d1ba9ebbf1cf8aead526c7",
+      "path": "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp"
+    },
+    {
+      "git_blob": "74dee6d60e7a9aa8c22d789c3709f073a2c743b6",
+      "path": "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp"
+    },
+    {
+      "git_blob": "7079b8dd916f5774641eb9b4ad15738da6374e3b",
+      "path": "include/pops/numerics/elliptic/interface/elliptic_interface.hpp"
+    },
+    {
+      "git_blob": "5f636f6cf80a9cca36f611a669135a691741e311",
+      "path": "include/pops/numerics/elliptic/interface/elliptic_problem.hpp"
+    },
+    {
+      "git_blob": "9adcf3cbf66707a0855ca638d4140e9163ea7ff3",
+      "path": "include/pops/numerics/elliptic/interface/elliptic_solver.hpp"
+    },
+    {
+      "git_blob": "933f26ae75df8ada6198b0b3055c983f0afd5895",
+      "path": "include/pops/numerics/elliptic/interface/field_boundary_kernel.hpp"
+    },
+    {
+      "git_blob": "49e4d3fbe9d3314aa71ffd00fc8e5cce88386906",
+      "path": "include/pops/numerics/elliptic/interface/field_newton_krylov.hpp"
+    },
+    {
+      "git_blob": "39ca77ac65327d91dc9083ba7d6d02790b0e7712",
+      "path": "include/pops/numerics/elliptic/interface/field_nonlinear.hpp"
+    },
+    {
+      "git_blob": "9ed7eda88f13b5c06564edbfa098f73cb3ec80a7",
+      "path": "include/pops/numerics/elliptic/interface/field_nullspace.hpp"
+    },
+    {
+      "git_blob": "fdd1f7a2211b9a62d125d150b10f830538a2d13c",
+      "path": "include/pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp"
+    },
+    {
+      "git_blob": "d65389c8233420d43f596d458bf420f9465a7c09",
+      "path": "include/pops/numerics/elliptic/interface/field_nullspace_builtins.hpp"
+    },
+    {
+      "git_blob": "8055f3a7211f592bc3dbd436793acbe98c507329",
+      "path": "include/pops/numerics/elliptic/interface/field_nullspace_prepare.hpp"
+    },
+    {
+      "git_blob": "f8be211cd4a1c22ed8372f767a939227381c3b58",
+      "path": "include/pops/numerics/elliptic/interface/field_nullspace_provider.hpp"
+    },
+    {
+      "git_blob": "502c6040235f63302411e827db8c5afa75a0f637",
+      "path": "include/pops/numerics/elliptic/interface/field_nullspace_workspace.hpp"
+    },
+    {
+      "git_blob": "0e98ff68afab3db842004bc5c9ec29f5481d7e54",
+      "path": "include/pops/numerics/elliptic/interface/field_provider.hpp"
+    },
+    {
+      "git_blob": "158878736f2b522327e24fa2fd96d22241fcc0a9",
+      "path": "include/pops/numerics/elliptic/linear/collective_prepared_owner.hpp"
+    },
+    {
+      "git_blob": "0bc3b4337e62d358b8a609213dc6f07c9b7ef4fa",
+      "path": "include/pops/numerics/elliptic/linear/generic_krylov.hpp"
+    },
+    {
+      "git_blob": "f143e228a964fd575a6c239e3c8f59b7d2cbcf3b",
+      "path": "include/pops/numerics/elliptic/linear/krylov_method_provider.hpp"
+    },
+    {
+      "git_blob": "4017cf2057dc98f2a66b0c7a0c3e1517eb768f02",
+      "path": "include/pops/numerics/elliptic/linear/krylov_workspace.hpp"
+    },
+    {
+      "git_blob": "b1c0d1f7436b709f4ad9f94b276d318c28ce073b",
+      "path": "include/pops/numerics/elliptic/linear/prepared_affine_problem.hpp"
+    },
+    {
+      "git_blob": "25036fefa3184d92fcb85003f274fefffc40886f",
+      "path": "include/pops/numerics/elliptic/linear/prepared_vector_metric.hpp"
+    },
+    {
+      "git_blob": "d7058a07b4e3141882f0dff496a008a7278158b0",
+      "path": "include/pops/numerics/elliptic/linear/pure_field_algebra.hpp"
+    },
+    {
+      "git_blob": "692f1d9e02e22ed6e364ff400a52a66801052b4a",
+      "path": "include/pops/numerics/elliptic/linear/scaled_field_algebra.hpp"
+    },
+    {
+      "git_blob": "c3ef3ce579616fed70cfa3951f0ee7df8b2ec267",
+      "path": "include/pops/numerics/elliptic/linear/scaled_scalar.hpp"
+    },
+    {
+      "git_blob": "173e8c58bf4d4fc81d22d23f1e78f0b6c3b32c9e",
+      "path": "include/pops/numerics/elliptic/linear/solve_outcome.hpp"
+    },
+    {
+      "git_blob": "e9b43ab8032e567d83030b9b282d706c5e8b962a",
+      "path": "include/pops/numerics/elliptic/linear/solve_report.hpp"
+    },
+    {
+      "git_blob": "38fa31279a9bfc128498b680a3b2f3db37a7b404",
+      "path": "include/pops/numerics/elliptic/linear/vector_distribution.hpp"
+    },
+    {
+      "git_blob": "6b4073a332c781d65e19fbadebb598d20b68f124",
+      "path": "include/pops/numerics/elliptic/mg/composite_fac_nlevel.hpp"
+    },
+    {
+      "git_blob": "343b38f7cc4bc0f4600504130d98a711996e7472",
+      "path": "include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp"
+    },
+    {
+      "git_blob": "1caaf3b37abee6cbb8c26a109d5c91b762193f98",
+      "path": "include/pops/numerics/elliptic/mg/geometric_mg.hpp"
+    },
+    {
+      "git_blob": "bc3a7f9d95029c40c09287ab703d846dbff13c51",
+      "path": "include/pops/numerics/elliptic/nd/cartesian_poisson.hpp"
+    },
+    {
+      "git_blob": "c27dd3938bf4882f9d033c9fa66a68fb92f30eaa",
+      "path": "include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp"
+    },
+    {
+      "git_blob": "450f26026a13e82ce323e924a7e1c269a228ca54",
+      "path": "include/pops/numerics/elliptic/nd/general_field_operator.hpp"
+    },
+    {
+      "git_blob": "5bf9b6272a96f4c67e3efecc192a9eb2b2568d37",
+      "path": "include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp"
+    },
+    {
+      "git_blob": "f863e1e276a2aa24c5fb26e1c013e481658ab58a",
+      "path": "include/pops/numerics/elliptic/poisson/poisson_fft.hpp"
+    },
+    {
+      "git_blob": "00df1177ac2305b23db44508b4df9fb0410a82e5",
+      "path": "include/pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp"
+    },
+    {
+      "git_blob": "4a531f4919fe8324eac1b597e5255ca5c4ebeb7d",
+      "path": "include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp"
+    },
+    {
+      "git_blob": "4c9823468601fc0dbd8e5138a5c246eccbd06292",
+      "path": "include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp"
+    },
+    {
+      "git_blob": "3c4660ef77e3d29f0dc8c64b5b59b46d45ba9ddf",
+      "path": "include/pops/numerics/elliptic/poisson/poisson_operator.hpp"
+    },
+    {
+      "git_blob": "01843da35e1b5043b1ad5b997c20d4c95df07684",
+      "path": "include/pops/numerics/elliptic/polar/polar_geometry.hpp"
+    },
+    {
+      "git_blob": "d82fd4f3f0ecf79bcb9bef08c73ace1e911f5f1f",
+      "path": "include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp"
+    },
+    {
+      "git_blob": "26612711a0eae09d05eac4dbd320435ae8ad466f",
+      "path": "include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp"
+    },
+    {
+      "git_blob": "cb7b1c1f390fddbc44a3baaa5f3c9a16d78da550",
+      "path": "include/pops/numerics/fv/flux_failure.hpp"
+    },
+    {
+      "git_blob": "dab86c4ae678ec0bcd20403610745083ce17a9e9",
+      "path": "include/pops/numerics/fv/flux_interfaces.hpp"
+    },
+    {
+      "git_blob": "2ce6a88c8f999e1c28bba263f63ea2781dd9e6dd",
+      "path": "include/pops/numerics/fv/numerical_flux.hpp"
+    },
+    {
+      "git_blob": "1a31c968673ed90241d78be5fd99de3638edb9f5",
+      "path": "include/pops/numerics/fv/reconstruction.hpp"
+    },
+    {
+      "git_blob": "fa16e00de7ae53ad3cf90560194b1eb984e1ddde",
+      "path": "include/pops/numerics/fv/spatial_discretisation.hpp"
+    },
+    {
+      "git_blob": "12b8cd331b093d1248e3e72cb7dcd3dc6fdeaa7f",
+      "path": "include/pops/numerics/linalg/block_inverse.hpp"
+    },
+    {
+      "git_blob": "f33f93d9c6de4b5fb4d428208738112b25e1871b",
+      "path": "include/pops/numerics/linalg/dense_eig.hpp"
+    },
+    {
+      "git_blob": "1065334c24f03ed86cc1e706922222f8a535455b",
+      "path": "include/pops/numerics/nonlinear/local_nonlinear_collective.hpp"
+    },
+    {
+      "git_blob": "9592d13193c6086f541d22c0921f5a82e1f5b750",
+      "path": "include/pops/numerics/nonlinear/newton_options.hpp"
+    },
+    {
+      "git_blob": "8dfb971633a7baedae21c3f4a48a08d321b7300f",
+      "path": "include/pops/numerics/nonlinear/prepared_local_nonlinear.hpp"
+    },
+    {
+      "git_blob": "610946b3109eb13ca25f1196c18b6387bcbd99cc",
+      "path": "include/pops/numerics/nonlinear/prepared_variable_recovery.hpp"
+    },
+    {
+      "git_blob": "3bd66fe1badee6ba9fe7c7263fdf796265794ebe",
+      "path": "include/pops/numerics/spatial/embedded_boundary/characteristic.hpp"
+    },
+    {
+      "git_blob": "f83238425aa127871b3dca94a277eb0a29560107",
+      "path": "include/pops/numerics/spatial/embedded_boundary/cut_geometry.hpp"
+    },
+    {
+      "git_blob": "93dd73d48e91cfca04e2a305e9e51102532afd5d",
+      "path": "include/pops/numerics/spatial/embedded_boundary/operator.hpp"
+    },
+    {
+      "git_blob": "0c1f826844d0352619aed7b7ead0be3acb4b25dc",
+      "path": "include/pops/numerics/spatial/nd/conservation_laws.hpp"
+    },
+    {
+      "git_blob": "4363df231ee69b58b098118e9a868cead812a989",
+      "path": "include/pops/numerics/spatial/nd/face_field.hpp"
+    },
+    {
+      "git_blob": "b7b3c487419bb5661af91d2a8ddb6f642989b996",
+      "path": "include/pops/numerics/spatial/nd/finite_volume.hpp"
+    },
+    {
+      "git_blob": "84b624ba6c1d06607b5ed493b5449794b701618b",
+      "path": "include/pops/numerics/spatial/nd/reconstruction.hpp"
+    },
+    {
+      "git_blob": "45836c90233ea095973c22ea08ad9263cdb7cd2e",
+      "path": "include/pops/numerics/spatial/nd/state_schema.hpp"
+    },
+    {
+      "git_blob": "ba32e093e40b4942aa0f865c3c80508fede67b32",
+      "path": "include/pops/numerics/spatial/operators/cartesian_operator.hpp"
+    },
+    {
+      "git_blob": "53d7d4571fc8428b166f8814e71b0e8736c90ac8",
+      "path": "include/pops/numerics/spatial/operators/masked_operator.hpp"
+    },
+    {
+      "git_blob": "a17038b4ead709af34735033c7cac5206649923e",
+      "path": "include/pops/numerics/spatial/operators/polar_operator.hpp"
+    },
+    {
+      "git_blob": "6b9e90785ff166c7088b14bd23db01983a109314",
+      "path": "include/pops/numerics/spatial/primitives/face_flux.hpp"
+    },
+    {
+      "git_blob": "fc13016974a6a99a70a5234de08ad6d712eaee4a",
+      "path": "include/pops/numerics/spatial/primitives/positivity.hpp"
+    },
+    {
+      "git_blob": "f74cace149f72ad11617e08544b09a247b0ebfa5",
+      "path": "include/pops/numerics/spatial/primitives/state_access.hpp"
+    },
+    {
+      "git_blob": "67dfa74ee283a3aaf32515a333c6a6addae6a5b9",
+      "path": "include/pops/numerics/spatial/primitives/wave_speed.hpp"
+    },
+    {
+      "git_blob": "ea8423f0f961426bafaf6147eba044ca5f2b04ee",
+      "path": "include/pops/numerics/spatial/provider_matrix.hpp"
+    },
+    {
+      "git_blob": "ff29027da142f75cd6e1ff2e0ac65baea47bab81",
+      "path": "include/pops/numerics/spatial_operator.hpp"
+    },
+    {
+      "git_blob": "27411afd28b768d5a1f0b1150f2860dd772cbda4",
+      "path": "include/pops/numerics/time/amr/levels/amr_clock.hpp"
+    },
+    {
+      "git_blob": "0997e38605cc42406b53b5cd23c1e47fed03a996",
+      "path": "include/pops/numerics/time/amr/levels/amr_patch_range.hpp"
+    },
+    {
+      "git_blob": "36a3e74578be0f24e4ec297844b488d84f14747c",
+      "path": "include/pops/numerics/time/amr/levels/amr_subcycling.hpp"
+    },
+    {
+      "git_blob": "13f98266ddc217f9ab7636c29cb5cf4560e76848",
+      "path": "include/pops/numerics/time/amr/levels/amr_subcycling_engine.hpp"
+    },
+    {
+      "git_blob": "04f1a18f3ba9594237133b1a9a351f5fea3e509c",
+      "path": "include/pops/numerics/time/amr/levels/amr_subcycling_plan.hpp"
+    },
+    {
+      "git_blob": "41820325763ac79629c8bb22e792cd626d735710",
+      "path": "include/pops/numerics/time/amr/prepared_coarse_fine_operator.hpp"
+    },
+    {
+      "git_blob": "1fdf774593c43ddc84bac4acde2d8cc07ddff205",
+      "path": "include/pops/numerics/time/amr/reflux/amr_flux_execution.hpp"
+    },
+    {
+      "git_blob": "121307e1bca6f7a72580f8c61fd5c2a35da3b9ac",
+      "path": "include/pops/numerics/time/amr/reflux/amr_flux_helpers.hpp"
+    },
+    {
+      "git_blob": "505e498a2fcd3aed417e52264ccb43e4ab66e5e9",
+      "path": "include/pops/numerics/time/amr/reflux/amr_flux_ledger.hpp"
+    },
+    {
+      "git_blob": "57aff987e2195863a751e6a77838645eb8b8eae4",
+      "path": "include/pops/numerics/time/amr/reflux/amr_flux_preparation.hpp"
+    },
+    {
+      "git_blob": "b4a1d90c69e1f4cd8fd8b3a8753acf5a3c47987b",
+      "path": "include/pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp"
+    },
+    {
+      "git_blob": "599947de4cbf4a72afa4ad23f13fe382144d0944",
+      "path": "include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp"
+    },
+    {
+      "git_blob": "1d17c5771ab51811b5876f7223d61747ba8387a9",
+      "path": "include/pops/numerics/time/integrators/implicit_stepper.hpp"
+    },
+    {
+      "git_blob": "5dec58cc51bb64ff43a692b6268351b191c1a275",
+      "path": "include/pops/numerics/time/integrators/time_integrator.hpp"
+    },
+    {
+      "git_blob": "8318e7d06f0df1de25aae19644d56e233867b442",
+      "path": "include/pops/numerics/time/integrators/time_steppers.hpp"
+    },
+    {
+      "git_blob": "e27f91bdf4fdb389363d072686ea60e0afbcac9e",
+      "path": "include/pops/numerics/time/schemes/imex.hpp"
+    },
+    {
+      "git_blob": "869af193c10dc98a90420c16a250db2686f3e7f6",
+      "path": "include/pops/numerics/time/schemes/splitting.hpp"
+    },
+    {
+      "git_blob": "b93a8e10e91f81df3cee622eb3b5a27115be5d96",
+      "path": "include/pops/parallel/collective_exception.hpp"
+    },
+    {
+      "git_blob": "fe895755ac218c45e8138e9ee606b50325ee9ab6",
+      "path": "include/pops/parallel/comm.hpp"
+    },
+    {
+      "git_blob": "63546c634385a04f31f172302cd585f002ae4365",
+      "path": "include/pops/parallel/execution_lane.hpp"
+    },
+    {
+      "git_blob": "be229896a8b46e580f8aa3430913d157dfe4297b",
+      "path": "include/pops/parallel/field_distribution_reduction.hpp"
+    },
+    {
+      "git_blob": "40ba36c37b2b6724ce6dd9e3266e15b3d6393cea",
+      "path": "include/pops/parallel/load_balance.hpp"
+    },
+    {
+      "git_blob": "fc5a0eb51f72aaef8df0b73f8ebfb97d87091b5f",
+      "path": "include/pops/parallel/ownership_plan.hpp"
+    },
+    {
+      "git_blob": "b3dd3e165e0434a10058ec42922dc6ea071410d6",
+      "path": "include/pops/parallel/prepared_load_balance.hpp"
+    },
+    {
+      "git_blob": "31d6cb77dc97d29f3ae3de9ea12333bda8993181",
+      "path": "include/pops/parallel/prepared_provider_consensus.hpp"
+    },
+    {
+      "git_blob": "27bda4e152daf820e2885d8b2d369d0cc65b44ff",
+      "path": "include/pops/parallel/solve_report_consensus.hpp"
+    },
+    {
+      "git_blob": "e66d2fb8d0d243c27f7b1f05eb1d9087d283cfb5",
+      "path": "include/pops/parallel/world_communicator.hpp"
+    },
+    {
+      "git_blob": "ef1cd5373d74c89aab8560c19894372c2800598c",
+      "path": "include/pops/physics/admissibility/admissibility.hpp"
+    },
+    {
+      "git_blob": "3d5a19bb889df464db1ef88c2beb810d08c21d87",
+      "path": "include/pops/physics/admissibility/admissible_set.hpp"
+    },
+    {
+      "git_blob": "19d5248cb64466c835f3ba4f08fb52ba731b1a3b",
+      "path": "include/pops/physics/admissibility/enforcement_schedule.hpp"
+    },
+    {
+      "git_blob": "74d1bf0710b05f9380388bf48c4e61e1661c6913",
+      "path": "include/pops/physics/admissibility/projection.hpp"
+    },
+    {
+      "git_blob": "c42edd5fe481166ac90cd85799e94b8fad323db6",
+      "path": "include/pops/physics/bricks/bricks.hpp"
+    },
+    {
+      "git_blob": "97a4cd3333ddc4ba44903c5639b5934e56e2661a",
+      "path": "include/pops/physics/bricks/elliptic.hpp"
+    },
+    {
+      "git_blob": "7d365df1e176544bbc4795c7408d3ef90764c443",
+      "path": "include/pops/physics/bricks/hyperbolic.hpp"
+    },
+    {
+      "git_blob": "152cadf52ec51022e682023fa001f88f0254fd20",
+      "path": "include/pops/physics/bricks/source.hpp"
+    },
+    {
+      "git_blob": "614222a23170a96531ae311d73459c18a377f97b",
+      "path": "include/pops/physics/composition/composite.hpp"
+    },
+    {
+      "git_blob": "77e52c1e021b57181c3414b812c418de3572938d",
+      "path": "include/pops/physics/composition/exact_brick_contract.hpp"
+    },
+    {
+      "git_blob": "edf9b270119dd575510322dc0d67350c43acf320",
+      "path": "include/pops/physics/fluids/euler.hpp"
+    },
+    {
+      "git_blob": "932969a4583edee020bbe9e2eea3b25dd776cb39",
+      "path": "include/pops/physics/inversion/inversion.hpp"
+    },
+    {
+      "git_blob": "6fb7834d3284d7c09953010643f9bbb824899b15",
+      "path": "include/pops/physics/inversion/variable_inversion.hpp"
+    },
+    {
+      "git_blob": "05ab30922c425a5a5d9e302cb4dcdb1d529292e2",
+      "path": "include/pops/runtime/accelerator/prepared_stream_executor.hpp"
+    },
+    {
+      "git_blob": "fa93e07f3f7ee2d23e490dd2bad313cc2cae65f0",
+      "path": "include/pops/runtime/amr/amr_layout_transfer.hpp"
+    },
+    {
+      "git_blob": "f03f7c0f9de3950aa27e0b993dfb83aa26234c9a",
+      "path": "include/pops/runtime/amr/amr_layout_transfer_bridge.hpp"
+    },
+    {
+      "git_blob": "8cc25e9142775da65644478b861c587f77612f7b",
+      "path": "include/pops/runtime/amr/amr_runtime.hpp"
+    },
+    {
+      "git_blob": "546b2ddcdc430142b40d2c2e3888de4a85101b6b",
+      "path": "include/pops/runtime/amr/amr_tensor_elliptic.hpp"
+    },
+    {
+      "git_blob": "3e4921ee3335c1f7ff8708ccb7c1594d27ae48dd",
+      "path": "include/pops/runtime/amr/bootstrap_transfer_builtins.hpp"
+    },
+    {
+      "git_blob": "17bebd46267cd51cce88cc4b35edc50305c32004",
+      "path": "include/pops/runtime/amr/coarse_fine_ghost_schedule.hpp"
+    },
+    {
+      "git_blob": "ed1321c87833ab760f7499af9830c581e25d4dfd",
+      "path": "include/pops/runtime/amr/component_field_solver_provider.hpp"
+    },
+    {
+      "git_blob": "f2e4760830a5a27018bec5c32beba1a0c17d83ea",
+      "path": "include/pops/runtime/amr/composite_reduction.hpp"
+    },
+    {
+      "git_blob": "781c7c375575ea1c0af40c9a869a45ec78bf6c50",
+      "path": "include/pops/runtime/amr/detail/native_tagger_session.hpp"
+    },
+    {
+      "git_blob": "eec90aa5973ab63ab2016af33085945c75218b4e",
+      "path": "include/pops/runtime/amr/exact_field_solver_provider.hpp"
+    },
+    {
+      "git_blob": "e814cca4f0f6c29d8e45054918387e3aa31c4af3",
+      "path": "include/pops/runtime/amr/field_solver_options.hpp"
+    },
+    {
+      "git_blob": "32472c312f4505664864a768b8cce031c3df4289",
+      "path": "include/pops/runtime/amr/hierarchy_policy_authority.hpp"
+    },
+    {
+      "git_blob": "f85cfb7fcfe74b49ea3861ef6ddd24681e89f5b8",
+      "path": "include/pops/runtime/amr/hierarchy_tensor_solver_provider.hpp"
+    },
+    {
+      "git_blob": "d8c360437798a8ad73ec4352ec00dc8f60b06bb7",
+      "path": "include/pops/runtime/amr/persistent_tagging_state.hpp"
+    },
+    {
+      "git_blob": "405f768f855a2d5f6a0f4c4c684f7134de6d2423",
+      "path": "include/pops/runtime/amr/prepared_amr_ghost_fill.hpp"
+    },
+    {
+      "git_blob": "632f0c43e88fe9a1e298bf7d7b351ac756a39b91",
+      "path": "include/pops/runtime/amr/prepared_clustering_component.hpp"
+    },
+    {
+      "git_blob": "3f6551ad80c48f56b6032df5635c75057a3859e3",
+      "path": "include/pops/runtime/amr/prepared_component_providers.hpp"
+    },
+    {
+      "git_blob": "5a8e8288095ae00bb12940c069810456d3b16eb4",
+      "path": "include/pops/runtime/amr/prepared_multiblock_hierarchy.hpp"
+    },
+    {
+      "git_blob": "1fe2be1d3919a78e06d83d7e543fd3f239ec77cc",
+      "path": "include/pops/runtime/amr/prepared_reflux_component.hpp"
+    },
+    {
+      "git_blob": "32db39d36eb2c7bf7ad6b99ed8c1e755516132d4",
+      "path": "include/pops/runtime/amr/prepared_tagger_component.hpp"
+    },
+    {
+      "git_blob": "d84bc0446d952b5f6cf2f6d0fd2bdcdb2990a6ef",
+      "path": "include/pops/runtime/amr/prepared_tagging_execution.hpp"
+    },
+    {
+      "git_blob": "b0651f3a577968c88f2b4a317c6123b5e15c7356",
+      "path": "include/pops/runtime/amr/tensor_composite_fac.hpp"
+    },
+    {
+      "git_blob": "ade46141979d4dbbc60dcba78c75b264626301a9",
+      "path": "include/pops/runtime/amr_patch.hpp"
+    },
+    {
+      "git_blob": "30f9cff20f1193cd3ab81c81915fdc05e97aad3c",
+      "path": "include/pops/runtime/amr_system.hpp"
+    },
+    {
+      "git_blob": "3f288d51a8eb45ed11b8f3ce306552836f27fc63",
+      "path": "include/pops/runtime/analytic/collective_preflight.hpp"
+    },
+    {
+      "git_blob": "3ec7eadf488e27e8c8d540b13b129b4d26b0dd60",
+      "path": "include/pops/runtime/analytic/expression.hpp"
+    },
+    {
+      "git_blob": "d5f3d714dce508066321dca2c513662aab71f3f1",
+      "path": "include/pops/runtime/analytic/initial_materialization.hpp"
+    },
+    {
+      "git_blob": "03d6b8a68e0bf5b0b96148d6e9c47e8e4e330770",
+      "path": "include/pops/runtime/analytic/level_set.hpp"
+    },
+    {
+      "git_blob": "01c3292940cc97d4fd35d3362c01667b028c1771",
+      "path": "include/pops/runtime/builders/block/block_builder.hpp"
+    },
+    {
+      "git_blob": "a9fa77d3c9a74e04f4aa44d744cc96b2de8da4b6",
+      "path": "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
+    },
+    {
+      "git_blob": "3f9d726571d4f83f8edb0921fdc65833ee55f416",
+      "path": "include/pops/runtime/builders/compiled/dsl_block.hpp"
+    },
+    {
+      "git_blob": "daeb431e52028c341ded182dea5759d3ae1a0b9c",
+      "path": "include/pops/runtime/builders/compiled/generated_amr_system_block.hpp"
+    },
+    {
+      "git_blob": "c87402d9f0c33894c28a77bd5afe888eed5a696d",
+      "path": "include/pops/runtime/builders/compiled/generated_system_block.hpp"
+    },
+    {
+      "git_blob": "68ee483b2f1e67a63ca2acf47dee47fafd2c6bad",
+      "path": "include/pops/runtime/builders/compiled/model_runtime_params.hpp"
+    },
+    {
+      "git_blob": "4fc6b1abe52d94db1456a574ca63ccdc610d9b25",
+      "path": "include/pops/runtime/builders/compiled/native_loader.hpp"
+    },
+    {
+      "git_blob": "6c35834720f5df85680f982218c37fd623c6fedd",
+      "path": "include/pops/runtime/builders/factory/brick_catalog.hpp"
+    },
+    {
+      "git_blob": "bf4f37034c5061b5036aae852b89856d6fabd239",
+      "path": "include/pops/runtime/builders/factory/model_factory.hpp"
+    },
+    {
+      "git_blob": "b7c8520dfba9f1470b3368ce385e587f5d0135d4",
+      "path": "include/pops/runtime/builders/scheme_dispatch.hpp"
+    },
+    {
+      "git_blob": "d0da1de995fc3817de500b616981765550d8af67",
+      "path": "include/pops/runtime/checkpoint/spatial_contract.hpp"
+    },
+    {
+      "git_blob": "bc8530ed20428f8ac7177f320f88e8c9094beecb",
+      "path": "include/pops/runtime/config/component_interfaces.hpp"
+    },
+    {
+      "git_blob": "c195738d062db33d671d98b9c0df081e55acf3a4",
+      "path": "include/pops/runtime/config/component_manifest.hpp"
+    },
+    {
+      "git_blob": "98fa9c84ef7485efc3020765b3e983ccfb7fd1e1",
+      "path": "include/pops/runtime/config/dispatch_tags.hpp"
+    },
+    {
+      "git_blob": "a80878413dfef359e3662d23c1989754e5bb1db8",
+      "path": "include/pops/runtime/config/generated_component_abi.hpp"
+    },
+    {
+      "git_blob": "7b8df180270a1e9e3876843e2132a9984d88c8c8",
+      "path": "include/pops/runtime/config/generated_component_catalog.hpp"
+    },
+    {
+      "git_blob": "26bb5efb8aeac56e85e0ebcbf8f93a9726b2db2f",
+      "path": "include/pops/runtime/config/generated_release_contract.hpp"
+    },
+    {
+      "git_blob": "479e163bca75b805568b486ca7ed00f28cf54930",
+      "path": "include/pops/runtime/config/model_spec.hpp"
+    },
+    {
+      "git_blob": "053cb9018b393a84015f89f22454fd1b78e6870b",
+      "path": "include/pops/runtime/config/platform_manifest.hpp"
+    },
+    {
+      "git_blob": "93eaf0bee2b525a75a5a0a1c2fa93da2393ab9b3",
+      "path": "include/pops/runtime/config/route_ids.hpp"
+    },
+    {
+      "git_blob": "05b113ab461cd767095011c808bcc3941369859c",
+      "path": "include/pops/runtime/config/runtime_params.hpp"
+    },
+    {
+      "git_blob": "881291e853ec002cc16737a943fba5d953531d77",
+      "path": "include/pops/runtime/config/spatial_domain.hpp"
+    },
+    {
+      "git_blob": "0215d17964d691e01edfda756f77e2d530b2e4aa",
+      "path": "include/pops/runtime/dynamic/abi_key.hpp"
+    },
+    {
+      "git_blob": "118e0a2982569b8a359b65726345260d4a7336ca",
+      "path": "include/pops/runtime/dynamic/authenticated_native_file.hpp"
+    },
+    {
+      "git_blob": "eaf2f7889f883cc3ec461c518b36b961f1180b03",
+      "path": "include/pops/runtime/dynamic/component_consumers.hpp"
+    },
+    {
+      "git_blob": "3ea77065e6039023a042b942014b70b89f9fe8cb",
+      "path": "include/pops/runtime/dynamic/component_loader.hpp"
+    },
+    {
+      "git_blob": "ab8d28e611c45783aa83a6cf9a948c2f0ed402ad",
+      "path": "include/pops/runtime/dynamic/dynlib.hpp"
+    },
+    {
+      "git_blob": "126da19180fa7b19cebf0361c5075f0e80a46093",
+      "path": "include/pops/runtime/dynamic/model_registry.hpp"
+    },
+    {
+      "git_blob": "28a68e0ef7486ccce263b726ae1f6a5c9f1d8eb2",
+      "path": "include/pops/runtime/dynamic/physical_support_transfer.hpp"
+    },
+    {
+      "git_blob": "2abddbb6d1d6727f878784b2e908433b04167d61",
+      "path": "include/pops/runtime/dynamic/prepared_execution_context.hpp"
+    },
+    {
+      "git_blob": "fb2540f6e7e220af63febb4b869dca56d52c1863",
+      "path": "include/pops/runtime/export.hpp"
+    },
+    {
+      "git_blob": "c9b222448db1a54f8298203afe96969f0f04da0f",
+      "path": "include/pops/runtime/facade_options.hpp"
+    },
+    {
+      "git_blob": "9eeee6790df6164f1bb8bcb4370a7a2cc0839e72",
+      "path": "include/pops/runtime/module_capabilities.hpp"
+    },
+    {
+      "git_blob": "6ac14459d4090f12b52bbcda8b7965258182f91b",
+      "path": "include/pops/runtime/multiblock/evaluation_point.hpp"
+    },
+    {
+      "git_blob": "8b2103b3bd3dc4fce37016f331436c2cc7115309",
+      "path": "include/pops/runtime/multiblock/interface_flux_scheduler.hpp"
+    },
+    {
+      "git_blob": "e5d0a2127fed287d0c94de7fa0090eaa9016d827",
+      "path": "include/pops/runtime/multiblock/prepared_interface_flux_component.hpp"
+    },
+    {
+      "git_blob": "e98ff5fd2b4ff3cc8a4f4e58f31f62e0fa396bda",
+      "path": "include/pops/runtime/named_field_output.hpp"
+    },
+    {
+      "git_blob": "3433bfaebb4bcc72bf5d3755f412b975fb72fc89",
+      "path": "include/pops/runtime/named_field_publication.hpp"
+    },
+    {
+      "git_blob": "0c1f8ed614a9cc48f437914682e34256a76adb14",
+      "path": "include/pops/runtime/numerical_defaults.hpp"
+    },
+    {
+      "git_blob": "67adac1c0f7e9d29658995c270225b2059694399",
+      "path": "include/pops/runtime/output/hdf5_collective.hpp"
+    },
+    {
+      "git_blob": "c0e698ecceb7129ad5f4e8be508b6263b8bdeb17",
+      "path": "include/pops/runtime/output_piece.hpp"
+    },
+    {
+      "git_blob": "87e9ea9b9582698e439c09f041abf748b0743d87",
+      "path": "include/pops/runtime/output_piece_collective.hpp"
+    },
+    {
+      "git_blob": "2bcff58f8c8dfa35934ab1d527e9d13715a8df32",
+      "path": "include/pops/runtime/program/accepted_exchange.hpp"
+    },
+    {
+      "git_blob": "968713fca022a3531efaee7f0dcae0580a064899",
+      "path": "include/pops/runtime/program/amr_history_flux_snapshot.hpp"
+    },
+    {
+      "git_blob": "a44b4af04bb0f6e10f1e8d4b3306016dc0267cc1",
+      "path": "include/pops/runtime/program/amr_history_flux_snapshot_codec.hpp"
+    },
+    {
+      "git_blob": "8ee1ac47d3745e49f61fe02866242a1e64a7f0a6",
+      "path": "include/pops/runtime/program/amr_history_flux_snapshot_execution.hpp"
+    },
+    {
+      "git_blob": "ffa73a427442adbd0a51b12ae23ffa71bfb68497",
+      "path": "include/pops/runtime/program/amr_program_checkpoint.hpp"
+    },
+    {
+      "git_blob": "58cce506bf6cdf0550a0c8b600d9ceaede325e57",
+      "path": "include/pops/runtime/program/amr_program_context.hpp"
+    },
+    {
+      "git_blob": "fcdac233e76c2dabf087aeab1bcdbb51f8ddd869",
+      "path": "include/pops/runtime/program/cache_manager.hpp"
+    },
+    {
+      "git_blob": "937546713d5ff755e25df344f4299ea47e97c5e9",
+      "path": "include/pops/runtime/program/cell_temporal_partition.hpp"
+    },
+    {
+      "git_blob": "467d122435d24592d69bb8046a9ac8250f96e960",
+      "path": "include/pops/runtime/program/cell_temporal_partition_executor.hpp"
+    },
+    {
+      "git_blob": "655a2c998259d8beb23a3a785094778e2d3656ed",
+      "path": "include/pops/runtime/program/clock_schedule.hpp"
+    },
+    {
+      "git_blob": "64b109f709bdb83fa3b03f6b8389e36ca3d2bd2e",
+      "path": "include/pops/runtime/program/collective_step_rejection.hpp"
+    },
+    {
+      "git_blob": "0a92d1387cb272e2c1c908a46aa2036f2904276e",
+      "path": "include/pops/runtime/program/component_package.hpp"
+    },
+    {
+      "git_blob": "cedb41263be5036dbfe87f49bde7c8426bf34209",
+      "path": "include/pops/runtime/program/external_brick.hpp"
+    },
+    {
+      "git_blob": "beaa4e6d8ea9334b3c65db467745aa718fdab556",
+      "path": "include/pops/runtime/program/external_riemann_brick.hpp"
+    },
+    {
+      "git_blob": "5706c7d4e3610376d2af11b5dfd2a88a0f7679ff",
+      "path": "include/pops/runtime/program/history_sample_identity_codec.hpp"
+    },
+    {
+      "git_blob": "0dc14c22c8da96ef1fb1a345ee63dce2c657a354",
+      "path": "include/pops/runtime/program/module_metadata.hpp"
+    },
+    {
+      "git_blob": "fd15aa76af0f2afe15a0c51758105cbfa2527f58",
+      "path": "include/pops/runtime/program/prepared_amr_spatial_residual.hpp"
+    },
+    {
+      "git_blob": "1b4199f53014f65f922734119efc2f6cdbedbe5d",
+      "path": "include/pops/runtime/program/prepared_condensed_sampling.hpp"
+    },
+    {
+      "git_blob": "b39c25b76e58813e5a3a7e8e72ebe2f3455c1ad2",
+      "path": "include/pops/runtime/program/prepared_resource_cache.hpp"
+    },
+    {
+      "git_blob": "a6198b893668404ed845b932cd6c56ac849254ea",
+      "path": "include/pops/runtime/program/prepared_scalar_boundary_session.hpp"
+    },
+    {
+      "git_blob": "7f6486a3f0b580a40161460666c307c32c39c476",
+      "path": "include/pops/runtime/program/prepared_spatial_residual.hpp"
+    },
+    {
+      "git_blob": "80d9a0e2fe8fd36f2113ace21169d0ac4b58f850",
+      "path": "include/pops/runtime/program/prepared_tensor_boundary_session.hpp"
+    },
+    {
+      "git_blob": "97697061145a4b9d484e6b54df05d90eb8441437",
+      "path": "include/pops/runtime/program/profiler.hpp"
+    },
+    {
+      "git_blob": "e116823cd853167f6d3812049be456ca0e2386b8",
+      "path": "include/pops/runtime/program/program_context.hpp"
+    },
+    {
+      "git_blob": "5cdf284424109319e81f309a89966ba1ebcc28ec",
+      "path": "include/pops/runtime/program/program_owner_field_identity.hpp"
+    },
+    {
+      "git_blob": "76324301a34dd0038b065f64f6dd2c76ed84a17b",
+      "path": "include/pops/runtime/program/program_runtime_state.hpp"
+    },
+    {
+      "git_blob": "768bad7a76185145ad5e22dc5a0f221e67129219",
+      "path": "include/pops/runtime/program/residual_operator.hpp"
+    },
+    {
+      "git_blob": "b6f218443cb8646eaf2c30f471f12be3ef0eb366",
+      "path": "include/pops/runtime/program/same_level_cell_temporal_provider.hpp"
+    },
+    {
+      "git_blob": "8c57bb5589a134dcd7c917a30135da0159f96f29",
+      "path": "include/pops/runtime/program/source_mask.hpp"
+    },
+    {
+      "git_blob": "a17ca0e8d7dd531ad01411eea8da4e4856f558e8",
+      "path": "include/pops/runtime/program/step_transaction.hpp"
+    },
+    {
+      "git_blob": "1a2282b10a04081dc0bb4930e88051124be55e9a",
+      "path": "include/pops/runtime/program/wire_ids.hpp"
+    },
+    {
+      "git_blob": "6cb57ffb1be57233a09b9d86bf932077bfa6659c",
+      "path": "include/pops/runtime/recovery/uniform_recovery_consumer.hpp"
+    },
+    {
+      "git_blob": "46354e6ab41a37dfdd868638df2301d20cb00035",
+      "path": "include/pops/runtime/runtime_environment.hpp"
+    },
+    {
+      "git_blob": "f11efbe3c5130ca8f60a2be46358b3f51127b66d",
+      "path": "include/pops/runtime/system.hpp"
+    },
+    {
+      "git_blob": "9ff1ed0b4cf266cf6d8e80fdd03cecca9bf12b15",
+      "path": "include/pops/runtime/system/auxiliary_checkpoint.hpp"
+    },
+    {
+      "git_blob": "157a7b022366a0d9229561737b4cbca23be2f618",
+      "path": "include/pops/runtime/system/auxiliary_ghost_fill.hpp"
+    },
+    {
+      "git_blob": "c9548ff4ba66a38c5ee7ed2d62bf23b809aa2456",
+      "path": "include/pops/runtime/system/derived_aux_provider.hpp"
+    },
+    {
+      "git_blob": "bd2551e3aec6a50f2409ca2f2a15a2f761f420fc",
+      "path": "include/pops/runtime/system/exact_aux_registry.hpp"
+    },
+    {
+      "git_blob": "6178d5a0e709db127ed46dd6b8b5f78a8bb3bd77",
+      "path": "include/pops/runtime/system/exact_field_marshaling.hpp"
+    },
+    {
+      "git_blob": "dc9c808e4cb8a92a773267535f6b72f2f55a62dd",
+      "path": "include/pops/runtime/system/exact_field_solver_backend.hpp"
+    },
+    {
+      "git_blob": "8cd90d9df2dd7928455fc0b0be9b17c6822975ef",
+      "path": "include/pops/runtime/system/exact_named_field.hpp"
+    },
+    {
+      "git_blob": "640e390ff7c7494c45e9451c912e6c02fe6f3166",
+      "path": "include/pops/runtime/system/field_topology_report.hpp"
+    },
+    {
+      "git_blob": "c0270d1e2b5110f05f917910c3d114006c1fe6b6",
+      "path": "include/pops/runtime/system/native_package_capability.hpp"
+    },
+    {
+      "git_blob": "3c9ccfaf82e725fb91d66d546c21ebe1e6184b83",
+      "path": "include/pops/runtime/system/prepared_embedded_boundary.hpp"
+    },
+    {
+      "git_blob": "36c06bfae0b2d6625835e3c1905ede5cfb4d4782",
+      "path": "include/pops/runtime/system/prepared_field_solver_component.hpp"
+    },
+    {
+      "git_blob": "86b204516cd54653d4e4f205bc8d9c36362cd0bf",
+      "path": "include/pops/runtime/system/program_field_publication.hpp"
+    },
+    {
+      "git_blob": "c96d60b2596eb4857085d7f35922b5a1f463caf1",
+      "path": "include/pops/runtime/system/provider_storage_binding.hpp"
+    },
+    {
+      "git_blob": "19c0f75d509e78fa953e28257d2a686ef1f85374",
+      "path": "include/pops/runtime/system/system_block_closures.hpp"
+    },
+    {
+      "git_blob": "abff691e8d418a4395ca67e1282f2975227e9873",
+      "path": "include/pops/runtime/system/system_block_store.hpp"
+    },
+    {
+      "git_blob": "a36e4be72cc9f6b01e755111d11e08b76fed0939",
+      "path": "include/pops/runtime/system/system_boundary_registry.hpp"
+    },
+    {
+      "git_blob": "4ae7022a27cde7d55e411c251c7871eee4527ec8",
+      "path": "include/pops/runtime/system/system_coupling_registry.hpp"
+    },
+    {
+      "git_blob": "57be3e92b323dd0ef751389ef1af50a4d3a3f63b",
+      "path": "include/pops/runtime/system/system_diagnostics_registry.hpp"
+    },
+    {
+      "git_blob": "49e45098db8e1624756cd0809a5a0d38eb5d66cf",
+      "path": "include/pops/runtime/system/system_domain.hpp"
+    },
+    {
+      "git_blob": "420fcf1a9c4f16551b5f29893b1561fe5f3c2363",
+      "path": "include/pops/runtime/system/system_interface_core_session.hpp"
+    },
+    {
+      "git_blob": "2ab39eac53ebb2501562d6093a52ea85c68c7fce",
+      "path": "include/pops/runtime/system/system_lifecycle.hpp"
+    },
+    {
+      "git_blob": "72e20b24b59cdca5805714e0d0cd80eb1d575557",
+      "path": "include/pops/runtime/system/system_poisson_options.hpp"
+    },
+    {
+      "git_blob": "663f0a5c8b77f660f81927e5587850ec801c94b9",
+      "path": "src/runtime/amr/amr_field_solver_builtin.cpp"
+    },
+    {
+      "git_blob": "fcc21c89fda00b07d2ad9a7ed1e61030b198b709",
+      "path": "src/runtime/amr/amr_field_solver_component.cpp"
+    },
+    {
+      "git_blob": "f94d273106e74e1c81e722a9c8f8119584b8e9a7",
+      "path": "src/runtime/amr/amr_layout_transfer.cpp"
+    },
+    {
+      "git_blob": "115145582a2f2394de6857b4554656617eb246fd",
+      "path": "src/runtime/amr/amr_system.cpp"
+    },
+    {
+      "git_blob": "0336481809fd438bf9b82bacad995310fd2e35b8",
+      "path": "src/runtime/output/hdf5_collective.cpp"
+    },
+    {
+      "git_blob": "afa556504a85e9c2e9aa834a728f20d340527e8d",
+      "path": "src/runtime/prepared_embedded_boundary.cpp"
+    },
+    {
+      "git_blob": "dd4c35b010c7b9a8f2c29c23534c2b416dc037ff",
+      "path": "src/runtime/program/step_transaction.cpp"
+    },
+    {
+      "git_blob": "64ffaebcabdf20e8e36eef8561e35c11e2305c19",
+      "path": "src/runtime/system/system.cpp"
+    },
+    {
+      "git_blob": "7b3196382e244625b68d6d92e1702f850aaa6de9",
+      "path": "src/runtime/system/system_aux.cpp"
+    },
+    {
+      "git_blob": "2ad138f74c88564c39e7fa2cc02576534a0d2d5a",
+      "path": "src/runtime/system/system_embedded_boundary.cpp"
+    },
+    {
+      "git_blob": "fa05b02601983821b537918dc27d9e38c25c2b79",
+      "path": "src/runtime/system/system_field_plans.cpp"
+    },
+    {
+      "git_blob": "13ee6e522d7fd7b7539d6807283f66c971058269",
+      "path": "src/runtime/system/system_fields.cpp"
+    },
+    {
+      "git_blob": "a6ab501363a730a942eea8f796c0d32ba8d90e13",
+      "path": "src/runtime/system/system_impl.hpp"
+    },
+    {
+      "git_blob": "8f7d85bbe929f146afb4324de420dbb976f2360e",
+      "path": "src/runtime/system/system_install.cpp"
+    },
+    {
+      "git_blob": "c48a4e68b1a11771b1887a1ad05594bf785c8a3c",
+      "path": "src/runtime/system/system_io.cpp"
+    },
+    {
+      "git_blob": "c92d53923aeae9d33216d68f42bdd0571438b97c",
+      "path": "src/runtime/system/system_layout_transfer.cpp"
+    },
+    {
+      "git_blob": "fbdf3b18fdcfc13a8351d3525352e83d2ffe8c35",
+      "path": "src/runtime/system/system_profiling.cpp"
+    },
+    {
+      "git_blob": "2f28ad113c75325ed79323692fad3fdee1ad712c",
+      "path": "src/runtime/system/system_program.cpp"
+    },
+    {
+      "git_blob": "b1fc51ccd6644259682494be29cb6d13b4d4a321",
+      "path": "tests/cpp/integration/amr/test_amr_composite_poisson.cpp"
+    },
+    {
+      "git_blob": "7c128ff649403b41ec2f180b8a86eb8a41637956",
+      "path": "tests/cpp/integration/amr/test_amr_coupled_source_role_strict.cpp"
+    },
+    {
+      "git_blob": "5808c3c2d6df23b96fe7302f4a628fd0dd323b62",
+      "path": "tests/cpp/integration/amr/test_amr_diagnostics.cpp"
+    },
+    {
+      "git_blob": "5a91400b03cbd0d67ca08c35fab409ea7d1eeacf",
+      "path": "tests/cpp/integration/amr/test_amr_distribute_coarse_serial.cpp"
+    },
+    {
+      "git_blob": "c8e3051009fee047bac007d0066feef94259c011",
+      "path": "tests/cpp/integration/amr/test_amr_hierarchy_barrier_continuation.cpp"
+    },
+    {
+      "git_blob": "b4e7dff66d50ff17c90bca2143ce84e65b52ed13",
+      "path": "tests/cpp/integration/amr/test_amr_hierarchy_field_scratch.cpp"
+    },
+    {
+      "git_blob": "c7d094eb69b70811ba6fe8e2dad095b303c7665c",
+      "path": "tests/cpp/integration/amr/test_amr_history_ring.cpp"
+    },
+    {
+      "git_blob": "3303bf5938111c45f7728407e4d430e9dcabea8f",
+      "path": "tests/cpp/integration/amr/test_amr_multiblock_compiled.cpp"
+    },
+    {
+      "git_blob": "ce4b20b5dbb54dcebdcaede430523c2822386917",
+      "path": "tests/cpp/integration/amr/test_amr_multiblock_coupled_source.cpp"
+    },
+    {
+      "git_blob": "e6a5f723ddbcdb9e0def95293f99459080dad703",
+      "path": "tests/cpp/integration/amr/test_amr_multiblock_implicit_transaction.cpp"
+    },
+    {
+      "git_blob": "1fc28705128f4bcaeb4783a8e9fd3a10b093d41b",
+      "path": "tests/cpp/integration/amr/test_amr_multiblock_regrid_union.cpp"
+    },
+    {
+      "git_blob": "20de608f473573a1e6239f12944ef73d6dd36ab3",
+      "path": "tests/cpp/integration/amr/test_amr_multiblock_substeps.cpp"
+    },
+    {
+      "git_blob": "1e5f119c51f679a156753cc67e9f8884a6ef72e2",
+      "path": "tests/cpp/integration/amr/test_amr_named_field.cpp"
+    },
+    {
+      "git_blob": "7464b18d44dc22c090674bf164e27442e2759746",
+      "path": "tests/cpp/integration/amr/test_amr_potential.cpp"
+    },
+    {
+      "git_blob": "cfc4e80b08b9c263e611724f65ce26ed5b686e53",
+      "path": "tests/cpp/integration/amr/test_amr_program_diffusion.cpp"
+    },
+    {
+      "git_blob": "685788435619774fa9761b6e99e3c8b643511426",
+      "path": "tests/cpp/integration/amr/test_amr_program_embedded_boundary.cpp"
+    },
+    {
+      "git_blob": "c6e9103ad0aab9371daac94c6bdfbe283d41864a",
+      "path": "tests/cpp/integration/amr/test_amr_program_field_publication.cpp"
+    },
+    {
+      "git_blob": "70e0b0638af8ce693421fe3454405b91d0018be3",
+      "path": "tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp"
+    },
+    {
+      "git_blob": "5d004cfc833e68f784d8c526abe97a85ab92e80b",
+      "path": "tests/cpp/integration/amr/test_amr_regrid_variable.cpp"
+    },
+    {
+      "git_blob": "75803ffe0f1e59ec3dbf94d753fad169b060a253",
+      "path": "tests/cpp/integration/amr/test_amr_seed_no_refine.cpp"
+    },
+    {
+      "git_blob": "31a20137f46f1c868f13f271b9ac2124f716b094",
+      "path": "tests/cpp/integration/amr/test_amr_spatial_parity.cpp"
+    },
+    {
+      "git_blob": "1d9185e9e17db6af413d172c6b9d1cf865d3378d",
+      "path": "tests/cpp/integration/amr/test_amr_synchronized_continuation.cpp"
+    },
+    {
+      "git_blob": "60fe4e1912caed2d4af63358bcde5d8aa28a1c22",
+      "path": "tests/cpp/integration/amr/test_amr_system_contract.cpp"
+    },
+    {
+      "git_blob": "8514693988bfb8f6b2af32a882a61f6599dfddd9",
+      "path": "tests/cpp/integration/amr/test_amr_system_twoblock.cpp"
+    },
+    {
+      "git_blob": "416c58a82abed2a53a3d7ab56583c3e82552949a",
+      "path": "tests/cpp/integration/amr/test_amr_transfer_properties.cpp"
+    },
+    {
+      "git_blob": "7c133c79411d0bdb3f70149db77a988b5775ad34",
+      "path": "tests/cpp/integration/amr/test_amr_transition_invariants.cpp"
+    },
+    {
+      "git_blob": "ebd2b179bce1a95eb7cb2ef36ebb207a91e7a37b",
+      "path": "tests/cpp/integration/amr/test_cell_temporal_partition_executor.cpp"
+    },
+    {
+      "git_blob": "ffda1b310c9faea0229716937293b870643fe1cf",
+      "path": "tests/cpp/integration/amr/test_cell_temporal_program_route.cpp"
+    },
+    {
+      "git_blob": "f1121d48876ed642ceedc76e4c542e6c8ac72f2e",
+      "path": "tests/cpp/integration/amr/test_program_reflux_ledger.cpp"
+    },
+    {
+      "git_blob": "0600df1a517120a86513dfca84f604425a70a183",
+      "path": "tests/cpp/integration/amr/test_refinement.cpp"
+    },
+    {
+      "git_blob": "cfcc02f5e52d73fe6637154bfa3a3cb911cf7476",
+      "path": "tests/cpp/integration/amr/test_temporal_partition_restart.cpp"
+    },
+    {
+      "git_blob": "43f1177b3e9e7c0cb10a46289aeef457906bc67e",
+      "path": "tests/cpp/integration/mpi/test_amr_regrid_mpi_parity.cpp"
+    },
+    {
+      "git_blob": "63ed9ebaaa631220158297ebfa69c3c263f13c23",
+      "path": "tests/cpp/integration/mpi/test_mpi_amr_compiled_parity.cpp"
+    },
+    {
+      "git_blob": "f7f1907d3410e67336d9f8f5af9496fbe5403e44",
+      "path": "tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp"
+    },
+    {
+      "git_blob": "a88f5779eae04ca613788a545c8c4fe9a23e07ef",
+      "path": "tests/cpp/integration/mpi/test_mpi_amr_dynamic_active_depth.cpp"
+    },
+    {
+      "git_blob": "f0bb3c1a0d28e3d69433fe34d3196d8970c26958",
+      "path": "tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp"
+    },
+    {
+      "git_blob": "026bb4e2acd920e30ef814748278e7b122a639d8",
+      "path": "tests/cpp/integration/mpi/test_mpi_amr_rebalance_migration.cpp"
+    },
+    {
+      "git_blob": "b968422b00b079ba7d9bdb545fb93f79c351a793",
+      "path": "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp"
+    },
+    {
+      "git_blob": "bd2a8e2513fa6d71dc08c2fec86a9d8030f35827",
+      "path": "tests/cpp/integration/mpi/test_mpi_amr_twoblock_parity.cpp"
+    },
+    {
+      "git_blob": "6b134ef0671bf874903a6a5686033f86b90a0f50",
+      "path": "tests/cpp/integration/mpi/test_mpi_array_reduce.cpp"
+    },
+    {
+      "git_blob": "ea6117883335aa1fb1f59b93603a8a63570f5b17",
+      "path": "tests/cpp/integration/mpi/test_mpi_auxiliary_ghost_fill.cpp"
+    },
+    {
+      "git_blob": "245693d3f21f87150c585637bca672bc5f234720",
+      "path": "tests/cpp/integration/mpi/test_mpi_cartesian_poisson_nd.cpp"
+    },
+    {
+      "git_blob": "b2dcea97210033e695a1317710cd0c5b11ca9ed4",
+      "path": "tests/cpp/integration/mpi/test_mpi_cell_temporal_program.cpp"
+    },
+    {
+      "git_blob": "29aeaca3562362dc06dbe0f5315deac0703ecd70",
+      "path": "tests/cpp/integration/mpi/test_mpi_cell_temporal_program_refusal.cpp"
+    },
+    {
+      "git_blob": "9da9545f0ac8aa9a8c8e25eee32dddacaad9e1a9",
+      "path": "tests/cpp/integration/mpi/test_mpi_composite_fac.cpp"
+    },
+    {
+      "git_blob": "e8a293c1562e6d13198be1317ff4c81f5f1e3a01",
+      "path": "tests/cpp/integration/mpi/test_mpi_composite_fac_fft_coarse.cpp"
+    },
+    {
+      "git_blob": "a91fc921fb886df73f1b98e8ab15768b70bd1ef6",
+      "path": "tests/cpp/integration/mpi/test_mpi_composite_fac_partitioned_nd.cpp"
+    },
+    {
+      "git_blob": "d54f81eab9d383615471502832da1436d38747eb",
+      "path": "tests/cpp/integration/mpi/test_mpi_composite_fac_replicated_coarse.cpp"
+    },
+    {
+      "git_blob": "db4eee5555e54357d184555012ed2c7a6b07e095",
+      "path": "tests/cpp/integration/mpi/test_mpi_coupled_source.cpp"
+    },
+    {
+      "git_blob": "1321909d5a1696652e6127f99ab13fd9d3c0d20a",
+      "path": "tests/cpp/integration/mpi/test_mpi_coupler_inject.cpp"
+    },
+    {
+      "git_blob": "6cfc7bfa7624dbb3d318f419f9001e7316a0adfc",
+      "path": "tests/cpp/integration/mpi/test_mpi_cutcell_multibox.cpp"
+    },
+    {
+      "git_blob": "47b0718c209e8a44ea157affd31c821413c591f4",
+      "path": "tests/cpp/integration/mpi/test_mpi_exchange_batches.cpp"
+    },
+    {
+      "git_blob": "4dcf1e19776d07d692c31704e4b245acaf06f1a9",
+      "path": "tests/cpp/integration/mpi/test_mpi_external_lifecycle.cpp"
+    },
+    {
+      "git_blob": "24017151ff60e9262f02b0d46ca35fb9355fd611",
+      "path": "tests/cpp/integration/mpi/test_mpi_fft_distributed.cpp"
+    },
+    {
+      "git_blob": "925e4ca63dfebd6b57c0ae0cd22f787f9a650f4f",
+      "path": "tests/cpp/integration/mpi/test_mpi_field_nullspace_preflight.cpp"
+    },
+    {
+      "git_blob": "215ed32847398afeb1763bde80b8440070b8bd01",
+      "path": "tests/cpp/integration/mpi/test_mpi_field_plan_consensus.cpp"
+    },
+    {
+      "git_blob": "a642afad182ead1519afdbba19b0482df0519314",
+      "path": "tests/cpp/integration/mpi/test_mpi_flux_failure_collective.cpp"
+    },
+    {
+      "git_blob": "34b57f2bd5148743c93b9a22bce4cab49d85971a",
+      "path": "tests/cpp/integration/mpi/test_mpi_halo_exchange.cpp"
+    },
+    {
+      "git_blob": "89478d5e173f4ae3f75f8b6b35a8933f37754e39",
+      "path": "tests/cpp/integration/mpi/test_mpi_halo_exchange_completion_failstop.cpp"
+    },
+    {
+      "git_blob": "30755a0cd8e108248041b9f027a6875cb5c513ad",
+      "path": "tests/cpp/integration/mpi/test_mpi_hdf5_collective.cpp"
+    },
+    {
+      "git_blob": "03bb509d58b4b58aafb28d260b7dcc77d4ef4155",
+      "path": "tests/cpp/integration/mpi/test_mpi_load_balance_authority.cpp"
+    },
+    {
+      "git_blob": "82387593b890ed7ece6da8e2ba11ccabc7e841db",
+      "path": "tests/cpp/integration/mpi/test_mpi_multiblock_interface_scheduler.cpp"
+    },
+    {
+      "git_blob": "67d7eb400136326a0f77dbedbdcf3c28b1461a42",
+      "path": "tests/cpp/integration/mpi/test_mpi_nd_translation_completion_failstop.cpp"
+    },
+    {
+      "git_blob": "8f59e20b6811cd03740ad89afa3140790a3c6ab0",
+      "path": "tests/cpp/integration/mpi/test_mpi_nd_translation_exchange.cpp"
+    },
+    {
+      "git_blob": "c3d758ca14b027403183c965fa89113aaa61e584",
+      "path": "tests/cpp/integration/mpi/test_mpi_poisson.cpp"
+    },
+    {
+      "git_blob": "fe61c8e4ea4604a14bdc91d3b27f7a3348d20920",
+      "path": "tests/cpp/integration/mpi/test_mpi_polar_schur.cpp"
+    },
+    {
+      "git_blob": "ec0feffc4fddd161401433638f738159b1174500",
+      "path": "tests/cpp/integration/mpi/test_mpi_prepared_amr_ghost_fill.cpp"
+    },
+    {
+      "git_blob": "abe44ff01a63b39fcc2ff05af48711cd185b9af2",
+      "path": "tests/cpp/integration/mpi/test_mpi_prepared_tagging_execution.cpp"
+    },
+    {
+      "git_blob": "a5504c7c493d250215a9a560f18dc7ebe668b19f",
+      "path": "tests/cpp/integration/mpi/test_mpi_redistribute.cpp"
+    },
+    {
+      "git_blob": "d7c7fc25bd49160d5c873e11b4308980c3ebef00",
+      "path": "tests/cpp/integration/mpi/test_mpi_smoke.cpp"
+    },
+    {
+      "git_blob": "0f46b4cffd41460e5003bb092cceefd851da80a3",
+      "path": "tests/cpp/integration/mpi/test_mpi_system_analytic_level_set.cpp"
+    },
+    {
+      "git_blob": "21452bc0ac194c83f57830c2bdf6941534145735",
+      "path": "tests/cpp/integration/mpi/test_mpi_system_fft.cpp"
+    },
+    {
+      "git_blob": "3a956a481ec62410ba1c8086a2fbf4990bcb81b4",
+      "path": "tests/cpp/integration/mpi/test_mpi_system_gather_scatter.cpp"
+    },
+    {
+      "git_blob": "2e2e5d122b894ab030f6a6c1399517eb84a835d4",
+      "path": "tests/cpp/integration/mpi/test_mpi_system_io_gather.cpp"
+    },
+    {
+      "git_blob": "875d36622a59c2ee627a93f6d2a5ed9780e56981",
+      "path": "tests/cpp/integration/mpi/test_mpi_system_layout_transfer.cpp"
+    },
+    {
+      "git_blob": "0de645d2160a50857e65a7d85c687c2cbbc07a90",
+      "path": "tests/cpp/integration/mpi/test_mpi_system_solve_fields.cpp"
+    },
+    {
+      "git_blob": "03937bb50df133ae5c23e080516a86affeea54c8",
+      "path": "tests/cpp/integration/mpi/test_mpi_tensor_fac_provider_nd.cpp"
+    },
+    {
+      "git_blob": "3f96a9c37c9229c3f1627001352844a641d86ad4",
+      "path": "tests/cpp/integration/mpi/test_mpi_transition_invariants.cpp"
+    },
+    {
+      "git_blob": "ce3a2ba2529f853a0b95d13184c7c53f9b7b47af",
+      "path": "tests/cpp/integration/native_loader/test_amr_compiled_model.cpp"
+    },
+    {
+      "git_blob": "a1fd42ee9142e387604b5584657bf0e376862c00",
+      "path": "tests/cpp/integration/native_loader/test_amr_native_loader.cpp"
+    },
+    {
+      "git_blob": "e34c377c7806274b55a393f9c5b61a3e400ce0eb",
+      "path": "tests/cpp/integration/native_loader/test_amr_riemann_native.cpp"
+    },
+    {
+      "git_blob": "7df65817294760ed3530b8c3986b8e2164e64994",
+      "path": "tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp"
+    },
+    {
+      "git_blob": "77c45840fb82cf3e5210a1b70f022b1c98921e80",
+      "path": "tests/cpp/integration/native_loader/test_amr_weno5_native.cpp"
+    },
+    {
+      "git_blob": "45df6dea768e62092d734841225927b8b707f9fd",
+      "path": "tests/cpp/integration/native_loader/test_compiled_model_parity.cpp"
+    },
+    {
+      "git_blob": "5a1154612fcd53cfdb37d8e6b63d694061d7d856",
+      "path": "tests/cpp/integration/native_loader/test_external_riemann_dispatch.cpp"
+    },
+    {
+      "git_blob": "02507fc3ac31c7292b09611c569cabbe13edaf1a",
+      "path": "tests/cpp/integration/native_loader/test_native_aux_named.cpp"
+    },
+    {
+      "git_blob": "b4fd4521986feb79c1549498cf78ef2523842a11",
+      "path": "tests/cpp/integration/native_loader/test_native_loader_param_overflow.cpp"
+    },
+    {
+      "git_blob": "839fc0aeb00dbdc74d30b89058705b4941d4ee13",
+      "path": "tests/cpp/integration/native_loader/test_program_abi_symbols.cpp"
+    },
+    {
+      "git_blob": "b61cfa403b71a3cc0baa45c032c586bef0290530",
+      "path": "tests/cpp/integration/native_loader/test_program_loader.cpp"
+    },
+    {
+      "git_blob": "6c4f000c9997f98dd4cdc56d1efe6656d7f0c19c",
+      "path": "tests/cpp/integration/native_loader/test_weno5_compiled_model.cpp"
+    },
+    {
+      "git_blob": "af72f23b3edb6dc048e3e1bdf9b2b13e853363b3",
+      "path": "tests/cpp/integration/runtime/external_brick_fixture_a.cpp"
+    },
+    {
+      "git_blob": "7e81829c321f10960207c79b4fce560938258df4",
+      "path": "tests/cpp/integration/runtime/external_brick_fixture_b.cpp"
+    },
+    {
+      "git_blob": "8b436962119c33d5a0f4440e57afeceacd5c71a8",
+      "path": "tests/cpp/integration/runtime/test_aux_runtime_bz.cpp"
+    },
+    {
+      "git_blob": "9e3af20551a28be85aaac34c621fab3122a92005",
+      "path": "tests/cpp/integration/runtime/test_brick_catalog.cpp"
+    },
+    {
+      "git_blob": "4dfa317747773ea10fa921ecb0b46e816a37b75e",
+      "path": "tests/cpp/integration/runtime/test_cache_manager.cpp"
+    },
+    {
+      "git_blob": "f7ab3a342d734a7f7d3735c23f2dede52017ddac",
+      "path": "tests/cpp/integration/runtime/test_capability_report.cpp"
+    },
+    {
+      "git_blob": "5e21a1f9132ee181f6218afd75c26ff7ef3b4d0e",
+      "path": "tests/cpp/integration/runtime/test_checkpoint_cache.cpp"
+    },
+    {
+      "git_blob": "02c9e95a28c6bc707d41e6529ca9605e41722171",
+      "path": "tests/cpp/integration/runtime/test_checkpoint_history.cpp"
+    },
+    {
+      "git_blob": "e98159a34b9e631920ecf73f080a4b8f3d18c8f7",
+      "path": "tests/cpp/integration/runtime/test_checkpoint_history_policy.cpp"
+    },
+    {
+      "git_blob": "320ed06b265e760a5f91a051f3c0cb619680601d",
+      "path": "tests/cpp/integration/runtime/test_config_model_validation.cpp"
+    },
+    {
+      "git_blob": "96f40af82980097b000eac6e427733cd777e0953",
+      "path": "tests/cpp/integration/runtime/test_exb_seam.cpp"
+    },
+    {
+      "git_blob": "b6ef496c1da4d2113a1ff2daebba493211451999",
+      "path": "tests/cpp/integration/runtime/test_external_brick.cpp"
+    },
+    {
+      "git_blob": "f910de9fc88f4a5494ce22a6ef50e0c173ba4932",
+      "path": "tests/cpp/integration/runtime/test_external_brick_isolation.cpp"
+    },
+    {
+      "git_blob": "36030370c734c1f9b60b8779d462079d50dcf54e",
+      "path": "tests/cpp/integration/runtime/test_external_brick_json.cpp"
+    },
+    {
+      "git_blob": "e7c60ecd5f50f8809bdc4f3261043d3777bd64ab",
+      "path": "tests/cpp/integration/runtime/test_facade_routing.cpp"
+    },
+    {
+      "git_blob": "153b9380c7961e59d58f47b713be4eac1b2b62d3",
+      "path": "tests/cpp/integration/runtime/test_module_metadata.cpp"
+    },
+    {
+      "git_blob": "6ff0a5cd98e3ab6fd7a58c08e059fcfb8a5d291f",
+      "path": "tests/cpp/integration/runtime/test_multiblock_interface_scheduler.cpp"
+    },
+    {
+      "git_blob": "eb43797657d78510128c02d84e7ee6f227b132d0",
+      "path": "tests/cpp/integration/runtime/test_profiler.cpp"
+    },
+    {
+      "git_blob": "777e0cc27d005efcbc1569162b11b5c0aaa6b982",
+      "path": "tests/cpp/integration/runtime/test_program_runtime.cpp"
+    },
+    {
+      "git_blob": "ecf7f92f346fb6c86787e21580fa2f016265c32e",
+      "path": "tests/cpp/integration/runtime/test_route_ids.cpp"
+    },
+    {
+      "git_blob": "829aa4df51c6076c011388f9646da4df57d3fb94",
+      "path": "tests/cpp/integration/runtime/test_runtime_environment.cpp"
+    },
+    {
+      "git_blob": "961eafbebfbeb1f20ff2c1e1f6f494acd765936e",
+      "path": "tests/cpp/integration/runtime/test_system_abstraction.cpp"
+    },
+    {
+      "git_blob": "63c18bc0ade3d8735ed5cf78e1b48045bb89bfb4",
+      "path": "tests/cpp/support/amr_tagging_test_authority.hpp"
+    },
+    {
+      "git_blob": "d2491ea4685913fe951bad2ae1b119472b80f226",
+      "path": "tests/cpp/support/amr_transfer_test_authority.hpp"
+    },
+    {
+      "git_blob": "3dd3b6d7a4cfad62e15cdcdbf26eb83f6fb13060",
+      "path": "tests/cpp/support/component_abi_test_helpers.hpp"
+    },
+    {
+      "git_blob": "3e405148453c4e919eb3392b64de6ac202067c89",
+      "path": "tests/cpp/support/explicit_amr_program.hpp"
+    },
+    {
+      "git_blob": "00ac8f33922b020af6f8c3c2ff6d4db7bf40f2f1",
+      "path": "tests/cpp/support/explicit_system_program.hpp"
+    },
+    {
+      "git_blob": "8e09e4e47d9c4faf2ace33737f83623b27507780",
+      "path": "tests/cpp/support/gtest_compat.hpp"
+    },
+    {
+      "git_blob": "dbaf803f9b2f6d57c64960f46c46255bcc00d68b",
+      "path": "tests/cpp/support/gtest_main.cpp"
+    },
+    {
+      "git_blob": "b7c0c28f21596e20dc3e65a58dfb9e69b9af7a7d",
+      "path": "tests/cpp/support/gtest_rank_output.hpp"
+    },
+    {
+      "git_blob": "b26bbfb9055ea286a7f94ea19b2fffe8c2b307ba",
+      "path": "tests/cpp/support/load_balance_test_authority.hpp"
+    },
+    {
+      "git_blob": "4d88286136b283b56be5379067ac6957d8ccda1f",
+      "path": "tests/cpp/support/native_dso_compiler.hpp"
+    },
+    {
+      "git_blob": "2449389b590929e9709b6500a2bdc8a2c4af2ab6",
+      "path": "tests/cpp/support/reference_time_scheduler.hpp"
+    },
+    {
+      "git_blob": "40ed3825270613ba566bb3d791f81fba02cb3d15",
+      "path": "tests/cpp/support/test_harness.hpp"
+    },
+    {
+      "git_blob": "04a0a9195535e4322ae475b1f7a375afc297e8c8",
+      "path": "tests/cpp/unit/amr/test_nd_amr_consumers.cpp"
+    },
+    {
+      "git_blob": "790cade5c8a2fe4c744152ac70bb475941d01926",
+      "path": "tests/cpp/unit/amr/test_nd_amr_runtime.cpp"
+    },
+    {
+      "git_blob": "9cbbb604b1f6251bd7472296f0dc394a6f3e99e7",
+      "path": "tests/cpp/unit/amr/test_nd_flux_ledger.cpp"
+    },
+    {
+      "git_blob": "2f2b04c1722466a168d397d48b8b263029b937b6",
+      "path": "tests/cpp/unit/amr/test_nd_transfer.cpp"
+    },
+    {
+      "git_blob": "3024a9135eb52128b1ad7e48c3c9ebd9ccaa07ee",
+      "path": "tests/cpp/unit/amr/test_prepared_amr_ghost_fill.cpp"
+    },
+    {
+      "git_blob": "b8bb2c87fbfe6de4315e7d77fe529de1cbd6c7a7",
+      "path": "tests/cpp/unit/codegen/test_model_registry.cpp"
+    },
+    {
+      "git_blob": "fc94ec255de8a351e457f8c8aba16954d7c8e73d",
+      "path": "tests/cpp/unit/core/test_canonical_identity.cpp"
+    },
+    {
+      "git_blob": "c3aef98375d2f55c8ff39fe5737a033cbb6ad9bc",
+      "path": "tests/cpp/unit/elliptic/test_cartesian_poisson_nd.cpp"
+    },
+    {
+      "git_blob": "534ca215b61a7813f805f961a06813c9dcf9b659",
+      "path": "tests/cpp/unit/elliptic/test_composite_fac_adjacent.cpp"
+    },
+    {
+      "git_blob": "972d47f329ee79bd2880f1d4607cb26202c25361",
+      "path": "tests/cpp/unit/elliptic/test_composite_fac_eb.cpp"
+    },
+    {
+      "git_blob": "30c55e893ee4cebd8be2e172c1f28816a58f42b8",
+      "path": "tests/cpp/unit/elliptic/test_composite_fac_fft_coarse.cpp"
+    },
+    {
+      "git_blob": "54025a0027ed8c2a6c5a938ec7c0c31d74976a73",
+      "path": "tests/cpp/unit/elliptic/test_composite_fac_nlevel.cpp"
+    },
+    {
+      "git_blob": "6144bb24715dc23397b482a5d8624f917c118104",
+      "path": "tests/cpp/unit/elliptic/test_composite_fac_poisson.cpp"
+    },
+    {
+      "git_blob": "4f9370be81c38a4affcecbf3f793e6a0eedb3db9",
+      "path": "tests/cpp/unit/elliptic/test_composite_fac_tensor.cpp"
+    },
+    {
+      "git_blob": "5b926d8bd8cf8bb1445247fbb7363382cbfdb87c",
+      "path": "tests/cpp/unit/elliptic/test_composite_fac_variable_k.cpp"
+    },
+    {
+      "git_blob": "93fc01f3203d1d10d443d4315517b0c1586200e5",
+      "path": "tests/cpp/unit/elliptic/test_composite_general_field.cpp"
+    },
+    {
+      "git_blob": "c0d8b3477b4d44329839766fcfe9acee867b5c80",
+      "path": "tests/cpp/unit/elliptic/test_coupled_fieldsolve.cpp"
+    },
+    {
+      "git_blob": "8c790c032ce39f2de67d73d8227aa5de1599abb0",
+      "path": "tests/cpp/unit/elliptic/test_elliptic_composite_rhs.cpp"
+    },
+    {
+      "git_blob": "bd7aa60cec2e824256f24047e4fe733c98c6b936",
+      "path": "tests/cpp/unit/elliptic/test_elliptic_interface.cpp"
+    },
+    {
+      "git_blob": "07b04cfc60fae20f87ae3541faca07d80f42ffcc",
+      "path": "tests/cpp/unit/elliptic/test_elliptic_operator.cpp"
+    },
+    {
+      "git_blob": "42589307aff50ee344f6db8db8aec55aa12f17a9",
+      "path": "tests/cpp/unit/elliptic/test_elliptic_problem.cpp"
+    },
+    {
+      "git_blob": "18e11a73ad9ebc9a698644f9b1d0a6a706b0ba6e",
+      "path": "tests/cpp/unit/elliptic/test_field_nullspace.cpp"
+    },
+    {
+      "git_blob": "9a06422cfba6e4fc4bb60761ab167343d449fd13",
+      "path": "tests/cpp/unit/elliptic/test_float32_poisson_residual.cpp"
+    },
+    {
+      "git_blob": "cdb08acc86d7390154083c80ccdcdf10d9f1d78a",
+      "path": "tests/cpp/unit/elliptic/test_geometric_mg.cpp"
+    },
+    {
+      "git_blob": "9e7dd540e3024b10ca2f21d78101b707d9541f13",
+      "path": "tests/cpp/unit/elliptic/test_geometric_mg_nd.cpp"
+    },
+    {
+      "git_blob": "1ab8a4d0e538074da043ab0b35cba2ba3a97a6d7",
+      "path": "tests/cpp/unit/elliptic/test_krylov_collective_contract.cpp"
+    },
+    {
+      "git_blob": "f56d79a8aeb835e0adc053c824e717efff35de4e",
+      "path": "tests/cpp/unit/elliptic/test_krylov_workspace_reentrancy.cpp"
+    },
+    {
+      "git_blob": "0ad58421133718d1cd01ca65841415be362a5ce2",
+      "path": "tests/cpp/unit/elliptic/test_newton_robustness.cpp"
+    },
+    {
+      "git_blob": "0e86d7dd9b495afa4f3ce89529fd5e224b1ed110",
+      "path": "tests/cpp/unit/elliptic/test_poisson_convergence.cpp"
+    },
+    {
+      "git_blob": "3be4452c1642501c11358f0c9fc380a35756e50a",
+      "path": "tests/cpp/unit/elliptic/test_poisson_fft.cpp"
+    },
+    {
+      "git_blob": "d7ac74230fc60c3d558e220067e1c51237a5528e",
+      "path": "tests/cpp/unit/elliptic/test_poisson_smoother.cpp"
+    },
+    {
+      "git_blob": "a18c10e86c3ba68ed2cb617e425cea3cb4f7143b",
+      "path": "tests/cpp/unit/elliptic/test_poisson_smoother_cache.cpp"
+    },
+    {
+      "git_blob": "a4d18944fedc019b522d2561534f4a4bd4d3e4c5",
+      "path": "tests/cpp/unit/elliptic/test_polar_poisson_mms.cpp"
+    },
+    {
+      "git_blob": "80d445ec97645637f315572cf6b71a960501d386",
+      "path": "tests/cpp/unit/elliptic/test_polar_schur_multibox.cpp"
+    },
+    {
+      "git_blob": "6a590743a08ac8d97bdc321a725e072824e5c4ba",
+      "path": "tests/cpp/unit/elliptic/test_polar_tensor_elliptic_mms.cpp"
+    },
+    {
+      "git_blob": "b6b7457aebd86a451a91bb33a3fa5484310e2272",
+      "path": "tests/cpp/unit/elliptic/test_pure_field_algebra_extreme_dot.cpp"
+    },
+    {
+      "git_blob": "e133362a95ee5c37a9598d1e315a9aae87cd225a",
+      "path": "tests/cpp/unit/elliptic/test_scaled_scalar.cpp"
+    },
+    {
+      "git_blob": "03e952781db8ad4b33ed1a3454b0850c6d4e43a2",
+      "path": "tests/cpp/unit/elliptic/test_solver_codegen_generated.cpp"
+    },
+    {
+      "git_blob": "7e5557e3a56aff97c3cc8f902ad412ac66aac306",
+      "path": "tests/cpp/unit/elliptic/test_structured_solver_diagnostics.cpp"
+    },
+    {
+      "git_blob": "89d4d2265a0a580e62b21aa6bc4788707d18a786",
+      "path": "tests/cpp/unit/mesh/nd_multifab_test_utils.hpp"
+    },
+    {
+      "git_blob": "faad6eba51e2e83f683bcc08a6981e6f7bdeab98",
+      "path": "tests/cpp/unit/mesh/test_box.cpp"
+    },
+    {
+      "git_blob": "dc0b219de0c890c228fbc682f0051b87cc30b73c",
+      "path": "tests/cpp/unit/mesh/test_box_array.cpp"
+    },
+    {
+      "git_blob": "833c9424ac25bd2d99f6c7406919f868973a7dde",
+      "path": "tests/cpp/unit/mesh/test_copy_schedule_cache.cpp"
+    },
+    {
+      "git_blob": "dc686926c20def83e472728f0abb683794cec360",
+      "path": "tests/cpp/unit/mesh/test_dispatch_tags.cpp"
+    },
+    {
+      "git_blob": "345e7ece805c1929a07742ff51e4a536ae0afb4e",
+      "path": "tests/cpp/unit/mesh/test_fill_boundary.cpp"
+    },
+    {
+      "git_blob": "6f7ba2b0f8cc38a8dbcc33e34f3116576384c1fd",
+      "path": "tests/cpp/unit/mesh/test_fill_boundary_cache.cpp"
+    },
+    {
+      "git_blob": "dceb16554baa629a3c4cf411d78160060c425136",
+      "path": "tests/cpp/unit/mesh/test_geometry.cpp"
+    },
+    {
+      "git_blob": "3fe55ac72af7087935ef664e223abeffaa9f6ad0",
+      "path": "tests/cpp/unit/mesh/test_multifab.cpp"
+    },
+    {
+      "git_blob": "12cf50e47c96819f6ba8a606ea1519ef8a724372",
+      "path": "tests/cpp/unit/mesh/test_nd_boundary_schedule.cpp"
+    },
+    {
+      "git_blob": "113ebab782935c6e339cdb819da9df109d1f49ca",
+      "path": "tests/cpp/unit/mesh/test_nd_cluster.cpp"
+    },
+    {
+      "git_blob": "151b1bf2b794aa0f8cf9368cc3df93de299412f4",
+      "path": "tests/cpp/unit/mesh/test_nd_distribution.cpp"
+    },
+    {
+      "git_blob": "996502724b87b8ca498e6efd5ac1a6ee8a6ec21f",
+      "path": "tests/cpp/unit/mesh/test_nd_execution.cpp"
+    },
+    {
+      "git_blob": "c1738df26f726a31c5ff407c0bcf1ceb199d8c6b",
+      "path": "tests/cpp/unit/mesh/test_nd_hierarchy_plan.cpp"
+    },
+    {
+      "git_blob": "26dc277372ab8d861fd835602a8b474aa6cfe8c4",
+      "path": "tests/cpp/unit/mesh/test_nd_layout.cpp"
+    },
+    {
+      "git_blob": "c5900c4a9a1b15458740420e264f131129ac1efc",
+      "path": "tests/cpp/unit/mesh/test_nd_load_balance.cpp"
+    },
+    {
+      "git_blob": "a775b043365ef33f58c1d7fb5fe00bff026cfc16",
+      "path": "tests/cpp/unit/mesh/test_nd_metric_provider.cpp"
+    },
+    {
+      "git_blob": "2ac6106ecf5109208d24a0538c7f6501fb4b4d96",
+      "path": "tests/cpp/unit/mesh/test_nd_tag_mask.cpp"
+    },
+    {
+      "git_blob": "dd1f626e508ac7d16a500ec3ea95705f91ca1c4b",
+      "path": "tests/cpp/unit/mesh/test_nd_topology.cpp"
+    },
+    {
+      "git_blob": "001f0251a75891aac39b788a3aba0ccdea5fd49e",
+      "path": "tests/cpp/unit/mesh/test_nd_translation_schedule.cpp"
+    },
+    {
+      "git_blob": "83ee8b5c2540192244ecc558b1d42d465daa9860",
+      "path": "tests/cpp/unit/mesh/test_physical_bc.cpp"
+    },
+    {
+      "git_blob": "07e7cfc492f02e8917a1f46aaf508f1c609293cb",
+      "path": "tests/cpp/unit/mesh/test_prepared_hyperbolic_boundary.cpp"
+    },
+    {
+      "git_blob": "56db198260edb4b6bfd0466cefc1bce9804877f3",
+      "path": "tests/cpp/unit/mesh/test_reduce.cpp"
+    },
+    {
+      "git_blob": "b88e26bc57e229d20db8b252259a9dab4c4a172e",
+      "path": "tests/cpp/unit/mesh/test_reduce_abs_sum.cpp"
+    },
+    {
+      "git_blob": "85b396c2da8afabb6e53e92db6aaf3da3147776b",
+      "path": "tests/cpp/unit/mesh/test_sync_residence.cpp"
+    },
+    {
+      "git_blob": "f810110cf5d69ccdc447e40fcd13da36f7047bc9",
+      "path": "tests/cpp/unit/numerics/test_block_inverse.cpp"
+    },
+    {
+      "git_blob": "e72cdf70f56688d73b8fd091e98342bafb93a15e",
+      "path": "tests/cpp/unit/numerics/test_diffusion.cpp"
+    },
+    {
+      "git_blob": "baa463bf1e9704cd8f3f15e65969705f754f94ff",
+      "path": "tests/cpp/unit/numerics/test_fallback_diagnostics.cpp"
+    },
+    {
+      "git_blob": "7e3601d49b20922bb198380acee72daebc349c52",
+      "path": "tests/cpp/unit/numerics/test_flux_interfaces.cpp"
+    },
+    {
+      "git_blob": "b392f200e21ebf4a143c1ab67709310747d13f5b",
+      "path": "tests/cpp/unit/numerics/test_imex_ap.cpp"
+    },
+    {
+      "git_blob": "d94d8e060f6c15d8cd7252b727703fd0d2154286",
+      "path": "tests/cpp/unit/numerics/test_implicit_source_nd.cpp"
+    },
+    {
+      "git_blob": "b1ff6aed7b38f135b0016ab61236c83acabe019e",
+      "path": "tests/cpp/unit/numerics/test_interface_flux_fragment_ledger.cpp"
+    },
+    {
+      "git_blob": "b4e485ad832c51a200f3a43a42e6b7638873aba9",
+      "path": "tests/cpp/unit/numerics/test_nd_finite_volume.cpp"
+    },
+    {
+      "git_blob": "8f78220dd8aec5ed6bf4e972f794fc6a587a724c",
+      "path": "tests/cpp/unit/numerics/test_numerical_defaults.cpp"
+    },
+    {
+      "git_blob": "e146486315ba4bd3f083817e5a5fd46e4be8e767",
+      "path": "tests/cpp/unit/numerics/test_positivity_floor.cpp"
+    },
+    {
+      "git_blob": "08f9e4696616b9ace9416f781f2aea6170c51f21",
+      "path": "tests/cpp/unit/numerics/test_prepared_cartesian_nd.cpp"
+    },
+    {
+      "git_blob": "d262457f7f940d3d1e2897f606c50b5c4eb98371",
+      "path": "tests/cpp/unit/numerics/test_prepared_numerics_gate.cpp"
+    },
+    {
+      "git_blob": "a71a31fdbd12473db27cfae776d63a13f6083684",
+      "path": "tests/cpp/unit/numerics/test_primitive_recon.cpp"
+    },
+    {
+      "git_blob": "22e25be941365d853ac2995395c52a32a8245425",
+      "path": "tests/cpp/unit/numerics/test_riemann_capabilities.cpp"
+    },
+    {
+      "git_blob": "4f0ce429bd118f7d6b9b49b3f8c9de37062dc4d0",
+      "path": "tests/cpp/unit/numerics/test_roe_flux.cpp"
+    },
+    {
+      "git_blob": "50c7b98b79089b8e86f4882c8761126000f613bb",
+      "path": "tests/cpp/unit/numerics/test_spatial_provider_matrix.cpp"
+    },
+    {
+      "git_blob": "695caa7310a796bbc4d1e506ff6982050f105b52",
+      "path": "tests/cpp/unit/numerics/test_splitting.cpp"
+    },
+    {
+      "git_blob": "1701ef76f2916fdfe59ffb61fffeb747b587afd2",
+      "path": "tests/cpp/unit/numerics/test_variable_recovery_chain.cpp"
+    },
+    {
+      "git_blob": "98a25681e1dbf5953977d2de0f1f62e60ba52a53",
+      "path": "tests/cpp/unit/numerics/test_weno_convergence.cpp"
+    },
+    {
+      "git_blob": "0c35685e516f3a5158e4156b7f9b8ae8498b35c5",
+      "path": "tests/cpp/unit/parallel/test_world_communicator.cpp"
+    },
+    {
+      "git_blob": "319166806c67769cc9d4670f5bbe433e237b3601",
+      "path": "tests/cpp/unit/physics/test_ap_limit.cpp"
+    },
+    {
+      "git_blob": "70c17d7294086179160d1dc6c6811609a93f175e",
+      "path": "tests/cpp/unit/physics/test_aux_coupler_bz.cpp"
+    },
+    {
+      "git_blob": "303193aa3397a8e994087b6b77bf8c4375c84d1d",
+      "path": "tests/cpp/unit/physics/test_aux_halo.cpp"
+    },
+    {
+      "git_blob": "7a877cfea22dc04355e82ff16386e6e1f80796bb",
+      "path": "tests/cpp/unit/physics/test_aux_single_source.cpp"
+    },
+    {
+      "git_blob": "51a21718790c5b1152eeeda0413dd405788a99bd",
+      "path": "tests/cpp/unit/physics/test_composite_fac_variable_eps.cpp"
+    },
+    {
+      "git_blob": "4ea8fceb6058b0df117275155c276ecacd934f84",
+      "path": "tests/cpp/unit/physics/test_coupled_source_stack_limit.cpp"
+    },
+    {
+      "git_blob": "fd4fac4e79580e28f05548f60890e2242d6c9e2f",
+      "path": "tests/cpp/unit/physics/test_coupling_operator_contract.cpp"
+    },
+    {
+      "git_blob": "1c07f241d5f709f044115e297d82409467eeaaa2",
+      "path": "tests/cpp/unit/physics/test_generic_inversion_admissibility.cpp"
+    },
+    {
+      "git_blob": "4be08e74e0f534a1b28dc48c383151101e340d85",
+      "path": "tests/cpp/unit/physics/test_isothermal_vacuum_floor.cpp"
+    },
+    {
+      "git_blob": "8ee1ad63f73a6ac875630f8c4692cb1e81afe5cf",
+      "path": "tests/cpp/unit/physics/test_narrow_physical_operations.cpp"
+    },
+    {
+      "git_blob": "9d7fe44b178a5e805cfe8e125bc7a75b8db31230",
+      "path": "tests/cpp/unit/physics/test_polar_fluid_transport.cpp"
+    },
+    {
+      "git_blob": "c87facabeac1e06a3d6e822a1b2fe6cbdd2d0401",
+      "path": "tests/cpp/unit/physics/test_polar_lorentz_source.cpp"
+    },
+    {
+      "git_blob": "0d1f625b9ce8628c41861a935aa73dc9deace07d",
+      "path": "tests/cpp/unit/runtime/test_amr_history_flux_snapshot.cpp"
+    },
+    {
+      "git_blob": "a4f143296a94c4be6e05ce69bc502925ea5cbe11",
+      "path": "tests/cpp/unit/runtime/test_amr_layout_transfer.cpp"
+    },
+    {
+      "git_blob": "163ac2b8fbf7ec6c1af129c5c6845e45b6bd58c6",
+      "path": "tests/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp"
+    },
+    {
+      "git_blob": "4770fd6066d542130e795037fb74e8a5e96e391f",
+      "path": "tests/cpp/unit/runtime/test_analytic_expression.cpp"
+    },
+    {
+      "git_blob": "3f7fd9a4955835d43700b4dd1a9663e0fb5b69b1",
+      "path": "tests/cpp/unit/runtime/test_analytic_level_set.cpp"
+    },
+    {
+      "git_blob": "8c55ab17213cdcdcb2eb2d483498e63d286ad74a",
+      "path": "tests/cpp/unit/runtime/test_collective_step_rejection.cpp"
+    },
+    {
+      "git_blob": "bce442f399d138916d938417e28acd50f0321e62",
+      "path": "tests/cpp/unit/runtime/test_component_interfaces.cpp"
+    },
+    {
+      "git_blob": "4dffb1cea7a4dd4f7a9ce1fb2176c33b21db32c1",
+      "path": "tests/cpp/unit/runtime/test_coupled_source.cpp"
+    },
+    {
+      "git_blob": "0558d8fb350da45b5925ad12c335c74faf07f0dd",
+      "path": "tests/cpp/unit/runtime/test_dense_eig.cpp"
+    },
+    {
+      "git_blob": "c08b8118a8d06f23950755e1512a2ea93fb61e23",
+      "path": "tests/cpp/unit/runtime/test_embedded_boundary_generic.cpp"
+    },
+    {
+      "git_blob": "5a5d4ffddecfb9212128fdb8b956c7e4e103eef1",
+      "path": "tests/cpp/unit/runtime/test_exact_aux_registry_nd.cpp"
+    },
+    {
+      "git_blob": "6a493cb5a4a536bb918134b277247f7eb08cfcbe",
+      "path": "tests/cpp/unit/runtime/test_generated_amr_system_block.cpp"
+    },
+    {
+      "git_blob": "58da525cb20affc5b9be250e2e13360e8fbe40b4",
+      "path": "tests/cpp/unit/runtime/test_generated_stability_speed.cpp"
+    },
+    {
+      "git_blob": "0a063171461f9bbe89162f4bb0933c0d77df58ac",
+      "path": "tests/cpp/unit/runtime/test_native_field_attachment.cpp"
+    },
+    {
+      "git_blob": "bb34328d568f567a99c1089eeea9a21ce7206062",
+      "path": "tests/cpp/unit/runtime/test_nd_named_field_output.cpp"
+    },
+    {
+      "git_blob": "0f64d95cb0526cc12b75acd9c6d43938480058c6",
+      "path": "tests/cpp/unit/runtime/test_physical_support_transfer.cpp"
+    },
+    {
+      "git_blob": "13fe6930e62d61fd09a3a12c51fa8080b783b055",
+      "path": "tests/cpp/unit/runtime/test_platform_manifest.cpp"
+    },
+    {
+      "git_blob": "adc3860d75c3d8c5c55b523372e019cab3827387",
+      "path": "tests/cpp/unit/runtime/test_prepared_diffusion.cpp"
+    },
+    {
+      "git_blob": "07c2155de7fde467d2532b10b6cffa8212a1223f",
+      "path": "tests/cpp/unit/runtime/test_prepared_embedded_boundary_nd.cpp"
+    },
+    {
+      "git_blob": "3dab706a4c02427941cbb13a4636b6a1f81c026e",
+      "path": "tests/cpp/unit/runtime/test_prepared_field_solver_nd.cpp"
+    },
+    {
+      "git_blob": "407c5bf31a22f9728e259055e99861bcce4fb704",
+      "path": "tests/cpp/unit/runtime/test_prepared_resource_cache.cpp"
+    },
+    {
+      "git_blob": "8d92dd0211e88b92a197eb631b71b8bb3fc051a9",
+      "path": "tests/cpp/unit/runtime/test_prepared_spatial_residual.cpp"
+    },
+    {
+      "git_blob": "9f4ac8ecb411039ac8c20ce357e40dbc4e6021b9",
+      "path": "tests/cpp/unit/runtime/test_prepared_stream_executor.cpp"
+    },
+    {
+      "git_blob": "e330571e63b85c903f8bbfd0c920812ad65f4621",
+      "path": "tests/cpp/unit/runtime/test_program_context_contract.cpp"
+    },
+    {
+      "git_blob": "105e46fe763dda0e35f4e8d3099451a4387e3203",
+      "path": "tests/cpp/unit/runtime/test_program_context_schur_free.cpp"
+    },
+    {
+      "git_blob": "79b7a119d21b474ae2e6631075814863dd47fe6e",
+      "path": "tests/cpp/unit/runtime/test_public_validation_errors.cpp"
+    },
+    {
+      "git_blob": "cc9ecce5c52a756890d6b6da372afe3251103d58",
+      "path": "tests/cpp/unit/runtime/test_residual_operator.cpp"
+    },
+    {
+      "git_blob": "5a9efbd5ad4e35734e5960359f126063a090ff00",
+      "path": "tests/cpp/unit/runtime/test_scheme_dispatch.cpp"
+    },
+    {
+      "git_blob": "ec15310abfa97259d0f333a2315bc96fd5a93b5f",
+      "path": "tests/cpp/unit/runtime/test_spatial_discretisation.cpp"
+    },
+    {
+      "git_blob": "b8b5bfedc9b39f040463e853534a428648bfaaf9",
+      "path": "tests/cpp/unit/runtime/test_step_attempt_rejected_amr_link.cpp"
+    },
+    {
+      "git_blob": "0694b6969065bb718042fed32effc801d2b5b5b5",
+      "path": "tests/cpp/unit/runtime/test_step_attempt_rejected_header_only.cpp"
+    },
+    {
+      "git_blob": "990be9256e6835cb59afa6e4f52257468583aa63",
+      "path": "tests/cpp/unit/runtime/test_system_interface_core_session.cpp"
+    },
+    {
+      "git_blob": "18600af485ad85abe1664dec74730bc0dd1ccea6",
+      "path": "tests/cpp/unit/runtime/test_variable_role.cpp"
+    },
+    {
+      "git_blob": "cec0f906fd883a516c4237b58d6f8b767e0f4ed2",
+      "path": "tests/cpp/unit/runtime/test_variable_user_role.cpp"
+    }
+  ],
+  "unchanged_cpp_inventory_sha256": "119c4cb2f0f90657313142f6c98734b45a2180c26de66e2c872d76c358a28eb1"
+}

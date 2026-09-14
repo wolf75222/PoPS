@@ -65,6 +65,8 @@ enum class AnalyticOp : std::uint8_t {
   Between = 29,
   Input = 30,
   Z = 31,
+  Erf = 32,
+  Erfc = 33,
 };
 
 enum class AnalyticValueType : std::uint8_t { Scalar = 0, Predicate = 1 };
@@ -144,6 +146,10 @@ inline const char* op_name(AnalyticOp op) {
       return "cos";
     case AnalyticOp::Exp:
       return "exp";
+    case AnalyticOp::Erf:
+      return "erf";
+    case AnalyticOp::Erfc:
+      return "erfc";
     case AnalyticOp::Log:
       return "log";
     case AnalyticOp::Atan2:
@@ -215,6 +221,10 @@ inline AnalyticOp analytic_op_from_name(std::string_view name) {
     return AnalyticOp::Cos;
   if (name == "exp")
     return AnalyticOp::Exp;
+  if (name == "erf")
+    return AnalyticOp::Erf;
+  if (name == "erfc")
+    return AnalyticOp::Erfc;
   if (name == "log")
     return AnalyticOp::Log;
   if (name == "atan2")
@@ -253,7 +263,7 @@ inline AnalyticOp analytic_op_from_name(std::string_view name) {
 }
 
 inline bool is_known(AnalyticOp op) {
-  return static_cast<std::uint8_t>(op) <= static_cast<std::uint8_t>(AnalyticOp::Z);
+  return static_cast<std::uint8_t>(op) <= static_cast<std::uint8_t>(AnalyticOp::Erfc);
 }
 
 inline int arity(AnalyticOp op) {
@@ -270,6 +280,8 @@ inline int arity(AnalyticOp op) {
     case AnalyticOp::Sin:
     case AnalyticOp::Cos:
     case AnalyticOp::Exp:
+    case AnalyticOp::Erf:
+    case AnalyticOp::Erfc:
     case AnalyticOp::Log:
     case AnalyticOp::Not:
       return 1;
@@ -423,6 +435,13 @@ struct AnalyticProgramView {
         case AnalyticOp::Exp: {
           const std::size_t value = sp - 1;
           values[value] = Kokkos::exp(values[value]);
+          validity[value] = validity[value] && Kokkos::isfinite(values[value]);
+        } break;
+        case AnalyticOp::Erf:
+        case AnalyticOp::Erfc: {
+          const std::size_t value = sp - 1;
+          values[value] = instruction.op == AnalyticOp::Erf ? Kokkos::erf(values[value])
+                                                            : Kokkos::erfc(values[value]);
           validity[value] = validity[value] && Kokkos::isfinite(values[value]);
         } break;
         case AnalyticOp::Log: {

@@ -82,3 +82,53 @@ def test_canonical_lowering_rejects_duplicate_roles_and_out_of_rank_axes() -> No
         roles_for(("first", "second"), (roles.Custom("q1"), roles.Custom("q1")))
     with pytest.raises(ValueError, match="outside dimension 2"):
         roles_for(("mz",), (roles.Momentum(_Axis(2)),), dimension=2)
+
+
+@pytest.mark.parametrize("dimension", [1, 2, 3])
+@pytest.mark.parametrize("representation", ["typed", "token", "parsed"])
+def test_axial_schema_retains_all_physical_embedding_axes(dimension, representation):
+    values = {
+        "typed": tuple(roles.Axial(_Axis(axis)) for axis in range(3)),
+        "token": tuple("axial:%d" % axis for axis in range(3)),
+        "parsed": tuple(identity.RoleKey("axial", axis) for axis in range(3)),
+    }[representation]
+    schema = identity.StateSchema.resolve(values, dimension=dimension)
+    assert schema.dimension == dimension
+    assert schema.axes("axial") == (0, 1, 2)
+    assert tuple(role.token for role in schema.roles) == ("axial:0", "axial:1", "axial:2")
+    assert schema.index(roles.Axial(_Axis(2))) == 2
+    assert identity.StateSchema.resolve(tuple(role.token for role in schema.roles),
+                                        dimension=dimension) == schema
+
+
+@pytest.mark.parametrize("dimension", [1, 2, 3])
+def test_canonical_role_tuple_retains_out_of_plane_axial_metadata(dimension):
+    tokens = ("density",) + tuple("momentum:%d" % axis for axis in range(dimension)) + ("axial:2",)
+    schema = identity.StateSchema.resolve(tokens, dimension=dimension)
+    assert tuple(role.token for role in schema.roles) == tokens
+    assert schema.index("axial:2") == dimension + 1
+    assert schema.axes("momentum") == tuple(range(dimension))
+
+
+@pytest.mark.parametrize("dimension", [None, 1, 2, 3])
+def test_axial_role_refuses_axes_outside_physical_embedding(dimension):
+    with pytest.raises(ValueError, match="physical x/y/z embedding"):
+        identity.parse_role("axial:3", dimension=dimension)
+    with pytest.raises(ValueError, match="physical x/y/z embedding"):
+        identity.native_role_token(roles.Axial(_Axis(3)), dimension=dimension)
+    if dimension is not None:
+        with pytest.raises(ValueError, match="physical x/y/z embedding"):
+            identity.StateSchema.resolve((identity.RoleKey("axial", 3),), dimension=dimension)
+
+
+@pytest.mark.parametrize("dimension", [1, 2, 3])
+@pytest.mark.parametrize("family", ["momentum", "velocity"])
+def test_polar_role_axes_remain_limited_to_mesh_dimension(dimension, family):
+    with pytest.raises(ValueError, match="outside dimension"):
+        identity.StateSchema.resolve(("%s:%d" % (family, dimension),), dimension=dimension)
+
+
+@pytest.mark.parametrize("dimension", [True, 0, 4, "2"])
+def test_axial_embedding_does_not_bypass_invalid_mesh_dimension(dimension):
+    with pytest.raises(ValueError, match="must be one of 1, 2, or 3"):
+        identity.parse_role("axial:2", dimension=dimension)

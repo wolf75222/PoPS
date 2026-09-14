@@ -62,6 +62,15 @@ struct IndexMapping {
   constexpr bool operator==(const IndexMapping&) const = default;
 };
 
+/// Physical parent faces where limited-linear ghost interpolation uses one-sided slopes.
+/// Storage edges alone never authorize a reduced stencil.
+template <int Dim>
+struct PhysicalParentBoundary {
+  Box<Dim> domain{};
+  std::array<bool, Dim> lower{};
+  std::array<bool, Dim> upper{};
+};
+
 namespace detail {
 
 inline int checked_transfer_index(std::int64_t value, const char* operation) {
@@ -458,14 +467,16 @@ class PreparedTransfer {
 
   POPS_HD PreparedTransfer(TransferKind kind, RefinementRatio<Dim> ratio, IndexMapping<Dim> mapping,
                            ComponentRange components, FieldView<const Real, Dim> source,
-                           FieldView<Real, Dim> destination, Box<Dim> destination_region)
+                           FieldView<Real, Dim> destination, Box<Dim> destination_region,
+                           PhysicalParentBoundary<Dim> physical_boundary)
       : kind_(kind),
         ratio_(ratio),
         mapping_(mapping),
         components_(components),
         source_(source),
         destination_(destination),
-        destination_region_(destination_region) {}
+        destination_region_(destination_region),
+        physical_boundary_(physical_boundary) {}
 
   POPS_HD void restrict_cell(const Index<Dim>& coarse) const {
     Index<Dim> fine_base{};
@@ -507,9 +518,16 @@ class PreparedTransfer {
         Index<Dim> upper = parent;
         --lower[axis];
         ++upper[axis];
-        const Real slope = detail::monotonized_central_slope(source_(lower, source_component),
-                                                             source_(parent, source_component),
-                                                             source_(upper, source_component));
+        Real slope;
+        if (physical_boundary_.lower[axis] && parent[axis] == physical_boundary_.domain.lo[axis])
+          slope = source_(upper, source_component) - source_(parent, source_component);
+        else if (physical_boundary_.upper[axis] &&
+                 parent[axis] == physical_boundary_.domain.hi[axis])
+          slope = source_(parent, source_component) - source_(lower, source_component);
+        else
+          slope = detail::monotonized_central_slope(source_(lower, source_component),
+                                                    source_(parent, source_component),
+                                                    source_(upper, source_component));
         const std::int64_t offset_numerator = std::int64_t{2} * child[axis] + 1 - ratio_[axis];
         const std::int64_t offset_denominator = std::int64_t{2} * ratio_[axis];
         value +=
@@ -599,6 +617,7 @@ class PreparedTransfer {
   FieldView<const Real, Dim> source_{};
   FieldView<Real, Dim> destination_{};
   Box<Dim> destination_region_{};
+  PhysicalParentBoundary<Dim> physical_boundary_{};
 };
 
 template <int Dim>
@@ -661,6 +680,27 @@ class TransferProvider {
                                 const Box<Dim>& destination_region, RefinementRatio<Dim> ratio,
                                 IndexMapping<Dim> mapping = {},
                                 ComponentRange components = {}) const {
+    return prepare_impl(source, destination, destination_region, ratio, mapping, components, {});
+  }
+
+  /// Bind physical faces explicitly; all interior and periodic neighbors remain mandatory.
+  PreparedTransfer<Dim> prepare_physical_boundary_ghosts(
+      FieldView<const Real, Dim> source, FieldView<Real, Dim> destination,
+      const Box<Dim>& destination_region, RefinementRatio<Dim> ratio, IndexMapping<Dim> mapping,
+      ComponentRange components, PhysicalParentBoundary<Dim> physical_boundary) const {
+    if (kind_ != TransferKind::CoarseFineGhostInterpolation || physical_boundary.domain.empty())
+      throw std::invalid_argument(
+          "physical parent boundaries require the limited-linear coarse/fine ghost route");
+    return prepare_impl(source, destination, destination_region, ratio, mapping, components,
+                        physical_boundary);
+  }
+
+ private:
+  PreparedTransfer<Dim> prepare_impl(FieldView<const Real, Dim> source,
+                                     FieldView<Real, Dim> destination,
+                                     const Box<Dim>& destination_region, RefinementRatio<Dim> ratio,
+                                     IndexMapping<Dim> mapping, ComponentRange components,
+                                     PhysicalParentBoundary<Dim> physical_boundary) const {
     require_supported_route();
     if (!ratio.refines_any_axis())
       throw std::invalid_argument(
@@ -678,22 +718,41 @@ class TransferProvider {
                                      : kind_ == TransferKind::FifthOrderCoarseFineGhostInterpolation
                                          ? 2
                                          : 1;
-    const Box<Dim> required_source =
+    Box<Dim> required_source =
         kind_ == TransferKind::ConservativeRestriction
             ? detail::refined_source_box(destination_region, ratio, mapping)
         : kind_ == TransferKind::NodeMultilinearProlongation
             ? detail::node_interpolation_source_box(destination_region, ratio, mapping)
             : detail::interpolation_source_box(destination_region, ratio, mapping,
                                                interpolation_radius);
+    if (!physical_boundary.domain.empty()) {
+      const auto parents = detail::interpolation_source_box(destination_region, ratio, mapping, 0);
+      for (int axis = 0; axis < Dim; ++axis) {
+        const auto lower = physical_boundary.domain.lo[axis];
+        const auto upper = physical_boundary.domain.hi[axis];
+        if ((physical_boundary.lower[axis] && parents.lo[axis] < lower) ||
+            (physical_boundary.upper[axis] && parents.hi[axis] > upper))
+          throw std::invalid_argument("coarse/fine ghost parents cross a physical domain face");
+        const bool one_sided_lower =
+            physical_boundary.lower[axis] && required_source.lo[axis] < lower;
+        const bool one_sided_upper =
+            physical_boundary.upper[axis] && required_source.hi[axis] > upper;
+        if ((one_sided_lower || one_sided_upper) && lower == upper)
+          throw std::invalid_argument("one-sided interpolation requires two physical parent cells");
+        if (one_sided_lower)
+          required_source.lo[axis] = lower;
+        if (one_sided_upper)
+          required_source.hi[axis] = upper;
+      }
+    }
     if (!source_view.box.contains(required_source))
       throw std::invalid_argument(
           "prepared ND transfer source FieldView does not contain the complete stencil");
 
     return PreparedTransfer<Dim>(kind_, ratio, mapping, components, source, destination,
-                                 destination_region);
+                                 destination_region, physical_boundary);
   }
 
- private:
   void require_supported_route() const {
     if constexpr (Center == Centering::Node) {
       if (kind_ == TransferKind::NodeMultilinearProlongation)

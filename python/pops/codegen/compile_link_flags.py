@@ -1,4 +1,4 @@
-"""Path-independent linker identity for generated Program plugins."""
+"""Path-independent linker identity for explicitly loaded native plugins."""
 from __future__ import annotations
 
 import sys
@@ -18,4 +18,16 @@ def deterministic_program_link_flags(flags: Any) -> list[str]:
     return result
 
 
-__all__ = ["deterministic_program_link_flags"]
+def deterministic_component_link_flags(flags: Any) -> list[str]:
+    """Keep local build paths out of external component and generated model bytes.
+
+    Components, like Programs, are loaded by their authenticated file path. A stable inert
+    install name prevents Darwin's content-derived UUID from varying between MPI ranks.
+    """
+    result = list(flags)
+    if sys.platform == "darwin":
+        result.append("-Wl,-install_name,@rpath/pops_component.dylib")
+    return result
+
+
+__all__ = ["deterministic_program_link_flags", "deterministic_component_link_flags"]

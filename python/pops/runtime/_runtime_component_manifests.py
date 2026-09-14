@@ -13,6 +13,7 @@ from pops.codegen._plans import require_install_plan
 from pops.model import ComponentManifest
 from pops.output._consumer_contracts import consumer_collective_requirements
 
+from ._consumer_ownership import consumer_block_owner
 from ._runtime_plan_io import proved_platform
 
 
@@ -30,15 +31,14 @@ def _block_layouts(plan: Any) -> dict[str, tuple[str, str]]:
     return rows
 
 
-def _reference_block(reference: Any, names: tuple[str, ...]) -> str:
-    block = getattr(reference, "block_ref", None)
-    local_id = getattr(block, "local_id", None)
-    if local_id in names:
-        return local_id
-    if len(names) == 1:
-        return names[0]
+def _reference_block(reference: Any, layouts: Mapping[str, tuple[str, str]],
+                     case_owner: Any) -> str:
+    by_id = {block_id: name for name, (block_id, _layout_id) in layouts.items()}
+    owner = consumer_block_owner(reference, tuple(by_id), case_owner=case_owner)
+    if owner is not None:
+        return by_id[owner]
     raise ValueError(
-        "multi-block consumer quantity %s has no exact block owner"
+        "consumer quantity %s has no exact block owner"
         % getattr(reference, "qualified_id", reference)
     )
 
@@ -46,6 +46,8 @@ def _reference_block(reference: Any, names: tuple[str, ...]) -> str:
 def _consumer_contracts(plan: Any) -> tuple[
         dict[str, tuple[str, ...]], dict[str, tuple[dict[str, Any], ...]]]:
     names = tuple(block.name for block in plan.artifact.blocks)
+    block_layouts = _block_layouts(plan)
+    case_owner = plan.artifact.layout_plan.owner
     resources: dict[str, set[str]] = {name: set() for name in names}
     requirements: dict[str, dict[tuple[str, str, str], dict[str, Any]]] = {
         name: {} for name in names
@@ -63,19 +65,18 @@ def _consumer_contracts(plan: Any) -> tuple[
     if graph is not None:
         for manifest in graph.nodes:
             for quantity in (*manifest.quantities, *manifest.diagnostic_quantities):
-                block = _reference_block(quantity.reference, names)
+                block = _reference_block(quantity.reference, block_layouts, case_owner)
                 resources[block].add(quantity.runtime_resource)
             for quantity, operation, strategy in consumer_collective_requirements(
                 manifest
             ):
-                block = _reference_block(quantity.reference, names)
+                block = _reference_block(quantity.reference, block_layouts, case_owner)
                 require(
                     block,
                     quantity.runtime_resource,
                     operation,
                     strategy,
                 )
-    block_layouts = _block_layouts(plan)
     for name in names:
         if not resources[name]:
             resources[name].add("state:%s" % block_layouts[name][0])

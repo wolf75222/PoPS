@@ -8,6 +8,7 @@
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/dynamic/dynlib.hpp>
 #include <pops/runtime/program/module_metadata.hpp>
+#include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
 
 #include <algorithm>
@@ -20,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -98,6 +100,33 @@ void System<Dim>::store_history(const std::string& name, const MultiFab<Dim>& va
     throw std::invalid_argument("System::store_history ring differs between MPI ranks");
   require_collective_exact_layout(value, p_->ba, p_->dm, p_->local_rank, ring.front().ncomp(),
                                   "System::store_history");
+  // Prepare the typed publication before any numeric mutation; legacy zero-dt stores remain
+  // explicitly unauthenticated. Qualified ProgramContext stores use this same producer helper.
+  std::vector<runtime::program::HistorySampleIdentity> samples;
+  std::vector<std::uint8_t> sample_bytes;
+  std::exception_ptr sample_error;
+  try {
+    if (outgoing_dt > 0.0) {
+      samples = p_->program_.hist_.prepare_sample_store(name, p_->t, outgoing_dt);
+    } else {
+      samples = p_->program_.hist_.validated_samples(name);
+      samples.front() = {};
+      if (!p_->program_.hist_.initialized.at(name))
+        std::fill(samples.begin(), samples.end(), runtime::program::HistorySampleIdentity{});
+    }
+    sample_bytes = runtime::program::encode_history_sample_identity(name, -1, samples);
+  } catch (...) {
+    sample_error = std::current_exception();
+  }
+  if (all_reduce_max(sample_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && sample_error)
+      std::rethrow_exception(sample_error);
+    throw std::runtime_error("System::store_history sample preparation failed collectively");
+  }
+  const std::string_view sample_contract(reinterpret_cast<const char*>(sample_bytes.data()),
+                                         sample_bytes.size());
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view(name), sample_contract}}))
+    throw std::invalid_argument("System::store_history sample identity differs between ranks");
   // Copy the valid cells of value into the current slot [0] (identical layout: ring slots and the
   // block state share (ba, dm); lincomb(dst, 1, src, 0, src) is a valid-cell deep copy).
   pops::lincomb(ring[0], Real(1), value, Real(0), value);
@@ -121,6 +150,7 @@ void System<Dim>::store_history(const std::string& name, const MultiFab<Dim>& va
     }
     p_->program_.hist_.initialized[name] = true;
   }
+  p_->program_.hist_.slot_sample.at(name).swap(samples);
   p_->program_.hist_.store_pending[name] = true;
 }
 
@@ -196,6 +226,10 @@ void System<Dim>::restore_history(const std::string& name, int slot,
   if (all_reduce_max(slot < 0 ? 1L : 0L) != 0)
     throw std::runtime_error("System::restore_history: slot=" + std::to_string(slot) +
                              " must be >= 0 for history '" + name + "'");
+  // The public slot is int, but its required depth is slot + 1 and must also fit int. Refuse
+  // collectively before auto-registration or growth can allocate or change the live ring.
+  if (all_reduce_max(slot == std::numeric_limits<int>::max() ? 1L : 0L) != 0)
+    throw std::overflow_error("System::restore_history: required ring depth exceeds int");
   if (all_reduce_max(p_->sp.empty() ? 1L : 0L) != 0)
     throw std::runtime_error(
         "System::restore_history: a block must exist before restoring a history ring");
@@ -227,21 +261,60 @@ void System<Dim>::restore_history(const std::string& name, int slot,
   if (ring.front().ncomp() != expected_components)
     throw std::runtime_error(
         "System::restore_history: registered ring component count differs from block 0");
-  if (slot >= static_cast<int>(ring.size())) {
-    // A deeper slot than currently registered: grow the ring (zero-filled tail) so it fits, matching
-    // register_history's idempotent growth.
-    const int ncomp = ring[0].ncomp();
-    for (int k = static_cast<int>(ring.size()); k <= slot; ++k) {
-      MultiFab<Dim> s(p_->ba, p_->dm, p_->local_rank, ncomp, uniform_ghosts<Dim>(1));
-      s.set_val(Real(0));
-      ring.push_back(std::move(s));
+  // Numeric restore may grow a ring before its checkpoint metadata is imported. Keep the dt
+  // and typed sample ledgers complete immediately; retained entries are never reconstructed.
+  auto& manager = p_->program_.hist_;
+  std::vector<MultiFab<Dim>> tail;
+  std::vector<MultiFab<Dim>> prepared_ring;
+  std::vector<Real> prepared_dts;
+  std::vector<runtime::program::HistorySampleIdentity> prepared_samples;
+  std::exception_ptr preparation_error;
+  const auto old_depth = ring.size();
+  const auto required_depth = static_cast<std::size_t>(slot) + 1;
+  try {
+    manager.validated_samples(name);
+    if (manager.depth.at(name) != static_cast<int>(old_depth))
+      throw std::logic_error("System history restore has an invalid registered depth");
+    if (required_depth > old_depth) {
+      prepared_dts = manager.slot_dt.at(name);
+      prepared_dts.resize(required_depth, Real(0));
+      prepared_samples = manager.slot_sample.at(name);
+      prepared_samples.resize(required_depth);
+      tail.reserve(required_depth - old_depth);
+      for (auto k = old_depth; k < required_depth; ++k) {
+        tail.emplace_back(p_->ba, p_->dm, p_->local_rank, ring.front().ncomp(),
+                          ring.front().ghosts());
+        tail.back().set_val(Real(0));
+      }
+      // Only a separate vector may allocate here: rejected payloads must preserve live field
+      // references as well as the ring's values and metadata.
+      prepared_ring.reserve(required_depth);
     }
-    p_->program_.hist_.depth[name] = static_cast<int>(ring.size());
+  } catch (...) {
+    preparation_error = std::current_exception();
   }
-  // Scatter the GLOBAL component-major buffer into the exact ranked slot. Structural ownership and
-  // payload consensus are authenticated collectively before any resident Fab is mutated.
-  runtime::system::marshaling::write_global(ring[static_cast<std::size_t>(slot)], p_->dom, values,
-                                            ring.front().ncomp());
+  if (all_reduce_max(preparation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error("System history restore preparation failed collectively");
+  }
+  // Authenticate the complete global payload before publishing any new slot or invalidating an
+  // existing identity. New numeric tails remain Unknown until the exact checkpoint ledger arrives.
+  auto& target = tail.empty() ? ring[static_cast<std::size_t>(slot)] : tail.back();
+  runtime::system::marshaling::write_global(target, p_->dom, values, ring.front().ncomp());
+  if (!tail.empty()) {
+    static_assert(std::is_nothrow_move_constructible_v<MultiFab<Dim>>);
+    static_assert(noexcept(ring.swap(prepared_ring)));
+    for (auto& field : ring)
+      prepared_ring.push_back(std::move(field));
+    for (auto& field : tail)
+      prepared_ring.push_back(std::move(field));
+    ring.swap(prepared_ring);
+    manager.slot_dt.at(name).swap(prepared_dts);
+    manager.slot_sample.at(name).swap(prepared_samples);
+    manager.depth.at(name) = static_cast<int>(ring.size());
+  }
+  manager.slot_sample.at(name).at(static_cast<std::size_t>(slot)) = {};
 }
 template <int Dim>
 void System<Dim>::set_history_initialized(const std::string& name, bool initialized) {
@@ -249,9 +322,17 @@ void System<Dim>::set_history_initialized(const std::string& name, bool initiali
   if (it == p_->program_.hist_.initialized.end())
     throw std::runtime_error("System::set_history_initialized: unknown history '" + name +
                              "' (restore its slots first)");
+  auto& samples = p_->program_.hist_.slot_sample.at(name);
+  const auto depth = p_->program_.hist_.depth.at(name);
+  if (samples.size() != p_->program_.hist_.histories.at(name).size() ||
+      samples.size() != static_cast<std::size_t>(depth))
+    throw std::logic_error("System history initialized restore has an invalid sample ledger");
+  auto& fill_count = p_->program_.hist_.fill_count.at(name);
+  auto& pending = p_->program_.hist_.store_pending.at(name);
   it->second = initialized;
-  p_->program_.hist_.fill_count[name] = initialized ? p_->program_.hist_.depth.at(name) : 0;
-  p_->program_.hist_.store_pending[name] = false;
+  fill_count = initialized ? depth : 0;
+  pending = false;
+  std::fill(samples.begin(), samples.end(), runtime::program::HistorySampleIdentity{});
 }
 template <int Dim>
 void System<Dim>::restore_history_fill_count(const std::string& name, int fill_count) {
@@ -263,9 +344,17 @@ void System<Dim>::restore_history_fill_count(const std::string& name, int fill_c
     throw std::runtime_error("System::restore_history_fill_count: fill count " +
                              std::to_string(fill_count) + " is outside [0, " +
                              std::to_string(depth->second) + "] for history '" + name + "'");
-  p_->program_.hist_.fill_count[name] = fill_count;
-  p_->program_.hist_.initialized[name] = fill_count > 0;
-  p_->program_.hist_.store_pending[name] = false;
+  auto& samples = p_->program_.hist_.slot_sample.at(name);
+  if (samples.size() != p_->program_.hist_.histories.at(name).size() ||
+      samples.size() != static_cast<std::size_t>(depth->second))
+    throw std::logic_error("System history fill-count restore has an invalid sample ledger");
+  auto& initialized = p_->program_.hist_.initialized.at(name);
+  auto& pending = p_->program_.hist_.store_pending.at(name);
+  auto& accepted_fill = p_->program_.hist_.fill_count.at(name);
+  accepted_fill = fill_count;
+  initialized = fill_count > 0;
+  pending = false;
+  std::fill(samples.begin(), samples.end(), runtime::program::HistorySampleIdentity{});
 }
 
 // Selective history persistence + deterministic ring replay (ADC-626). A history-persistence policy
@@ -273,6 +362,49 @@ void System<Dim>::restore_history_fill_count(const std::string& name, int fill_c
 // per-slot outgoing interval is serialized alongside so restart can replay the recomputed slots with
 // the exact dt sequence (variable-dt histories round-trip bit-for-bit). rebuild_history_slots
 // reconstructs the missing slots by re-stepping the installed Program from the nearest older slot.
+template <int Dim>
+std::vector<std::uint8_t> System<Dim>::history_sample_identity(const std::string& name) const {
+  const auto& ring = p_->program_.hist_.histories.at(name);
+  const auto& samples = p_->program_.hist_.slot_sample.at(name);
+  const auto& dts = p_->program_.hist_.slot_dt.at(name);
+  if (samples.size() != ring.size() || dts.size() != ring.size())
+    throw std::logic_error("System history sample ledger differs from its ring");
+  for (std::size_t slot = 0; slot < samples.size(); ++slot)
+    runtime::program::validate_history_sample_provenance(
+        samples[slot], p_->program_.hist_.initialized.at(name), dts[slot]);
+  return runtime::program::encode_history_sample_identity(name, -1, samples);
+}
+
+template <int Dim>
+void System<Dim>::restore_history_sample_identity(const std::string& name,
+                                                  const std::vector<std::uint8_t>& bytes) {
+  std::vector<runtime::program::HistorySampleIdentity> candidate;
+  std::exception_ptr local_error;
+  try {
+    const auto& ring = p_->program_.hist_.histories.at(name);
+    if (p_->program_.hist_.slot_sample.at(name).size() != ring.size())
+      throw std::logic_error("System history sample restore lacks its registered ledger");
+    candidate = runtime::program::decode_history_sample_identity(bytes, name, -1, ring.size());
+    const auto& dts = p_->program_.hist_.slot_dt.at(name);
+    if (dts.size() != ring.size())
+      throw std::logic_error("System history sample restore has an invalid dt ledger");
+    for (std::size_t slot = 0; slot < candidate.size(); ++slot)
+      runtime::program::validate_history_sample_provenance(
+          candidate[slot], p_->program_.hist_.initialized.at(name), dts[slot]);
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System history sample restore failed collectively");
+  }
+  const std::string_view encoded(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view(name), encoded}}))
+    throw std::invalid_argument("System history sample restore differs between MPI ranks");
+  p_->program_.hist_.slot_sample.at(name).swap(candidate);
+}
+
 template <int Dim>
 double System<Dim>::history_slot_dt(const std::string& name, int slot) const {
   auto it = p_->program_.hist_.histories.find(name);
@@ -303,10 +435,14 @@ void System<Dim>::restore_history_slot_dt(const std::string& name, int slot, dou
         "System::restore_history_slot_dt: dt must be finite and >= 0 for "
         "history '" +
         name + "'");
-  std::vector<Real>& dts = p_->program_.hist_.slot_dt[name];
+  auto& samples = p_->program_.hist_.slot_sample.at(name);
+  if (samples.size() != it->second.size() || static_cast<std::size_t>(slot) >= samples.size())
+    throw std::out_of_range("System history dt restore differs from its registered sample ledger");
+  std::vector<Real>& dts = p_->program_.hist_.slot_dt.at(name);
   if (slot >= static_cast<int>(dts.size()))
     dts.resize(static_cast<std::size_t>(slot) + 1, Real(0));
   dts[static_cast<std::size_t>(slot)] = native_dt;
+  samples[static_cast<std::size_t>(slot)] = {};
 }
 
 template <int Dim>
@@ -1030,6 +1166,10 @@ template void System<kNativeDimension>::restore_history(const std::string&, int,
                                                         const std::vector<double>&);
 template void System<kNativeDimension>::set_history_initialized(const std::string&, bool);
 template void System<kNativeDimension>::restore_history_fill_count(const std::string&, int);
+template std::vector<std::uint8_t> System<kNativeDimension>::history_sample_identity(
+    const std::string&) const;
+template void System<kNativeDimension>::restore_history_sample_identity(
+    const std::string&, const std::vector<std::uint8_t>&);
 template double System<kNativeDimension>::history_slot_dt(const std::string&, int) const;
 template void System<kNativeDimension>::restore_history_slot_dt(const std::string&, int, double);
 template int System<kNativeDimension>::rebuild_history_slots(const std::string&,

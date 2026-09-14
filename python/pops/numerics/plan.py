@@ -16,6 +16,68 @@ _RATE_METHOD_PROTOCOL = (
 )
 
 
+class UnsupportedBalanceRealizationError(ValueError):
+    """A retained equation has no selected native numerical realization."""
+
+    code = "unsupported_balance_realization"
+    phase = "resolve"
+
+    def __init__(self, rate: OperatorHandle, reason: str) -> None:
+        self.context = {"rate": rate.local_id, "reason": reason}
+        super().__init__("[%s] rate %r: %s" % (self.code, rate.local_id, reason))
+
+
+def _validate_selected_balance_coverage(model: Any, selected: Mapping, *, states: Any) -> None:
+    """Cover each chosen equation exactly once, through the whole rate or partitions."""
+    contracts = model._rate_contracts
+    state_set = None if states is None else set(states)
+    expected = model.selected_rate_contracts(states=states)
+    retained = getattr(model, "_retained_rates", {})
+    covered: dict[Any, dict[int, Any]] = {}
+    legacy: set[Any] = set()
+    extra = []
+    for rate in selected:
+        contract = contracts.get(rate)
+        if contract is None or (state_set is not None and contract["state"] not in state_set):
+            extra.append(rate)
+            continue
+        view = retained.get(rate)
+        if view is None:
+            if rate not in expected:
+                extra.append(rate)
+            else:
+                legacy.add(rate)
+            continue
+        root = view.balance.handle
+        if root not in expected:
+            extra.append(rate)
+            continue
+        counts = covered.setdefault(root, {})
+        for occurrence in view.occurrences:
+            previous = counts.get(occurrence.ordinal)
+            if previous is not None:
+                raise ValueError(
+                    "DiscretizationPlan duplicate physical balance occurrence %r[%d] "
+                    "in numerical routes %r and %r"
+                    % (root.local_id, occurrence.ordinal, previous.local_id, rate.local_id))
+            counts[occurrence.ordinal] = rate
+    missing = []
+    for root in expected:
+        view = retained.get(root)
+        if view is None:
+            if root not in legacy:
+                missing.append(root.local_id)
+            continue
+        required = set(range(len(view.balance.occurrences)))
+        if root not in covered or required != set(covered[root]):
+            omitted = sorted(required - set(covered.get(root, {})))
+            missing.append("%s occurrences %s" % (root.local_id, omitted))
+    if missing or extra:
+        raise ValueError(
+            "DiscretizationPlan rate coverage mismatch for Model %r block states: missing=%s extra=%s"
+            % (model.name, missing, sorted(rate.local_id for rate in extra)))
+
+
 def _require_rate_method(value: Any, where: str) -> Any:
     missing = [name for name in _RATE_METHOD_PROTOCOL if not callable(getattr(value, name, None))]
     if missing:
@@ -318,32 +380,44 @@ class ResolvedDiscretizationPlan:
         return {**self._payload(), "identity": self.identity.token}
 
     def primary_spatial(self) -> Any:
-        """Compatibility projection for the current per-block native spatial ABI.
+        """Project independently evaluated rates onto one native transport installation.
 
-        The resolved plan retains every per-rate binding. The native engine currently accepts one
-        spatial method per block. Rates may name different physical fluxes while selecting the
-        same native reconstruction/Riemann/variable configuration; that exact physical ownership
-        remains on each resolved rate row. Genuinely different runtime configurations fail
-        explicitly instead of picking the first.
+        A method may explicitly declare that its Program operation only needs state storage.
+        Such a method contributes its resolved halos without competing with a block's native
+        reconstruction/Riemann/variable selection. Every per-rate numerical binding remains
+        authoritative; genuinely different transport configurations still fail closed.
         """
         methods = [row.method for row in self.rates]
         configurations = []
+        storage_depths = []
         for method in methods:
             provider = getattr(method, "runtime_configuration", None)
             configuration = provider() if callable(provider) else method.to_data()
             if not isinstance(configuration, dict):
-                raise TypeError(
-                    "rate method runtime_configuration() must return a dict"
-                )
+                raise TypeError("rate method runtime_configuration() must return a dict")
             configurations.append(configuration)
-        first = configurations[0]
-        if any(configuration != first for configuration in configurations[1:]):
+            requirements = getattr(method, "runtime_storage_requirements", None)
+            requirements = requirements() if callable(requirements) else None
+            if requirements is not None:
+                if (not isinstance(requirements, Mapping)
+                        or set(requirements) != {"ghost_depth"}
+                        or type(requirements["ghost_depth"]) is not int
+                        or requirements["ghost_depth"] < 1):
+                    raise TypeError("runtime storage requirements need one positive ghost_depth")
+                storage_depths.append(requirements["ghost_depth"])
+            else:
+                storage_depths.append(None)
+        installed = [index for index, depth in enumerate(storage_depths) if depth is None]
+        if not installed:
+            return methods[max(range(len(methods)), key=storage_depths.__getitem__)]
+        first = installed[0]
+        if any(configurations[index] != configurations[first] for index in installed[1:]):
             raise ValueError(
                 "native runtime requires one finite-volume method per block; resolved rates select "
                 "distinct runtime configurations and cannot be lowered without a per-operator "
                 "native ABI"
             )
-        return methods[0]
+        return methods[first]
 
     def amr_stencil_requirement(self, *, owner: Any, dimension: int) -> Any:
         """Project the exact spatial methods onto the open AMR nesting protocol."""
@@ -424,17 +498,20 @@ class DiscretizationPlan(Descriptor):
             raise TypeError("DiscretizationPlan requires a Model exposing typed rate contracts")
         selected = dict(self.rates.items())
         state_set = None if states is None else set(states)
-        expected = {
-            rate for rate, contract in contracts.items()
-            if state_set is None or contract["state"] in state_set
-        }
-        missing, extra = expected - set(selected), set(selected) - expected
-        if missing or extra:
-            raise ValueError(
-                "DiscretizationPlan rate coverage mismatch for Model %r block states: "
-                "missing=%s extra=%s"
-                % (model.name, sorted(row.local_id for row in missing),
-                   sorted(row.local_id for row in extra)))
+        if callable(getattr(model, "selected_rate_contracts", None)):
+            _validate_selected_balance_coverage(model, selected, states=states)
+        else:
+            expected = {
+                rate for rate, contract in contracts.items()
+                if state_set is None or contract["state"] in state_set
+            }
+            missing, extra = expected - set(selected), set(selected) - expected
+            if missing or extra:
+                raise ValueError(
+                    "DiscretizationPlan rate coverage mismatch for Model %r block states: "
+                    "missing=%s extra=%s"
+                    % (model.name, sorted(row.local_id for row in missing),
+                       sorted(row.local_id for row in extra)))
         if not selected:
             raise ValueError("DiscretizationPlan has no rate binding for Model %r" % model.name)
         for rate, method in selected.items():
@@ -462,6 +539,13 @@ class DiscretizationPlan(Descriptor):
                 continue
             if model.rate_contract(rate)["state"] not in states:
                 continue
+            view = getattr(model, "_retained_rates", {}).get(rate)
+            if view is not None:
+                reason = view.legacy_incompatibility()
+                if reason is not None:
+                    validate_balance = getattr(method, "validate_balance_view", None)
+                    if not callable(validate_balance) or validate_balance(view) is not True:
+                        raise UnsupportedBalanceRealizationError(rate, reason)
             rates.append(ResolvedRateMethod(
                 case.resolve(rate, block=block), method.resolve_references(resolve_handle)))
         def resolve_pairs(rows: Any, family: str) -> tuple[ResolvedNumericalBinding, ...]:

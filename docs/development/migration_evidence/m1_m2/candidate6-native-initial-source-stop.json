@@ -1,0 +1,89 @@
+{
+  "source_sha": "a760245b004008cd464ad44ef7b5c629c3e728db",
+  "dimension": 2,
+  "mpi_enabled": true,
+  "kokkos_backends": [
+    "OPENMP",
+    "SERIAL"
+  ],
+  "compiler": "/usr/bin/clang++",
+  "build_type": "Release",
+  "build_parallelism": 2,
+  "environment": {
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907",
+    "POPS_KOKKOS_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907",
+    "POPS_NATIVE_DIM": "2"
+  },
+  "steps": [
+    {
+      "label": "configure",
+      "command": [
+        "rtk",
+        "proxy",
+        "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/cmake",
+        "-S",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2",
+        "-B",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+        "-DCMAKE_C_COMPILER=/usr/bin/clang",
+        "-DCMAKE_PREFIX_PATH=/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907",
+        "-DKokkos_ROOT=/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907",
+        "-DPOPS_NATIVE_DIM=2",
+        "-DPOPS_REAL_TYPE=double",
+        "-DPOPS_BUILD_TESTS=ON",
+        "-DPOPS_BUILD_PYTHON=OFF",
+        "-DPOPS_USE_KOKKOS=ON",
+        "-DPOPS_USE_MPI=ON",
+        "-DPOPS_USE_HDF5=ON"
+      ],
+      "started": 1788821170.146893,
+      "log": "candidate6-native-configure.log",
+      "exit_code": 0,
+      "elapsed_seconds": 10.547070980072021
+    },
+    {
+      "label": "build",
+      "command": [
+        "rtk",
+        "proxy",
+        "/Users/romaindespoulain/miniforge3/envs/pops-migration-20260907/bin/cmake",
+        "--build",
+        "/Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-m2/build/migration-native",
+        "--clean-first",
+        "--parallel",
+        "2",
+        "--target",
+        "test_narrow_physical_operations",
+        "test_component_interfaces",
+        "test_aux_single_source",
+        "test_nd_transfer",
+        "test_prepared_amr_ghost_fill",
+        "test_nd_cluster",
+        "test_program_context_contract",
+        "test_program_reflux_ledger",
+        "test_amr_synthetic_program_loader_transaction",
+        "test_coupled_fieldsolve",
+        "test_generated_amr_system_block",
+        "test_nd_flux_ledger",
+        "test_native_field_attachment",
+        "test_mpi_prepared_amr_ghost_fill"
+      ],
+      "started": 1788821180.694688,
+      "log": "candidate6-native-build.log",
+      "exit_code": 0,
+      "elapsed_seconds": 145.89539194107056
+    }
+  ],
+  "status": "expected_python_source_change_incomplete",
+  "limitations": [
+    "Requested 14-target native matrix only; no Python wheel qualification."
+  ],
+  "start_tracked_bytes_sha256": "99cd6de7f0e3c4226959772160eef826cdf6f090690c484c4f642ac0a8aca810",
+  "compiler_version": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.5.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+  "error": "RuntimeError(\"frozen source changed: head=bd583faf196f3c1faeedec489e04d24e959ed00b, dirty=''\")",
+  "runner_sha256": "734bc0bd2fba93cd74cf1aa62069f795eb846287a6e4ea8723de54359d6c5cdd"
+}

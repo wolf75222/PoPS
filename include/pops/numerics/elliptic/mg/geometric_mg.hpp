@@ -155,6 +155,39 @@ BoundaryScheduleBudget exact_boundary_budget() {
   return {entries - 1};
 }
 
+// Cell-centered multilinear correction prolongation. Unlike constant injection,
+// this interpolates the smooth error represented by the rediscretized coarse operator.
+template <int Dim>
+struct ProlongCorrectionKernel {
+  FieldView<const Real, Dim> coarse;
+  FieldView<Real, Dim> fine;
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    Index<Dim> parent{}, direction{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::int64_t coordinate = cell[axis];
+      std::int64_t quotient = coordinate / 2;
+      if (coordinate % 2 < 0)
+        --quotient;
+      parent[axis] = static_cast<int>(quotient);
+      direction[axis] = coordinate - 2 * quotient == 0 ? -1 : 1;
+    }
+    Real value = Real(0);
+    for (int corner = 0; corner < (1 << Dim); ++corner) {
+      Index<Dim> sample = parent;
+      Real weight = Real(1);
+      for (int axis = 0; axis < Dim; ++axis) {
+        const bool neighbor = (corner & (1 << axis)) != 0;
+        if (neighbor)
+          sample[axis] += direction[axis];
+        weight *= neighbor ? Real(0.25) : Real(0.75);
+      }
+      value += weight * coarse(sample, 0);
+    }
+    fine(cell, 0) = value;
+  }
+};
+
 template <int Dim>
 mesh::Distribution<Dim> rebind_distribution(const mesh::BoxArray<Dim>& layout,
                                             const mesh::Distribution<Dim>& model) {
@@ -430,9 +463,8 @@ class GeometricMG {
       if (!coarse.coefficient)
         coarse.coefficient.emplace(coarse.phi.layout(), coarse.phi.distribution(),
                                    coarse.phi.local_rank(), 1, detail::unit_ghosts<Dim>());
-      const CopyScheduleBudget budget =
-          detail::exact_copy_budget(coarse.coefficient->layout(),
-                                    coarsen(levels_[level - 1]->coefficient->layout(), 2));
+      const CopyScheduleBudget budget = detail::exact_copy_budget(
+          coarse.coefficient->layout(), coarsen(levels_[level - 1]->coefficient->layout(), 2));
       average_down(*levels_[level - 1]->coefficient, *coarse.coefficient, 2, budget);
     }
     for (auto& level : levels_)
@@ -538,9 +570,10 @@ class GeometricMG {
     report.reference_residual_norm = reference;
     report.residual_norm = reference;
     report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
+    // The absolute floor is authored separately; an implicit unit floor defeats
+    // strict small-forcing solves, including FAC coarse correction equations.
     const Real stop =
-        std::max(options_.absolute_tolerance,
-                 options_.relative_tolerance * std::max(reference, Real(1)));
+        std::max(options_.absolute_tolerance, options_.relative_tolerance * reference);
     if (reference <= stop) {
       fill_ghosts_(fine);
       report.mark_solved("geometric_mg_initial_residual");
@@ -988,10 +1021,14 @@ class GeometricMG {
     average_down(level.residual, coarse.rhs, 2, restriction_budget);
     v_cycle_(level_index + 1);
 
-    level.correction.set_val(Real(0));
-    const CopyScheduleBudget prolongation_budget =
-        detail::exact_copy_budget(coarsen(level.correction.layout(), 2), coarse.phi.layout());
-    interpolate(coarse.phi, level.correction, 2, prolongation_budget);
+    // The hierarchy retains exact paired patches and owners at every coarsening.
+    // Refresh both same-level and physical coarse ghosts after its last smoother.
+    fill_ghosts_(coarse);
+    for (std::size_t local = 0; local < level.correction.local_size(); ++local)
+      for_each_cell(level.correction.box(local), detail::ProlongCorrectionKernel<Dim>{
+                                                     std::as_const(coarse.phi).fab(local).view(),
+                                                     level.correction.fab(local).view()});
+    Kokkos::fence();
     saxpy(level.phi, Real(1), level.correction);
     smooth_(level, options_.post_sweeps);
   }

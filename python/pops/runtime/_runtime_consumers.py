@@ -20,6 +20,7 @@ from pops._geometry_contracts import (
 from pops._native_collectives import (
     allgather_value,
     rank as native_rank,
+    require_communicator,
     require_world,
     size as native_size,
 )
@@ -1291,7 +1292,7 @@ class _PreparedRootExternalWriter(PreparedPublication):
         if preparation.request.parallel_mode is not ParallelMode.ROOT:
             raise ValueError("ROOT native Writer coordinator requires a ROOT request")
         self._effect = effect
-        self._communicator = require_world(preparation.communicator)
+        self._communicator = require_communicator(preparation.communicator)
         self._rank = native_rank(self._communicator)
         self._size = native_size(self._communicator)
         if (self._rank, self._size) != (preparation.request.rank, preparation.request.size):
@@ -1495,16 +1496,20 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             )
         self._builtin_catalyst_consumers = tuple(sorted(builtin_catalyst))
         self._builtin_catalyst_run_started = False
+        # The caller-thread lane owns ROOT gathers and synchronous COLLECTIVE writers.  Async
+        # consumers retain their separate worker lanes; neither route may borrow MPI_COMM_WORLD.
         self._root_output_consumers = tuple(
             sorted(
                 candidate.qualified_id
                 for candidate in owner._consumer_graph.nodes
-                if candidate.kind
-                in {
-                    ConsumerKind.SCIENTIFIC_OUTPUT,
-                    ConsumerKind.MONITOR,
-                }
-                and candidate.parallel_mode is ParallelMode.ROOT
+                if (
+                    candidate.kind in {ConsumerKind.SCIENTIFIC_OUTPUT, ConsumerKind.MONITOR}
+                    and candidate.parallel_mode is ParallelMode.ROOT
+                )
+                or (
+                    candidate.kind is ConsumerKind.SCIENTIFIC_OUTPUT
+                    and candidate.parallel_mode is ParallelMode.COLLECTIVE
+                )
             )
         )
         from pops import interfaces
@@ -3679,16 +3684,15 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         release_identity: bool,
         entry_effect_fence: str | None = None,
     ) -> tuple[ObserverDeliveryReport, ...]:
-        """Close a zero-progress failed run and retain its identity unless reuse is trivial.
+        """Close a zero-progress failed run and prove effect-free identity reuse.
 
         ``RunManifest`` identities intentionally describe execution semantics rather than an
         invocation nonce.  A run that fails before its first accepted step therefore receives the
         same identity when the caller fixes the external fault and retries from the restored entry
-        boundary.  Reuse is deliberately limited to a single-rank RuntimeInstance with an empty
-        ConsumerGraph and an unchanged publisher fence.  A size-one MPI world has no cross-rank
-        observer lifecycle, so it is equivalent to the serial route here.  Multi-rank MPI, output
-        and observer lifecycles stay sealed because opening or closing their external resources is
-        already observable.
+        boundary.  Reuse requires an empty ConsumerGraph, an unchanged publisher fence, and
+        complete run-entry restoration.  Every MPI rank must prove those conditions for the same
+        run after successful collective cleanup.  Output and observer lifecycles stay sealed
+        because opening or closing their external resources is already observable.
         """
 
         if type(release_identity) is not bool:
@@ -3704,8 +3708,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         nodes = tuple(getattr(graph, "nodes", ()))
         current_effect_fence = None
         if (
-            self._size == 1
-            and not nodes
+            not nodes
             and not self._root_output_consumers
             and not self._builtin_catalyst_consumers
         ):
@@ -3714,8 +3717,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             except BaseException:
                 current_effect_fence = None
         reusable = bool(
-            self._size == 1
-            and release_identity
+            release_identity
             and entry_effect_fence is not None
             and current_effect_fence == entry_effect_fence
             and not already_closed
@@ -3724,13 +3726,19 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             and not self._root_output_consumers
             and not self._builtin_catalyst_consumers
         )
-        if reusable:
+        # All ranks participate even when local rollback or the effect fence refused reuse.
+        # A local decision alone could reopen one rank while a peer retains cleanup authority.
+        rows = self._collective_close_rows(
+            "failed-run identity release",
+            {"rank": self._rank, "run_identity": run_key, "reusable": reusable},
+        )
+        if all(row["run_identity"] == run_key and row["reusable"] is True for row in rows):
             self._closed_observer_runs.discard(run_key)
             self._observer_run_phases.pop(run_key, None)
         return reports
 
     def _root_output_communicator(self) -> Any:
-        """Return the one active duplicated lane used by native ROOT snapshot gathers."""
+        """Return the active caller-thread lane for ROOT gathers and collective writers."""
 
         if not self._root_output_consumers:
             raise RuntimeError("the ConsumerGraph declares no ROOT snapshot consumer")
@@ -4433,6 +4441,8 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         _rank, _size, communicator = _execution_topology(self._owner)
         if effect.target.parallel_mode is ParallelMode.SERIAL:
             communicator = None
+        elif effect.target.parallel_mode is ParallelMode.COLLECTIVE:
+            communicator = self._root_output_communicator()
         return OutputPreparation(fmt, snapshot, request, target, communicator)
 
     def _prepare_live_visualization(

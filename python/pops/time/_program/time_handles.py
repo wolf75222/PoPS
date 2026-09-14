@@ -28,6 +28,7 @@ class _ProgramTimeHandles(_ProgramBase):
         self._time_current_values = {}
         self._time_stage_handles = {}
         self._time_stage_values = {}
+        self._next_stage_identity = 0
         self._time_history_handles = {}
         self._time_history_values = {}
         self._time_history_configs = {}
@@ -375,7 +376,7 @@ class _ProgramTimeHandles(_ProgramBase):
                 partition: TimePoint(
                     _reowned_clock(coordinate.clock), coordinate.offset, step=coordinate.step)
                 for partition, coordinate in point.partitions.items()
-            })
+            }, identity=point.identity)
 
         state_map = {}
         for old_state in self._time_states.values():

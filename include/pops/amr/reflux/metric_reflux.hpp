@@ -132,12 +132,15 @@ struct TemporalSliceMeasure {
   double substep_duration = 0.0;
 };
 
+using TemporalSlices = std::map<StageSlice, TemporalSliceMeasure>;
+using TemporalStageFamilies = std::map<std::string, TemporalSlices>;
+
 inline StageSlice stage_slice(const ClockStamp& clock, const std::string& stage) {
   return {clock_coordinate(clock), stage};
 }
 
-inline void register_temporal_slice(std::map<StageSlice, TemporalSliceMeasure>& slices,
-                                    const StageSlice& slice, const FaceFluxFragmentMeasure& measure,
+inline void register_temporal_slice(TemporalSlices& slices, const StageSlice& slice,
+                                    const FaceFluxFragmentMeasure& measure,
                                     std::size_t total_slice_count,
                                     const MetricRefluxBudget& budget) {
   const TemporalSliceMeasure candidate{measure.stage_weight, measure.substep_begin,
@@ -155,6 +158,25 @@ inline void register_temporal_slice(std::map<StageSlice, TemporalSliceMeasure>& 
   if (total_slice_count >= budget.max_clock_stage_slices)
     throw std::length_error("ND metric reflux clock-stage slices exceed their prepared budget");
   slices.emplace(slice, candidate);
+}
+
+inline std::size_t temporal_slice_count(const TemporalStageFamilies& families) {
+  std::size_t result = 0;
+  for (const auto& [family, slices] : families) {
+    (void)family;
+    result += slices.size();
+  }
+  return result;
+}
+
+inline void register_temporal_family_slice(TemporalStageFamilies& families,
+                                           const std::string& family, const StageSlice& slice,
+                                           const FaceFluxFragmentMeasure& measure,
+                                           std::size_t other_slice_count,
+                                           const MetricRefluxBudget& budget) {
+  auto& slices = families[family];
+  register_temporal_slice(slices, slice, measure,
+                          temporal_slice_count(families) + other_slice_count, budget);
 }
 
 struct ExactSubstep {
@@ -188,9 +210,8 @@ struct AuthenticatedWindow {
   std::size_t substep_count = 0;
 };
 
-inline AuthenticatedWindow authenticated_window(
-    const std::map<StageSlice, TemporalSliceMeasure>& slices, Rational window_begin,
-    Rational window_end) {
+inline AuthenticatedWindow authenticated_window(const TemporalSlices& slices, Rational window_begin,
+                                                Rational window_end) {
   std::map<ExactSubstep, SubstepQuadrature> substeps;
   for (const auto& [slice, measure] : slices) {
     (void)slice;
@@ -236,17 +257,25 @@ inline AuthenticatedWindow authenticated_window(
 
 template <int Dim>
 void validate_temporal_coverage(const CoarseFaceRefluxKey<Dim>& key,
-                                const std::map<StageSlice, TemporalSliceMeasure>& coarse_slices,
-                                const std::map<StageSlice, TemporalSliceMeasure>& fine_slices) {
-  const AuthenticatedWindow coarse =
-      authenticated_window(coarse_slices, key.window_begin, key.window_end);
-  const AuthenticatedWindow fine =
-      authenticated_window(fine_slices, key.window_begin, key.window_end);
-  const std::size_t operations = coarse_slices.size() + fine_slices.size();
-  if (!roundoff_equal(coarse.duration, fine.duration, operations) ||
-      !roundoff_equal(coarse.duration_per_phase, fine.duration_per_phase, operations))
-    throw std::runtime_error(
-        "ND metric reflux coarse and fine physical clocks do not cover the same window");
+                                const TemporalStageFamilies& coarse_families,
+                                const TemporalStageFamilies& fine_families) {
+  if (coarse_families.size() != fine_families.size())
+    throw std::runtime_error("ND metric reflux coarse and fine spatial provider identities differ");
+  for (const auto& [family, coarse_slices] : coarse_families) {
+    const auto fine = fine_families.find(family);
+    if (fine == fine_families.end())
+      throw std::runtime_error(
+          "ND metric reflux coarse and fine spatial provider identities differ");
+    const AuthenticatedWindow coarse =
+        authenticated_window(coarse_slices, key.window_begin, key.window_end);
+    const AuthenticatedWindow refined =
+        authenticated_window(fine->second, key.window_begin, key.window_end);
+    const std::size_t operations = coarse_slices.size() + fine->second.size();
+    if (!roundoff_equal(coarse.duration, refined.duration, operations) ||
+        !roundoff_equal(coarse.duration_per_phase, refined.duration_per_phase, operations))
+      throw std::runtime_error(
+          "ND metric reflux coarse and fine physical clocks do not cover the same window");
+  }
 }
 
 template <int Dim>
@@ -360,8 +389,8 @@ MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, P
   const std::set<std::array<int, Dim>> expected_coarse{detail::coordinate_array(key.coarse_face)};
   std::map<detail::StageSlice, std::set<std::array<int, Dim>>> coarse_slices;
   std::map<detail::StageSlice, std::set<std::array<int, Dim>>> fine_slices;
-  std::map<detail::StageSlice, detail::TemporalSliceMeasure> coarse_temporal;
-  std::map<detail::StageSlice, detail::TemporalSliceMeasure> fine_temporal;
+  detail::TemporalStageFamilies coarse_temporal;
+  detail::TemporalStageFamilies fine_temporal;
   MetricFaceReflux<Payload> result;
 
   for (const auto& entry : ledger.published_entries(key.axis)) {
@@ -372,8 +401,9 @@ MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, P
     switch (entry.key.role) {
       case FaceLedgerRole::Coarse:
         coarse_slices[slice].insert(detail::coordinate_array(entry.key.face));
-        detail::register_temporal_slice(coarse_temporal, slice, entry.measure,
-                                        coarse_temporal.size() + fine_temporal.size(), budget);
+        detail::register_temporal_family_slice(coarse_temporal, entry.key.temporal_family, slice,
+                                               entry.measure,
+                                               detail::temporal_slice_count(fine_temporal), budget);
         axpy(result.coarse_integrated, scale, entry.payload);
         result.coarse_weighted_measure += scale;
         if (!std::isfinite(result.coarse_weighted_measure))
@@ -381,8 +411,9 @@ MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, P
         break;
       case FaceLedgerRole::Fine:
         fine_slices[slice].insert(detail::coordinate_array(entry.key.face));
-        detail::register_temporal_slice(fine_temporal, slice, entry.measure,
-                                        coarse_temporal.size() + fine_temporal.size(), budget);
+        detail::register_temporal_family_slice(
+            fine_temporal, entry.key.temporal_family, slice, entry.measure,
+            detail::temporal_slice_count(coarse_temporal), budget);
         axpy(result.fine_integrated, scale, entry.payload);
         result.fine_weighted_measure += scale;
         if (!std::isfinite(result.fine_weighted_measure))

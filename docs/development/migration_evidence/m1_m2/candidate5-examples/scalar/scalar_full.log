@@ -1,0 +1,155 @@
+PoPS release runtime | native_sha256=16342cd011e2dc8d002ee180971060ef5a3925367e4953595fc5ab2f49c8ce02
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : tutorial_scalar_advection_rk2_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 128 x 128 cells; 3 levels, ratios (2, 2):(2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.45, max_dt=0.01)
+  interval            : 0 -> 0.2 (max 100000 accepted steps)
+  consumers           : checkpoint @ at_end -> checkpoints/restart; scientific_output paraview-vtu @ every(10) -> solution/tracer; scientific_output hdf5 @ every(50) -> state/tracer
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate5-examples/scalar/scalar_full/manual/accepted (explicit-root)
+  artifact identity   : d2f3f50f7824fd22
+  run identity        : dacd88276d6f5f84
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 228 / 0
+  final time / step   : 0.2 / 228
+  elapsed             : 792.841524 s
+  run identity        : dacd88276d6f5f84
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : tutorial_scalar_advection_rk2_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 128 x 128 cells; 3 levels, ratios (2, 2):(2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.45, max_dt=0.01)
+  interval            : 0.2 -> 0.4 (max 100000 accepted steps)
+  consumers           : checkpoint @ at_end -> checkpoints/restart; scientific_output paraview-vtu @ every(10) -> solution/tracer; scientific_output hdf5 @ every(50) -> state/tracer
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate5-examples/scalar/scalar_full/manual/continuous (explicit-root)
+  artifact identity   : d2f3f50f7824fd22
+  run identity        : 915c2a634083f199
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 228 / 0
+  final time / step   : 0.4 / 456
+  elapsed             : 761.310169 s
+  run identity        : 915c2a634083f199
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : tutorial_scalar_advection_rk2_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 128 x 128 cells; 3 levels, ratios (2, 2):(2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.45, max_dt=0.01)
+  interval            : 0.2 -> 0.4 (max 100000 accepted steps)
+  consumers           : checkpoint @ at_end -> checkpoints/restart; scientific_output paraview-vtu @ every(10) -> solution/tracer; scientific_output hdf5 @ every(50) -> state/tracer
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate5-examples/scalar/scalar_full/manual/restarted (explicit-root)
+  artifact identity   : d2f3f50f7824fd22
+  run identity        : 5772279b7ad12d20
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 228 / 0
+  final time / step   : 0.4 / 456
+  elapsed             : 769.797265 s
+  run identity        : 5772279b7ad12d20
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : tutorial_scalar_advection_rk2_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 128 x 128 cells; 3 levels, ratios (2, 2):(2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.45, max_dt=0.01)
+  interval            : 0 -> 0.2 (max 100000 accepted steps)
+  consumers           : checkpoint @ at_end -> checkpoints/restart; scientific_output paraview-vtu @ every(10) -> solution/tracer; scientific_output hdf5 @ every(50) -> state/tracer
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate5-examples/scalar/scalar_full/preset/accepted (explicit-root)
+  artifact identity   : 2550ee1df928db21
+  run identity        : a2bc736b44cb8fad
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 228 / 0
+  final time / step   : 0.2 / 228
+  elapsed             : 743.371926 s
+  run identity        : a2bc736b44cb8fad
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.0.0 | resolved simulation launch
+================================================================
+  case                : tutorial_scalar_advection_rk2_amr
+  target / backend    : amr_system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 2
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : finite_volume, variables=conservative, reconstruction=muscl, riemann=scalar_upwind, formal_order=2, ghost_depth=2, boundaries=1
+  layout 0            : AMR; 128 x 128 cells; 3 levels, ratios (2, 2):(2, 2); [0, 1] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.45, max_dt=0.01)
+  interval            : 0.2 -> 0.4 (max 100000 accepted steps)
+  consumers           : checkpoint @ at_end -> checkpoints/restart; scientific_output paraview-vtu @ every(10) -> solution/tracer; scientific_output hdf5 @ every(50) -> state/tracer
+  output root         : /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate5-examples/scalar/scalar_full/preset/continued (explicit-root)
+  artifact identity   : 2550ee1df928db21
+  run identity        : 5ba3326743a30475
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 228 / 0
+  final time / step   : 0.4 / 456
+  elapsed             : 813.358709 s
+  run identity        : 5ba3326743a30475
+PoPS final scalar-advection acceptance:
+  HDF5: pops.scientific-output.v1:sha256:67531a8e985ae69de8617e0df05c7b1783248f27a2aab6cac1284740811a1413
+  ParaView: pops.scientific-output.v1:sha256:96eef69818a6d6c5146b8006866e43c56b97ffe812e49156f183ae52b19c4db7
+  analytic error at t=0.193359: L1=3.331568e-04 L2=2.166155e-03 Linf=3.548130e-02 relative-L2=1.700899e-02
+  AMR synchronization: levels=(0, 1, 2) relations=((0, 1), (1, 2)) phases=('reflux', 'average_down')
+  AMR regrid: count=92 -> 184 topology-epoch=92 -> 184
+  checkpoint: /Users/romaindespoulain/dev/tmp/PoPS-migration-20260907-evidence/candidate5-examples/scalar/scalar_full/manual/accepted_restart.npz
+  bit-identical restart: step 456
+  explicit/pops.lib.time.SSPRK2 parity: b856d30c47e27d8c1ae7ccec5a3d60f394fdae3565fb08b675c6213f7d3c6fbf

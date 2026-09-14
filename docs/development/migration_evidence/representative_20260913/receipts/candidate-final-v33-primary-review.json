@@ -1,0 +1,16 @@
+{
+  "source": "ec8afeadc19cc22508098b6dbc5cff095cf9d170",
+  "review_complete": true,
+  "reviewed_base": "2bb005f0cdf79f3027167a92931090f6c940ea18",
+  "reviewed_diff_sha256": "04accad1bfee6cb926e68af0acd0df5d8b83818b2a0f3efce3e4acab0170c695",
+  "reviewer": "primary Astra",
+  "reviewed_utc": "2026-09-13T12:44:10.349931+00:00",
+  "scope": "Personally inspected all6 changed files since accepted v32: test binds sole declared initialization authority; native model uses existing deterministic component linker flags, both model artifact-spec builders invalidate old Darwin caches. Non-Darwin flags unchanged, strict full-binary and staged MPI contracts preserved. No C++ changes. Native composition remains pending.",
+  "controls": {
+    "model_link_source_r1": "5passed",
+    "composition_source_r3": "16passed reused; no affine/operation/halo implementation changed",
+    "native_factory_r1": "3passed reused; native factories unchanged"
+  },
+  "diagnosis_receipt": "representative-20260913-composition-model-binary-diagnosis.json",
+  "qualification_complete": false
+}
