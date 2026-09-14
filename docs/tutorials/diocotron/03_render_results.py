@@ -64,6 +64,7 @@ SIGNATURE_KEYS = ("model", "mode", "radius", "ring", "alpha", "omega", "temperat
 OPTIONAL_SIGNATURE_KEYS = ("coarse_max_grid", "cluster_max_grid", "distribute_coarse",
                            "potential_history_slot", "potential_history_contract",
                            "potential_history_transfer", "field_initial_guess", "time_calendar",
+                           "field_coarse_method", "field_coarse_restart", "field_coarse_iteration_cap",
                            "output_interval", "growth_output_interval", "growth_output_end")
 COLORS = plt.colormaps["Blues"](np.linspace(0, 1, 256))
 COLORS[0] = (1., 1., 1., 1.)

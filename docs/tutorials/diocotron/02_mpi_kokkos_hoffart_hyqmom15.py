@@ -199,6 +199,7 @@ potential = program.solve(LinearProblem(elliptic, rhs,
     scope=scope, nullspace=None),
     solver=CompositeTensorFAC(max_iter=300, rel_tol=1e-10, abs_tol=1e-12,
         correction_damping=0.5, fine_sweeps=64, coarse_cycles=512,
+        coarse_method="gmres", coarse_restart=64,
         boundary_conditions=(Neumann(0.), Dirichlet(0.), Periodic(), Periodic()),
         diagonal_average="arithmetic"), name="midpoint potential").consume(action=FailRun())
 program.store_history("plasma.potential", potential)
@@ -313,6 +314,7 @@ parameters = dict(model="HYQMOM15", mode=MODE, radius=R, ring=(R0, R1), alpha=AL
     coarse_max_grid=COARSE_MAX_GRID, cluster_max_grid=CLUSTER_MAX_GRID, distribute_coarse=True,
     potential_history_slot=1, potential_history_contract="scalar-output-field-v1",
     potential_history_transfer="authenticated-1to1-retain-overlap-v1", field_initial_guess="zero",
+    field_coarse_method="gmres", field_coarse_restart=64, field_coarse_iteration_cap=512,
     time_calendar="absolute cap-safe subdivisions of exact decimal output intervals",
     output_interval=OUTPUT_INTERVAL, growth_output_interval=GROWTH_OUTPUT_INTERVAL,
     growth_output_end=GROWTH_OUTPUT_END,

@@ -19,6 +19,7 @@
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/runtime/amr/tensor_coarse_gmres.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -51,6 +52,8 @@ struct LevelBinding {
   MultiFab<Dim, MemorySpace>* solution = nullptr;
 };
 
+enum class CoarseCorrectionMethod : std::uint8_t { gauss_seidel, gmres };
+
 struct Controls {
   Real relative_tolerance = Real(1e-10);
   Real absolute_tolerance = Real(0);
@@ -60,6 +63,8 @@ struct Controls {
   Real coarse_absolute_tolerance = Real(0);
   int coarse_cycles = 128;
   Real correction_damping = Real(1);
+  CoarseCorrectionMethod coarse_method = CoarseCorrectionMethod::gauss_seidel;
+  int coarse_restart = 64;
 };
 
 namespace detail {
@@ -410,6 +415,11 @@ void copy_valid(MultiFab<Dim, MemorySpace>& destination, const MultiFab<Dim, Mem
 
 inline void validate_controls(const Controls& controls) {
   if (controls.maximum_iterations < 1 || controls.fine_sweeps < 1 || controls.coarse_cycles < 1 ||
+      (controls.coarse_method != CoarseCorrectionMethod::gauss_seidel &&
+       controls.coarse_method != CoarseCorrectionMethod::gmres) ||
+      controls.coarse_restart < 1 ||
+      (controls.coarse_method == CoarseCorrectionMethod::gauss_seidel &&
+       controls.coarse_restart != 64) ||
       !std::isfinite(static_cast<double>(controls.relative_tolerance)) ||
       controls.relative_tolerance <= Real(0) ||
       !std::isfinite(static_cast<double>(controls.absolute_tolerance)) ||
@@ -433,7 +443,9 @@ inline void validate_controls(const Controls& controls) {
 /// ExecutionLane;
 /// replicated level zero is retained as an explicit capability and refined contributions are
 /// broadcast from their unique owners into that replicated parent.  No solve-time storage
-/// allocation is permitted.
+/// allocation is permitted by the Gauss-Seidel route. Opt-in GMRES constructs its basis eagerly
+/// and prepares persistent execution sessions from the first real coefficient image, before its
+/// first recurrence; subsequent solves and every matrix application reuse that storage.
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class FullTensorCompositeFac {
  public:
@@ -442,21 +454,32 @@ class FullTensorCompositeFac {
   FullTensorCompositeFac(std::span<const LevelBinding<Dim, MemorySpace>> bindings,
                          std::span<const ::pops::amr::RefinementRatio<Dim>> ratios,
                          const ExecutionLane& lane,
-                         elliptic::nd::CartesianTensorStencilOptions stencil_options = {})
+                         elliptic::nd::CartesianTensorStencilOptions stencil_options = {},
+                         CoarseCorrectionMethod coarse_method = CoarseCorrectionMethod::gauss_seidel,
+                         int coarse_restart = 64)
       : bindings_(bindings.begin(), bindings.end()),
         ratios_(ratios.begin(), ratios.end()),
         lane_(&lane),
         lane_borrow_(lane.borrow_immutably()),
-        stencil_options_(stencil_options) {
+        stencil_options_(stencil_options),
+        coarse_method_(coarse_method),
+        coarse_restart_(coarse_restart) {
     static_assert(
         Kokkos::SpaceAccessibility<Kokkos::DefaultExecutionSpace, MemorySpace>::accessible,
         "FullTensorCompositeFac requires DefaultExecutionSpace access to its memory space");
     std::exception_ptr local_error;
     try {
+      Controls prepared_controls;
+      prepared_controls.coarse_method = coarse_method_;
+      prepared_controls.coarse_restart = coarse_restart_;
+      detail::validate_controls(prepared_controls);
       validate_bindings_();
       levels_.reserve(bindings_.size());
       for (std::size_t level = 0; level < bindings_.size(); ++level)
         levels_.push_back(std::make_unique<Level>(bindings_[level], level == 0));
+      if (coarse_method_ == CoarseCorrectionMethod::gmres && singular_())
+        throw std::invalid_argument(
+            "tensor FAC GMRES coarse correction currently requires a nonsingular boundary problem");
       connections_.reserve(ratios_.size());
       for (std::size_t parent = 0; parent < ratios_.size(); ++parent) {
         connections_.push_back(std::make_unique<Connection>(*levels_[parent], *levels_[parent + 1],
@@ -499,6 +522,17 @@ class FullTensorCompositeFac {
         levels_[level]->halo_exchange.emplace(levels_[level]->halo_schedule, lane, context);
       }
     }
+    if (coarse_method_ == CoarseCorrectionMethod::gmres) {
+      if constexpr (std::same_as<MemorySpace,
+                                 typename Kokkos::DefaultExecutionSpace::memory_space>) {
+        auto& coarse = *levels_.front();
+        coarse_gmres_.emplace(coarse.correction, *coarse.binding.geometry, coarse.halo_schedule,
+                             coarse.homogeneous_boundary, stencil_options_, lane, exact_contract_,
+                             coarse_restart_);
+      } else {
+        throw std::invalid_argument("tensor FAC GMRES requires the native Krylov memory space");
+      }
+    }
   }
 
   FullTensorCompositeFac(const FullTensorCompositeFac&) = delete;
@@ -536,6 +570,9 @@ class FullTensorCompositeFac {
     if (all_reduce_max(&lane == lane_ ? 0L : 1L, *lane_) != 0)
       throw std::invalid_argument(
           "dimension-generic tensor FAC requires its prepared execution lane");
+    if (all_reduce_max(controls.coarse_method != coarse_method_ ||
+                           controls.coarse_restart != coarse_restart_ ? 1L : 0L, lane) != 0)
+      throw std::invalid_argument("tensor FAC coarse method differs from its prepared contract");
     detail::validate_controls(controls);
     for (std::size_t level = 0; level < levels_.size(); ++level)
       detail::copy_valid<Dim>(*levels_[level]->binding.solution,
@@ -561,6 +598,15 @@ class FullTensorCompositeFac {
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                          "nd_tensor_fac_non_elliptic_coefficient");
       return report;
+    }
+    if (coarse_gmres_) {
+      if constexpr (std::same_as<MemorySpace,
+                                 typename Kokkos::DefaultExecutionSpace::memory_space>) {
+        typename TensorCoarseGmres<Dim>::coefficient_fields source{};
+        for (std::size_t slot = 0; slot < source.size(); ++slot)
+          source[slot] = levels_.front()->binding.coefficients[slot];
+        coarse_gmres_->prepare_coefficients(source);
+      }
     }
     average_solution_down_();
     compute_composite_residual_();
@@ -592,7 +638,14 @@ class FullTensorCompositeFac {
 
       compute_composite_residual_();
       restrict_residual_tower_();
-      solve_coarse_correction_(controls);
+      const auto coarse_report = solve_coarse_correction_(controls);
+      if (coarse_report && !coarse_report->solved()) {
+        report.residual_norm = composite_residual_norm_();
+        report.rel_residual = report.residual_norm / reference;
+        report.mark_failed(coarse_report->status, coarse_report->action,
+                           std::string("nd_tensor_fac_coarse_correction: ") + coarse_report->reason);
+        return report;
+      }
       report.step_norm = controls.correction_damping * global_norm_inf_(levels_.front()->correction);
       add_active_(*levels_.front(), levels_.front()->correction, controls.correction_damping);
       prolong_correction_tower_(controls.correction_damping);
@@ -1136,6 +1189,9 @@ class FullTensorCompositeFac {
         .scalar(stencil_options_.dirichlet_faces)
         .scalar(stencil_options_.arithmetic_diagonal)
         .scalar(static_cast<std::uint64_t>(bindings_.size()));
+    if (coarse_method_ != CoarseCorrectionMethod::gauss_seidel)
+      contract.text("pops.tensor-fac.coarse-method@1")
+          .scalar(coarse_method_).scalar(coarse_restart_);
     for (const auto& binding : bindings_) {
       for (int axis = 0; axis < Dim; ++axis)
         contract.scalar(binding.geometry->domain().lo[axis])
@@ -1324,12 +1380,44 @@ class FullTensorCompositeFac {
                                              levels_[child - 1]->residual);
   }
 
-  void solve_coarse_correction_(const Controls& controls) {
+  std::optional<SolveReport> solve_coarse_correction_(const Controls& controls) {
     Level& coarse = *levels_.front();
     coarse.correction.set_val(Real(0));
     const Real reference = global_norm_inf_(coarse.residual);
     const Real stop = std::max(controls.coarse_absolute_tolerance,
                                controls.coarse_relative_tolerance * reference);
+    if (coarse_gmres_) {
+      if constexpr (std::same_as<MemorySpace,
+                                 typename Kokkos::DefaultExecutionSpace::memory_space>) {
+        if (reference == Real(0)) {
+          SolveReport zero;
+          zero.reference_residual_norm = Real(0);
+          zero.residual_norm = Real(0);
+          zero.rel_residual = Real(0);
+          zero.mark_solved("tensor_coarse_gmres_zero_rhs");
+          return zero;
+        }
+        auto result = coarse_gmres_->solve(coarse.correction, coarse.residual, stop,
+                                            controls.coarse_cycles);
+        if (!result.solved())
+          return result;
+        // Confirm with the original FAC coefficient storage and exact infinity-norm criterion.
+        // The helper's Euclidean stopping rule is deliberately at least as strict.
+        fill_solution_ghosts_(0, coarse.correction, true);
+        for (std::size_t local = 0; local < coarse.correction.local_size(); ++local)
+          for_each_cell(coarse.correction.box(local),
+                        detail::ResidualKernel<Dim>{coarse.scratch.fab(local).view(),
+                            std::as_const(coarse.residual.fab(local)).view(),
+                            std::as_const(coarse.covered.fab(local)).view(),
+                            stencil_(coarse, local, coarse.correction), false});
+        Kokkos::fence();
+        const Real residual = global_norm_inf_(coarse.scratch);
+        if (!std::isfinite(static_cast<double>(residual)) || residual > stop)
+          result.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
+                             "tensor_coarse_gmres_original_infinity_residual");
+        return result;
+      }
+    }
     for (int sweep = 0; sweep < controls.coarse_cycles; ++sweep) {
       smooth_(0, coarse.correction, coarse.residual, 1, false, true);
       if (nullspace_workspace_ && ((sweep + 1) % 8 == 0 || sweep + 1 == controls.coarse_cycles))
@@ -1348,6 +1436,8 @@ class FullTensorCompositeFac {
           break;
       }
     }
+    // Historical GS is an inexact correction; its cap is not an inner convergence claim.
+    return std::nullopt;
   }
 
   static void add_active_(Level& level, const field_type& correction, Real damping) {
@@ -1477,6 +1567,9 @@ class FullTensorCompositeFac {
   std::vector<const MultiFab<Dim>*> nullspace_rhs_{};
   std::vector<MultiFab<Dim>*> nullspace_candidates_{};
   std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
+  CoarseCorrectionMethod coarse_method_;
+  int coarse_restart_;
+  std::optional<TensorCoarseGmres<Dim>> coarse_gmres_{};
 };
 
 }  // namespace pops::runtime::program::tensor_fac

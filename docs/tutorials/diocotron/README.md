@@ -89,6 +89,14 @@ are `POPS_NR`, `POPS_NTHETA`, `POPS_MAX_LEVELS`, `POPS_MODE`, `POPS_CFL`,
 `POPS_MAX_DT`, `POPS_T_END`, and `POPS_OUTPUT_INTERVAL`. The tutorials use
 synchronous AMR steps, conservative transfer, accepted-state checkpoints, and
 the public PoPS compile/bind/run interfaces.
+The FAC coarse correction uses prepared GMRES with a fixed diagonal preconditioner.
+Every matrix application retains the complete finite-Omega tensor and the conducting-disk
+boundary law. The coarse solve checks the original residual, and the outer FAC solve keeps
+its original composite residual tolerances, fine smoothing and correction damping. This
+is a solver change; it does not replace the equation by its drift limit. The first real
+coefficient snapshot prepares the persistent GMRES sessions before iteration. Runtime
+and numerical qualification of a new solver revision are recorded separately from its
+implementation; no speedup is assumed from selecting GMRES.
 Coarse patches are explicitly distributed across MPI ranks. `POPS_COARSE_MAX_GRID`
 bounds coarse patches; `POPS_CLUSTER_MAX_GRID` bounds clusters in parent tagging
 cells before factor-two refinement. The latter is not a bound in child-cell units.

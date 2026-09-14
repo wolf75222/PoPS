@@ -30,7 +30,10 @@ inline MappedDiskFacMeasurement mapped_disk_fac_witness(
         {.zero_flux_faces=1u, .dirichlet_faces=2u, .arithmetic_diagonal=true},
     int angular_ratio = 1, int fine_sweeps = 64, int coarse_cycles = 512,
     int maximum_iterations = 200, Real damping = Real(1),
-    Real relative_tolerance = Real(2e-9)) {
+    Real relative_tolerance = Real(2e-9),
+    runtime::program::tensor_fac::CoarseCorrectionMethod coarse_method =
+        runtime::program::tensor_fac::CoarseCorrectionMethod::gauss_seidel,
+    int coarse_restart = 64) {
   using namespace runtime::program::tensor_fac;
   using Field = MultiFab<2>;
   constexpr Real pi = Real(3.141592653589793238462643383279502884L);
@@ -159,13 +162,16 @@ inline MappedDiskFacMeasurement mapped_disk_fac_witness(
   }
   const std::array<amr::RefinementRatio<2>, 1> ratios{
       amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
-  FullTensorCompositeFac<2> solver(bindings, ratios, lane, stencil_options);
+  FullTensorCompositeFac<2> solver(bindings, ratios, lane, stencil_options,
+                                  coarse_method, coarse_restart);
   Controls controls;
   controls.relative_tolerance = relative_tolerance;
   controls.absolute_tolerance = Real(1e-12);
   controls.maximum_iterations = maximum_iterations;
   controls.fine_sweeps = fine_sweeps;
   controls.coarse_cycles = coarse_cycles;
+  controls.coarse_method = coarse_method;
+  controls.coarse_restart = coarse_restart;
   controls.coarse_relative_tolerance = Real(1e-11);
   controls.correction_damping = damping;
   MappedDiskFacMeasurement result;

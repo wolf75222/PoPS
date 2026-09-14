@@ -38,6 +38,8 @@ struct TensorFacControls {
   std::optional<Real> coarse_relative_tolerance;
   std::optional<Real> coarse_absolute_tolerance;
   std::optional<int> coarse_cycles;
+  std::optional<tensor_fac::CoarseCorrectionMethod> coarse_method;
+  std::optional<int> coarse_restart;
   std::optional<Real> correction_damping;
   std::optional<bool> verbose;
   int boundary_count = 0;
@@ -59,6 +61,16 @@ inline void validate_controls(const TensorFacControls& controls) {
     throw std::invalid_argument("tensor FAC coarse absolute tolerance must be non-negative");
   if (controls.coarse_cycles && *controls.coarse_cycles <= 0)
     throw std::invalid_argument("tensor FAC coarse_cycles must be positive");
+  const auto coarse_method =
+      controls.coarse_method.value_or(tensor_fac::CoarseCorrectionMethod::gauss_seidel);
+  if (coarse_method != tensor_fac::CoarseCorrectionMethod::gauss_seidel &&
+      coarse_method != tensor_fac::CoarseCorrectionMethod::gmres)
+    throw std::invalid_argument("tensor FAC coarse method is unsupported");
+  if (controls.coarse_restart && *controls.coarse_restart <= 0)
+    throw std::invalid_argument("tensor FAC coarse_restart must be positive");
+  if (coarse_method == tensor_fac::CoarseCorrectionMethod::gauss_seidel &&
+      controls.coarse_restart.value_or(64) != 64)
+    throw std::invalid_argument("tensor FAC coarse_restart applies only to GMRES");
   if (controls.correction_damping &&
       (!std::isfinite(static_cast<double>(*controls.correction_damping)) ||
        *controls.correction_damping <= Real(0) || *controls.correction_damping > Real(1)))
@@ -70,7 +82,7 @@ inline TensorFacControls decode_controls(const PreparedProviderOptions& options)
     throw std::invalid_argument("tensor FAC options use an unsupported exact schema");
   TensorFacControls controls;
   for (const auto& [key, value] : options.values) {
-    if (key == "fac.fine_sweeps" || key == "fac.coarse_cycles") {
+    if (key == "fac.fine_sweeps" || key == "fac.coarse_cycles" || key == "fac.coarse_restart") {
       if (!std::holds_alternative<std::int64_t>(value))
         throw std::invalid_argument("tensor FAC integer option has the wrong wire type");
       const std::int64_t raw = std::get<std::int64_t>(value);
@@ -78,8 +90,20 @@ inline TensorFacControls decode_controls(const PreparedProviderOptions& options)
         throw std::invalid_argument("tensor FAC integer option is outside the native range");
       if (key == "fac.fine_sweeps")
         controls.fine_sweeps = static_cast<int>(raw);
-      else
+      else if (key == "fac.coarse_cycles")
         controls.coarse_cycles = static_cast<int>(raw);
+      else
+        controls.coarse_restart = static_cast<int>(raw);
+    } else if (key == "fac.coarse_method") {
+      if (!std::holds_alternative<std::string>(value))
+        throw std::invalid_argument("tensor FAC coarse method has the wrong wire type");
+      const auto& method = std::get<std::string>(value);
+      if (method == "gauss_seidel")
+        controls.coarse_method = tensor_fac::CoarseCorrectionMethod::gauss_seidel;
+      else if (method == "gmres")
+        controls.coarse_method = tensor_fac::CoarseCorrectionMethod::gmres;
+      else
+        throw std::invalid_argument("tensor FAC coarse method must be gauss_seidel or gmres");
     } else if (key == "fac.coarse_rel_tol" || key == "fac.coarse_abs_tol") {
       if (!std::holds_alternative<double>(value))
         throw std::invalid_argument("tensor FAC tolerance option has the wrong wire type");
@@ -294,7 +318,9 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
       }
       tensor_fac_ = std::make_unique<tensor_fac::FullTensorCompositeFac<Dim, MemorySpace>>(
           std::span<const tensor_fac::LevelBinding<Dim, MemorySpace>>(bindings), request_.ratios,
-          lane, controls_.stencil_options);
+          lane, controls_.stencil_options,
+          controls_.coarse_method.value_or(tensor_fac::CoarseCorrectionMethod::gauss_seidel),
+          controls_.coarse_restart.value_or(64));
     }
   }
 
@@ -368,6 +394,9 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
     resolved.coarse_absolute_tolerance =
         controls_.coarse_absolute_tolerance.value_or(defaults.coarse_abs_tol);
     resolved.coarse_cycles = controls_.coarse_cycles.value_or(defaults.coarse_cycles);
+    resolved.coarse_method =
+        controls_.coarse_method.value_or(tensor_fac::CoarseCorrectionMethod::gauss_seidel);
+    resolved.coarse_restart = controls_.coarse_restart.value_or(64);
     resolved.correction_damping = controls_.correction_damping.value_or(Real(1));
     return tensor_fac_->solve(resolved, lane);
   }

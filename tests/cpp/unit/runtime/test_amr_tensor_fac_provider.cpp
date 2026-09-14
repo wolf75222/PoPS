@@ -5,12 +5,47 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace {
+
+TEST(HierarchyTensorExactRank, CoarseGmresNativeOptionsKeepExactWireTypes) {
+  using namespace pops::runtime::program;
+  using tensor_fac::CoarseCorrectionMethod;
+  auto options = tensor_elliptic_detail::default_options();
+  const auto defaults = tensor_elliptic_detail::decode_controls(options);
+  EXPECT_FALSE(defaults.coarse_method.has_value());
+  EXPECT_FALSE(defaults.coarse_restart.has_value());
+  options.values.emplace("fac.coarse_method", std::string{"gmres"});
+  options.values.emplace("fac.coarse_restart", std::int64_t{32});
+  const auto gmres = tensor_elliptic_detail::decode_controls(options);
+  ASSERT_TRUE(gmres.coarse_method.has_value());
+  EXPECT_EQ(*gmres.coarse_method, CoarseCorrectionMethod::gmres);
+  EXPECT_EQ(gmres.coarse_restart, 32);
+
+  options.values.at("fac.coarse_method") = std::string{"gauss_seidel"};
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.at("fac.coarse_restart") = std::int64_t{64};
+  EXPECT_NO_THROW(tensor_elliptic_detail::decode_controls(options));
+  options.values.at("fac.coarse_method") = std::string{"GMRES"};
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.at("fac.coarse_method") = true;
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.at("fac.coarse_method") = std::string{"gmres"};
+  options.values.at("fac.coarse_restart") = 64.0;
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.at("fac.coarse_restart") = true;
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  for (const std::int64_t invalid : {std::int64_t{0}, std::int64_t{-1},
+       std::int64_t{std::numeric_limits<int>::max()} + 1}) {
+    options.values.at("fac.coarse_restart") = invalid;
+    EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  }
+}
 
 template <int Dim>
 pops::Extent<Dim> extents(std::int64_t value) {

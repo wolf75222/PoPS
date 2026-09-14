@@ -759,7 +759,10 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
             raise TypeError("%s options must be an exact mapping" % where)
     if not values:
         values = CompositeTensorFAC().canonical_options()
-    if not _COMPOSITE_OPTION_NAMES <= set(values) or set(values) - _COMPOSITE_OPTION_NAMES - {"boundary_conditions", "diagonal_average", "correction_damping"}:
+    if not _COMPOSITE_OPTION_NAMES <= set(values) or set(values) - _COMPOSITE_OPTION_NAMES - {
+        "boundary_conditions", "diagonal_average", "correction_damping",
+        "coarse_method", "coarse_restart",
+    }:
         raise TypeError("%s options do not match the provider schema" % where)
     from pops.identity.scalar import exact_cpp_int, scalar_data
     from pops.model._bind_schema_data import literal_value
@@ -773,6 +776,14 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
         coarse_cycles = exact_cpp_int(
             coarse_cycles, where=where + " coarse_cycles", minimum=1
         )
+    coarse_method = values.get("coarse_method", "gauss_seidel")
+    if type(coarse_method) is not str or coarse_method not in ("gauss_seidel", "gmres"):
+        raise ValueError("CompositeTensorFAC coarse_method must be gauss_seidel or gmres")
+    coarse_restart = exact_cpp_int(
+        values.get("coarse_restart", 64), where=where + " coarse_restart", minimum=1
+    )
+    if coarse_method == "gauss_seidel" and coarse_restart != 64:
+        raise ValueError("CompositeTensorFAC coarse_restart applies only to GMRES")
     verbose = values["verbose"]
     if verbose is not None and type(verbose) is not bool:
         raise TypeError("%s verbose must be a Python bool or None" % where)
@@ -802,6 +813,8 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
         "coarse_cycles": coarse_cycles,
         "verbose": verbose,
     }
+    if coarse_method == "gmres":
+        result.update(coarse_method=coarse_method, coarse_restart=coarse_restart)
     if "boundary_conditions" in values:
         boundary_data = _tensor_boundary_data(values["boundary_conditions"])
         result["boundary_conditions"] = None if boundary_data is None else {
@@ -1073,6 +1086,11 @@ def _emit_composite_tensor_fac(
         native_options.append(
             '{"fac.coarse_cycles", std::int64_t{%d}}' % coarse_cycles
         )
+    if options.get("coarse_method", "gauss_seidel") == "gmres":
+        native_options.extend((
+            '{"fac.coarse_method", std::string{"gmres"}}',
+            '{"fac.coarse_restart", std::int64_t{%d}}' % options["coarse_restart"],
+        ))
     if verbose is not None:
         native_options.append(
             '{"fac.verbose", %s}' % ("true" if verbose else "false")
@@ -1197,6 +1215,10 @@ class CompositeTensorFAC:
     Authored faces are ordered (axis0 lower, axis0 upper, ...). Neumann(0) enforces zero
     complete conormal flux; Dirichlet(0) is a homogeneous conducting boundary. Periodic faces
     must agree with mesh topology. Smooth mapped metrics may use arithmetic diagonal averaging.
+    The optional GMRES coarse correction applies the same complete tensor stencil with a
+    fixed diagonal preconditioner. It requires a nonsingular coarse problem. ``coarse_cycles``
+    caps iterations of the selected coarse method; ``coarse_restart`` sizes the prepared
+    GMRES basis. The outer FAC convergence criterion is unchanged.
     """
 
     max_iter: int = _DEFAULT_MAX_ITER
@@ -1206,6 +1228,8 @@ class CompositeTensorFAC:
     coarse_rel_tol: Any = None
     coarse_abs_tol: Any = None
     coarse_cycles: int | None = None
+    coarse_method: str = "gauss_seidel"
+    coarse_restart: int = 64
     verbose: bool | None = None
     boundary_conditions: Any = None
     diagonal_average: str = "harmonic"
@@ -1235,6 +1259,13 @@ class CompositeTensorFAC:
             "coarse_cycles",
             optional_positive_int(self.coarse_cycles, where="CompositeTensorFAC(coarse_cycles=)"),
         )
+        if type(self.coarse_method) is not str or self.coarse_method not in ("gauss_seidel", "gmres"):
+            raise ValueError("CompositeTensorFAC coarse_method must be gauss_seidel or gmres")
+        from pops.identity.scalar import exact_cpp_int
+        object.__setattr__(self, "coarse_restart", exact_cpp_int(
+            self.coarse_restart, where="CompositeTensorFAC(coarse_restart=)", minimum=1))
+        if self.coarse_method == "gauss_seidel" and self.coarse_restart != 64:
+            raise ValueError("CompositeTensorFAC coarse_restart applies only to GMRES")
         if self.coarse_rel_tol is not None:
             object.__setattr__(
                 self,
@@ -1283,6 +1314,8 @@ class CompositeTensorFAC:
             "coarse_cycles": self.coarse_cycles,
             "verbose": self.verbose,
         }
+        if self.coarse_method == "gmres":
+            result.update(coarse_method=self.coarse_method, coarse_restart=self.coarse_restart)
         if self.boundary_conditions is not None:
             result["boundary_conditions"] = {
                 str(index): law for index, law in enumerate(self.boundary_conditions)}
