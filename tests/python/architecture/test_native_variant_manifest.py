@@ -331,7 +331,12 @@ def test_ci_consumes_only_authenticated_explicit_native_variants():
 
     build = workflow.split("\n  gate-python-build:\n", 1)[1].split("\n  gate-python:\n", 1)[0]
     assert 'POPS_NATIVE_DIM: ${{ matrix.dimension }}' in build
-    assert 'dimension: [1, 2]' in build
+    assert 'dimension: ${{ fromJSON(needs.set-mode.outputs.python_dimensions) }}' in build
+    authentication = build.split("- name: Authenticate Dim=${{ matrix.dimension }} Python native variant", 1)[1]
+    authentication, upload = authentication.split("- name: Upload Python module artifact", 1)
+    assert "scripts/verify_installed_native.py" in authentication
+    assert '--expect-dim "$POPS_NATIVE_DIM" --expect-serial' in authentication
+    assert "name: gate-python-build-kokkos-py-dim${{ matrix.dimension }}" in upload
 
     assert 'value = environment.get("POPS_NATIVE_DIM")' in conftest
     assert 'select_native_dimension(native_dimension)' in conftest

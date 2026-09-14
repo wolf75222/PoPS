@@ -1121,7 +1121,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
 
     openmp_block = workflow.split("\n  kokkos-openmp:\n", 1)[1]
     assert "name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})" in openmp_block
-    assert "timeout-minutes: 70" in openmp_block
+    job_budget = re.search(
+        r"timeout-minutes: \$\{\{ matrix.kind == 'python' && (\d+) \|\| (\d+) \}\}",
+        openmp_block,
+    )
+    assert job_budget is not None
+    python_job_minutes, cpp_job_minutes = map(int, job_budget.groups())
+    assert cpp_job_minutes == 70
     assert "needs: [set-mode, gate-openmp-prewarm]" in openmp_block
     assert "fail-fast: false" in openmp_block
     assert openmp_block.count("- lane: cpp-") == 11
@@ -1141,7 +1147,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "            ccache_maxsize: 2G"
     ) in openmp_block
     assert openmp_block.count("if: matrix.kind == 'cpp'") == 6
-    assert openmp_block.count("if: matrix.kind == 'python'") == 7
+    assert openmp_block.count("if: matrix.kind == 'python'") == 12
     assert "CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}" in openmp_block
     assert "uses: actions/cache/restore@v6" in openmp_block
     assert "uses: actions/cache/save@v6" in openmp_block
@@ -1256,14 +1262,46 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
     ) in openmp_block
     assert openmp_block.count("NINJA_STATUS='[%f/%t elapsed=%es active=%r] '") == 2
-    openmp_native_test_block = openmp_block.split(
-        "\n      - name: Test ABI natif", 1)[1].split("\n      - name:", 1)[0]
-    assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in openmp_native_test_block
-    assert "cache-hit" not in openmp_native_test_block
-    for native_test in (
-        "test_native_abi_std", "test_dsl_production", "test_dsl_production_amr",
+    job_environment = openmp_block.split("\n    env:\n", 1)[1].split("\n    steps:", 1)[0]
+    for required_environment in (
+        'POPS_REQUIRE_NATIVE_TESTS: "1"', 'OMP_NUM_THREADS: "2"',
+        'OMP_PROC_BIND: "false"',
+        "Kokkos_ROOT: ${{ github.workspace }}/.kokkos-openmp-install",
+        "POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-openmp-install",
     ):
-        assert native_test in openmp_native_test_block
+        assert required_environment in job_environment
+    native_steps = re.findall(
+        r"\n      - name: Test ABI natif[^\n]*\n(.*?)(?=\n      - name:)",
+        openmp_block, flags=re.DOTALL,
+    )
+    expected_native_tests = (
+        "test_native_abi_std", "test_dsl_production", "test_dsl_production_amr",
+        "test_dsl_production_amr_poisson", "test_dsl_production_amr_roe",
+        "test_dsl_production_amr_guards",
+    )
+    assert len(native_steps) == len(expected_native_tests)
+    native_step_minutes = 0
+    for step, native_test in zip(native_steps, expected_native_tests):
+        relative_path = f"tests/python/integration/native_loader/{native_test}.py"
+        assert "if: matrix.kind == 'python'" in step
+        assert "cache-hit" not in step
+        assert "continue-on-error" not in step
+        assert "PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python" in step
+        # One unchanged process per step, with no success-on-signal shell wrapper.
+        assert re.search(r"^        run: (.+)$", step, re.MULTILINE).group(1) == (
+            f"python3 -m pytest -q {relative_path}"
+        )
+        minutes = int(re.search(r"timeout-minutes: (\d+)", step).group(1))
+        source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        process_budget = re.search(r"^POPS_PROCESS_TIMEOUT = (\d+)$", source, re.MULTILINE)
+        process_seconds = int(process_budget.group(1)) if process_budget else 300
+        assert minutes * 60 >= process_seconds + 60
+        native_step_minutes += minutes
+    assert openmp_block.index("Authenticate Dim=2 OpenMP Python native variant") < (
+        openmp_block.index("- name: Test ABI natif")
+    )
+    build_step_minutes = int(re.search(r"timeout-minutes: (\d+)", openmp_python_build).group(1))
+    assert python_job_minutes >= build_step_minutes + native_step_minutes + 10
 
     set_mode_block = workflow.split("\n  set-mode:\n", 1)[1].split(
         "\n  # GATE C++", 1)[0]

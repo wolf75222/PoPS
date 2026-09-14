@@ -2101,8 +2101,9 @@ jobs:
     runs-on: ubuntu-latest
     # Les shards C++ recoivent le socle runtime du prewarm courant ; leur watchdog de 38 minutes
     # reste une borne fail-closed pour verification, objets de tests et liens. La lane Python
-    # conserve son garde de 45 minutes. L'enveloppe externe couvre setup/cache/nettoyage.
-    timeout-minutes: 70
+    # conserve son garde de build de 45 minutes et six phases natives independantes.
+    # Python: 47 min de step build + 6 x 16 min de tests + 17 min de setup/cache/nettoyage.
+    timeout-minutes: ${{ matrix.kind == 'python' && 160 || 70 }}
     needs: [set-mode, gate-openmp-prewarm]
     strategy:
       fail-fast: false
@@ -2191,6 +2192,13 @@ jobs:
       # Attempt-qualified, lane-specific publication lets an always() save retain
       # valid objects from a failed bounded build without cpp/python cache races.
       CCACHE_CACHE_KEY: kokkos-openmp-${{ matrix.lane }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # Every OpenMP native phase uses the same two-thread runtime and fails on
+      # missing prerequisites. Runtime-compiled loaders must use the module's Kokkos.
+      OMP_NUM_THREADS: "2"
+      OMP_PROC_BIND: "false"
+      POPS_REQUIRE_NATIVE_TESTS: "1"
+      Kokkos_ROOT: ${{ github.workspace }}/.kokkos-openmp-install
+      POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-openmp-install
 
     steps:
       - uses: actions/checkout@v7
@@ -2510,44 +2518,51 @@ jobs:
       # it compiles a production model at runtime and actually RUNS it (System + AMR) via
       # add_native_block, the counterpart to the compile/bind smoke carried on the fast gate
       # (gate-python-compile-cache). The full lane carries the bind-RUN proof; the gate lane the compile-BIND.
-      - name: Test ABI natif (production -> add_native_block, std aligne sur le loader c++20)
+      # Each file keeps its own native process watchdog (up to 900 s). A 16-minute
+      # step allows pytest startup/reporting without sharing one 15-minute deadline
+      # across all six cold-compilation phases. The built module is reused throughout;
+      # every nonzero exit, including teardown failures, remains fatal.
+      - name: Test ABI natif (C++ standard and loader)
         if: matrix.kind == 'python'
-        timeout-minutes: 15
+        timeout-minutes: 16
         env:
-          OMP_NUM_THREADS: "2"
-          OMP_PROC_BIND: "false"
-          # The OpenMP runtime lane has built every native prerequisite above. Keep every
-          # ABI/production phase fail-closed, including the split AMR process files.
-          POPS_REQUIRE_NATIVE_TESTS: "1"
-          # PARITE KOKKOS du loader runtime : le module _pops est compile AVEC Kokkos ; sans cette
-          # variable, dsl.py compile le loader SANS -DPOPS_HAS_KOKKOS -> cle d'ABI kokkos=0 vs
-          # kokkos=1 du module -> rejet explicite (jeton ajoute expres : cette divergence etait
-          # auparavant un fallback serie MUET). Le step suit desormais la regle documentee partout :
-          # exporter POPS_KOKKOS_ROOT = la racine Kokkos du build.
-          POPS_KOKKOS_ROOT: ${{ env.KOKKOS_PREFIX }}
-        run: |
-          export PYTHONPATH="$PWD/build-kokkos-py/python"
-          # Kokkos-only : ces tests compilent un loader/.so qui inclut les en-tetes pops (-> for_each).
-          # Ils lisent le Kokkos via Kokkos_ROOT / POPS_KOKKOS_ROOT : MEME install Kokkos OpenMP que _pops.
-          export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
-          # Le test cle de regression + les suites production qui compilent un modele au runtime et
-          # le branchent par add_native_block (System et AMR). Sous Kokkos, loader = c++20.
-          # Le teardown est redevenu STRICT : le SIGABRT post-succes de test_dsl_production_amr
-          # (issue #271, arenes statiques des loaders detruites avant les finalize hooks Kokkos)
-          # est corrige a la racine (ManagedArena = singleton jamais detruit, allocator.hpp) --
-          # la tolerance ciblee rc=134 est retiree, tout echec redevient fatal.
-          for t in test_native_abi_std test_dsl_production test_dsl_production_amr \
-              test_dsl_production_amr_poisson test_dsl_production_amr_roe \
-              test_dsl_production_amr_guards; do
-            test_path="$(find tests/python -name "$t.py" -print -quit)"
-            if [ -z "$test_path" ]; then
-              echo "::error::Python test $t.py not found under tests/python"
-              exit 1
-            fi
-            echo "::group::$t"
-            python3 -m pytest -q "${test_path}"
-            echo "::endgroup::"
-          done
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
+        run: python3 -m pytest -q tests/python/integration/native_loader/test_native_abi_std.py
+
+      - name: Test ABI natif (production System)
+        if: matrix.kind == 'python'
+        timeout-minutes: 16
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
+        run: python3 -m pytest -q tests/python/integration/native_loader/test_dsl_production.py
+
+      - name: Test ABI natif (AMR transport, HLLC and WENO)
+        if: matrix.kind == 'python'
+        timeout-minutes: 16
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
+        run: python3 -m pytest -q tests/python/integration/native_loader/test_dsl_production_amr.py
+
+      - name: Test ABI natif (AMR Euler-Poisson)
+        if: matrix.kind == 'python'
+        timeout-minutes: 16
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
+        run: python3 -m pytest -q tests/python/integration/native_loader/test_dsl_production_amr_poisson.py
+
+      - name: Test ABI natif (AMR Roe reconstruction parity)
+        if: matrix.kind == 'python'
+        timeout-minutes: 16
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
+        run: python3 -m pytest -q tests/python/integration/native_loader/test_dsl_production_amr_roe.py
+
+      - name: Test ABI natif (AMR contract guards)
+        if: matrix.kind == 'python'
+        timeout-minutes: 16
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
+        run: python3 -m pytest -q tests/python/integration/native_loader/test_dsl_production_amr_guards.py
 
       - name: ccache stats (Kokkos OpenMP, ${{ matrix.lane }})
         if: ${{ always() && (matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true') }}

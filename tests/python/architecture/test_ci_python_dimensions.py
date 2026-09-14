@@ -74,12 +74,21 @@ def test_missing_or_unauthenticated_native_package_cannot_run_tests(tmp_path, mo
 
 def test_ci_builds_and_downloads_each_declared_dimension():
     workflow = (runner.ROOT / ".github/workflows/ci.yml").read_text()
+    mode = workflow.split("\n  set-mode:\n", 1)[1].split("\n  gate-cpp-prewarm:\n", 1)[0]
     prewarm = workflow.split("\n  gate-python-prewarm:\n", 1)[1].split("\n  gate-python-build:\n", 1)[0]
     build = workflow.split("\n  gate-python-build:\n", 1)[1].split("\n  gate-python:\n", 1)[0]
     shard = workflow.split("\n  gate-python:\n", 1)[1].split("\n  gate-python-compile-cache:\n", 1)[0]
-    assert "dimension: [1, 2]" in build
+    # Selection/full-plan coverage belongs to test_ci_plan; both producers must
+    # consume its same published dimensions, including a plan selecting only Dim1.
+    assert "python3 scripts/ci_plan.py plan" in mode
+    assert 'python_dimensions: ${{ steps.decide.outputs.python_dimensions }}' in mode
+    assert '--github-output "$GITHUB_OUTPUT"' in mode
+    for producer in (prewarm, build):
+        needs = next(line.strip() for line in producer.splitlines() if line.strip().startswith("needs:"))
+        assert "set-mode" in needs
+        assert "dimension: ${{ fromJSON(needs.set-mode.outputs.python_dimensions) }}" in producer
+        assert "POPS_NATIVE_DIM: ${{ matrix.dimension }}" in producer
     assert "pops-module-dim${{ matrix.dimension }}-" in build
-    assert "dimension: [1, 2]" in prewarm
     assert next(line.strip() for line in prewarm.splitlines() if "key: pops-module-" in line) == next(
         line.strip() for line in build.splitlines() if "key: pops-module-" in line)
     assert "name: gate-python-prewarm-dim${{ matrix.dimension }}-${{ matrix.lane }}" in prewarm
@@ -87,7 +96,10 @@ def test_ci_builds_and_downloads_each_declared_dimension():
     assert "name: gate-python-build-kokkos-py-dim${{ matrix.dimension }}" in build
     contract = json.loads(runner.CONTRACT.read_text())
     for dimension in {contract["default"], *contract["files"].values()}:
-        assert f"name: gate-python-build-kokkos-py-dim{dimension}" in shard
-        assert f"path: .pops-ci/python-packages/dim{dimension}" in shard
+        download = shard.split(f"- name: Download Dim{dimension} Python module artifact", 1)[1].split("\n      - ", 1)[0]
+        assert f"if: steps.test-plan.outputs.dim{dimension}_count != '0'" in download
+        assert "uses: actions/download-artifact@" in download
+        assert f"name: gate-python-build-kokkos-py-dim{dimension}" in download
+        assert f"path: .pops-ci/python-packages/dim{dimension}" in download
     assert "scripts/ci_python_dimensions.py --selected-file" in shard
     assert 'POPS_NATIVE_DIM: "2"' not in shard
