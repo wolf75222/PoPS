@@ -206,7 +206,8 @@ selected route; a serial refinement example does not establish distributed corre
 Cartesian data and stencils are ranked by compile-time dimension. Embedded-boundary kernels
 introduce cut geometry, face measures and active-cell constraints. Small cut cells can
 strengthen stability restrictions. Standalone polar ring algorithms use their own metric
-terms and capability limits; their presence does not imply a polar `System` runtime.
+terms and capability limits; no public runtime route claims polar `System` support.
+Such a route requires a metric-aware `Dim`-ranked provider that owns its topology.
 
 [`mesh`](../include/pops/mesh) owns box/layout and field storage;
 [`parallel`](../include/pops/parallel) owns communication seams. Kokkos supplies local

@@ -64,7 +64,8 @@ def test_setup_authenticates_the_solved_mpich_parallel_hdf5_stack() -> None:
     assert 'mpich_version="$(conda list -n "$ENV_NAME" mpich' in setup
     assert "MPICH_CC=/usr/bin/clang MPICH_CXX=/usr/bin/clang++" in setup
     assert "H5Pset_fapl_mpio(access, MPI_COMM_WORLD, MPI_INFO_NULL)" in setup
-    assert 'conda run -n "$ENV_NAME" "$h5pcc" "$probe_source"' in setup
+    probe_command = " ".join(setup.replace("\\\n", " ").split())
+    assert 'cd "$probe_dir" && conda run -n "$ENV_NAME" "$h5pcc" "$probe_source"' in probe_command
     assert 'conda run -n "$ENV_NAME" "$probe_binary"' in setup
 
 
