@@ -1,4 +1,4 @@
-"""The 3D scalar-advection tuto is one Cartesian Dim product, not a Boundary3D fork."""
+"""The 3D scalar-advection tutorial uses the ranked Cartesian domain API."""
 
 from pathlib import Path
 
@@ -6,7 +6,7 @@ from pathlib import Path
 _TUTO = (
     Path(__file__).resolve().parents[4]
     / "docs"
-    / "tuto"
+    / "tutorials"
     / "scalar_advection"
     / "16_openmp_cartesian3d_ssprk2.py"
 )

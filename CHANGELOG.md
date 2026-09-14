@@ -18,6 +18,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Consolidate CI documentation/watchdog plumbing and extend native formatting coverage.
+  Move runnable teaching scripts to `docs/tutorials`, update build commands and thread controls,
+  refresh the project/architecture/algorithm guides, and remove obsolete headers and prose.
+- Share uniform/AMR field-provider installation and Case/Program immutable-container copying;
+  reject corrupt sibling native variants before signing another dimension.
+- Resolve one matching Kokkos/OpenMP runtime on a fresh macOS configure, fixing native-test
+  crashes caused by mixed Homebrew/conda OpenMP libraries. Repair restart and Strang tutorial
+  execution, and forward CI cancellation to monitored commands.
+- Finalize newly installed Darwin native variants before repeat-install hash checks while
+  preserving authenticated sibling dimensions; first and incremental builds use the same path.
+
 - The PoPS programming-model migration carries qualified expression identities, signed occurrences,
   typed accesses and exact numerical-operation coverage through resolution and native emission.
   Uncovered terms and incompatible provider effects fail before execution.

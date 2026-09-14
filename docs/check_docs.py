@@ -27,7 +27,6 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 DOCMAP = DOCS / "docmap.toml"
-DOCGUIDE = DOCS / "docguide"
 EM_DASH = "\u2014"
 
 PROJECT_ROOT_DOCS = [
@@ -49,13 +48,14 @@ def load_docmap(path: pathlib.Path = DOCMAP) -> dict:
 
 
 def md_files(root: pathlib.Path = ROOT) -> list[pathlib.Path]:
-    files = [p for p in PROJECT_ROOT_DOCS if p.exists()]
-    files.extend(sorted((root / "docs").glob("**/*.md")))
+    files = [root / p.name for p in PROJECT_ROOT_DOCS if (root / p.name).exists()]
+    for directory in ("docs", "examples", "benchmarks"):
+        files.extend(sorted((root / directory).glob("**/*.md")))
     return sorted(set(files))
 
 
 def active_docs(root: pathlib.Path = ROOT) -> list[pathlib.Path]:
-    files = [p for p in PROJECT_ROOT_DOCS if p.exists()]
+    files = [root / p.name for p in PROJECT_ROOT_DOCS if (root / p.name).exists()]
     files.extend(sorted((root / "docs").glob("*.md")))
     return sorted(set(files))
 
@@ -63,13 +63,6 @@ def active_docs(root: pathlib.Path = ROOT) -> list[pathlib.Path]:
 def relpath(path: pathlib.Path, root: pathlib.Path = ROOT) -> str:
     return str(path.relative_to(root)).replace("\\", "/")
 
-
-def is_docguide(path: pathlib.Path) -> bool:
-    try:
-        path.relative_to(DOCGUIDE)
-        return True
-    except ValueError:
-        return False
 
 
 def mask_code(text: str) -> str:
@@ -100,9 +93,11 @@ def local_target(raw: str) -> str | None:
     return path
 
 
-def check_links(path: pathlib.Path, text: str, violations: list[str]) -> None:
+def check_links(
+    path: pathlib.Path, text: str, violations: list[str], root: pathlib.Path = ROOT,
+) -> None:
     masked = mask_code(text)
-    rel = relpath(path)
+    rel = relpath(path, root)
 
     for regex in (LINK_RE, IMAGE_RE):
         for match in regex.finditer(masked):
@@ -190,18 +185,19 @@ def check(freshness_warn_only: bool = False, root: pathlib.Path = ROOT) -> int:
     violations: list[str] = []
     warnings: list[str] = []
 
-    if not DOCMAP.exists():
+    docmap = root / "docs" / "docmap.toml"
+    if not docmap.exists():
         violations.append("docs/docmap.toml manquant")
         data: dict = {}
     else:
-        data = load_docmap(DOCMAP)
+        data = load_docmap(docmap)
 
     for path in md_files(root):
         text = path.read_text(encoding="utf-8")
         rel = relpath(path, root)
-        if EM_DASH in text and not is_docguide(path):
+        if EM_DASH in text:
             violations.append(f"{rel}: {text.count(EM_DASH)} em-dash (U+2014) interdits")
-        check_links(path, text, violations)
+        check_links(path, text, violations, root)
 
     if data:
         check_docmap(data, root, violations)

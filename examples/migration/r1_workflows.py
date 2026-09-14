@@ -73,19 +73,6 @@ WORKFLOWS = {
 }
 
 
-# Compatibility names only dispatch; physics lives in the scientific modules.
-def _field_consumer_case(cells, *, transport):
-    return (field_transport if transport else euler_poisson).build_case(cells)
-
-
-def _diffusion_case(cells, *, implicit):
-    return (implicit_diffusion if implicit else explicit_diffusion).build_case(cells)
-
-
-_heterogeneous_case = heterogeneous_interaction.build_case
-_variable_field_case = variable_coefficient_field.build_case
-
-
 def _legacy_interface():
     # Existing protocol evidence can still exercise the original interface until
     # native qualification authorizes its removal. The public CLI uses Python law.

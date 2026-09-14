@@ -14,6 +14,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codesign_pops_extensions import CodesignError, codesign_imported_extensions
 from write_native_variant_manifest import (
     NativeVariantManifestError,
     load_manifest,
@@ -61,22 +62,33 @@ def snapshot(dest: Path) -> int:
 def restore(src: Path, expect_dim: int) -> int:
     src = src.resolve()
     snapshot_manifest = src / "variants.json"
-    if not snapshot_manifest.is_file():
-        print("preserve-native-variants: no snapshot; nothing to restore")
-        return 0
     root = _installed_native_root()
     if root is None:
         raise NativeVariantManifestError("installed pops/_native is missing after pip")
     installed_manifest = root / "variants.json"
     if not installed_manifest.is_file():
         raise NativeVariantManifestError("installed variants.json is missing after pip")
-    installed = list(load_manifest(installed_manifest, verify_files=True, verify_hashes=True))
+    # Wheel installation can rewrite Mach-O bytes after the build-tree digest was recorded.
+    # Only the explicitly just-installed Darwin leaf is awaiting signature/hash finalization.
+    installed = list(load_manifest(installed_manifest, verify_files=True, verify_hashes=False))
+    for row in installed:
+        if sys.platform == "darwin" and row["dimension"] == expect_dim:
+            continue
+        extension = root.joinpath(*PurePosixPath(row["path"]).parts)
+        if sha256_file(extension) != row["sha256"]:
+            raise NativeVariantManifestError(
+                "installed native variant bytes disagree with variants.json: Dim=%d"
+                % row["dimension"]
+            )
     installed_dims = {row["dimension"] for row in installed}
     if expect_dim not in installed_dims:
         raise NativeVariantManifestError(
             "installed variants.json does not contain the just-built Dim=%d" % expect_dim
         )
-    snapshotted = load_manifest(snapshot_manifest, verify_files=True, verify_hashes=True)
+    snapshotted = (
+        load_manifest(snapshot_manifest, verify_files=True, verify_hashes=True)
+        if snapshot_manifest.is_file() else ()
+    )
     merged = list(installed)
     restored = []
     for row in snapshotted:
@@ -101,7 +113,11 @@ def restore(src: Path, expect_dim: int) -> int:
             )
         merged.append(row)
         restored.append(row["dimension"])
-    write_manifest_atomic(installed_manifest, merged)
+    if restored:
+        write_manifest_atomic(installed_manifest, merged)
+    # Authenticate the full sibling inventory before signing, then publish the requested leaf's
+    # final digest. This also runs on first install, when there is no snapshot to restore.
+    codesign_imported_extensions((expect_dim,))
     load_manifest(installed_manifest, verify_files=True, verify_hashes=True)
     print("preserve-native-variants: restored sibling dimensions %s" % restored)
     return 0
@@ -120,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "snapshot":
             return snapshot(args.dest)
         return restore(args.src, args.expect_dim)
-    except (NativeVariantManifestError, OSError, ValueError) as exc:
+    except (CodesignError, NativeVariantManifestError, OSError, ValueError) as exc:
         print("preserve-native-variants failed: %s" % exc, file=sys.stderr)
         return 1
 

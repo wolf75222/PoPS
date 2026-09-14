@@ -82,8 +82,10 @@ jobs:
       - name: clang-format --dry-run (bloquant)
         run: |
           echo "$(clang-format --version)"
-          mapfile -t files < <(find include python tests -type f \
-            \( -name '*.hpp' -o -name '*.h' -o -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' \) | sort)
+          # Track all native source directories, including src/runtime and benchmarks.
+          # Git excludes generated build trees; NUL delimiters preserve paths with spaces.
+          mapfile -d '' -t files < <(git ls-files -z -- \
+            '*.hpp' '*.h' '*.cpp' '*.cc' '*.cxx' '*.c')
           bad=0
           : > format-diff.patch
           for f in "${files[@]}"; do
@@ -207,37 +209,7 @@ jobs:
         env:
           KOKKOS_PREFIX: ${{ steps.kokkos.outputs.kokkos-prefix }}
         run: |
-          run_with_heartbeat() {
-            local label="$1"
-            local limit="$2"
-            shift 2
-            local started=$SECONDS
-            echo "::notice::${label}: watchdog=${limit}"
-            set +e
-            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
-            local command_pid=$!
-            (
-              while kill -0 "$command_pid" 2>/dev/null; do
-                sleep 60
-                kill -0 "$command_pid" 2>/dev/null || exit 0
-                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
-                active_compilers=$(pgrep -c -x cc1plus || true)
-                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              done
-            ) &
-            local heartbeat_pid=$!
-            wait "$command_pid"
-            local status=$?
-            kill "$heartbeat_pid" 2>/dev/null || true
-            wait "$heartbeat_pid" 2>/dev/null || true
-            set -e
-            if [ "$status" -eq 124 ]; then
-              echo "::error::${label} exceeded its ${limit} watchdog"
-            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
-              echo "::error::${label} was terminated by signal (status=${status})"
-            fi
-            return "$status"
-          }
+          source scripts/ci_heartbeat.sh
 
           case "${{ matrix.profile }}" in
             warnings)
@@ -405,12 +377,12 @@ jobs:
                 || command -v run-clang-tidy-19 || echo run-clang-tidy)
           echo "wrapper : $RCT"
           # Le HeaderFilter de .clang-tidy limite deja les diagnostics a include/pops/. On analyse les
-          # TU de tests/ (elles tirent l'essentiel des en-tetes du coeur). -extra-arg : la DB porte des
+          # TU de src/ et tests/ (implementation et consommateurs des en-tetes). -extra-arg : la DB porte des
           # flags gcc -> on neutralise les options inconnues du frontend clang.
           set +e
           "$RCT" -p build-kokkos -quiet \
             -extra-arg=-Wno-unknown-warning-option -extra-arg=-Wno-unknown-attributes \
-            "$(pwd)/tests/.*\.cpp" 2>&1 | tee tidy.log
+            "$(pwd)/(src|tests)/.*\.cpp" 2>&1 | tee tidy.log
           n=$(grep -c "warning:" tidy.log || true)
           {
             echo "### clang-tidy"

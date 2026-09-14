@@ -25,13 +25,14 @@ count, host, and SLURM job id.
 From the PoPS repository root:
 
 ```sh
-cmake -S benchmarks -B build/benchmarks -DCMAKE_BUILD_TYPE=Release
+cmake -S benchmarks -B build/benchmarks -DCMAKE_BUILD_TYPE=Release -DPOPS_NATIVE_DIM=2
 cmake --build build/benchmarks --target pops_benchmark -j
 build/benchmarks/bin/pops_benchmark --case=all --output=benchmarks.jsonl
 ```
 
+Choose `-DPOPS_NATIVE_DIM=1`, `2`, or `3` for the intended spatial dimension.
 Enable MPI explicitly with `-DPOPS_BENCH_ENABLE_MPI=ON`; the harness otherwise uses PoPS's serial
-communication seam. See `./pops_benchmark --help` for case sizes and solver controls.
+communication seam. See `build/benchmarks/bin/pops_benchmark --help` for case sizes and solver controls.
 
 ## ROMEO Arm GPU
 
@@ -78,3 +79,11 @@ Raw JSONL, device inventory, and the machine-readable
 `$HOME/pops-benchmark-results/adc700`. This campaign is intentionally outside routine CI: a CPU
 run, missing device inventory, malformed ABBA ordering, or absent hardware produces no device or
 performance proof.
+
+## ADC-757 heterogeneous numerics campaign
+
+[adc757/README.md](adc757/README.md) describes the runtime evidence, repeated
+measurements and device requirements for local-time and AMR load-balance comparisons.
+Its assembler and verifier remain separate from the routine `arith_halo` and
+`scalar_mg` harness. Submit scripts for both campaigns live together under
+[`romeo/`](romeo/). The [manifest](manifest.toml) records their distinct protocols.

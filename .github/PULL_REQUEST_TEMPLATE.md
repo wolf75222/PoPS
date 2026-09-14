@@ -36,7 +36,7 @@ Fixes PoPS-NN
 
 ## Docs and versioning
 
-- [ ] User docs updated if behavior or API changed (README, docs/sphinx, docmap)
+- [ ] User docs updated if behavior or API changed (README, docs/tutorials, architecture and algorithm guides)
 - [ ] `CHANGELOG.md` [Unreleased] entry for a notable change
 - [ ] `docs/check_docs.py` green (ASCII strict, no em-dash) if docs were touched
 
@@ -47,7 +47,7 @@ Fixes PoPS-NN
      2. src/runtime/system/system.cpp    (dispatch wiring)
      3. python/bindings/core/            (Python surface adapters)
      4. tests/cpp/unit/numerics/test_roe_flux.cpp (regression)
-     5. docs/sphinx/reference/bricks_reference.md -->
+     5. docs/ALGORITHMS.md -->
 
 ## Risks / attention
 

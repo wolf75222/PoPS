@@ -22,7 +22,7 @@
 # compiler baked into _pops anyway.
 #
 # It also makes the Linux/Ubuntu user path reliable end to end (cf.
-# docs/sphinx/getting-started/installation.md): it bootstraps conda guidance, configures conda-forge to
+# README.md): it bootstraps conda guidance, configures conda-forge to
 # survive HTTP 429, forces a CPU Kokkos by default (the bare `kokkos` resolves to the CUDA variant on a
 # host with an NVIDIA driver -> `pip install .` then fails "Could not find nvcc"), persists the DSL
 # runtime variables in the env, and ends on the runtime-layer doctor.
@@ -35,7 +35,8 @@ source "$HERE/scripts/conda_runtime.sh"
 # --- git hygiene: ignore the mechanical clang-format sweep in `git blame` (ADC-118) ----------------
 # The repo ships .git-blame-ignore-revs (the full-tree reformat SHA). Point local `git blame` at it so
 # the sweep does not mask real authorship; GitHub's blame UI honors the file automatically.
-if git -C "$HERE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if [[ -f "$HERE/.git-blame-ignore-revs" ]] && \
+   git -C "$HERE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git -C "$HERE" config blame.ignoreRevsFile .git-blame-ignore-revs || true
 fi
 
@@ -90,13 +91,14 @@ EOF
   exit 1
 fi
 
-# --- conda-forge robustness (survive HTTP 429) ; prefer mamba for the heavy solves ------------------
-# These edit ~/.condarc (global) ; they are the conda-forge recommended defaults and harmless.
-conda config --set channel_priority strict          >/dev/null 2>&1 || true
-conda config --set solver libmamba                   >/dev/null 2>&1 || true
-conda config --set remote_max_retries 10             >/dev/null 2>&1 || true
-conda config --set remote_backoff_factor 2           >/dev/null 2>&1 || true
-conda config --set remote_read_timeout_secs 120      >/dev/null 2>&1 || true
+# --- process-local solver/retry defaults ------------------------------------------------------------
+# Keep setup's defaults local to this invocation and respect explicit caller overrides.
+# A project setup must not rewrite the user's global ~/.condarc.
+export CONDA_CHANNEL_PRIORITY="${CONDA_CHANNEL_PRIORITY:-strict}"
+export CONDA_SOLVER="${CONDA_SOLVER:-libmamba}"
+export CONDA_REMOTE_MAX_RETRIES="${CONDA_REMOTE_MAX_RETRIES:-10}"
+export CONDA_REMOTE_BACKOFF_FACTOR="${CONDA_REMOTE_BACKOFF_FACTOR:-2}"
+export CONDA_REMOTE_READ_TIMEOUT_SECS="${CONDA_REMOTE_READ_TIMEOUT_SECS:-120}"
 PKG="conda"
 command -v mamba >/dev/null 2>&1 && PKG="mamba"
 
@@ -203,7 +205,9 @@ printf '%s\n' \
   '  MPI_Finalize();' \
   '  return failed;' \
   '}' >"$probe_source"
-if ! conda run -n "$ENV_NAME" "$h5pcc" "$probe_source" -o "$probe_binary" >/dev/null 2>&1 ||
+# h5pcc may emit intermediate objects into its working directory.
+if ! (cd "$probe_dir" && conda run -n "$ENV_NAME" \
+      "$h5pcc" "$probe_source" -o "$probe_binary" >/dev/null 2>&1) ||
    ! conda run -n "$ENV_NAME" "$probe_binary" >/dev/null 2>&1; then
   rm -rf "$probe_dir"
   echo "ERROR: env '$ENV_NAME' cannot compile and execute the native MPI/HDF5 collective API." >&2

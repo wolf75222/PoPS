@@ -56,6 +56,7 @@ configure_and_build() {
   cmake -S "${REPO_ROOT}/benchmarks/adc700" -B "${build_root}" \
     -DPOPS_ADC700_SOURCE_ROOT="${source_root}" \
     -DPOPS_ADC700_ROUTE="${route}" \
+    -DPOPS_NATIVE_DIM=2 \
     -DPOPS_ADC700_REVISION="${revision}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_COMPILER="${NVCC_WRAPPER}" \

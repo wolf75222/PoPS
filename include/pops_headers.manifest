@@ -98,7 +98,6 @@ api pops/numerics/elliptic/interface/field_nullspace_provider.hpp
 api pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp
 api pops/numerics/elliptic/interface/field_nullspace_prepare.hpp
 api pops/numerics/elliptic/interface/field_nullspace_builtins.hpp
-api pops/numerics/elliptic/interface/field_provider.hpp
 api pops/numerics/elliptic/linear/generic_krylov.hpp
 sdk-support pops/numerics/elliptic/linear/collective_prepared_owner.hpp
 api pops/numerics/elliptic/linear/krylov_method_provider.hpp
@@ -165,7 +164,6 @@ api pops/numerics/time/amr/prepared_coarse_fine_operator.hpp
 sdk-support pops/numerics/time/amr/reflux/amr_flux_execution.hpp
 api pops/numerics/time/amr/reflux/amr_flux_helpers.hpp
 sdk-support pops/numerics/time/amr/reflux/amr_flux_preparation.hpp
-api pops/numerics/time/amr/reflux/amr_flux_ledger.hpp
 api pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp
 api pops/numerics/time/amr/reflux/amr_reflux_mf.hpp
 api pops/numerics/time/integrators/implicit_stepper.hpp
@@ -351,7 +349,6 @@ sdk-support pops/runtime/system/system_block_closures.hpp
 sdk-support pops/runtime/system/system_interface_core_session.hpp
 sdk-support pops/runtime/system/system_boundary_registry.hpp
 sdk-support pops/runtime/system/system_coupling_registry.hpp
-sdk-support pops/runtime/system/system_diagnostics_registry.hpp
 sdk-support pops/runtime/system/system_domain.hpp
 sdk-support pops/runtime/system/system_lifecycle.hpp
 sdk-support pops/runtime/system/system_poisson_options.hpp

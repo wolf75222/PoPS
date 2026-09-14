@@ -266,11 +266,8 @@ PYTHONPATH= PYTHONNOUSERSITE=1 \
     --expect-dim "$POPS_NATIVE_DIM"
 
 # --- diagnose ---------------------------------------------------------------------------------------
-# ADC-647: pip/scikit-build may rewrite the copied extension after the linker signed its build-tree
-# output. Resolve the exact installed module without importing pops, ad-hoc sign it on Darwin, and
-# verify both the signature and its ad-hoc identity. Any failure stops before import/doctor.
-PYTHONPATH= PYTHONNOUSERSITE=1 \
-  python "$HERE/scripts/codesign_pops_extensions.py" --expect-dim "$POPS_NATIVE_DIM"
+# Restore finalizes the requested Darwin signature and authenticates the complete merged manifest
+# before this native capability check or doctor is allowed to import an extension.
 native_verify_args=()
 if [[ $WITH_MPI -eq 1 ]]; then
   native_verify_args=(--expect-dim "$POPS_NATIVE_DIM" --expect-mpi --expect-parallel-hdf5)

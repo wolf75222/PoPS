@@ -9,8 +9,7 @@ picks the runtime, never a user string).
 Scope: this greps the USER-FACING surface only -- ``README.md`` plus the module docstrings of
 ``pops/__init__.py`` and ``pops/problem/__init__.py`` (the two docstrings a user reads first).
 Internal design /
-reference docs (``docs/design/**``, ``docs/ARCHITECTURE.md``, ``docs/ALGORITHMS.md``, the vendored
-``docs/docguide/**``) legitimately DESCRIBE the internal mechanism in that vocabulary and are
+reference docs (``docs/design/**``, ``docs/ARCHITECTURE.md``, ``docs/ALGORITHMS.md``, implementation design notes) legitimately DESCRIBE the internal mechanism in that vocabulary and are
 allowlisted, as is ``CHANGELOG.md`` (history).
 
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.

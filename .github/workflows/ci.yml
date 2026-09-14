@@ -198,37 +198,7 @@ jobs:
 
       - name: Prewarm production runtime objects (${{ matrix.lane }})
         run: |
-          run_with_heartbeat() {
-            local label="$1"
-            local limit="$2"
-            shift 2
-            local started=$SECONDS
-            echo "::notice::${label}: watchdog=${limit}"
-            set +e
-            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
-            local command_pid=$!
-            (
-              while kill -0 "$command_pid" 2>/dev/null; do
-                sleep 60
-                kill -0 "$command_pid" 2>/dev/null || exit 0
-                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
-                active_compilers=$(pgrep -c -x cc1plus || true)
-                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              done
-            ) &
-            local heartbeat_pid=$!
-            wait "$command_pid"
-            local status=$?
-            kill "$heartbeat_pid" 2>/dev/null || true
-            wait "$heartbeat_pid" 2>/dev/null || true
-            set -e
-            if [ "$status" -eq 124 ]; then
-              echo "::error::${label} exceeded its ${limit} watchdog"
-            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
-              echo "::error::${label} was terminated by signal (status=${status})"
-            fi
-            return "$status"
-          }
+          source scripts/ci_heartbeat.sh
           lane_parallelism=4
           lane_watchdog=18m
           case "${{ matrix.lane }}" in
@@ -416,37 +386,7 @@ jobs:
         timeout-minutes: 30
         run: |
           SECONDS=0
-          run_with_heartbeat() {
-            local label="$1"
-            local limit="$2"
-            shift 2
-            local started=$SECONDS
-            echo "::notice::${label}: watchdog=${limit}"
-            set +e
-            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
-            local command_pid=$!
-            (
-              while kill -0 "$command_pid" 2>/dev/null; do
-                sleep 60
-                kill -0 "$command_pid" 2>/dev/null || exit 0
-                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
-                active_compilers=$(pgrep -c -x cc1plus || true)
-                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              done
-            ) &
-            local heartbeat_pid=$!
-            wait "$command_pid"
-            local status=$?
-            kill "$heartbeat_pid" 2>/dev/null || true
-            wait "$heartbeat_pid" 2>/dev/null || true
-            set -e
-            if [ "$status" -eq 124 ]; then
-              echo "::error::${label} exceeded its ${limit} watchdog"
-            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
-              echo "::error::${label} was terminated by signal (status=${status})"
-            fi
-            return "$status"
-          }
+          source scripts/ci_heartbeat.sh
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           # -ffile-prefix-map (ADC-366): codegen-neutral path rewrite for ccache cross-checkout hits (see
           # gate-python). CI-only -D; abi_key (compiler+header-content hash) untouched.
@@ -681,37 +621,7 @@ jobs:
         if: steps.module-cache-probe.outputs.cache-hit != 'true'
         run: |
           SECONDS=0
-          run_with_heartbeat() {
-            local label="$1"
-            local limit="$2"
-            shift 2
-            local started=$SECONDS
-            echo "::notice::${label}: watchdog=${limit}"
-            set +e
-            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
-            local command_pid=$!
-            (
-              while kill -0 "$command_pid" 2>/dev/null; do
-                sleep 60
-                kill -0 "$command_pid" 2>/dev/null || exit 0
-                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
-                active_compilers=$(pgrep -c -x cc1plus || true)
-                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              done
-            ) &
-            local heartbeat_pid=$!
-            wait "$command_pid"
-            local status=$?
-            kill "$heartbeat_pid" 2>/dev/null || true
-            wait "$heartbeat_pid" 2>/dev/null || true
-            set -e
-            if [ "$status" -eq 124 ]; then
-              echo "::error::${label} exceeded its ${limit} watchdog"
-            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
-              echo "::error::${label} was terminated by signal (status=${status})"
-            fi
-            return "$status"
-          }
+          source scripts/ci_heartbeat.sh
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           ccache --zero-stats
           mapfile -t object_targets < <(
@@ -1382,37 +1292,7 @@ jobs:
 
       - name: Prewarm MPI production runtime objects (${{ matrix.lane }})
         run: |
-          run_with_heartbeat() {
-            local label="$1"
-            local limit="$2"
-            shift 2
-            local started=$SECONDS
-            echo "::notice::${label}: watchdog=${limit}"
-            set +e
-            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
-            local command_pid=$!
-            (
-              while kill -0 "$command_pid" 2>/dev/null; do
-                sleep 60
-                kill -0 "$command_pid" 2>/dev/null || exit 0
-                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
-                active_compilers=$(pgrep -c -x cc1plus || true)
-                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              done
-            ) &
-            local heartbeat_pid=$!
-            wait "$command_pid"
-            local status=$?
-            kill "$heartbeat_pid" 2>/dev/null || true
-            wait "$heartbeat_pid" 2>/dev/null || true
-            set -e
-            if [ "$status" -eq 124 ]; then
-              echo "::error::${label} exceeded its ${limit} watchdog"
-            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
-              echo "::error::${label} was terminated by signal (status=${status})"
-            fi
-            return "$status"
-          }
+          source scripts/ci_heartbeat.sh
           lane_parallelism=4
           lane_watchdog=18m
           case "${{ matrix.lane }}" in
@@ -1637,37 +1517,7 @@ jobs:
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
         # $KOKKOS_PREFIX (env du job, install en cache). ccache auto-detecte.
         run: |
-          run_with_heartbeat() {
-            local label="$1"
-            local limit="$2"
-            shift 2
-            local started=$SECONDS
-            echo "::notice::${label}: watchdog=${limit}"
-            set +e
-            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
-            local command_pid=$!
-            (
-              while kill -0 "$command_pid" 2>/dev/null; do
-                sleep 60
-                kill -0 "$command_pid" 2>/dev/null || exit 0
-                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
-                active_compilers=$(pgrep -c -x cc1plus || true)
-                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              done
-            ) &
-            local heartbeat_pid=$!
-            wait "$command_pid"
-            local status=$?
-            kill "$heartbeat_pid" 2>/dev/null || true
-            wait "$heartbeat_pid" 2>/dev/null || true
-            set -e
-            if [ "$status" -eq 124 ]; then
-              echo "::error::${label} exceeded its ${limit} watchdog"
-            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
-              echo "::error::${label} was terminated by signal (status=${status})"
-            fi
-            return "$status"
-          }
+          source scripts/ci_heartbeat.sh
           mpi_cmake_args=()
           if mpiexec --version 2>&1 | grep -Eqi 'Open MPI|OpenRTE'; then
             # FindMPI propagates these preflags to every manifest-owned CTest launch.
@@ -2015,37 +1865,7 @@ jobs:
 
       - name: Prewarm OpenMP production runtime objects (${{ matrix.graph }}, ${{ matrix.lane }})
         run: |
-          run_with_heartbeat() {
-            local label="$1"
-            local limit="$2"
-            shift 2
-            local started=$SECONDS
-            echo "::notice::${label}: watchdog=${limit}"
-            set +e
-            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
-            local command_pid=$!
-            (
-              while kill -0 "$command_pid" 2>/dev/null; do
-                sleep 60
-                kill -0 "$command_pid" 2>/dev/null || exit 0
-                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
-                active_compilers=$(pgrep -c -x cc1plus || true)
-                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              done
-            ) &
-            local heartbeat_pid=$!
-            wait "$command_pid"
-            local status=$?
-            kill "$heartbeat_pid" 2>/dev/null || true
-            wait "$heartbeat_pid" 2>/dev/null || true
-            set -e
-            if [ "$status" -eq 124 ]; then
-              echo "::error::${label} exceeded its ${limit} watchdog"
-            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
-              echo "::error::${label} was terminated by signal (status=${status})"
-            fi
-            return "$status"
-          }
+          source scripts/ci_heartbeat.sh
           # Deux frontends sont la limite observee sans pression memoire dangereuse sur les
           # runners publics OpenMP. Les lanes restent executees en parallele.
           lane_parallelism=2
@@ -2340,37 +2160,7 @@ jobs:
         # MEME preset ci-kokkos que le job Serial (binaryDir build-kokkos) : seule l'install
         # Kokkos pointee par $KOKKOS_PREFIX differe ; les runners sont des machines distinctes.
         run: |
-          run_with_heartbeat() {
-            local label="$1"
-            local limit="$2"
-            shift 2
-            local started=$SECONDS
-            echo "::notice::${label}: watchdog=${limit}"
-            set +e
-            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
-            local command_pid=$!
-            (
-              while kill -0 "$command_pid" 2>/dev/null; do
-                sleep 60
-                kill -0 "$command_pid" 2>/dev/null || exit 0
-                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
-                active_compilers=$(pgrep -c -x cc1plus || true)
-                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              done
-            ) &
-            local heartbeat_pid=$!
-            wait "$command_pid"
-            local status=$?
-            kill "$heartbeat_pid" 2>/dev/null || true
-            wait "$heartbeat_pid" 2>/dev/null || true
-            set -e
-            if [ "$status" -eq 124 ]; then
-              echo "::error::${label} exceeded its ${limit} watchdog"
-            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
-              echo "::error::${label} was terminated by signal (status=${status})"
-            fi
-            return "$status"
-          }
+          source scripts/ci_heartbeat.sh
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
             -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
@@ -2451,37 +2241,7 @@ jobs:
         run: |
           # Keep this runtime lane capability-equivalent to the serial Python gate for the final
           # examples and output reopen checks; collective HDF5 stays in the dedicated MPI job.
-          run_with_heartbeat() {
-            local label="$1"
-            local limit="$2"
-            shift 2
-            local started=$SECONDS
-            echo "::notice::${label}: watchdog=${limit}"
-            set +e
-            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
-            local command_pid=$!
-            (
-              while kill -0 "$command_pid" 2>/dev/null; do
-                sleep 60
-                kill -0 "$command_pid" 2>/dev/null || exit 0
-                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
-                active_compilers=$(pgrep -c -x cc1plus || true)
-                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              done
-            ) &
-            local heartbeat_pid=$!
-            wait "$command_pid"
-            local status=$?
-            kill "$heartbeat_pid" 2>/dev/null || true
-            wait "$heartbeat_pid" 2>/dev/null || true
-            set -e
-            if [ "$status" -eq 124 ]; then
-              echo "::error::${label} exceeded its ${limit} watchdog"
-            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
-              echo "::error::${label} was terminated by signal (status=${status})"
-            fi
-            return "$status"
-          }
+          source scripts/ci_heartbeat.sh
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           # Cold OpenMP evidence (job 87543770170) showed cc1plus=1 throughout, 20/37 objects
           # after 43 minutes, and 9.4--14.9 GiB still available.  The post-split production TUs

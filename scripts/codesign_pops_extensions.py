@@ -105,6 +105,17 @@ def locate_installed_pops_variants(
             "installed package contains an unmanifested native extension: %s"
             % ", ".join(str(path) for path in sorted(unmanifested))
         )
+    # Requested leaves may have stale digests after wheel/Mach-O rewriting; signing owns their
+    # final authentication. Sibling leaves will not be repaired, so authenticate them before any
+    # requested extension is mutated or its manifest refreshed. Otherwise a stale sibling fails
+    # only at the final whole-manifest check, after a partially published signing operation.
+    for variant in all_variants:
+        if (variant.dimension not in dimensions
+                and sha256_file(variant.path) != variant.row["sha256"]):
+            raise CodesignError(
+                "unselected native variant bytes disagree with variants.json: Dim=%d"
+                % variant.dimension
+            )
     return tuple(
         variant for variant in all_variants if variant.dimension in dimensions
     )

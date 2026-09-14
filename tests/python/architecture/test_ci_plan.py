@@ -46,8 +46,9 @@ def test_diff_uses_merge_base_and_preserves_renames_and_deletions(tmp_path):
 @pytest.mark.parametrize("path", [
     "CMakeLists.txt", "python/CMakeLists.txt", "cmake/PoPSConfig.cmake.in",
     "include/pops/core/array.hpp", "include/pops/parallel/mpi.hpp",
-    ".github/workflows/ci.yml", "scripts/ci_components.toml",
-    "docs/tuto/scalar_advection/08_mpi_amr_explicit_ssprk2.py",
+    ".github/workflows/ci.yml", ".github/workflows/new_unmapped_lane.yml",
+    "scripts/ci_components.toml", "scripts/build_python.sh",
+    "docs/tutorials/scalar_advection/08_mpi_amr_explicit_ssprk2.py",
     "tests/python/support/new_helper.py", "new_unmapped_module/input.dat",
     "python/pops/removed_module.py",
 ])
@@ -93,6 +94,8 @@ def plans(tmp_path_factory):
     directory = tmp_path_factory.mktemp("ci-plans")
     cases = {
         "docs": ["README.md"],
+        "docs-workflow": [".github/workflows/docs.yml"],
+        "docs-entrypoint": ["scripts/build_docs.sh"],
         "python-test": ["tests/python/unit/runtime/test_capacity_limits.py"],
         "dim1-test": ["tests/python/integration/runtime/test_public_drift_diffusion_matrix.py"],
         "cpp-test": ["tests/cpp/unit/mesh/test_box.cpp"],
@@ -107,6 +110,8 @@ def plans(tmp_path_factory):
 
 @pytest.mark.parametrize("name,cpp,python,architecture", [
     ("docs", [], [], []),
+    ("docs-workflow", [], [], []),
+    ("docs-entrypoint", [], [], []),
     ("python-test", [], ["tests/python/unit/runtime/test_capacity_limits.py"], []),
     ("cpp-test", ["test_box"], [], []),
     ("architecture-test", [], [], ["tests/python/architecture/test_ci_shard_binpack.py"]),

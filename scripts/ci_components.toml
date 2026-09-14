@@ -5,7 +5,7 @@
 
 [[component]]
 name = "build-and-ci"
-paths = ["CMakeLists.txt", "**/CMakeLists.txt", "CMakePresets.json", "cmake/*", "pyproject.toml", "environment.yml", "python/bindings/*", ".github/workflows/*", ".github/actions/*", "scripts/ci_*", "scripts/build*", "scripts/setup*", "tests/test_manifest.toml", "tests/cpp/test_sources.cmake", "tests/cpp/*durations.json", "tests/python/test_durations.json", "tests/python/native_dimensions.json", "tests/python/conftest.py", "tests/python/support/*", "tests/cpp/support/*"]
+paths = ["CMakeLists.txt", "**/CMakeLists.txt", "CMakePresets.json", "cmake/*", "pyproject.toml", "environment.yml", "python/bindings/*", ".github/workflows/ci.yml", ".github/workflows/quality.yml", ".github/workflows/wheels.yml", ".github/workflows/release.yml", ".github/actions/*", "scripts/ci_*", "scripts/build_python.sh", "scripts/setup*", "tests/test_manifest.toml", "tests/cpp/test_sources.cmake", "tests/cpp/*durations.json", "tests/python/test_durations.json", "tests/python/native_dimensions.json", "tests/python/conftest.py", "tests/python/support/*", "tests/cpp/support/*"]
 full = true
 
 [[component]]
@@ -44,5 +44,5 @@ paths = ["tests/cpp/unit/*", "tests/cpp/integration/*", "tests/python/unit/*", "
 
 [[component]]
 name = "documentation"
-paths = ["*.md", "docs/*", "tutorials/*", "LICENSE*", ".gitignore", ".codespellrc", ".markdownlint*"]
+paths = ["*.md", "docs/*", "tutorials/*", "LICENSE*", ".gitignore", ".codespellrc", ".markdownlint*", ".github/workflows/docs.yml", "scripts/build_docs.sh"]
 metadata = true

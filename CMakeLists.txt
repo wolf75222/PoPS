@@ -172,78 +172,7 @@ if(NOT POPS_REAL_TYPE STREQUAL "double")
   target_compile_definitions(pops INTERFACE POPS_REAL_TYPE=${POPS_REAL_TYPE})
 endif()
 
-# Hints libomp pour AppleClang (qui ne trouve pas libomp seul). Sous Kokkos-only il reste UN
-# consommateur : une install Kokkos batie avec Kokkos_ENABLE_OPENMP propage
-# find_dependency(OpenMP REQUIRED) via son KokkosConfig.cmake -- sans ces hints,
-# find_package(Kokkos) echouerait sur macOS. Ce N'EST PAS le backend OpenMP autonome (retire) :
-# uniquement la plomberie de DECOUVERTE de libomp.
-#
-# Important macOS: ne jamais melanger deux libomp dans le meme binaire. Si un env conda est actif
-# mais qu'aucun Kokkos conda n'est explicitement demande, find_package(Kokkos) peut trouver le Kokkos
-# Homebrew; forcer alors OpenMP sur conda charge a la fois conda/libomp et Homebrew/libomp via
-# libkokkoscore, puis les tests crashent dans libomp (__kmp_suspend_64 / mutex lock failed).
-# Macro idempotente, no-op hors APPLE ; invoquee AVANT la resolution de Kokkos ci-dessous.
-macro(pops_apple_libomp_hints)
-  # Recompute these cache entries on every configure.  A build tree may be reused after switching
-  # Kokkos prefixes; retaining the previous libomp would load two OpenMP runtimes in one process.
-  if(APPLE)
-    set(_pops_conda_libomp_prefix "")
-    if(DEFINED ENV{CONDA_PREFIX} AND EXISTS "$ENV{CONDA_PREFIX}/lib/libomp.dylib")
-      set(_pops_conda_libomp_prefix "$ENV{CONDA_PREFIX}")
-    endif()
-
-    # Prefer the libomp colocated with an explicitly selected Kokkos prefix.  Do not require an
-    # activated conda shell: CI, CTest and installed-package consumers commonly pass Kokkos_ROOT
-    # directly.  Kokkos_DIR is the config directory (<prefix>/lib/cmake/Kokkos), so recover its
-    # prefix before testing for the runtime.
-    set(_pops_kokkos_libomp_prefix "")
-    set(_pops_kokkos_config_dir "")
-    if(DEFINED Kokkos_DIR)
-      set(_pops_kokkos_config_dir "${Kokkos_DIR}")
-    elseif(DEFINED ENV{Kokkos_DIR})
-      set(_pops_kokkos_config_dir "$ENV{Kokkos_DIR}")
-    endif()
-    if(_pops_kokkos_config_dir)
-      get_filename_component(_pops_kokkos_config_prefix
-        "${_pops_kokkos_config_dir}/../../.." ABSOLUTE)
-      if(EXISTS "${_pops_kokkos_config_prefix}/lib/libomp.dylib")
-        set(_pops_kokkos_libomp_prefix "${_pops_kokkos_config_prefix}")
-      endif()
-    endif()
-    if(NOT _pops_kokkos_libomp_prefix)
-      if(DEFINED Kokkos_ROOT AND EXISTS "${Kokkos_ROOT}/lib/libomp.dylib")
-        set(_pops_kokkos_libomp_prefix "${Kokkos_ROOT}")
-      elseif(DEFINED ENV{Kokkos_ROOT} AND EXISTS "$ENV{Kokkos_ROOT}/lib/libomp.dylib")
-        set(_pops_kokkos_libomp_prefix "$ENV{Kokkos_ROOT}")
-      elseif(DEFINED POPS_KOKKOS_ROOT AND EXISTS "${POPS_KOKKOS_ROOT}/lib/libomp.dylib")
-        set(_pops_kokkos_libomp_prefix "${POPS_KOKKOS_ROOT}")
-      elseif(DEFINED ENV{POPS_KOKKOS_ROOT}
-             AND EXISTS "$ENV{POPS_KOKKOS_ROOT}/lib/libomp.dylib")
-        set(_pops_kokkos_libomp_prefix "$ENV{POPS_KOKKOS_ROOT}")
-      endif()
-    endif()
-
-    set(LIBOMP_PREFIX "")
-    if(_pops_kokkos_libomp_prefix)
-      set(LIBOMP_PREFIX "${_pops_kokkos_libomp_prefix}")
-    else()
-      execute_process(COMMAND brew --prefix libomp
-                      OUTPUT_VARIABLE LIBOMP_PREFIX
-                      OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-      if((NOT LIBOMP_PREFIX OR NOT EXISTS "${LIBOMP_PREFIX}/lib/libomp.dylib")
-         AND _pops_conda_libomp_prefix)
-        set(LIBOMP_PREFIX "${_pops_conda_libomp_prefix}")
-      endif()
-    endif()
-    if(LIBOMP_PREFIX AND EXISTS "${LIBOMP_PREFIX}/lib/libomp.dylib")
-      set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include"
-          CACHE STRING "" FORCE)
-      set(OpenMP_CXX_LIB_NAMES "omp" CACHE STRING "" FORCE)
-      set(OpenMP_omp_LIBRARY "${LIBOMP_PREFIX}/lib/libomp.dylib"
-          CACHE FILEPATH "" FORCE)
-    endif()
-  endif()
-endmacro()
+include(cmake/PopsAppleOpenMP.cmake)
 
 # Resolution de Kokkos (cf. wiki Kokkos "Integrating Kokkos into your CMake project", methode 4 :
 # supporter a la fois un Kokkos externe ET embarque). find_package D'ABORD (CONFIG, version mini 4.2,
@@ -272,6 +201,8 @@ endif()
 pops_apple_libomp_hints()
 find_package(Kokkos 4.2 QUIET CONFIG)
 if(Kokkos_FOUND)
+  # Kokkos_DIR is now authoritative even on a clean configure with no explicit package root.
+  pops_apple_libomp_hints()
   message(STATUS "Kokkos trouve (install ${Kokkos_VERSION}) : for_each_cell backend = Kokkos (${Kokkos_DEVICES})")
 else()
   message(STATUS "Kokkos introuvable -> FetchContent (release ${POPS_KOKKOS_FETCH_VERSION}). "
@@ -835,16 +766,12 @@ if(POPS_INSTALL)
 endif()
 
 # --- Cible documentation (top-level UNIQUEMENT) ---------------------------------------------
-# `cmake --build <dir> --target docs` lance scripts/build_docs.sh (lint + Sphinx + Doxygen + site
-# combine). HORS de la cible ALL : jamais construite par un build standard ni par le CI de code ;
-# c'est un raccourci de confort, equivalent a `bash scripts/build_docs.sh` depuis la racine. Le
-# script verifie LUI-MEME ses dependances (sphinx, doxygen, graphviz) et sort proprement si l'une
-# manque -> aucune logique CMake en plus ici. Top-level seulement : un consommateur (FetchContent /
-# add_subdirectory) n'herite pas de cette cible de commodite.
+# Runs the documentation conformance checks through the shared local/CI script.
+# This convenience target is excluded from ALL and is only exposed by the top-level project.
 if(PROJECT_IS_TOP_LEVEL)
   add_custom_target(docs
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_docs.sh
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     USES_TERMINAL
-    COMMENT "Build de la documentation (Sphinx + Doxygen) via scripts/build_docs.sh")
+    COMMENT "Check documentation conformance via scripts/build_docs.sh")
 endif()

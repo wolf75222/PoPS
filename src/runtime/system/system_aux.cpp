@@ -304,18 +304,20 @@ template <int Dim>
 void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
   if (refresh_auxiliary_(point, {}) == AuxiliaryPublicationStatus::nonfinite_candidate)
     throw std::runtime_error(
-        "System auxiliary publication rejected: candidate valid/ghost image contains non-finite values");
+        "System auxiliary publication rejected: candidate valid/ghost image contains non-finite "
+        "values");
 }
 
 template <int Dim>
 void System<Dim>::prepare_program_auxiliary_consumer(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
     int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
-  if (prepare_program_auxiliary_consumer_for_solve(
-          point, consumer_qid, block, stage_state, evaluation_sequence) ==
+  if (prepare_program_auxiliary_consumer_for_solve(point, consumer_qid, block, stage_state,
+                                                   evaluation_sequence) ==
       AuxiliaryPublicationStatus::nonfinite_candidate)
     throw std::runtime_error(
-        "System auxiliary publication rejected: candidate valid/ghost image contains non-finite values");
+        "System auxiliary publication rejected: candidate valid/ghost image contains non-finite "
+        "values");
 }
 
 template <int Dim>
@@ -343,11 +345,20 @@ AuxiliaryPublicationStatus System<Dim>::prepare_program_auxiliary_consumer_for_s
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       preflight_error, &lane, "Program auxiliary read preflight failed collectively");
   ExactContractBuilder exact;
-  exact.text("pops.system.program-auxiliary-read").scalar(std::uint32_t{1})
-      .text(consumer_qid).scalar(block).text(point.clock).scalar(point.tick)
-      .scalar(point.level).scalar(point.substep).scalar(point.stage)
-      .scalar(point.stage_fraction.numerator).scalar(point.stage_fraction.denominator)
-      .scalar(point.dt).scalar(point.physical_time).scalar(evaluation_sequence);
+  exact.text("pops.system.program-auxiliary-read")
+      .scalar(std::uint32_t{1})
+      .text(consumer_qid)
+      .scalar(block)
+      .text(point.clock)
+      .scalar(point.tick)
+      .scalar(point.level)
+      .scalar(point.substep)
+      .scalar(point.stage)
+      .scalar(point.stage_fraction.numerator)
+      .scalar(point.stage_fraction.denominator)
+      .scalar(point.dt)
+      .scalar(point.physical_time)
+      .scalar(evaluation_sequence);
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"program-auxiliary-read", std::move(exact).release()}}, lane))
     throw std::invalid_argument("Program auxiliary read identity differs across MPI ranks");
@@ -559,7 +570,8 @@ AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
       if (transaction.requires_staging(provider.identity())) {
         has_due_provider = true;
         published.push_back(provider.identity());
-      } else if (std::find(required.begin(), required.end(), provider.identity()) != required.end() &&
+      } else if (std::find(required.begin(), required.end(), provider.identity()) !=
+                     required.end() &&
                  !p_->auxiliary_registry_.last_accepted_point(provider.identity())) {
         throw std::logic_error("Program auxiliary prerequisite has never been published: " +
                                provider.identity());
@@ -568,19 +580,23 @@ AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
     remaining_dirty = p_->dirty_auxiliary_providers_;
     if (!consumer_qids.empty())
       for (const auto& identity : p_->auxiliary_registry_.dependent_provider_identities(published))
-        if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) == remaining_dirty.end())
+        if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) ==
+            remaining_dirty.end())
           remaining_dirty.push_back(identity);
-    std::erase_if(remaining_dirty, [&](const auto& identity) {
-      return transaction.requires_staging(identity);
-    });
+    std::erase_if(remaining_dirty,
+                  [&](const auto& identity) { return transaction.requires_staging(identity); });
     ExactContractBuilder publication;
-    publication.text("pops.system.auxiliary-publication-selection").scalar(std::uint32_t{1})
-        .scalar(p_->auxiliary_registry_.accepted_generation()).scalar(has_due_provider);
+    publication.text("pops.system.auxiliary-publication-selection")
+        .scalar(std::uint32_t{1})
+        .scalar(p_->auxiliary_registry_.accepted_generation())
+        .scalar(has_due_provider);
     const auto identities = [](ExactContractBuilder& item, const std::string& identity) {
       item.text(identity);
     };
-    publication.sequence(consumer_qids, identities).sequence(required, identities)
-        .sequence(forced, identities).sequence(published, identities)
+    publication.sequence(consumer_qids, identities)
+        .sequence(required, identities)
+        .sequence(forced, identities)
+        .sequence(published, identities)
         .sequence(remaining_dirty, identities);
     publication_contract = std::move(publication).release();
     if (has_due_provider)
@@ -1009,7 +1025,8 @@ template void System<kNativeDimension>::publish_program_field_components(
 template void System<kNativeDimension>::prepare_program_auxiliary_consumer(
     const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
     const MultiFab<kNativeDimension>&, int);
-template AuxiliaryPublicationStatus System<kNativeDimension>::prepare_program_auxiliary_consumer_for_solve(
+template AuxiliaryPublicationStatus
+System<kNativeDimension>::prepare_program_auxiliary_consumer_for_solve(
     const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
     const MultiFab<kNativeDimension>&, int);
 template runtime::system::AuxiliaryStorageAddress<kNativeDimension>
