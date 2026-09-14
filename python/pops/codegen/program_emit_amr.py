@@ -373,12 +373,8 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
         state_identity = (
             state_ref.qualified_id if state_ref is not None else "scalar-history:" + name
         )
-        space = getattr(program, "_history_spaces", {}).get(name)
-        space_identity = (
-            json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
-            if space is not None
-            else "scalar-field"
-        )
+        from pops.codegen.program_history_identity import history_space_identity
+        space_identity = history_space_identity(program, name)
         row = history_manifest[name]
         interpolation = json.dumps(row["interpolation"], sort_keys=True, separators=(",", ":"))
         component = getattr(program, "_histories_ncomp", {}).get(name)

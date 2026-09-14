@@ -391,9 +391,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         state_ref = getattr(program, "_history_state_refs", {}).get(name)
         state_identity = (state_ref.qualified_id if state_ref is not None
                           else "scalar-history:" + name)
-        space = getattr(program, "_history_spaces", {}).get(name)
-        space_identity = (json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
-                          if space is not None else "scalar-field")
+        from pops.codegen.program_history_identity import history_space_identity
+        space_identity = history_space_identity(program, name)
         row = history_manifest[name]
         interpolation = json.dumps(
             row["interpolation"], sort_keys=True, separators=(",", ":"))
@@ -683,9 +682,8 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             state_ref = program._history_state_refs.get(name)
             state_identity = (state_ref.qualified_id if state_ref is not None
                               else "scalar-history:" + name)
-            space = program._history_spaces.get(name)
-            space_identity = (json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
-                              if space is not None else "scalar-field")
+            from pops.codegen.program_history_identity import history_space_identity
+            space_identity = history_space_identity(program, name)
             row = manifests[name]
             interpolation = json.dumps(
                 row["interpolation"], sort_keys=True, separators=(",", ":"))

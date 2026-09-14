@@ -740,7 +740,8 @@ void refresh_resources_after_accepted_history_remap_(
             throw std::runtime_error("AMR Program history flux remap has a non-canonical plan");
           const bool parent_source =
               entry.source == AmrProgramHistoryRemapSource::ParentDeferred ||
-              entry.source == AmrProgramHistoryRemapSource::ParentAlignedState;
+              entry.source == AmrProgramHistoryRemapSource::ParentAlignedState ||
+              entry.source == AmrProgramHistoryRemapSource::ParentAlignedScalarOutput;
           if (parent_source && entry.parent_key.empty())
             throw std::runtime_error("AMR Program history flux remap has no parent provenance key");
           if (!parent_source && !entry.parent_key.empty())
@@ -771,7 +772,8 @@ void refresh_resources_after_accepted_history_remap_(
           const bool source_from_parent =
               planned != plan.end() &&
               (planned->second->source == AmrProgramHistoryRemapSource::ParentDeferred ||
-               planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState);
+               planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState ||
+               planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedScalarOutput);
           if (!source_from_parent && retained != history_flux_expressions_.end() &&
               retained->second.size() == ring.size()) {
             staged.expressions.emplace(key, retained->second);
@@ -783,7 +785,10 @@ void refresh_resources_after_accepted_history_remap_(
             if (parent == history_flux_expressions_.end() || parent->second.size() != ring.size())
               throw std::runtime_error(
                   "AMR Program history flux remap lacks its authenticated parent sample");
-            if (planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState) {
+            const bool scalar_output =
+                planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedScalarOutput;
+            if (planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState ||
+                scalar_output) {
               const auto has_flux = [](const auto& slots) {
                 return std::any_of(slots.begin(), slots.end(),
                                    [](const auto& expression) { return !expression.empty(); });
@@ -794,6 +799,36 @@ void refresh_resources_after_accepted_history_remap_(
                 throw std::runtime_error(
                     "AMR Program aligned state history projection requires equal-clock state "
                     "samples without interface-flux provenance");
+              if (scalar_output) {
+                const auto& manager = runtime_state().hist_;
+                const std::string& parent_key = planned->second->parent_key;
+                if (ring.size() != 2 || manager.depth.at(key) != 2 ||
+                    manager.depth.at(parent_key) != 2 ||
+                    !manager.initialized.at(key) || !manager.initialized.at(parent_key) ||
+                    manager.store_pending.at(key) || manager.store_pending.at(parent_key) ||
+                    manager.space_identity.at(key) != kScalarOutputHistorySpace ||
+                    manager.space_identity.at(parent_key) != kScalarOutputHistorySpace ||
+                    manager.state_identity.at(key) != "scalar-history:" + decoded->second ||
+                    manager.state_identity.at(parent_key) != manager.state_identity.at(key) ||
+                    manager.owner.at(parent_key) != manager.owner.at(key) ||
+                    manager.clock_identity.at(parent_key) != manager.clock_identity.at(key) ||
+                    manager.interpolation_identity.at(parent_key) !=
+                        manager.interpolation_identity.at(key) ||
+                    manager.slot_dt.at(parent_key) != manager.slot_dt.at(key) ||
+                    manager.slot_sample.at(parent_key) != manager.slot_sample.at(key) ||
+                    manager.fill_count.at(parent_key) != manager.fill_count.at(key) ||
+                    manager.slot_dt.at(key).size() != 2 ||
+                    !std::all_of(manager.slot_dt.at(key).begin(), manager.slot_dt.at(key).end(),
+                                 [](Real dt) { return std::isfinite(dt) && dt > Real(0); }) ||
+                    manager.slot_sample.at(key).size() != 2 ||
+                    !std::all_of(manager.slot_sample.at(key).begin(),
+                                 manager.slot_sample.at(key).end(),
+                                 [](const auto& sample) { return sample.authenticated(); }) ||
+                    !std::all_of(ring.begin(), ring.end(),
+                                 [](const auto& slot) { return slot.ncomp() == 1; }))
+                  throw std::runtime_error(
+                      "AMR scalar output history remap lacks its exact parent capability");
+              }
             }
             auto projected_slots = parent->second;
             for (auto& expression : projected_slots)

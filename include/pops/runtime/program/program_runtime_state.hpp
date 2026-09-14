@@ -66,12 +66,17 @@
 
 namespace pops::runtime::program {
 
+/// Frozen codegen capability: a width-one, two-slot scalar ring with no Program reader.
+inline constexpr std::string_view kScalarOutputHistorySpace = "scalar-output-field-v1";
+
 enum class AmrProgramHistoryRemapSource : std::uint8_t {
   RetainedChild = 1,
   ParentDeferred = 2,
   Removed = 3,
   /// Spatial projection of authenticated equal-clock state samples, retaining covered cells.
   ParentAlignedState = 4,
+  /// Equal-clock scalar output samples; retained overlap is not temporally interpolated.
+  ParentAlignedScalarOutput = 5,
 };
 
 /// One canonical affected-ring decision prepared by the AMR lane before topology publication.

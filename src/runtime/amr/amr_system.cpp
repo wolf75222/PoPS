@@ -3931,6 +3931,9 @@ struct AmrSystem<Dim>::Impl {
   std::vector<std::unique_ptr<AcceptedSnapshot>> parent_step_transactions;
   std::unique_ptr<AcceptedSnapshot> restart_transaction;
   bool restart_transaction_committed = false;
+  // Rebuilt restart carriers are provisional until the complete, owner-qualified auxiliary
+  // checkpoint image has passed the existing per-level storage and registry validation.
+  bool restart_auxiliary_replacement_pending = false;
   // A restart may replace accepted rings with topology-qualified provisional storage. Only the
   // exact incoming accepted image, revalidated against the live rings at commit, can publish it.
   bool restart_history_replacement_pending = false;
@@ -7330,8 +7333,11 @@ struct AmrSystem<Dim>::Impl {
           const auto& prior = *previous->provider_storage[level];
           for (auto& [identity, group] : provider_storage->groups) {
             const auto* source = prior.find(identity);
-            if (source != nullptr && same_field_shape(*source, group)) {
-              copy_valid_field(*source, group);
+            if (source != nullptr && same_field_contract(*source, group)) {
+              // A graph refresh retains this provider's accepted freshness. Its exact grown
+              // image must survive as well, including a checkpoint image restored immediately
+              // before Program authority requalification replaces the graph a second time.
+              copy_full_field_in_place(*source, group);
               continue;
             }
             if (!topology_regrid_auxiliary_invalidation_pending)
@@ -8441,6 +8447,12 @@ struct AmrSystem<Dim>::Impl {
       throw std::logic_error("AMR history mutation cannot change a committed restart");
   }
 
+  void require_restart_auxiliary_restoration(const ExecutionLane& lane) const {
+    if (all_reduce_max(restart_auxiliary_replacement_pending ? 1L : 0L, lane) != 0)
+      throw std::logic_error(
+          "AMR restart auxiliary replacement lacks its complete restored accepted image");
+  }
+
   void require_restart_history_restoration(const ExecutionLane& lane) const {
     std::exception_ptr history_error;
     try {
@@ -8980,6 +8992,13 @@ struct AmrSystem<Dim>::Impl {
           auto source = retained_coverage
                             ? runtime::program::AmrProgramHistoryRemapSource::RetainedChild
                             : runtime::program::AmrProgramHistoryRemapSource::ParentDeferred;
+          const bool scalar_output =
+              descriptor.space_identity == runtime::program::kScalarOutputHistorySpace;
+          if (scalar_output &&
+              (descriptor.depth != 2 || descriptor.components != 1 ||
+               descriptor.state_identity != "scalar-history:" + descriptor.name))
+            throw std::invalid_argument(
+                "AMR scalar output history projection has an invalid frozen capability");
           const bool initialized_projection =
               source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred &&
               program.hist_.initialized.at(parent_key);
@@ -8994,12 +9013,18 @@ struct AmrSystem<Dim>::Impl {
                 ratio.denominator == 1 &&
                 relation.remainder_policy() == ::pops::amr::RemainderPolicy::IntegralOnly &&
                 !program.hist_.store_pending.at(parent_key);
-            if (parent->second.size() > 2 && exact_direct_clock && ratio.numerator == 1) {
+            if (scalar_output && (!exact_direct_clock || ratio.numerator != 1))
+              throw std::invalid_argument(
+                  "AMR scalar output history projection requires an exact 1:1 clock relation");
+            if ((parent->second.size() > 2 && exact_direct_clock && ratio.numerator == 1) ||
+                scalar_output) {
               // Equal clocks and authenticated sample IDs align mixed-source slots. Project those
               // actual parent samples onto newly covered cells; keep the aligned child samples
               // wherever they already exist.  This performs no temporal interpolation, replay,
               // or CopyCurrent initialization of an earned lag.  The artifact callback also
-              // authenticates that this is state data with no lagged interface-flux expression.
+              // authenticates either state data or the frozen scalar-output capability, with no
+              // lagged interface-flux expression. General two-slot integrator histories still
+              // use ParentDeferred and its independently qualified AB2 reconstruction.
               if (program.hist_.depth.at(parent_key) != descriptor.depth ||
                   dts.size() != parent->second.size() ||
                   !std::all_of(dts.begin(), dts.end(),
@@ -9011,6 +9036,14 @@ struct AmrSystem<Dim>::Impl {
                       descriptor.interpolation_identity)
                 throw std::invalid_argument(
                     "AMR Program aligned state history projection lacks exact parent samples");
+              if (scalar_output) {
+                const auto& parent_samples = program.hist_.slot_sample.at(parent_key);
+                if (parent_samples.size() != parent->second.size() ||
+                    !std::all_of(parent_samples.begin(), parent_samples.end(),
+                                 [](const auto& sample) { return sample.authenticated(); }))
+                  throw std::invalid_argument(
+                      "AMR scalar output history projection lacks authenticated parent samples");
+              }
               if (previous != nullptr &&
                   (previous->depth != descriptor.depth || !previous->initialized ||
                    previous->store_pending || previous->slot_dt != dts ||
@@ -9030,7 +9063,9 @@ struct AmrSystem<Dim>::Impl {
                            program.hist_.slot_sample.at(parent_key).at(slot)))
                     throw std::invalid_argument(
                         "AMR Program aligned state history projection has unaligned child samples");
-              source = runtime::program::AmrProgramHistoryRemapSource::ParentAlignedState;
+              source = scalar_output
+                           ? runtime::program::AmrProgramHistoryRemapSource::ParentAlignedScalarOutput
+                           : runtime::program::AmrProgramHistoryRemapSource::ParentAlignedState;
             } else if (parent->second.size() != 2 || program.hist_.depth.at(parent_key) != 2 ||
                        !exact_direct_clock || (ratio.numerator != 1 && ratio.numerator != 2) ||
                        dts.size() != 2 || !(dts[1] > Real(0))) {
@@ -10804,6 +10839,8 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
   std::string layout_contract;
   std::exception_ptr preparation_error;
   try {
+    if (p_->restart_auxiliary_replacement_pending)
+      throw std::logic_error("AMR auxiliary checkpoint cannot capture provisional restart storage");
     if (!p_->dirty_auxiliary_providers.empty())
       throw std::logic_error(
           "AMR auxiliary checkpoint refuses dirty provider state before accepted publication");
@@ -10988,6 +11025,8 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
   long local_failure = 0;
   std::string collective_contract;
   try {
+    if (p_->restart_transaction_committed)
+      throw std::logic_error("AMR auxiliary checkpoint cannot change a committed restart");
     if (!p_->dirty_auxiliary_providers.empty())
       throw std::logic_error("AMR auxiliary checkpoint restore refuses dirty live provider state");
     const auto& groups = p_->prepared_hierarchy->provider_storage;
@@ -11069,6 +11108,66 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
     runtime::system::restore_auxiliary_checkpoint_state(state[level], candidate_registries[level],
                                                         lane);
 
+  // POPSAUX2 stores valid values and accepted provider freshness, not numerical halos. Restore
+  // the latter through the declared hierarchy/physical producers before publishing that freshness.
+  // In particular, a fine route must read its restored private parent, never the live provisional
+  // carrier. No provider is reevaluated and these ghost producers do not alter valid values.
+  std::optional<BoundaryTopology<Dim>> restored_topology;
+  std::vector<runtime::multiblock::BoundaryEvaluationPoint> restored_points;
+  std::exception_ptr ghost_preflight_error;
+  try {
+    restored_topology.emplace(p_->topology());
+    const auto& hierarchy = *p_->prepared_hierarchy;
+    if (hierarchy.provider_candidate_physical_boundaries.size() != state.size() ||
+        hierarchy.provider_storage_field_identities.size() != state.size())
+      throw std::logic_error("AMR auxiliary checkpoint lacks its exact ghost authorities");
+    restored_points.resize(state.size());
+    for (std::size_t level = 0; level < state.size(); ++level) {
+      if (!accepted_candidates[level]->groups.empty() &&
+          !hierarchy.provider_candidate_physical_boundaries[level])
+        throw std::logic_error("AMR auxiliary checkpoint lacks a physical ghost authority");
+      restored_points[level].clock = "pops.amr.auxiliary-checkpoint-restoration";
+      restored_points[level].level = static_cast<int>(level);
+    }
+  } catch (...) {
+    ghost_preflight_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      ghost_preflight_error, &lane,
+      "AMR auxiliary checkpoint ghost preflight failed collectively before publication");
+  for (std::size_t level = 0; level < state.size(); ++level) {
+    auto& candidate = *accepted_candidates[level];
+    if (candidate.groups.empty())
+      continue;
+    const auto& layout = p_->engine->hierarchy().layout(level);
+    const auto& identity = p_->prepared_hierarchy->provider_storage_field_identities[level];
+    PreparedProviderGroupsGhostFill<Dim> fill;
+    if (level == 0)
+      fill = prepare_provider_groups_root_ghost_fill(
+          candidate, layout.domain(), *restored_topology, identity, p_->engine->topology_epoch(),
+          p_->engine->materialization_generation(), lane);
+    else
+      fill = prepare_provider_groups_fine_ghost_fill(
+          *accepted_candidates[level - 1], candidate,
+          p_->engine->hierarchy().layout(level - 1).domain(), layout.domain(),
+          layout.ratio_from_parent(), *restored_topology, identity, static_cast<int>(level),
+          p_->engine->topology_epoch(), p_->engine->materialization_generation(), lane);
+    fill(candidate, restored_points[level]);
+    p_->prepared_hierarchy->provider_candidate_physical_boundaries[level]->execute(candidate);
+    runtime::system::require_finite_auxiliary_groups(candidate, &lane,
+                                                     "AMR restored auxiliary ghosts");
+  }
+  std::exception_ptr candidate_ghost_copy_error;
+  try {
+    for (std::size_t level = 0; level < state.size(); ++level)
+      copy_auxiliary_groups_in_place(*accepted_candidates[level], *transaction_candidates[level]);
+  } catch (...) {
+    candidate_ghost_copy_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      candidate_ghost_copy_error, &lane,
+      "AMR auxiliary checkpoint ghost copy failed collectively before publication");
+
   std::vector<std::map<std::string, std::vector<const Real*>>> next_accepted_identity;
   std::vector<std::map<std::string, std::vector<const Real*>>> next_candidate_identity;
   std::exception_ptr identity_error;
@@ -11105,6 +11204,8 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
   }
   p_->prepared_hierarchy->auxiliary_registries.swap(candidate_registries);
   p_->dirty_auxiliary_providers.clear();
+  if (p_->restart_transaction && !p_->restart_transaction_committed)
+    p_->restart_auxiliary_replacement_pending = false;
 }
 
 template <int Dim>
@@ -11269,6 +11370,8 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
   const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR auxiliary refresh");
   std::exception_ptr hierarchy_error;
   try {
+    if (p_->restart_auxiliary_replacement_pending)
+      throw std::logic_error("AMR auxiliary refresh cannot consume provisional restart storage");
     if (!p_->prepared_hierarchy || p_->prepared_hierarchy->auxiliary_registries.size() !=
                                        p_->prepared_hierarchy->provider_storage.size())
       throw std::logic_error("AMR auxiliary hierarchy lost its per-level registries");
@@ -11552,7 +11655,10 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
         physical->execute(*candidate);
       };
       refresh_candidate_ghosts();
-      const auto auxiliary_geometry = prepared_amr_level_geometry(static_cast<int>(level));
+      // This prepared-lane refresh may run inside automatic bootstrap rematerialization.
+      // Public geometry access would re-enter ensure_engine() before bootstrap is complete.
+      const auto auxiliary_geometry = Geometry<Dim>::from_bounds(
+          p_->engine->hierarchy().layout(level).domain(), p_->cfg.lower, p_->cfg.upper);
       transaction.launch_ready_native(
           {hierarchy.provider_storage[level].get(), candidate, &auxiliary_geometry},
           [&](const auto&, std::exception_ptr local_error) {
@@ -18051,6 +18157,7 @@ void AmrSystem<Dim>::begin_restart_transaction() {
   p_->materialize_all_fields_atomically();
   p_->restart_transaction = p_->prepare_accepted_snapshot_collectively("restart transaction");
   p_->restart_transaction_committed = false;
+  p_->restart_auxiliary_replacement_pending = false;
   p_->restart_history_replacement_pending = false;
   p_->restart_history_authority_restored = false;
   p_->restart_history_authority.clear();
@@ -18065,6 +18172,7 @@ void AmrSystem<Dim>::commit_restart_transaction() {
   const long invalid = !p_->restart_transaction || p_->restart_transaction_committed ? 1L : 0L;
   if (all_reduce_max(invalid, lane) != 0)
     throw std::logic_error("AmrSystem has no collective uncommitted restart transaction");
+  p_->require_restart_auxiliary_restoration(lane);
   p_->require_restart_history_restoration(lane);
   p_->restart_transaction_committed = true;
 }
@@ -18076,6 +18184,7 @@ void AmrSystem<Dim>::finalize_restart_transaction() noexcept {
     return;
   p_->restart_transaction.reset();
   p_->restart_transaction_committed = false;
+  p_->restart_auxiliary_replacement_pending = false;
   p_->restart_history_replacement_pending = false;
   p_->restart_history_authority_restored = false;
   p_->restart_history_authority.clear();
@@ -18093,6 +18202,7 @@ void AmrSystem<Dim>::rollback_restart_transaction() {
 
   // Keep the original snapshot available if rebuilding derived resources fails during rollback.
   p_->restart_transaction_committed = false;
+  p_->restart_auxiliary_replacement_pending = false;
   p_->restart_history_replacement_pending = false;
   p_->restart_history_authority_restored = false;
   p_->restart_history_authority.clear();
@@ -18124,6 +18234,7 @@ void AmrSystem<Dim>::preflight_regrid_on_restart() {
   if (all_reduce_max(invalid, lane) != 0)
     throw std::logic_error(
         "AmrSystem restart regrid preflight requires one active restart transaction");
+  p_->require_restart_auxiliary_restoration(lane);
   p_->require_restart_history_restoration(lane);
   std::exception_ptr preflight_error;
   try {
@@ -18147,6 +18258,7 @@ void AmrSystem<Dim>::regrid_on_restart() {
           : 0L;
   if (all_reduce_max(invalid, lane) != 0)
     throw std::logic_error("AmrSystem restart regrid requires one active restart transaction");
+  p_->require_restart_auxiliary_restoration(lane);
   p_->require_restart_history_restoration(lane);
   std::vector<std::uint8_t> transformed_history_authority;
   std::map<std::string, std::vector<std::uint8_t>> transformed_history_slots;
@@ -19675,8 +19787,13 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
         std::rethrow_exception(carrier_allocation_error);
       throw std::runtime_error("AMR hierarchy rebuild carrier allocation failed collectively");
     }
+    // A checkpoint may describe different sparse coverage from the initialized live hierarchy.
+    // Its exact-layout groups and registries are private provisional allocations: copying the
+    // prior image would either violate the layout contract or retain unrelated freshness. Only
+    // the authenticated auxiliary restore may qualify them after this topology is published.
     std::unique_ptr<typename Impl::PreparedHierarchy> candidate_graph = p_->prepare_hierarchy_graph(
-        *candidate_engine, *candidate_multiblock, p_->prepared_hierarchy.get());
+        *candidate_engine, *candidate_multiblock,
+        restart_replacement ? nullptr : p_->prepared_hierarchy.get());
 
     // Engine, carrier, graph, exact map and flux budget are fully qualified candidates.  The
     // following ownership moves are the publication boundary, so a hierarchy refresh cannot
@@ -19710,6 +19827,11 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
     p_->automatic_bootstrap_complete = true;
     p_->program.refresh_hierarchy_state("AmrSystem::rebuild_hierarchy");
   });
+  // Set only after the internal rebuild transaction succeeds; a rejected candidate leaves the
+  // enclosing restart's prior restoration status intact. Empty registries need no numeric image.
+  if (restart_replacement)
+    p_->restart_auxiliary_replacement_pending =
+        p_->auxiliary_registry.sealed() && !p_->auxiliary_registry.storage_groups().empty();
 }
 
 template <int Dim>

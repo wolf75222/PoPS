@@ -664,6 +664,9 @@ pops_add_gtest_suite(NAME test_amr_synthetic_program_loader_transaction SOURCES 
 pops_test_source(_src test_amr_system_contract)
 pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_amr_scalar_output_history)
+pops_add_gtest_suite(NAME test_amr_scalar_output_history SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_system_twoblock)
 pops_add_gtest_suite(NAME test_amr_system_twoblock SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
