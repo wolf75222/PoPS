@@ -13,6 +13,7 @@ _MODEL_OWNER_SENSITIVE_OPS = frozenset(
         "source",
         "apply",
         "local_transform",
+        "affine_moment_update",
         "solve_local_linear",
         "solve_local_nonlinear",
         "solve_spatial_nonlinear",
@@ -284,6 +285,8 @@ def check_schedules_lowerable(program: Any, *, target: str | None = None) -> Non
                 "scheduled value %r is committed to %r but has no explicit OffPolicy"
                 % (scheduled_source.name, endpoint))
     if target == "amr_system":
+        from pops.time._program.affine_moments import validate_affine_moment_prefix
+        validate_affine_moment_prefix(program)
         _check_amr_flux_weights(program)
     temporal_clocks = {row["id"] for row in program.temporal_manifest()["clocks"]}
     for value in all_ops(program):

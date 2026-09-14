@@ -850,6 +850,12 @@ class AmrSystem {
   POPS_EXPORT void stage_auxiliary_input(const runtime::system::AuxiliaryComponentKey& key,
                                          const std::vector<double>& values);
   POPS_EXPORT void refresh_auxiliary(const runtime::system::AuxiliaryEvaluationPoint& point);
+  /// Publish one exact generated consumer on a hierarchy containing only the root level.
+  /// The SSA state authenticates ownership; auxiliary launchers read only their declared
+  /// auxiliary dependencies. This does not infer stage states for other hierarchy levels.
+  POPS_EXPORT void prepare_single_level_program_auxiliary_consumer(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+      int block, const MultiFab<Dim>& stage_state, int evaluation_sequence);
   [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryStorageAddress<Dim> auxiliary_address(
       const runtime::system::AuxiliaryComponentKey& key) const;
   [[nodiscard]] POPS_EXPORT std::vector<double> auxiliary_component(
@@ -1525,7 +1531,8 @@ class AmrSystem {
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides);
   POPS_EXPORT void refresh_auxiliary_on_prepared_lane(
-      const runtime::system::AuxiliaryEvaluationPoint& point);
+      const runtime::system::AuxiliaryEvaluationPoint& point,
+      const std::vector<std::string>& consumer_qids = {});
   void install_prepared_amr_block_candidate_(PreparedBlock block, bool native_package_candidate);
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_on_prepared_lane(
       const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state,

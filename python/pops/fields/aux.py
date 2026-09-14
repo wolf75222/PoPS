@@ -228,4 +228,65 @@ class DerivedAux(_AuxProducer):
         }
 
 
-__all__ = ["AuxiliaryBoundary", "DerivedAux", "InputAux"]
+class AnalyticAux(_AuxProducer):
+    """A static scalar evaluated from the current level's exact Cartesian geometry.
+
+    Unlike an input array, a geometric coefficient is evaluated again on a new AMR
+    layout. Coordinates denote cell centers; authenticated ``CellBounds`` inputs
+    allow cell-width-dependent, analytically integrated metric coefficients.
+    Runtime parameters and time-dependent expressions are deliberately excluded.
+    """
+
+    producer_kind = "derived"
+    restart_policy = "recompute"
+    regrid_policy = "recompute"
+
+    def __init__(self, target: Any, expression: Any, *, frame: Any,
+                 boundary: Any = None) -> None:
+        from pops.analytic import CellBounds, ScalarExpr
+        from pops.domain.cartesian import CartesianDomainFrame
+        from pops.domain.rectangle import RectangleFrame
+
+        if not isinstance(frame, (CartesianDomainFrame, RectangleFrame)):
+            raise TypeError("AnalyticAux requires a bounded Cartesian domain frame")
+        if type(expression) is not ScalarExpr:
+            raise TypeError("AnalyticAux expression must be an analytic ScalarExpr")
+        expression.validate()
+        if expression.frame_id not in (None, frame.canonical_id):
+            raise ValueError("AnalyticAux expression belongs to another frame")
+        if expression.has_parameters or expression.time_clocks():
+            raise ValueError("AnalyticAux currently requires a static parameter-free expression")
+        bounds = CellBounds(frame)
+        expected = dict(reference for axis in frame.axes
+                        for leaf in (bounds.lower(axis), bounds.upper(axis))
+                        for reference in leaf.input_references())
+        expected.update(dict(bounds.measure.input_references()))
+        if any(expected.get(slot) != component
+               for slot, component in expression.input_references()):
+            raise ValueError("AnalyticAux contains an unauthenticated cell-bound input")
+        super().__init__(target, boundary=boundary)
+        object.__setattr__(self, "expression", expression)
+        object.__setattr__(self, "frame", frame)
+
+    def options(self) -> dict[str, Any]:
+        return {**self._base_options(), "expression": self.expression.to_data(),
+                "frame": self.frame.to_dict()}
+
+    def requirements(self) -> RequirementSet:
+        return RequirementSet({"geometry_frame": self.frame.canonical_id})
+
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return (self._target,)
+
+    def resolve_references(self, resolver: Any) -> AnalyticAux:
+        return AnalyticAux(
+            resolve_handle(self._target, resolver, where="analytic auxiliary target"),
+            self.expression, frame=self.frame, boundary=self.boundary,
+        )
+
+    def to_data(self) -> dict[str, Any]:
+        return {"type": type(self).__name__, **self.options(),
+                "target": self._target.canonical_identity()}
+
+
+__all__ = ["AuxiliaryBoundary", "AnalyticAux", "DerivedAux", "InputAux"]

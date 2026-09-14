@@ -16,6 +16,7 @@
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/numerics/time/amr/levels/amr_subcycling.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
+#include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
@@ -172,18 +173,39 @@ class AmrProgramContext {
     const field_type* state = nullptr;
   };
 
+private:
+  struct RhsInputTraceRecord;
+
+public:
+  /// Invocation-owned input authority for a generated synchronous RHS evaluation.
+  class RhsInputTrace {
+  public:
+    RhsInputTrace(const RhsInputTrace&) = default;
+    RhsInputTrace(RhsInputTrace&&) = default;
+
+  private:
+    friend class AmrProgramContext;
+    RhsInputTrace() = default;
+    const AmrProgramContext* owner_ = nullptr;
+    const field_type* input_ = nullptr;
+    std::shared_ptr<const RhsInputTraceRecord> current_;
+    std::shared_ptr<const RhsInputTraceRecord> parent_;
+  };
+
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, field_type* state_value, field_type* rhs_value,
                     int rate_id_value, int flux_only_value,
                     std::string_view temporal_family_value = {},
-                    std::vector<nd::FaceField<Dim>>* retained_faces_value = nullptr)
+                    std::vector<nd::FaceField<Dim>>* retained_faces_value = nullptr,
+                    const RhsInputTrace* input_trace_value = nullptr)
         : block(block_value),
           state(state_value),
           rhs(rhs_value),
           rate_id(rate_id_value),
           flux_only(flux_only_value),
           temporal_family(temporal_family_value),
-          retained_faces(retained_faces_value) {}
+          retained_faces(retained_faces_value),
+          input_trace(input_trace_value) {}
 
     int block = -1;
     field_type* state = nullptr;
@@ -192,6 +214,7 @@ class AmrProgramContext {
     int flux_only = 0;
     std::string_view temporal_family;
     std::vector<nd::FaceField<Dim>>* retained_faces = nullptr;
+    const RhsInputTrace* input_trace = nullptr;
   };
 
   struct CouplingStateOverride {
@@ -311,6 +334,7 @@ class AmrProgramContext {
   // Class-scope responsibility fragments preserve the public nested-type identities and member
   // layout of AmrProgramContext while making each semantic authority independently auditable.
 #include <pops/runtime/program/amr_program_context_spatial.inc>
+#include <pops/runtime/program/amr_program_context_rhs_input_trace.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_public.inc>
 #include <pops/runtime/program/amr_program_context_diffusion.inc>
 #include <pops/runtime/program/amr_program_context_spatial_implicit.inc>
@@ -364,6 +388,7 @@ class AmrProgramContext {
   mutable std::uint64_t history_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t history_generation_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t operator_snapshot_revision_ = 0;
+  mutable int auxiliary_evaluation_sequence_ = 0;
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable std::map<std::string, int> history_levels_;
   mutable std::map<ScratchKey, field_type> scratches_;

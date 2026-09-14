@@ -31,7 +31,7 @@ def _formula_carrier(model: Any) -> Any:
 
 
 _MODEL_PARAM_OPS = frozenset({
-    "source", "apply", "local_transform", "solve_local_linear", "rhs", "diffusive_rhs",
+    "source", "apply", "local_transform", "affine_moment_update", "solve_local_linear", "rhs", "diffusive_rhs",
     "solve_local_nonlinear",
 })
 
@@ -96,6 +96,10 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
         if transform is not None:
             out += list(transform["expressions"])
             out.append(transform["valid_if"])
+    elif v.op == "affine_moment_update":
+        matrix = lin[v.attrs["linear_operator"]]
+        x, y = 1, v.attrs["order"] + 1
+        out.extend((matrix[x][x], matrix[x][y], matrix[y][x], matrix[y][y]))
     elif v.op == "rhs":
         for s in (v.attrs.get("sources") or []):
             if s != "default":

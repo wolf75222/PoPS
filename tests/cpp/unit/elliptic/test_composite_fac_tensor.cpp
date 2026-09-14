@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "tensor_periodic_seam_witness.hpp"
 
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
@@ -159,6 +160,20 @@ TEST(test_composite_fac_tensor, full_tensor_composite_retains_refinement_accurac
   EXPECT_GT(coarse_refined, 0.0);
   EXPECT_LT(fine_refined, 0.4 * coarse_refined)
       << "genuinely refined full-tensor FAC must converge under hierarchy refinement";
+}
+
+TEST(test_composite_fac_tensor, periodic_coarse_fine_seams_retain_translation_and_accuracy) {
+  const auto lane = pops::ExecutionLane::world("tests.tensor-periodic-coarse-fine-seam");
+  for (bool replicated : {true, false}) {
+    const auto interior = pops::test::tensor_periodic_seam_witness(16, 8, replicated, lane);
+    const auto one_sided = pops::test::tensor_periodic_seam_witness(16, 0, replicated, lane);
+    const auto paired = pops::test::tensor_periodic_seam_witness(16, 24, replicated, lane);
+    EXPECT_LT(pops::test::tensor_seam_difference(interior, one_sided), 2e-8);
+    EXPECT_LT(pops::test::tensor_seam_difference(interior, paired), 2e-8);
+    const auto refined = pops::test::tensor_periodic_seam_witness(32, 0, replicated, lane);
+    EXPECT_GT(one_sided.maximum_error, 0);
+    EXPECT_LT(refined.maximum_error, pops::Real(0.45) * one_sided.maximum_error);
+  }
 }
 
 TEST(test_composite_fac_tensor, tensor_boundary_point_refresh_is_collective_and_transactional) {

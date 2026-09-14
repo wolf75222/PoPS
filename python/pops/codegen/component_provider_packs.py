@@ -95,7 +95,7 @@ def canonical_emitter_carrier_value(value: Any) -> Any:
         )
     # Typed auxiliary routes deliberately retain executable descriptors.  A witness must not retain
     # those objects by reference: their exact data is the compiler-visible identity instead.
-    from pops.fields.aux import AuxiliaryBoundary, DerivedAux, InputAux, strict_field_data
+    from pops.fields.aux import AuxiliaryBoundary, AnalyticAux, DerivedAux, InputAux, strict_field_data
     from pops.model.provider_pack import ComponentContract
 
     if type(value) in (AuxiliaryBoundary, ComponentContract):
@@ -118,6 +118,13 @@ def canonical_emitter_carrier_value(value: Any) -> Any:
             "regrid": value.regrid_policy,
             "boundary": value.boundary,
             "expression": strict_field_data(value.expression),
+        })
+    if type(value) is AnalyticAux:
+        return canonical_emitter_carrier_value({
+            "type": "AnalyticAux", "target": value.target.qualified_id,
+            "producer": value.producer_kind, "restart": value.restart_policy,
+            "regrid": value.regrid_policy, "boundary": value.boundary,
+            "expression": value.expression.to_data(), "frame": value.frame.to_dict(),
         })
     if isinstance(value, Mapping):
         return {
@@ -427,6 +434,7 @@ def auxiliary_provider_routes(
     DAG validation at global package seal, while this authoring pass catches
     a self-contained module error before source emission.
     """
+    from pops.fields.aux import AnalyticAux
     declared = module.aux_providers()
     owner_qid = str(module.owner_path.canonical())
     routes: dict[ComponentKey, Mapping[str, Any]] = {}
@@ -449,7 +457,7 @@ def auxiliary_provider_routes(
         elif producer.producer_kind == "derived":
             if entry.producer != "derived:%s" % name:
                 raise ValueError("DerivedAux target %r has conflicting ProviderPack producer" % name)
-            dependencies = tuple(
+            dependencies = () if isinstance(producer, AnalyticAux) else tuple(
                 _component_key_for_auxiliary_reference(module, pack, reference)
                 for reference in producer.expression.declaration_references()
             )

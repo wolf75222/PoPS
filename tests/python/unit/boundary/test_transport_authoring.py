@@ -66,6 +66,40 @@ def _complete_set(frame, state, inlet_value):
     })
 
 
+def test_mixed_periodic_transport_retains_exact_geometry_and_native_face_laws():
+    from pops.mesh import PeriodicAxes
+
+    frame, _, _, _, numerics, case, block, state = _authoring()
+    numerics.boundaries.add(TransportBoundarySet({
+        frame.boundaries.x_min: NoFlux(state=state),
+        frame.boundaries.x_max: Outflow(state=state),
+    }, periodic=PeriodicAxes((frame.y,))))
+    case.numerics(numerics, block=block)
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    assert len(authority.conditions) == 2
+    assert len(authority.plan.topology.physical) == 2
+    assert len(authority.plan.topology.periodic) == 1
+    expected = ["no_flux", "foextrap", "periodic", "periodic"]
+    compiled = authority.compile_boundary_data()
+    runtime = authority.runtime_boundary_data({})
+    assert [row["type"] for row in compiled["faces"]] == expected
+    assert [row["type"] for row in runtime["faces"]] == expected
+    assert all(row["values"] == [0.] for row in runtime["faces"])
+    with pytest.raises(ValueError, match="missing geometric endpoints"):
+        replace(authority, periodic_faces=())
+
+
+def test_mixed_periodic_transport_refuses_physical_conditions_on_periodic_faces():
+    from pops.mesh import PeriodicAxes
+
+    frame, _, _, value, numerics, case, block, state = _authoring()
+    conditions = {face: Outflow(state=state) for face in frame.boundaries.all}
+    numerics.boundaries.add(TransportBoundarySet(conditions, periodic=PeriodicAxes((frame.y,))))
+    case.numerics(numerics, block=block)
+    with pytest.raises(ValueError, match="geometry coverage mismatch"):
+        case._resolved_numerics_for("tracer")
+
+
 def test_transport_set_resolves_exact_ports_values_and_derived_stencil_requirements():
     frame, _, inlet, inlet_value, numerics, case, block, block_state = _authoring()
     numerics.boundaries.add(_complete_set(frame, block_state, inlet_value))

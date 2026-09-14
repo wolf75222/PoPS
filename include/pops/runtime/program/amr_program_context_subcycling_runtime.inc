@@ -96,6 +96,7 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
     commit_interface_flux_attempt_();
     multiblock_subcycling_has_accepted_step_ = true;
   } catch (...) {
+    rhs_input_traces_.clear();
     if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
       interface_flux_ledger_->rollback();
     active_level_ = prior_level;
@@ -108,6 +109,7 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
     clear_active_multiblock_group_();
     throw;
   }
+  rhs_input_traces_.clear();
   active_level_ = prior_level;
   current_dt_ = prior_dt;
   current_interval_start_time_ = prior_interval_start;

@@ -1,3 +1,26 @@
+/// Root-only AMR execution does not pass through topology rematerialization. Publish its
+/// exact prerequisites before a generated Fab traversal, including the first field solve.
+/// Refined execution retains the hierarchy publication authority; no parent stage is inferred.
+void prepare_provider_values(std::string_view consumer_qid, int program_block,
+                             const field_type& stage_state, int evaluation_id) const {
+  if (nlev() != 1)
+    return;
+  const int runtime_block = sys_block(program_block);
+  prepare_spatial_collectively([&] {
+    if (resource_epoch_ != runtime_->topology_epoch() ||
+        resource_generation_ != runtime_->materialization_generation() || active_level_ != 0)
+      throw std::logic_error("AMR Program auxiliary preparation has a stale resource traversal");
+    if (scratch_prototype_owner_(stage_state) != runtime_block)
+      throw std::invalid_argument("AMR Program auxiliary preparation has a foreign SSA owner");
+    if (auxiliary_evaluation_sequence_ == std::numeric_limits<int>::max())
+      throw std::overflow_error("AMR Program auxiliary evaluation sequence exceeds its range");
+    require_rate_identity_(evaluation_id);
+  });
+  facade_->prepare_single_level_program_auxiliary_consumer(
+      boundary_evaluation_point(evaluation_id), std::string(consumer_qid), runtime_block,
+      stage_state, auxiliary_evaluation_sequence_++);
+}
+
 /// Bind one generated consumer's compact provider view for the active AMR hierarchy level.
 /// The program block is authenticated before storage lookup; the qid resolves through that
 /// level's sealed plan, so neither generated code nor this context can fall back to ``ctx.aux``.
@@ -72,17 +95,18 @@ void install_flux_temporal_families(
 }
 
 void rhs_into(int program_block, field_type& stage_state, field_type& rhs, int rate_id,
-              std::string_view temporal_family = {}) const {
+              std::string_view temporal_family = {}, const RhsInputTrace* input_trace = nullptr) const {
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program residual");
   const auto point = boundary_evaluation_point(rate_id);
+  const auto* parent = rhs_input_parent_(runtime_block, stage_state, rate_id, input_trace);
   const auto& evaluation =
       active_attempt_states_.empty()
           ? facade_->evaluate_prepared_amr_block_level_at(runtime_block, point, stage_state)
           : facade_->evaluate_prepared_amr_block_level_at(runtime_block, point, stage_state,
                                                           active_level_ - 1,
-                                                          staged_parent_for_block_(runtime_block));
+                                                          parent);
   copy_valid_(evaluation.residual, rhs);
   if (!active_attempt_states_.empty())
     attach_active_flux_basis_(runtime_block, evaluation, rhs, rate_id,
@@ -122,7 +146,7 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
     std::set<const field_type*> unique_outputs;
     ExactContractBuilder exact;
     exact.text("pops.amr-program.rhs-group")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{group_id})
         .scalar(static_cast<std::uint64_t>(requests.size()));
     for (const RhsGroupRequest& request : requests) {
@@ -149,7 +173,8 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
           .scalar(std::int32_t{request.rate_id})
           .scalar(std::uint32_t{static_cast<unsigned int>(request.flux_only)})
           .text(request.temporal_family)
-          .presence(request.retained_faces != nullptr);
+          .presence(request.retained_faces != nullptr)
+          .presence(request.input_trace != nullptr);
     }
     request_contract = std::move(exact).release();
   } catch (...) {
@@ -196,7 +221,9 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
     staged_parents.assign(ordered.size(), nullptr);
     if (active != 0)
       for (std::size_t index = 0; index < ordered.size(); ++index)
-        staged_parents[index] = staged_parent_for_block_(runtime_blocks[index]);
+        staged_parents[index] = rhs_input_parent_(runtime_blocks[index], *ordered[index]->state,
+                                                   ordered[index]->rate_id,
+                                                   ordered[index]->input_trace);
   } catch (...) {
     parent_error = std::current_exception();
   }
@@ -370,33 +397,38 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
 }
 
 void neg_div_flux_default_into(int program_block, field_type& stage_state, field_type& rhs,
-                               int rate_id, std::string_view temporal_family = {}) const {
+                               int rate_id, std::string_view temporal_family = {},
+                               const RhsInputTrace* input_trace = nullptr) const {
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program default flux residual");
   const auto point = boundary_evaluation_point(rate_id);
+  const auto* parent = rhs_input_parent_(runtime_block, stage_state, rate_id, input_trace);
   const auto& evaluation =
       active_attempt_states_.empty()
           ? facade_->evaluate_prepared_amr_block_level_flux_at(runtime_block, point, stage_state)
           : facade_->evaluate_prepared_amr_block_level_flux_at(
                 runtime_block, point, stage_state, active_level_ - 1,
-                staged_parent_for_block_(runtime_block));
+                parent);
   copy_valid_(evaluation.residual, rhs);
   if (!active_attempt_states_.empty())
     attach_active_flux_basis_(runtime_block, evaluation, rhs, rate_id,
                               FluxBasisProvider::PreparedDefaultFlux, temporal_family);
   count_kernel_();
 }
-void source_default_into(int program_block, field_type& stage_state, field_type& rhs) const {
+void source_default_into(int program_block, field_type& stage_state, field_type& rhs,
+                         const RhsInputTrace* input_trace = nullptr) const {
   const int runtime_block = sys_block(program_block);
   require_same_field_contract_(stage_state, rhs, "AMR Program default source residual");
-  const auto point = boundary_evaluation_point(0);
+  const int evaluation = input_trace && input_trace->current_ ? input_trace->current_->evaluation : 0;
+  const auto point = boundary_evaluation_point(evaluation);
+  const auto* parent = rhs_input_parent_(runtime_block, stage_state, evaluation, input_trace);
   if (active_attempt_states_.empty())
     facade_->prepared_amr_block_level_source_into_at(runtime_block, point, stage_state, rhs);
   else
     facade_->prepared_amr_block_level_source_into_at(runtime_block, point, stage_state, rhs,
                                                      active_level_ - 1,
-                                                     staged_parent_for_block_(runtime_block));
+                                                     parent);
   clear_active_flux_expression_(rhs);
   count_kernel_();
 }
@@ -437,14 +469,16 @@ void require_cartesian_generated_operator(int program_block, const std::string& 
     require_named_flux_execution_envelope_(runtime_block);
 }
 
-void prepare_generated_state(int program_block, field_type& stage_state, int rate_id) const {
+void prepare_generated_state(int program_block, field_type& stage_state, int rate_id,
+                             const RhsInputTrace* input_trace = nullptr) const {
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   const auto point = boundary_evaluation_point(rate_id);
+  const auto* parent = rhs_input_parent_(runtime_block, stage_state, rate_id, input_trace);
   if (active_attempt_states_.empty())
     facade_->prepare_generated_amr_block_level_state(runtime_block, point, stage_state);
   else
     facade_->prepare_generated_amr_block_level_state(runtime_block, point, stage_state,
                                                      active_level_ - 1,
-                                                     staged_parent_for_block_(runtime_block));
+                                                     parent);
 }

@@ -93,6 +93,7 @@ struct MappingContinuation {
 mutable std::unique_ptr<MappingContinuation> mapping_continuation_;
 
 void cancel_mapping_hierarchy_() const noexcept {
+  rhs_input_traces_.clear();
   if (multiblock_subcycling_)
     multiblock_subcycling_->abort_synchronized();
   if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
@@ -195,6 +196,7 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
           });
       commit_interface_flux_attempt_();
       multiblock_subcycling_has_accepted_step_ = true;
+      rhs_input_traces_.clear();
       synchronized_level_envelopes_.clear();
       clear_active_multiblock_group_();
       swap_level_attempt_envelope_(frame.prior);

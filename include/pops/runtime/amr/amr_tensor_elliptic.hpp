@@ -38,7 +38,11 @@ struct TensorFacControls {
   std::optional<Real> coarse_relative_tolerance;
   std::optional<Real> coarse_absolute_tolerance;
   std::optional<int> coarse_cycles;
+  std::optional<Real> correction_damping;
   std::optional<bool> verbose;
+  int boundary_count = 0;
+  std::array<int, 6> boundary_kinds{{-1, -1, -1, -1, -1, -1}};
+  elliptic::nd::CartesianTensorStencilOptions stencil_options{};
 };
 
 inline void validate_controls(const TensorFacControls& controls) {
@@ -55,6 +59,10 @@ inline void validate_controls(const TensorFacControls& controls) {
     throw std::invalid_argument("tensor FAC coarse absolute tolerance must be non-negative");
   if (controls.coarse_cycles && *controls.coarse_cycles <= 0)
     throw std::invalid_argument("tensor FAC coarse_cycles must be positive");
+  if (controls.correction_damping &&
+      (!std::isfinite(static_cast<double>(*controls.correction_damping)) ||
+       *controls.correction_damping <= Real(0) || *controls.correction_damping > Real(1)))
+    throw std::invalid_argument("tensor FAC correction damping must lie in (0, 1]");
 }
 
 inline TensorFacControls decode_controls(const PreparedProviderOptions& options) {
@@ -79,13 +87,45 @@ inline TensorFacControls decode_controls(const PreparedProviderOptions& options)
         controls.coarse_relative_tolerance = static_cast<Real>(std::get<double>(value));
       else
         controls.coarse_absolute_tolerance = static_cast<Real>(std::get<double>(value));
+    } else if (key == "fac.correction_damping") {
+      if (!std::holds_alternative<double>(value))
+        throw std::invalid_argument("tensor FAC correction damping has the wrong wire type");
+      controls.correction_damping = static_cast<Real>(std::get<double>(value));
     } else if (key == "fac.verbose") {
       if (!std::holds_alternative<bool>(value))
         throw std::invalid_argument("tensor FAC verbose option has the wrong wire type");
       controls.verbose = std::get<bool>(value);
+    } else if (key == "operator.arithmetic_diagonal") {
+      if (!std::holds_alternative<bool>(value))
+        throw std::invalid_argument("tensor face averaging has the wrong wire type");
+      controls.stencil_options.arithmetic_diagonal = std::get<bool>(value);
+    } else if (key == "boundary.count") {
+      if (!std::holds_alternative<std::int64_t>(value))
+        throw std::invalid_argument("tensor boundary count has the wrong wire type");
+      const auto count = std::get<std::int64_t>(value);
+      if (count != 2 && count != 4 && count != 6)
+        throw std::invalid_argument("tensor boundary count must be twice its spatial rank");
+      controls.boundary_count = static_cast<int>(count);
+    } else if (key.size() == 15 && key.starts_with("boundary.face.") &&
+               key.back() >= '0' && key.back() <= '5') {
+      if (!std::holds_alternative<std::int64_t>(value))
+        throw std::invalid_argument("tensor boundary kind has the wrong wire type");
+      const auto kind = std::get<std::int64_t>(value);
+      if (kind < 0 || kind > 2)
+        throw std::invalid_argument("tensor boundary must be periodic, homogeneous Dirichlet or zero flux");
+      controls.boundary_kinds[static_cast<std::size_t>(key.back() - '0')] = static_cast<int>(kind);
     } else {
       throw std::invalid_argument("unknown tensor FAC option '" + key + "'");
     }
+  }
+  for (int face = 0; face < 6; ++face) {
+    const int kind = controls.boundary_kinds[static_cast<std::size_t>(face)];
+    if ((face < controls.boundary_count) != (kind >= 0))
+      throw std::invalid_argument("tensor boundary options omit a face or exceed their exact rank");
+    if (kind == 1)
+      controls.stencil_options.dirichlet_faces |= 1u << face;
+    else if (kind == 2)
+      controls.stencil_options.zero_flux_faces |= 1u << face;
   }
   validate_controls(controls);
   return controls;
@@ -206,6 +246,21 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
     tensor_elliptic_detail::validate_controls(controls_);
     if (prepared_contract_.empty() || request_.components != 1)
       throw std::invalid_argument("dimension-generic tensor elliptic preparation is incomplete");
+    if (controls_.boundary_count != 0) {
+      if (controls_.boundary_count != 2 * Dim)
+        throw std::invalid_argument("tensor boundary option rank differs from the prepared hierarchy");
+      for (const auto& level : request_.levels)
+        for (int axis = 0; axis < Dim; ++axis)
+          for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+            const Face<Dim> face{axis, side};
+            const int declared = controls_.boundary_kinds[static_cast<std::size_t>(face.ordinal())];
+            const auto law = level.boundary.at(face);
+            if ((declared == 0) != level.boundary.topology().is_periodic(face) ||
+                (declared == 1 && (law.kind != PhysicalBoundaryKind::dirichlet || law.value != Real(0))) ||
+                (declared == 2 && (law.kind != PhysicalBoundaryKind::neumann || law.value != Real(0))))
+              throw std::invalid_argument("tensor face options disagree with the prepared physical boundary");
+          }
+    }
     levels_.reserve(request_.levels.size());
     for (const auto& level : request_.levels)
       levels_.emplace_back(level);
@@ -239,7 +294,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
       }
       tensor_fac_ = std::make_unique<tensor_fac::FullTensorCompositeFac<Dim, MemorySpace>>(
           std::span<const tensor_fac::LevelBinding<Dim, MemorySpace>>(bindings), request_.ratios,
-          lane);
+          lane, controls_.stencil_options);
     }
   }
 
@@ -313,6 +368,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
     resolved.coarse_absolute_tolerance =
         controls_.coarse_absolute_tolerance.value_or(defaults.coarse_abs_tol);
     resolved.coarse_cycles = controls_.coarse_cycles.value_or(defaults.coarse_cycles);
+    resolved.correction_damping = controls_.correction_damping.value_or(Real(1));
     return tensor_fac_->solve(resolved, lane);
   }
 

@@ -6953,8 +6953,10 @@ struct AmrSystem<Dim>::Impl {
             physical->execute(*candidate_storage);
           };
           refresh_candidate_ghosts();
+          const auto auxiliary_geometry = Geometry<Dim>::from_bounds(
+              engine->hierarchy().layout(static_cast<int>(level)).domain(), cfg.lower, cfg.upper);
           publication.launch_ready_native(
-              {prepared_hierarchy->provider_storage[level].get(), candidate_storage},
+              {prepared_hierarchy->provider_storage[level].get(), candidate_storage, &auxiliary_geometry},
               [&](const auto&, std::exception_ptr local_error) {
                 runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
                     local_error, &lane,
@@ -11198,14 +11200,80 @@ void AmrSystem<Dim>::refresh_auxiliary(const runtime::system::AuxiliaryEvaluatio
 }
 
 template <int Dim>
+void AmrSystem<Dim>::prepare_single_level_program_auxiliary_consumer(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+    int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR Program auxiliary read");
+  std::exception_ptr preflight_error;
+  try {
+    if (p_->engine->hierarchy().num_levels() != 1 || point.level != 0)
+      throw std::invalid_argument("AMR flat auxiliary read requires exactly one live level");
+    if (point.clock.empty() || point.tick != p_->macro_step || point.substep < 0 ||
+        point.stage < 0 || point.stage_fraction < amr::Rational(0, 1) ||
+        amr::Rational(1, 1) < point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
+        !std::isfinite(point.physical_time) || evaluation_sequence < 0)
+      throw std::invalid_argument("AMR Program auxiliary read requires its complete current point");
+    if (block < 0 || static_cast<std::size_t>(block) >= p_->blocks.size())
+      throw std::out_of_range("AMR Program auxiliary read block is outside the hierarchy");
+    const auto& accepted = p_->block_state(static_cast<std::size_t>(block), 0);
+    if (stage_state.layout() != accepted.layout() ||
+        stage_state.distribution() != accepted.distribution() ||
+        stage_state.local_rank() != accepted.local_rank() ||
+        stage_state.ncomp() != accepted.ncomp())
+      throw std::invalid_argument("AMR Program auxiliary read SSA state differs from its block");
+    (void)p_->prepared_hierarchy->auxiliary_registries.at(0).consumer_plan(consumer_qid);
+  } catch (...) {
+    preflight_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      preflight_error, &lane, "AMR Program auxiliary read preflight failed collectively");
+  authenticate_generated_block_point<Dim>(
+      "auxiliary-read", block, p_->blocks[static_cast<std::size_t>(block)].name, point,
+      p_->multiblock_hierarchy->collective_contract(), lane.communicator());
+  ExactContractBuilder exact;
+  exact.text("pops.amr.single-level-program-auxiliary-read")
+      .scalar(std::uint32_t{1})
+      .text(consumer_qid)
+      .scalar(block)
+      .text(point.clock)
+      .scalar(point.tick)
+      .scalar(point.level)
+      .scalar(point.substep)
+      .scalar(point.stage)
+      .scalar(point.stage_fraction.numerator)
+      .scalar(point.stage_fraction.denominator)
+      .scalar(point.dt)
+      .scalar(point.physical_time)
+      .scalar(p_->engine->topology_epoch())
+      .scalar(p_->engine->materialization_generation())
+      .scalar(evaluation_sequence);
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"amr-program-auxiliary-read", std::move(exact).release()}}, lane))
+    throw std::invalid_argument("AMR Program auxiliary read identity differs across MPI ranks");
+  runtime::system::AuxiliaryEvaluationPoint auxiliary_point;
+  auxiliary_point.clock = point.clock;
+  auxiliary_point.accepted_step = static_cast<std::uint64_t>(point.tick);
+  auxiliary_point.layout_generation = p_->engine->materialization_generation();
+  auxiliary_point.level = point.level;
+  auxiliary_point.substep = point.substep;
+  auxiliary_point.stage = point.stage;
+  auxiliary_point.nonlinear_iteration = evaluation_sequence;
+  auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+  refresh_auxiliary_on_prepared_lane(auxiliary_point, {consumer_qid});
+}
+
+template <int Dim>
 void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
-    const runtime::system::AuxiliaryEvaluationPoint& point) {
+    const runtime::system::AuxiliaryEvaluationPoint& point,
+    const std::vector<std::string>& consumer_qids) {
   const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR auxiliary refresh");
   std::exception_ptr hierarchy_error;
   try {
     if (!p_->prepared_hierarchy || p_->prepared_hierarchy->auxiliary_registries.size() !=
                                        p_->prepared_hierarchy->provider_storage.size())
       throw std::logic_error("AMR auxiliary hierarchy lost its per-level registries");
+    if (!consumer_qids.empty() && p_->prepared_hierarchy->provider_storage.size() != 1)
+      throw std::invalid_argument("AMR consumer publication requires one exact root level");
     if (!p_->prepared_hierarchy->lane ||
         p_->prepared_hierarchy->provider_candidate_storage.size() !=
             p_->prepared_hierarchy->provider_storage.size() ||
@@ -11220,6 +11288,66 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       hierarchy_error, &lane, "AMR auxiliary hierarchy preflight failed collectively");
   auto& hierarchy = *p_->prepared_hierarchy;
+  std::vector<std::string> forced = p_->dirty_auxiliary_providers;
+  std::vector<std::string> remaining_dirty = p_->dirty_auxiliary_providers;
+  // A flat Program read selects its exact dependency closure. In particular it must not
+  // publish unrelated dirty inputs or consume a field-output provider owned by another solve.
+  if (!consumer_qids.empty()) {
+    bool has_due_provider = false;
+    std::string selection_contract;
+    std::exception_ptr selection_error;
+    try {
+      auto& registry = hierarchy.auxiliary_registries.at(0);
+      std::vector<std::string> required;
+      const auto require_provider = [&](const auto& self, const auto& provider) -> void {
+        if (std::find(required.begin(), required.end(), provider.identity()) != required.end())
+          return;
+        required.push_back(provider.identity());
+        for (const auto& dependency : provider.dependencies())
+          self(self, registry.provider_for_key(dependency.key));
+      };
+      for (const auto& qid : consumer_qids)
+        for (const auto& value : registry.consumer_plan(qid).values)
+          require_provider(require_provider, registry.provider_for_key(value.key));
+      std::erase_if(forced, [&](const auto& identity) {
+        return std::find(required.begin(), required.end(), identity) == required.end();
+      });
+      for (std::size_t index : registry.topological_order()) {
+        const auto& provider = registry.provider(index);
+        if (std::find(required.begin(), required.end(), provider.identity()) == required.end())
+          continue;
+        const bool due =
+            std::find(forced.begin(), forced.end(), provider.identity()) != forced.end() ||
+            provider.policy().requires_evaluation(registry.last_accepted_point(provider.identity()),
+                                                  point);
+        has_due_provider = has_due_provider || due;
+        if (!due && !registry.last_accepted_point(provider.identity()))
+          throw std::logic_error("AMR Program auxiliary prerequisite has never been published: " +
+                                 provider.identity());
+      }
+      ExactContractBuilder exact;
+      const auto identity = [](ExactContractBuilder& item, const std::string& value) {
+        item.text(value);
+      };
+      exact.text("pops.amr.single-level-auxiliary-selection")
+          .scalar(std::uint32_t{1})
+          .scalar(registry.accepted_generation())
+          .scalar(has_due_provider)
+          .sequence(consumer_qids, identity)
+          .sequence(required, identity)
+          .sequence(forced, identity);
+      selection_contract = std::move(exact).release();
+    } catch (...) {
+      selection_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        selection_error, &lane, "AMR Program auxiliary selection failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-program-auxiliary-selection", selection_contract}}, lane))
+      throw std::invalid_argument("AMR Program auxiliary selection differs across MPI ranks");
+    if (!has_due_provider)
+      return;
+  }
   using transaction_type =
       typename runtime::system::ExactAuxiliaryRegistry<Dim>::PublicationTransaction;
   using storage_snapshot_type = std::vector<runtime::system::AuxiliaryStorageGroups<Dim>>;
@@ -11301,7 +11429,22 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
         level_point = point;
         level_point.level = static_cast<int>(level);
         transactions[level].emplace(
-            registry->begin_publication(level_point, p_->dirty_auxiliary_providers));
+            registry->begin_publication(level_point, forced, consumer_qids));
+        if (!consumer_qids.empty()) {
+          std::vector<std::string> published;
+          for (std::size_t index : registry->topological_order()) {
+            const auto& identity = registry->provider(index).identity();
+            if (transactions[level]->requires_staging(identity))
+              published.push_back(identity);
+          }
+          for (const auto& identity : registry->dependent_provider_identities(published))
+            if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) ==
+                remaining_dirty.end())
+              remaining_dirty.push_back(identity);
+          std::erase_if(remaining_dirty, [&](const auto& identity) {
+            return transactions[level]->requires_staging(identity);
+          });
+        }
       } catch (...) {
         candidate_error = std::current_exception();
       }
@@ -11409,8 +11552,9 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
         physical->execute(*candidate);
       };
       refresh_candidate_ghosts();
+      const auto auxiliary_geometry = prepared_amr_level_geometry(static_cast<int>(level));
       transaction.launch_ready_native(
-          {hierarchy.provider_storage[level].get(), candidate},
+          {hierarchy.provider_storage[level].get(), candidate, &auxiliary_geometry},
           [&](const auto&, std::exception_ptr local_error) {
             runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
                 local_error, &lane,
@@ -11470,7 +11614,10 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
                          "AMR auxiliary multi-level metadata commit failed collectively");
     return;
   }
-  p_->dirty_auxiliary_providers.clear();
+  if (consumer_qids.empty())
+    p_->dirty_auxiliary_providers.clear();
+  else
+    p_->dirty_auxiliary_providers.swap(remaining_dirty);
 }
 
 template <int Dim>
@@ -21886,6 +22033,9 @@ template void AmrSystem<kNativeDimension>::stage_auxiliary_input(
     const runtime::system::AuxiliaryComponentKey&, const std::vector<double>&);
 template void AmrSystem<kNativeDimension>::refresh_auxiliary(
     const runtime::system::AuxiliaryEvaluationPoint&);
+template void AmrSystem<kNativeDimension>::prepare_single_level_program_auxiliary_consumer(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+    const MultiFab<kNativeDimension>&, int);
 template runtime::system::AuxiliaryStorageAddress<kNativeDimension>
 AmrSystem<kNativeDimension>::auxiliary_address(const runtime::system::AuxiliaryComponentKey&) const;
 template std::vector<double> AmrSystem<kNativeDimension>::auxiliary_component(

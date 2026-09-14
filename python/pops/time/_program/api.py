@@ -16,6 +16,7 @@ from pops.model.ownership import OwnerKind, OwnerPath
 from pops.time._program.contract import register_program_type
 from pops.time._cadence import ProgramCadence
 from pops.time._program.authoring import _ProgramAuthoring
+from pops.time._program.affine_moments import _ProgramAffineMoments
 from pops.time._program.condensed import _ProgramCondensed
 from pops.time._program.operations import _ProgramCore
 from pops.time._program.dt_bound import _ProgramDtBound
@@ -40,6 +41,7 @@ from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue u
 
 @register_program_type
 class Program(
+    _ProgramAffineMoments,
     _ProgramTimeHandles,
     _ProgramPhysicalMaps,
     _ProgramCore,

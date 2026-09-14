@@ -507,6 +507,8 @@ set(POPS_CPP_STANDARD_TESTS
   test_composite_fac_variable_eps
   test_composite_fac_variable_k
   test_composite_fac_tensor
+  test_mapped_disk_tensor
+  test_mapped_disk_tensor_fac
   test_composite_general_field
   test_amr_composite_poisson
   test_polar_poisson_mms

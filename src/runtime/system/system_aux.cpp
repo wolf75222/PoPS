@@ -500,7 +500,7 @@ void System<Dim>::publish_program_field_components(
   const auto refresh_ghosts = [&] { transport.execute(candidate); };
   refresh_ghosts();
   transaction->launch_ready_native(
-      {&*p_->provider_carrier_, &candidate}, [&](const auto&, std::exception_ptr failure) {
+      {&*p_->provider_carrier_, &candidate, &p_->geom}, [&](const auto&, std::exception_ptr failure) {
         runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
             failure, &lane, "Program field prerequisite failed collectively");
         refresh_ghosts();
@@ -657,7 +657,7 @@ AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
     // observes a predecessor's valid-only candidate image.
     refresh_candidate_ghosts();
     transaction.launch_ready_native(
-        {&*p_->provider_carrier_, &candidate}, [&](const auto&, std::exception_ptr local_error) {
+        {&*p_->provider_carrier_, &candidate, &p_->geom}, [&](const auto&, std::exception_ptr local_error) {
           runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
               local_error, &*p_->auxiliary_ghost_lane_,
               "System auxiliary native provider launch failed collectively before ghost fill");

@@ -140,6 +140,12 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
                                 provider_plans=None, bidx=0, target="system"):
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
+    if target == "amr_system":
+        from pops.codegen.program_rhs_input_trace import requires_rhs_input_trace
+        if requires_rhs_input_trace(v):
+            raise NotImplementedError(
+                "AMR source-transformed diffusion inputs require a qualified composite "
+                "diffusion trace; same-stage RHS traces currently cover finite-volume transport")
     _,selected,_=_selected(v,node_model)
     preparation = "%s, %s, %s" % (
         state_var, _boundary_cpp(selected["physical"]),

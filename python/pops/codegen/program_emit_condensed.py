@@ -45,6 +45,9 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
     inline emitter (ADC-637), keeping program_emit_ops.py a thin router. Records the op's C++ token in
     @p var and appends its kernel to @p lines (the coefficient bundle also allocates one persistent
     row-major tensor field in @p prelude, captured by the apply lambda)."""
+    mapped = v.attrs.get("gradient_map") is not None or v.attrs.get("base_tensor") is not None
+    if mapped and target != "amr_system":
+        raise ValueError("mapped condensed operators require an AMR layout, including a one-level AMR layout")
     if v.op == "condensed_coeffs":
         if prelude is None:
             raise NotImplementedError(
@@ -61,6 +64,7 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
         lines += _emit_condensed_coeffs_kernel(
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["c"],
             v.attrs["th_dt"], v.attrs["c_rho"], "(*%s)" % tensor, var[state_in.id],
+            gradient_map=v.attrs.get("gradient_map"), base_tensor=v.attrs.get("base_tensor"),
             provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block, target=target)
         # Coefficient halos: the tensor apply reads neighbouring cells, so the field needs
         # its ghosts filled after assembly. The ctx
@@ -89,6 +93,8 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
         lines += _emit_condensed_rhs_kernel(
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["th_dt"],
             v.attrs["g"], var[out_in.id], var[phi_in.id], var[state_in.id],
+            gradient_map=v.attrs.get("gradient_map"), base_tensor=v.attrs.get("base_tensor"),
+            charge_component=v.attrs.get("charge_component"),
             provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block, target=target)
         var[v.id] = var[out_in.id]
     elif v.op == "condensed_reconstruct":
@@ -96,6 +102,8 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
         lines += _emit_condensed_reconstruct_kernel(
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["th_dt"],
             v.attrs["c_rho"], var[state_in.id], var[phi_in.id],
+            gradient_map=v.attrs.get("gradient_map"),
+            gradient_scale=v.attrs.get("gradient_scale"), target=target,
             provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block)
         var[v.id] = var[state_in.id]
     else:  # condensed_energy
@@ -123,14 +131,14 @@ def _subset_block_rows(impl: Any, op_name: Any, subset: Any) -> Any:
 
 
 def _emit_block_M(body: Any, impl: Any, jblock: Any, th_dt_cpp: Any, indent: Any,
-                  provider_binding: Any) -> Any:
+                  provider_binding: Any, extra_roots: Any = ()) -> Any:
     """Emit ``M = I - th_dt*J`` from the subset block @p jblock (n x n Expr) into the local ``M_[n][n]``,
     each line prefixed with @p indent. Binds the aux / param locals the J entries reference FIRST (via
     _cell_locals, cons/prim-free) and the th_dt_ scalar. Returns n. Shared by the coefficient path (which
     then inverts M with block_inverse) and the vector-apply paths (which call block_apply_inverse on M_).
     """
     n = len(jblock)
-    flat = [e for row in jblock for e in row]
+    flat = [e for row in jblock for e in row] + list(extra_roots)
     # aux / param locals the J entries read (cons/prim-free by the linear_source invariant): bound once.
     # _cell_locals reads state only for cons/prim (both False here), so the state_var arg is unused.
     for ln in _cell_locals(
@@ -149,7 +157,7 @@ def _emit_block_M(body: Any, impl: Any, jblock: Any, th_dt_cpp: Any, indent: Any
 
 
 def _emit_block_inverse(body: Any, impl: Any, jblock: Any, th_dt_cpp: Any, indent: Any,
-                        provider_binding: Any) -> Any:
+                        provider_binding: Any, extra_roots: Any = ()) -> Any:
     """Emit ``M = I - th_dt*J`` (via _emit_block_M) and all entries ``Mi_ = M^{-1}`` via
     ``pops::detail::block_inverse<n>``, into @p body. Returns n so the caller reads Mi_[r][c]. This is the
     COEFFICIENT primitive: the tensor ``A = I + c*rho*M^{-1}`` reads the entries directly, and each
@@ -157,7 +165,7 @@ def _emit_block_inverse(body: Any, impl: Any, jblock: Any, th_dt_cpp: Any, inden
     VECTOR applies (flux, reconstruct) do NOT use this -- they call block_apply_inverse on M_ so the
     single reciprocal is factored out of the bracket (apply_Binv order, bit-exact); see _emit_apply_minv.
     block_inverse computes the inverse once per cell; the caller reuses it for the full tensor."""
-    n = _emit_block_M(body, impl, jblock, th_dt_cpp, indent, provider_binding)
+    n = _emit_block_M(body, impl, jblock, th_dt_cpp, indent, provider_binding, extra_roots)
     body.append("%spops::Real Mi_[%d][%d];" % (indent, n, n))
     # block_inverse returns false on a singular M; we do not branch in the device kernel (no throw on
     # device). M = I - th_dt*J is invertible for a well-posed eliminable source (Lorentz: det = 1 + w^2
@@ -195,6 +203,20 @@ def _emit_apply_minv(
         )
 
 
+def _optional_rows(impl: Any, operator: Any, subset: Any) -> Any:
+    return None if operator is None else _subset_block_rows(impl, operator, subset)
+
+
+def _matrix_roots(*matrices: Any) -> list:
+    return [entry for matrix in matrices if matrix is not None for row in matrix for entry in row]
+
+
+def _matrix_entry(matrix: Any, row: int, column: int) -> str:
+    if matrix is None:
+        return "pops::Real(1)" if row == column else "pops::Real(0)"
+    return "(%s)" % matrix[row][column].to_cpp()
+
+
 def _emit_condensed_coeffs_kernel(
     uid: Any,
     model: Any,
@@ -206,6 +228,7 @@ def _emit_condensed_coeffs_kernel(
     tensor: Any,
     state_var: Any,
     *, provider_plans: Any, consumer_qid: str, program_block: int, target: str = "system",
+    gradient_map: Any = None, base_tensor: Any = None,
 ) -> list:
     """Emit ``A = I + c*rho*M^{-1}`` into one row-major ``Dim*Dim`` field.
 
@@ -218,8 +241,11 @@ def _emit_condensed_coeffs_kernel(
     if dimension not in (1, 2, 3):
         raise ValueError("condensed coefficient tensor rank must be 1, 2, or 3")
     jblock = _subset_block_rows(impl, jblock_op, subset)
+    gradient = _optional_rows(impl, gradient_map, subset)
+    base = _optional_rows(impl, base_tensor, subset)
+    map_roots = _matrix_roots(gradient, base)
     provider_binding = _provider_binding(
-        impl, [entry for row in jblock for entry in row], provider_plans, consumer_qid)
+        impl, _matrix_roots(jblock) + map_roots, provider_plans, consumer_qid)
     c_cpp = _coeff_cpp(c_coeff)
     th_dt_cpp = _coeff_cpp(th_dt)
     tensor_write = "cond%s_tensorW" % uid
@@ -240,19 +266,27 @@ def _emit_condensed_coeffs_kernel(
         "std::as_const(%s).fab(li).view();" % state_var,
         "  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
         % (provider_binding["count"], json.dumps(provider_binding["qid"]), program_block),
+        "  const pops::RuntimeParams params = ctx.program_params(%d);" % program_block,
         "  pops::for_each_cell(%s, [=] POPS_HD("
         "const pops::CellIndex<pops::kNativeDimension>& index) {" % iteration_box,
         "    const pops::Real rho = stateA(index, %d);" % int(c_rho),
     ]
-    _emit_block_inverse(body, impl, jblock, th_dt_cpp, "    ", provider_binding)
+    _emit_block_inverse(body, impl, jblock, th_dt_cpp, "    ", provider_binding, map_roots)
     body.append("    const pops::Real cr = (%s) * rho;  // c*rho: the outer factor (R2: rho not in M)"
                 % c_cpp)
     for row in range(dimension):
         for column in range(dimension):
-            identity = "pops::Real(1)" if row == column else "pops::Real(0)"
+            identity = _matrix_entry(base, row, column)
+            inverse_entry = "Mi_[%d][%d]" % (row, column)
+            if gradient is not None:
+                inverse_entry = "(" + " + ".join(
+                    "%s * Mi_[%d][%d] * %s" % (
+                        _matrix_entry(gradient, left, row), left, right,
+                        _matrix_entry(gradient, right, column))
+                    for left in range(dimension) for right in range(dimension)) + ")"
             body.append(
-                "    tensorA(index, %d) = %s + cr * Mi_[%d][%d];"
-                % (row * dimension + column, identity, row, column)
+                "    tensorA(index, %d) = %s + cr * %s;"
+                % (row * dimension + column, identity, inverse_entry)
             )
     body += ["  });", "}"]
     return body
@@ -260,7 +294,8 @@ def _emit_condensed_coeffs_kernel(
 
 def _emit_condensed_flux_kernel(body: Any, uid: Any, impl: Any, jblock: Any, th_dt_cpp: Any,
                                 subset: Any, fx_var: Any, state_var: Any, provider_binding: Any,
-                                program_block: int, target: str = "system") -> None:
+                                program_block: int, target: str = "system",
+                                gradient: Any = None, extra_roots: Any = ()) -> None:
     """Emit ``F = M^{-1} momentum`` into one component per exact native axis."""
     if target == "amr_system":
         body.append(
@@ -276,26 +311,38 @@ def _emit_condensed_flux_kernel(body: Any, uid: Any, impl: Any, jblock: Any, th_
         "std::as_const(%s).fab(li).view();" % state_var,
         "  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
         % (provider_binding["count"], json.dumps(provider_binding["qid"]), program_block),
+        "  const pops::RuntimeParams params = ctx.program_params(%d);" % program_block,
         "  pops::for_each_cell(%s, [=] POPS_HD("
         "const pops::CellIndex<pops::kNativeDimension>& index) {" % iteration_box,
     ]
-    n = _emit_block_M(body, impl, jblock, th_dt_cpp, "    ", provider_binding)
+    n = _emit_block_M(body, impl, jblock, th_dt_cpp, "    ", provider_binding, extra_roots)
     inputs = ["stateA(index, %d)" % int(component) for component in subset]
     outputs = ["cond_flux_%d_" % component for component in range(n)]
     _emit_apply_minv(body, inputs, outputs, "    ")
     for component, output in enumerate(outputs):
+        if gradient is not None:
+            output = " + ".join("%s * %s" % (_matrix_entry(gradient, axis, component), outputs[axis])
+                                for axis in range(len(subset)))
         body.append("    fA(index, %d) = %s;" % (component, output))
     body += ["  });", "}"]
 
 
 def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any, th_dt: Any,
                                g_coeff: Any, rhs_var: Any, phi_n_var: Any, state_var: Any,
-                               *, provider_plans: Any, consumer_qid: str, program_block: int, target: str = "system") -> list:
-    """Emit ``rhs = -Lap(phi_n) - g*div(M^{-1} momentum)`` for the exact native rank."""
+                               *, provider_plans: Any, consumer_qid: str, program_block: int,
+                               target: str = "system", gradient_map: Any = None,
+                               base_tensor: Any = None, charge_component: Any = None) -> list:
+    """Emit the conservative mapped source RHS, optionally folding in a Gauss projection."""
     impl = _model_impl(model)
     jblock = _subset_block_rows(impl, jblock_op, subset)
+    gradient = _optional_rows(impl, gradient_map, subset)
+    base = _optional_rows(impl, base_tensor, subset)
+    map_roots = _matrix_roots(gradient, base)
     provider_binding = _provider_binding(
-        impl, [entry for row in jblock for entry in row], provider_plans, consumer_qid)
+        impl, _matrix_roots(jblock) + map_roots, provider_plans, consumer_qid)
+    mapped = gradient is not None or base is not None
+    if charge_component is not None and charge_component >= len(impl.cons_names):
+        raise ValueError("condensed_rhs charge_component lies outside its State")
     th_dt_cpp = _coeff_cpp(th_dt)
     g_cpp = _coeff_cpp(g_coeff)
     rhs = _deref(rhs_var)
@@ -305,24 +352,49 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
     flux_write = "cond%s_fluxW" % uid
     rhs_write = "cond%s_rhsW" % uid
     dimension = len(subset)
-    body = (["ctx.prepare_condensed_prior(%d, %s);" % (program_block, _deref(phi_n_var))]
-            if target == "amr_system" else [])
+    body = []
+    if charge_component is None:
+        if target == "amr_system":
+            body.append("ctx.prepare_condensed_prior(%d, %s);" % (program_block, _deref(phi_n_var)))
+        body.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+                    % (lap, uid, _deref(phi_n_var)))
+        if mapped:
+            metric = "cond%s_metric" % uid
+            body += [
+                "pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 3, %s, %d, 1);"
+                % (metric, uid, _deref(phi_n_var), dimension * dimension),
+                "ctx.prepare_condensed_sampling<%d>(%d, %d, %s, %s, %s);"
+                % (provider_binding["count"], program_block, uid, state_var, metric,
+                   json.dumps(provider_binding["qid"])),
+                "for (int li = 0; li < %s.local_size(); ++li) {" % metric,
+                "  const auto metricA = %s.fab(li).view();" % metric,
+                "  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
+                % (provider_binding["count"], json.dumps(provider_binding["qid"]), program_block),
+                "  const pops::RuntimeParams params = ctx.program_params(%d);" % program_block,
+                "  pops::for_each_cell(%s.fab(li).grown_box(), [=] POPS_HD(const pops::CellIndex<pops::kNativeDimension>& index) {" % metric,
+            ]
+            for line in _cell_locals(impl, map_roots, "STATE_UNUSED", with_cons=False,
+                                     with_prim=False, provider_binding=provider_binding):
+                body.append("    " + line)
+            for row in range(dimension):
+                for column in range(dimension):
+                    body.append("    metricA(index, %d) = %s;" %
+                                (row * dimension + column, _matrix_entry(base, row, column)))
+            body += ["  });", "}", "ctx.fill_boundary(%s);" % metric,
+                     "ctx.condensed_tensor_laplacian(%d, %s, %s, %s);"
+                     % (program_block, lap, _deref(phi_n_var), metric)]
+        else:
+            body.append("ctx.laplacian(%s, %s);" % (lap, _deref(phi_n_var)))
+        body += [
+            "pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
+            % (negl, uid, _deref(phi_n_var)),
+            "for (int li = 0; li < %s.local_size(); ++li) {" % negl,
+            "  const auto nlA = %s.fab(li).view();" % negl,
+            "  const auto lapA = std::as_const(%s).fab(li).view();" % lap,
+            "  pops::for_each_cell(%s.box(li), [=] POPS_HD(const pops::CellIndex<pops::kNativeDimension>& index) {" % negl,
+            "    nlA(index, 0) = -lapA(index, 0);", "  });", "}",
+        ]
     body += [
-        "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 0, %s, 1, 0);" % (lap, uid, _deref(phi_n_var)),
-        "ctx.laplacian(%s, %s);" % (lap, _deref(phi_n_var)),
-        "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 1, %s, 1, 0);" % (negl, uid, _deref(phi_n_var)),
-        "for (int li = 0; li < %s.local_size(); ++li) {" % negl,
-        "  const pops::FieldView<pops::Real, pops::kNativeDimension> nlA = "
-        "%s.fab(li).view();" % negl,
-        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> lapA = "
-        "std::as_const(%s).fab(li).view();" % lap,
-        "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
-        "const pops::CellIndex<pops::kNativeDimension>& index) {" % negl,
-        "    nlA(index, 0) = -lapA(index, 0);",
-        "  });",
-        "}",
         "pops::MultiFab<pops::kNativeDimension>& %s = "
         "ctx.scalar_scratch(%d, 2, %s, %d, 1);" % (fx, uid, _deref(phi_n_var), dimension),
         "pops::MultiFab<pops::kNativeDimension>& %s = "
@@ -334,17 +406,19 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
     ]
     _emit_condensed_flux_kernel(
         body, uid, impl, jblock, th_dt_cpp, subset, flux_write, state_var, provider_binding,
-        program_block, target,
+        program_block, target, gradient=gradient, extra_roots=map_roots,
     )
     body.append("ctx.fill_boundary(%s);" % flux_write)
+    if mapped:
+        body.append("const auto cond%s_stencil_options = ctx.condensed_stencil_options(%d);" % (uid, program_block))
     body += [
         "const pops::Geometry<pops::kNativeDimension> cond%s_geometry = ctx.geometry();" % uid,
         "const pops::Real cond%s_g = %s;" % (uid, g_cpp),
         "for (int li = 0; li < %s.local_size(); ++li) {" % rhs_write,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> rhsA = "
         "%s.fab(li).view();" % rhs_write,
-        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> nlA = "
-        "std::as_const(%s).fab(li).view();" % negl,
+        ("  const auto nlA = std::as_const(%s).fab(li).view();" % negl if charge_component is None
+         else "  const auto chargeA = std::as_const(%s).fab(li).view();" % state_var),
         "  const pops::FieldView<const pops::Real, pops::kNativeDimension> fA = "
         "std::as_const(%s).fab(li).view();" % flux_write,
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
@@ -355,10 +429,21 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
         "      pops::CellIndex<pops::kNativeDimension> upper = index;",
         "      --lower[axis];",
         "      ++upper[axis];",
-        "      divF += (fA(upper, axis) - fA(lower, axis)) / "
-        "(pops::Real(2) * cond%s_geometry.spacing(axis));" % uid,
+    ]
+    if mapped:
+        body += [
+            "      pops::Real lower_flux = pops::Real(0.5) * (fA(lower, axis) + fA(index, axis));",
+            "      pops::Real upper_flux = pops::Real(0.5) * (fA(upper, axis) + fA(index, axis));",
+            "      if ((cond%s_stencil_options.zero_flux_faces & (1u << (2 * axis))) != 0 && index[axis] == cond%s_geometry.domain().lo[axis]) lower_flux = pops::Real(0);" % (uid, uid),
+            "      if ((cond%s_stencil_options.zero_flux_faces & (1u << (2 * axis + 1))) != 0 && index[axis] == cond%s_geometry.domain().hi[axis]) upper_flux = pops::Real(0);" % (uid, uid),
+            "      divF += (upper_flux - lower_flux) / cond%s_geometry.spacing(axis);" % uid,
+        ]
+    else:
+        body.append("      divF += (fA(upper, axis) - fA(lower, axis)) / (pops::Real(2) * cond%s_geometry.spacing(axis));" % uid)
+    charge = "nlA(index, 0)" if charge_component is None else "chargeA(index, %d)" % charge_component
+    body += [
         "    }",
-        "    rhsA(index, 0) = nlA(index, 0) - cond%s_g * divF;" % uid,
+        "    rhsA(index, 0) = %s - cond%s_g * divF;" % (charge, uid),
         "  });",
         "}",
     ]
@@ -368,22 +453,30 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
 def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any,
                                        th_dt: Any, c_rho: Any, state_var: Any, phi_var: Any,
                                        *, provider_plans: Any, consumer_qid: str,
-                                       program_block: int) -> list:
+                                       program_block: int, gradient_map: Any = None,
+                                       gradient_scale: Any = None, target: str = "system") -> list:
     """Emit the exact-ranked velocity reconstruction and write momentum in place."""
     impl = _model_impl(model)
     jblock = _subset_block_rows(impl, jblock_op, subset)
+    gradient = _optional_rows(impl, gradient_map, subset)
+    map_roots = _matrix_roots(gradient)
     provider_binding = _provider_binding(
-        impl, [entry for row in jblock for entry in row], provider_plans, consumer_qid)
+        impl, _matrix_roots(jblock) + map_roots, provider_plans, consumer_qid)
     th_dt_cpp = _coeff_cpp(th_dt)
     state = state_var
     phi = _deref(phi_var)
     phi_read = "cond%s_phiR" % uid
     dimension = len(subset)
-    body = _prepare_provider_values(provider_binding, program_block, state_var) + [
+    scale_cpp = "pops::Real(1)" if gradient_scale is None else _coeff_cpp(gradient_scale)
+    body = _prepare_provider_values(provider_binding, program_block, state_var)
+    if target == "amr_system":
+        body.append("ctx.prepare_generated_state(%d, %s, %d);" % (program_block, state_var, uid))
+    body += [
         "pops::MultiFab<pops::kNativeDimension>& %s = "
         'ctx.assembly_source(%s, "pops.tensor-elliptic.solution");'
         % (phi_read, phi),
-        "ctx.fill_boundary(%s);" % phi_read,
+        ("ctx.fill_condensed_potential(%d, %s);" % (program_block, phi_read) if gradient is not None
+         else "ctx.fill_boundary(%s);" % phi_read),
         "const pops::Geometry<pops::kNativeDimension> cond%s_geometry = ctx.geometry();" % uid,
         "for (int li = 0; li < %s.local_size(); ++li) {" % state,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> stateA = "
@@ -392,6 +485,7 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
         "std::as_const(%s).fab(li).view();" % phi_read,
         "  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
         % (provider_binding["count"], json.dumps(provider_binding["qid"]), program_block),
+        "  const pops::RuntimeParams params = ctx.program_params(%d);" % program_block,
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
         "const pops::CellIndex<pops::kNativeDimension>& index) {" % state,
         "    const pops::Real rho = stateA(index, %d);" % int(c_rho),
@@ -399,20 +493,25 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
         "    const int cond_components_[%d] = {%s};" % (
             dimension, ", ".join(str(int(component)) for component in subset)),
         "    pops::Real cond_residual_[%d];" % dimension,
+        "    pops::Real cond_coordinate_gradient_[%d];" % dimension,
     ]
-    _emit_block_M(body, impl, jblock, th_dt_cpp, "    ", provider_binding)
+    _emit_block_M(body, impl, jblock, th_dt_cpp, "    ", provider_binding, map_roots)
     body += [
         "    for (int axis = 0; axis < pops::kNativeDimension; ++axis) {",
         "      pops::CellIndex<pops::kNativeDimension> lower = index;",
         "      pops::CellIndex<pops::kNativeDimension> upper = index;",
         "      --lower[axis];",
         "      ++upper[axis];",
-        "      const pops::Real gradient = (phiA(upper, 0) - phiA(lower, 0)) / "
+        "      cond_coordinate_gradient_[axis] = (phiA(upper, 0) - phiA(lower, 0)) / "
         "(pops::Real(2) * cond%s_geometry.spacing(axis));" % uid,
-        "      cond_residual_[axis] = stateA(index, cond_components_[axis]) * inv_rho "
-        "- th_dt_ * gradient;",
         "    }",
     ]
+    for physical in range(dimension):
+        transformed = "cond_coordinate_gradient_[%d]" % physical if gradient is None else " + ".join(
+            "%s * cond_coordinate_gradient_[%d]" % (_matrix_entry(gradient, physical, axis), axis)
+            for axis in range(dimension))
+        body.append("    cond_residual_[%d] = stateA(index, cond_components_[%d]) * inv_rho - th_dt_ * (%s) * (%s);"
+                    % (physical, physical, scale_cpp, transformed))
     outputs = ["cond_velocity_%d_" % component for component in range(dimension)]
     _emit_apply_minv(
         body,

@@ -14,7 +14,7 @@ from .context import (
     UseHeldField,
     UseMaterializedField,
 )
-from .aux import AuxiliaryBoundary, DerivedAux, InputAux
+from .aux import AuxiliaryBoundary, AnalyticAux, DerivedAux, InputAux
 from .discretization import (
     CompositeHierarchySolve,
     FieldDiscretization,
@@ -125,6 +125,7 @@ __all__ = [
     "DerivedField",
     "DirichletContribution",
 "DerivedAux",
+"AnalyticAux",
 "AuxiliaryBoundary",
     "FailFieldRead",
     "FieldAttemptRejected",

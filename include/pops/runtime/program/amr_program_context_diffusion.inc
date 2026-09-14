@@ -4,17 +4,19 @@
 void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_state,
                                           field_type& rhs, int rate_id,
                                           std::vector<nd::FaceField<Dim>>& faces,
-                                          std::string_view temporal_family = {}) const {
+                                          std::string_view temporal_family = {},
+                                          const RhsInputTrace* input_trace = nullptr) const {
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program default flux residual");
   const auto point = boundary_evaluation_point(rate_id);
+  const auto* parent = rhs_input_parent_(runtime_block, stage_state, rate_id, input_trace);
   const auto& evaluation =
       active_attempt_states_.empty()
           ? facade_->evaluate_prepared_amr_block_level_flux_at(runtime_block, point, stage_state)
           : facade_->evaluate_prepared_amr_block_level_flux_at(
                 runtime_block, point, stage_state, active_level_ - 1,
-                staged_parent_for_block_(runtime_block));
+                parent);
   copy_valid_(evaluation.residual, rhs);
   std::exception_ptr copy_error;
   try {

@@ -5,6 +5,7 @@ channels:
   - conda-forge
 dependencies:
   - python=3.12
+  - pip
   - cmake>=3.27
   - ninja
   - ccache
@@ -16,5 +17,6 @@ dependencies:
   - mpich=4.1.2
   - mpi=1.0=mpich
   - "hdf5=1.14.3=mpi_mpich_*"
+  - zlib
   - llvm-openmp
   - fftw

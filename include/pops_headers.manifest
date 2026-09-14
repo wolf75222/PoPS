@@ -124,6 +124,7 @@ sdk-support pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp
 sdk-support pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp
 api pops/numerics/elliptic/poisson/poisson_fft_solver.hpp
 api pops/numerics/elliptic/poisson/poisson_operator.hpp
+sdk-root pops/numerics/moments/affine_velocity.hpp
 api pops/numerics/elliptic/polar/polar_geometry.hpp
 api pops/numerics/elliptic/polar/polar_poisson_solver.hpp
 sdk-support pops/numerics/elliptic/polar/polar_tensor_operator.hpp
@@ -297,6 +298,7 @@ sdk-support pops/runtime/program/amr_program_context_history_checkpoint_runtime.
 sdk-support pops/runtime/program/amr_program_context_history_checkpoint_services.inc
 sdk-root pops/runtime/program/amr_program_context.hpp
 sdk-support pops/runtime/program/amr_program_context_spatial.inc
+sdk-support pops/runtime/program/amr_program_context_rhs_input_trace.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations_services.inc
 sdk-support pops/runtime/program/amr_program_context_hierarchy_barriers.inc

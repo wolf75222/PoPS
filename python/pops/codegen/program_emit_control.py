@@ -266,12 +266,24 @@ def _emit_contiguous_rhs_group(
             if target == "amr_system" else ""
         )
         from pops.codegen.program_models import model_for_node
+        from pops.codegen.program_emit_kernels import prepare_default_rhs_providers
+        lines += prepare_default_rhs_providers(
+            model_for_node(model, value), value, index, var[state.id],
+            var.get(("program_provider_plans",)), target=target,
+            flux=True, source=default_source)
         from pops.codegen.program_transport_quadrature import declare_transport_faces
         faces = declare_transport_faces(value, model_for_node(model, value), var, lines)
         capture = "" if faces is None else ", &"+faces
-        requests.append("{%d, &%s, &%s, %d, %d%s%s}" % (
+        from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
+        input_trace = emit_rhs_input_trace(value, index, var[state.id], lines, target)
+        trace = ""
+        if input_trace is not None:
+            if not capture:
+                capture = ", nullptr"
+            trace = ", " + input_trace
+        requests.append("{%d, &%s, &%s, %d, %d%s%s%s}" % (
             index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
-            family, capture))
+            family, capture, trace))
     lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
     from pops.codegen.program_models import model_for_node
     from pops.codegen.program_partition_stability import emit_transport_frequency

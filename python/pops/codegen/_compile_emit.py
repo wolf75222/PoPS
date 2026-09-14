@@ -627,6 +627,10 @@ def _emit_auxiliary_route_registration(
         )
 
     def derived_launcher(identity: str, route: Mapping[str, Any]) -> str:
+        from pops.fields.aux import AnalyticAux
+        if isinstance(route["producer"], AnalyticAux):
+            from pops.codegen._analytic_aux import emit_analytic_aux_launcher
+            return emit_analytic_aux_launcher(identity, route["producer"])
         dependencies = route["dependencies"]
         producer = route["producer"]
         bindings = {

@@ -872,6 +872,7 @@ void refresh_resources_after_accepted_history_remap_(
   history_flux_expressions_.swap(remapped.expressions);
   publish_history_flux_snapshots_();
   scratches_.clear();
+  rhs_input_traces_.clear();
 }
 
 void publish_history_flux_snapshots_() const {

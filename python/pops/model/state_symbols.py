@@ -161,6 +161,25 @@ def _native_formula_model_view(model: Any, module: Any, *, quantity_handles: Any
                                   quantity_handles=quantity_handles)
         for name, value in unbound_emitter_attributes(model).items()
     })
+    # A caller may add typed AuxSpace producers to the public Module after the
+    # blackboard formulas have been authored. Their authenticated declarations
+    # belong to this private emission view, without mutating the original model
+    # or inventing a second FieldSpace for the same component.
+    declared = {}
+    for space in module.field_spaces().values():
+        for component in space.components:
+            key = ("field", space.name, component)
+            if component in declared and declared[component] != key:
+                raise ValueError("distinct typed fields share native auxiliary name %r" % component)
+            declared[component] = key
+    for space in module.aux().values():
+        key = ("aux", space.name, space.name)
+        if space.name in declared and declared[space.name] != key:
+            raise ValueError("distinct typed fields share native auxiliary name %r" % space.name)
+        declared[space.name] = key
+    components = list(emitter._provider_components)
+    components.extend(name for name in declared if name not in components)
+    object.__setattr__(emitter, "_provider_components", components)
     object.__setattr__(emitter, "_formula_native_bound", True)
     return emitter
 

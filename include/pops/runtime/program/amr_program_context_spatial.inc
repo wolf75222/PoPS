@@ -182,6 +182,7 @@ void begin_step(double dt) const {
   require_facade_execution_();
   if (!std::isfinite(dt) || !(dt > 0.0))
     throw std::invalid_argument("AMR Program step requires a finite positive dt");
+  rhs_input_traces_.clear();
   current_dt_ = dt;
   current_interval_start_time_ = facade_->time();
   current_interval_begin_phase_ = {0, 1};

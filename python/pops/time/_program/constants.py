@@ -47,7 +47,7 @@ class _ProgramConstants:
     # identity); scalar_field /
     # state / history (scratch/state bindings other ops fill or alias); and the sub-block ops below.
     _REMOVABLE_OPS = frozenset({
-        "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "local_transform", "linear_combine",
+        "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "local_transform", "affine_moment_update", "linear_combine",
         "linear_source", "solve_local_linear",
         "cell_compare", "where", "reduce", "scalar_op", "compare",
     })
@@ -102,7 +102,7 @@ class _ProgramConstants:
     )
 
     _SCRATCH_OPS = frozenset({
-        "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "local_transform", "linear_combine",
+        "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "local_transform", "affine_moment_update", "linear_combine",
         "linear_source", "solve_local_linear",
         "solve_local_nonlinear", "solve_coupled_implicit", "solve_implicit_source", "solve_spatial_nonlinear",
         "cell_compare", "where", "coupled_rate",
@@ -112,7 +112,7 @@ class _ProgramConstants:
         "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "linear_combine", "linear_source",
         "solve_local_linear",
         "solve_local_nonlinear", "solve_coupled_implicit", "cell_compare", "where", "coupled_rate",
-        "local_transform", "project", "fill_boundary",
+        "local_transform", "affine_moment_update", "project", "fill_boundary",
     })
     _HEAVY_KERNEL_OPS = frozenset({
         "solve_fields", "solve_fields_from_blocks", "solve_linear", "solve_coupled_implicit",
