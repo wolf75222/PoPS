@@ -23,7 +23,8 @@ bash scripts/build_python.sh --dim 2
 The setup installs Python 3.12, CMake, Ninja and the local CPU dependencies. The build
 installs `pops` and checks the native artifact. Choose `--dim 1`, `--dim 2` or `--dim 3`
 for the spatial dimension of your problem; each Python process uses one native dimension.
-Rerun the build script after native changes; it reuses the build cache.
+Rerun the build script after native changes; it reuses the build cache and retains other
+installed dimensions.
 
 Kokkos is required. MPI and parallel HDF5 are enabled together by
 `bash scripts/build_python.sh --dim 2 --mpi`. For a local OpenMP Kokkos installation,

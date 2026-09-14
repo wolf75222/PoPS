@@ -267,7 +267,7 @@ def test_scripts_pass_exact_dimension_before_every_native_import_or_doctor():
     assert 'python -c "import pops"' not in setup
     assert "--expect-dim \"$NATIVE_DIM\"" in setup
     assert build.index('python -m pip "${pip_args[@]}"') \
-        < build.index(helper_call) \
+        < build.index('preserve_native_variants.py" restore') \
         < build.index(verifier_call) \
         < build.index("select_native_dimension($POPS_NATIVE_DIM)")
     assert "--expect-dim \"$POPS_NATIVE_DIM\"" in build
@@ -314,5 +314,98 @@ def test_darwin_preflights_all_variants_before_signing(tmp_path, monkeypatch, in
     with pytest.raises((helper.CodesignError, helper.NativeVariantManifestError)):
         helper.codesign_imported_extensions((2,))
     assert calls == [], "invalid sibling state must be rejected before any codesign call"
+    assert manifest.read_bytes() == before_manifest
+    assert requested.path.read_bytes() == before_extension
+
+
+
+def _preserver():
+    spec = importlib.util.spec_from_file_location(
+        "_preserve_native_variants_test", ROOT / "scripts/preserve_native_variants.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("preserve_sibling", [False, True])
+def test_repeat_darwin_install_finalizes_new_bytes_before_authentication(
+    tmp_path, monkeypatch, preserve_sibling,
+):
+    """Two pip replacements keep sibling bytes and finish with an authenticated manifest."""
+    helper = _helper()
+    preserver = _preserver()
+    package_root = tmp_path / "pops"
+    native_root = package_root / "_native"
+    variant = _installed_variant(helper, package_root, payload=b"signed:initial dim2")
+    sibling = None
+    if preserve_sibling:
+        sibling = _installed_variant(helper, package_root, dimension=1, payload=b"signed:dim1")
+        helper.write_manifest_atomic(native_root / "variants.json", [sibling.row, variant.row])
+    monkeypatch.setattr(preserver, "_installed_native_root", lambda: native_root)
+    monkeypatch.setattr(helper, "_installed_manifest", lambda **kwargs: native_root / "variants.json")
+    monkeypatch.setattr(helper.sys, "platform", "darwin")
+    monkeypatch.setattr(helper.shutil, "which", lambda command: "/usr/bin/codesign")
+    monkeypatch.setattr(preserver, "codesign_imported_extensions", helper.codesign_imported_extensions)
+    signed = []
+
+    def run(command, **kwargs):
+        extension = Path(command[-1])
+        if "--force" in command:
+            signed.append(extension)
+            extension.write_bytes(b"signed:" + extension.read_bytes())
+        if "--verify" in command and not extension.read_bytes().startswith(b"signed:"):
+            return subprocess.CompletedProcess(command, 1, "", "invalid signature")
+        evidence = "Signature=adhoc\n" if "--display" in command else ""
+        return subprocess.CompletedProcess(command, 0, "", evidence)
+
+    monkeypatch.setattr(helper.subprocess, "run", run)
+    for iteration in range(2):
+        snapshot = tmp_path / ("snapshot%d" % iteration)
+        snapshot.mkdir()
+        if preserve_sibling or iteration:
+            assert preserver.snapshot(snapshot) == 0
+        # A new mono-Dim wheel replaces its manifest; old manually restored siblings can remain
+        # on disk because they are absent from that wheel's RECORD. Mach-O rewriting changes Dim2.
+        installed = dict(variant.row)
+        installed["sha256"] = hashlib.sha256(b"build-tree bytes").hexdigest()
+        helper.write_manifest_atomic(native_root / "variants.json", [installed])
+        variant.path.write_bytes(("wheel rewrite %d" % iteration).encode())
+        assert preserver.restore(snapshot, 2) == 0
+        rows = helper.load_manifest(native_root / "variants.json", verify_hashes=True)
+        assert {row["dimension"] for row in rows} == ({1, 2} if preserve_sibling else {2})
+        if sibling is not None:
+            assert sibling.path.read_bytes() == b"signed:dim1"
+    assert signed == [variant.path, variant.path]
+
+
+@pytest.mark.parametrize("invalid_source", ["installed-sibling", "snapshot", "non-darwin"])
+def test_restore_keeps_hash_guards_before_native_signing(tmp_path, monkeypatch, invalid_source):
+    helper = _helper()
+    preserver = _preserver()
+    package_root = tmp_path / "pops"
+    sibling = _installed_variant(helper, package_root, dimension=1, payload=b"dim1")
+    requested = _installed_variant(helper, package_root, dimension=2, payload=b"dim2")
+    native_root = package_root / "_native"
+    manifest = native_root / "variants.json"
+    helper.write_manifest_atomic(manifest, [sibling.row, requested.row])
+    monkeypatch.setattr(preserver, "_installed_native_root", lambda: native_root)
+    monkeypatch.setattr(preserver.sys, "platform", "linux" if invalid_source == "non-darwin" else "darwin")
+    snapshot = tmp_path / "snapshot"
+    assert preserver.snapshot(snapshot) == 0
+    if invalid_source == "snapshot":
+        (snapshot / sibling.row["path"]).write_bytes(b"changed snapshot sibling")
+    elif invalid_source == "installed-sibling":
+        sibling.path.write_bytes(b"changed installed sibling")
+    else:
+        requested.path.write_bytes(b"changed Linux leaf")
+    before_manifest = manifest.read_bytes()
+    before_extension = requested.path.read_bytes()
+    monkeypatch.setattr(
+        preserver, "codesign_imported_extensions",
+        lambda dimensions: pytest.fail("invalid hashes must fail before signing"),
+    )
+    with pytest.raises(preserver.NativeVariantManifestError, match="bytes disagree"):
+        preserver.restore(snapshot, 2)
     assert manifest.read_bytes() == before_manifest
     assert requested.path.read_bytes() == before_extension
