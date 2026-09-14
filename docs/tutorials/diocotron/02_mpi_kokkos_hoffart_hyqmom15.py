@@ -23,6 +23,7 @@ pops.set_threads(int(os.environ.get("POPS_THREADS", "1")))
 from mpi4py import MPI
 from pops.amr import AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer
 from pops.amr import Buffer, Coarsen, ConflictPolicy, EqualityPolicy, Hysteresis, Tag
+from pops.amr import PatchLayout
 from pops.analytic import CellBounds, between, coordinate, cos, maximum, minimum, sin, where
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import NoFlux, Outflow
@@ -33,6 +34,7 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
 from pops.lib.amr import CoarseFineInjection, ConservativeInjection, StateTransfer
+from pops.lib.amr import BergerRigoutsos, SpaceFillingCurve
 from pops.lib.initial import Analytic
 from pops.linalg import LinearProblem
 from pops.math import ValueExpr, Var, ddt, div
@@ -57,6 +59,9 @@ MODE = int(os.environ.get("POPS_MODE", "5"))
 NR = int(os.environ.get("POPS_NR", "16"))
 NTHETA = int(os.environ.get("POPS_NTHETA", str(4 * NR)))
 MAX_LEVELS = int(os.environ.get("POPS_MAX_LEVELS", "2"))
+COARSE_MAX_GRID = int(os.environ.get("POPS_COARSE_MAX_GRID", "8" if NR == 16 else "16"))
+# Cluster sizes count parent tagging cells before ratio-two refinement.
+CLUSTER_MAX_GRID = int(os.environ.get("POPS_CLUSTER_MAX_GRID", "16" if NR == 16 else "32"))
 CFL = float(os.environ.get("POPS_CFL", "0.3"))
 MAX_DT = float(os.environ.get("POPS_MAX_DT", "0.001"))
 T_END = float(os.environ.get("POPS_T_END", "10.0"))
@@ -65,8 +70,10 @@ WALL_SECONDS = float(os.environ.get("POPS_RUN_WALLTIME_SECONDS", "inf"))
 OUTPUT = Path(os.environ.get("POPS_RUN_OUTPUT", "hoffart-hyqmom15-mode%d" % MODE)).resolve()
 CHECKPOINT = Path(os.environ.get("POPS_RUN_CHECKPOINT", str(OUTPUT / "checkpoint.npz"))).resolve()
 RESTART = os.environ.get("POPS_RUN_RESTART", "")
-if MODE not in (3, 4, 5) or NR < 16 or NR % 8 or NTHETA < 32 or MAX_LEVELS < 1:
-    raise ValueError("use mode3/4/5, NR>=16 divisible by8, Ntheta>=32 and at least one level")
+if MODE not in (3, 4, 5) or NR < 16 or NR % 8 or NTHETA < 32 or NTHETA % 8 or MAX_LEVELS < 1:
+    raise ValueError("use mode3/4/5, NR>=16 and Ntheta>=32 divisible by8, and at least one level")
+if min(COARSE_MAX_GRID, CLUSTER_MAX_GRID) < 4 or COARSE_MAX_GRID % 2 or CLUSTER_MAX_GRID % 2:
+    raise ValueError("coarse patch and parent cluster maxima must be even and at least4")
 if not 0.0 < CFL <= 0.5 or MAX_DT <= 0 or T_END <= 0 or OUTPUT_INTERVAL <= 0:
     raise ValueError("time intervals must be positive and CFL must lie in (0,0.5]")
 WORLD = MPI.COMM_WORLD
@@ -177,12 +184,13 @@ coefficients = program.condensed_coeffs("Schur tensor", state=q.n,
 rhs = program.condensed_rhs(program.scalar_field("Schur rhs"), state=q.n,
     linear_operator=rotation, subset=(1, 5), th_dt=s, g=s,
     gradient_map=gradient_map, base_tensor=base_tensor, charge_component=0)
-previous_potential = program.history("plasma.potential", lag=1, ncomp=1, block=plasma)
+# The zero initial guess avoids interpreting diagnostic history as AB2 lagged data
+# when regridding creates new fine cells. The Schur equation and tolerance are unchanged.
 elliptic = program.matrix_free_operator("disk Schur operator", scope=scope)
 program.set_apply(elliptic, lambda builder, _out, value:
     -builder.apply_laplacian_coeff(builder.scalar_field("Schur action"), value, coefficients))
 potential = program.solve(LinearProblem(elliptic, rhs,
-    initial_guess=previous_potential, scope=scope, nullspace=None),
+    scope=scope, nullspace=None),
     solver=CompositeTensorFAC(max_iter=300, rel_tol=1e-10, abs_tol=1e-12,
         correction_damping=0.5, fine_sweeps=64, coarse_cycles=512,
         boundary_conditions=(Neumann(0.), Dirichlet(0.), Periodic(), Periodic()),
@@ -259,6 +267,10 @@ transfer = AMRTransfer()
 transfer.state(plasma_U, StateTransfer(prolongation=ConservativeInjection(),
                                       coarse_fine=CoarseFineInjection()))
 layout = AMR(grid=grid,
+    patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=COARSE_MAX_GRID),
+    clustering=BergerRigoutsos(minimum_efficiency=0.7, minimum_box_size=4,
+                              maximum_box_size=CLUSTER_MAX_GRID),
+    load_balance=SpaceFillingCurve(),
     hierarchy=AMRHierarchy(max_levels=MAX_LEVELS, ratios=(2,) * (MAX_LEVELS - 1)),
     tagging=tagging, regrid=AMRRegrid(schedule=every(10, clock=program.clock)),
     transfer=transfer, execution=AMRExecution.synchronous())
@@ -292,6 +304,8 @@ segment_initial_mass = simulation.integral("plasma", 0)
 parameters = dict(model="HYQMOM15", mode=MODE, radius=R, ring=(R0, R1), alpha=ALPHA,
     omega=OMEGA, temperature=TEMPERATURE, background=BACKGROUND, mean_ring=MEAN_RING,
     perturbation=PERTURBATION, nr=NR, ntheta=NTHETA, max_levels=MAX_LEVELS, cfl=CFL,
+    coarse_max_grid=COARSE_MAX_GRID, cluster_max_grid=CLUSTER_MAX_GRID, distribute_coarse=True,
+    potential_history_slot=1, field_initial_guess="zero",
     max_dt=MAX_DT, t_end=T_END, split="source-first Lie", source="CN Schur, full Gauss restart",
     spatial="mapped first-order Rusanov, full15x15 Jacobian, SSPRK2", mpi_ranks=WORLD.Get_size(),
     kokkos_threads=int(os.environ.get("POPS_THREADS", "1")),
@@ -324,6 +338,12 @@ for target in targets:
         report = pops.run(simulation, t_end=chunk_end, max_steps=100_000_000, console=False)
         chunk_seconds = WORLD.allreduce(time.monotonic() - chunk_start, op=MPI.MAX)
         maximum_chunk_seconds = max(maximum_chunk_seconds, chunk_seconds)
+        if RANK == 0:
+            progress = dict(time=simulation.time(), macro_step=simulation.macro_step(),
+                n_levels=simulation.n_levels(), elapsed_seconds=time.monotonic() - start_wall)
+            progress_tmp = OUTPUT / ".progress.json.tmp"
+            progress_tmp.write_text(json.dumps(progress) + "\n")
+            progress_tmp.replace(OUTPUT / "progress.json")
         checkpoint_elapsed = WORLD.allreduce(time.monotonic() - last_checkpoint_wall, op=MPI.MAX)
         if checkpoint_elapsed >= 300.0:
             simulation.checkpoint(CHECKPOINT.parent / ("step-%012d.npz" % simulation.macro_step()))
@@ -338,12 +358,13 @@ for target in targets:
                                  dtype=np.float64).reshape(15, NTHETA * factor, NR * factor)
         saved["q0_level%d" % level] = state_array[0]
         if simulation.macro_step() > 0:
+            # End-of-step rotation leaves the newest accepted field in raw slot one.
             saved["psi_level%d" % level] = np.asarray(
-                simulation.history_global("plasma.potential", level, 0), dtype=np.float64
+                simulation.history_global("plasma.potential", level, 1), dtype=np.float64
             ).reshape(NTHETA * factor, NR * factor)
     potential_time = None
     if simulation.macro_step() > 0:
-        potential_time = simulation.time() - .5 * simulation.history_slot_dt("plasma.potential", 0, 0)
+        potential_time = simulation.time() - .5 * simulation.history_slot_dt("plasma.potential", 0, 1)
     mass = simulation.integral("plasma", 0)
     row = dict(time=simulation.time(), potential_time=potential_time,
         macro_step=simulation.macro_step(), mass=mass, initial_mass=initial_mass,

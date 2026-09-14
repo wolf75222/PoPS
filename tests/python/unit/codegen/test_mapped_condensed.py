@@ -88,6 +88,32 @@ def test_condensed_field_rejects_different_metric_operators():
         _mapped_program(mismatched_map=True)
 
 
+def test_store_only_mapped_potential_registers_one_component_and_exact_block():
+    program, model = _mapped_program()
+    potential = next(value for value in program._values
+                     if value.op == "solve_outcome_component")
+    program.store_history("disk.potential", potential)
+    assert program._histories_ncomp == {"disk.potential": 1}
+    assert program._history_blocks["disk.potential"] is potential.block
+    assert not any(value.op == "history" for value in program._values)
+    source = emit_cpp_program(program, model=model, target="amr_system")
+    registration = next(line for line in source.splitlines()
+                        if 'ctx.register_history("disk.potential"' in line)
+    assert '"disk.potential", 1, 1, 0,' in registration
+    assert 'ctx.history("disk.potential"' not in source
+    assert 'ctx.store_history("disk.potential"' in source
+
+
+def test_store_only_scalar_history_cannot_change_its_block_owner():
+    program, model = _mapped_program()
+    potential = next(value for value in program._values
+                     if value.op == "solve_outcome_component")
+    foreign_block, _state = state_refs(program, "other", model=model)
+    program.history("disk.potential", ncomp=1, block=foreign_block)
+    with pytest.raises(ValueError, match="block provenance mismatch"):
+        program.store_history("disk.potential", potential)
+
+
 @pytest.mark.parametrize("faces", ((Neumann(1), Dirichlet()), (Dirichlet(2), Neumann()), (Periodic(),)))
 def test_tensor_boundary_rejects_unimplemented_or_inexact_laws(faces):
     with pytest.raises((TypeError, ValueError)):

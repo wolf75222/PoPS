@@ -56,6 +56,9 @@ rhs = q00 - s*div(C.T*inverse(B)*q_momentum).
 The solved potential is `psi=phi/alpha`. Composite tensor FAC couples the AMR
 levels, with a zero conducting potential at the outer wall and zero conormal
 flux at the pole. The source update uses the reconstructed midpoint mean.
+Each solve starts from zero with the stated convergence tolerance. Its diagnostic
+potential history is stored without a lagged warm-start read, allowing newly
+refined cells to receive the current hierarchy solution before history rotation.
 For HYQMOM15, one common affine Cayley velocity map updates all fifteen moments;
 the higher moments are not frozen during the Lorentz/electric update.
 
@@ -81,6 +84,9 @@ are `POPS_NR`, `POPS_NTHETA`, `POPS_MAX_LEVELS`, `POPS_MODE`, `POPS_CFL`,
 `POPS_MAX_DT`, `POPS_T_END`, and `POPS_OUTPUT_INTERVAL`. The tutorials use
 synchronous AMR steps, conservative transfer, accepted-state checkpoints, and
 the public PoPS compile/bind/run interfaces.
+Coarse patches are explicitly distributed across MPI ranks. `POPS_COARSE_MAX_GRID`
+bounds coarse patches; `POPS_CLUSTER_MAX_GRID` bounds clusters in parent tagging
+cells before factor-two refinement. The latter is not a bound in child-cell units.
 
 `POPS_RUN_OUTPUT`, `POPS_RUN_CHECKPOINT`, `POPS_RUN_RESTART`, and
 `POPS_RUN_WALLTIME_SECONDS` support bounded scheduler segments. A checkpoint is
@@ -106,6 +112,8 @@ qualification: the attached notes' fifth-moment formulas correspond to Appendix
 B.1 of [Bryngelson, Fox and Laurent (2026)](https://comp-physics.group/papers/bryngelson-JCP-26.pdf),
 and its actual cold initial data produce complex characteristic pairs. The
 native speed check therefore refuses the first step. The complete published
-hyperbolicity/realizability treatment must be resolved before a production run;
-neither suppressing imaginary parts nor increasing the imaginary tolerance is an
-accepted fix. This implementation milestone does not claim a HYQMOM15 result.
+Cartesian corrections also fail oblique checks. An exact rational Gaussian
+counterexample and the distinction from alternative fifteen-moment models are
+documented in [HYQMOM15_LIMITATION.md](HYQMOM15_LIMITATION.md). Neither suppressing
+imaginary parts nor increasing the imaginary tolerance is an accepted fix. This
+implementation milestone does not claim an evolved HYQMOM15 result.

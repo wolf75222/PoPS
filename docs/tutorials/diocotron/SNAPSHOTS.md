@@ -24,6 +24,10 @@ Each `snapshot-<macro_step>.npz` contains plain arrays and scalar JSON strings; 
 | `parameters` | The complete authored case parameter dictionary, including model, mode, geometry, numerical settings and native artifact identity. |
 | `patches` | Unmodified `simulation.amr.patch_table().to_dict()`. |
 
+The depth-two named potential ring rotates at the end of each accepted step. Snapshots read raw slot **1**, which holds the newest accepted source potential, and timestamp it using `time - history_slot_dt("plasma.potential", 0, 1)/2`. The parameter `potential_history_slot=1` records this convention. Earlier qualification archives without this parameter used raw slot 0 and do not have qualified non-initial potential timestamps; their density timestamps and complete native checkpoint arrays remain usable.
+
+`progress.json` is atomically replaced after each successful public `pops.run` chunk. It records `time`, `macro_step`, `n_levels`, and `elapsed_seconds`. It proves that chunk returned successfully; only a completed checkpoint proves durable restart state.
+
 `PatchReport.per_level[L].boxes` contains flattened **inclusive** tuples `(lo_r, lo_theta, hi_r, hi_theta)`. Its base entry has no boxes and covers the entire domain. Fine entries provide the actual global patch boxes. The renderer checks dimensions, census, nested coverage and complete parent-cell alignment. It masks cells covered by the next finer level and ignores invalid fine-array entries. It recomputes composite mass from active `q0*dr*dtheta` cells and records the difference from the native diagnostic.
 
 Overlapping segment snapshots are merged only if their state/potential arrays, patch tables, physical timestamps and mass agree exactly. Segment-local `initial_mass` and elapsed wall time may differ. Conflicting data or different physical/numerical/artifact identities inside one trajectory are refused.

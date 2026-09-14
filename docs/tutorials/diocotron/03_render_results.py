@@ -61,6 +61,8 @@ PAPER_RATES = {3: .772, 4: .911, 5: .683}
 SIGNATURE_KEYS = ("model", "mode", "radius", "ring", "alpha", "omega", "temperature",
                   "background", "mean_ring", "perturbation", "nr", "ntheta", "max_levels",
                   "cfl", "max_dt", "split", "source", "spatial", "artifact_identity")
+OPTIONAL_SIGNATURE_KEYS = ("coarse_max_grid", "cluster_max_grid", "distribute_coarse",
+                           "potential_history_slot", "field_initial_guess")
 COLORS = plt.colormaps["Blues"](np.linspace(0, 1, 256))
 COLORS[0] = (1., 1., 1., 1.)
 COLOR_MAP = ListedColormap(COLORS)
@@ -98,6 +100,7 @@ for run_number, directory in enumerate(args.runs):
             parameters = json.loads(str(stored["parameters"].item()))
             patches = json.loads(str(stored["patches"].item()))
             candidate = {key: parameters[key] for key in SIGNATURE_KEYS}
+            candidate.update({key: parameters.get(key) for key in OPTIONAL_SIGNATURE_KEYS})
             if signature is None:
                 signature = candidate
             elif candidate != signature:
@@ -154,6 +157,14 @@ for run_number, directory in enumerate(args.runs):
 # 3. Prepare only the requested panels for which a saved density state exists.
 for records, run_summary in trajectories:
     parameters = records[0]["parameters"]
+    qualified_potential_times = type(parameters.get("potential_history_slot")) is int \
+        and parameters["potential_history_slot"] == 1
+    run_summary["potential_timestamp_status"] = (
+        "newest accepted raw history slot 1" if qualified_potential_times else
+        "unqualified legacy slot convention; Fourier samples omitted")
+    if not qualified_potential_times:
+        summary["warnings"].append(run_summary["label"] +
+            ": legacy potential timestamps are not qualified; density figures remain available.")
     radius, ring_radius = float(parameters["radius"]), float(parameters["ring"][0])
     nr, ntheta, mode = int(parameters["nr"]), int(parameters["ntheta"]), int(parameters["mode"])
     density_min = float(parameters["background"] if args.density_min is None else args.density_min)
@@ -296,7 +307,7 @@ for records, run_summary in trajectories:
 
 
                 # 6. Sample only valid potential values, at their actual midpoint time.
-                if metadata["potential_time"] is not None:
+                if metadata["potential_time"] is not None and qualified_potential_times:
                     psi = np.asarray(stored["psi_level%d" % level], dtype=np.float64)
                     if psi.shape != valid.shape or not np.all(np.isfinite(psi[valid])):
                         raise ValueError("nonfinite or incorrectly shaped valid potential cells")
@@ -320,7 +331,7 @@ for records, run_summary in trajectories:
         if sample_summary["negative_density_cells"]:
             run_summary["warnings"].append("%s contains %d negative physical density cells" %
                 (record["path"].name, sample_summary["negative_density_cells"]))
-        if metadata["potential_time"] is not None:
+        if metadata["potential_time"] is not None and qualified_potential_times:
             if np.any(circle_level < 0) or not np.all(np.isfinite(circle)):
                 raise ValueError("incomplete valid potential coverage of the Fourier circle")
             coefficient = np.sum(circle*np.exp(-1j*mode*circle_theta))/angular_count
@@ -396,7 +407,7 @@ for records, run_summary in trajectories:
     if any(right["potential_time"] <= left["potential_time"] for left, right in zip(samples, samples[1:], strict=False)):
         raise ValueError("potential timestamps must increase across accepted snapshots")
     fit_lower, fit_upper = FIT_WINDOWS[mode]
-    fit = {"window": [fit_lower, fit_upper], "status": "no potential samples"}
+    fit = {"window": [fit_lower, fit_upper], "status": "no qualified potential samples"}
     fourier = run_summary["fourier"]
     fourier["fit"] = fit
     if samples:
@@ -510,7 +521,7 @@ if growth_modes:
         summary["growth_outputs"].append(str(figure_path))
     plt.close(figure)
 else:
-    summary["warnings"].append("No normalized growth curve: a saved near-zero potential is required.")
+    summary["warnings"].append("No normalized growth curve: a qualified near-zero potential sample is required.")
 
 
 # 10. Preserve every source, transform, fit, missing time and actual animation timestamp.

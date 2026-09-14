@@ -34,7 +34,7 @@ pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 ALPHA, OMEGA, DT = 39.4784176e12, -6.28318531e12, 0.001
 
 
-def _case(n, levels):
+def _case(n, levels, *, warm_start=True, regrid_every=100, grow_by_momentum=False):
     frame = Rectangle("mapped_disk_mms", (0., 0.), (1., 2 * math.pi)).frame(Cartesian2D())
     radial, angular = frame.axes
     r, theta = coordinate(frame, radial), coordinate(frame, angular)
@@ -79,7 +79,8 @@ def _case(n, levels):
     rhs = program.condensed_rhs(program.scalar_field("charge_rhs"), state=old.n,
         linear_operator=magnetic, subset=(1, 2), th_dt=s, g=s,
         gradient_map=gradient, base_tensor=metric, charge_component=0)
-    previous = program.history("disk.potential", lag=1, ncomp=1, block=block)
+    previous = (program.history("disk.potential", lag=1, ncomp=1, block=block)
+                if warm_start else None)
     operator = program.matrix_free_operator("mapped_schur", scope=Hierarchy())
     program.set_apply(operator, lambda builder, _out, value:
         -builder.apply_laplacian_coeff(builder.scalar_field("elliptic_image"), value, coefficients))
@@ -103,11 +104,15 @@ def _case(n, levels):
     threshold = case.param(RuntimeParam("refine_marker", default=.75))
     transfer = AMRTransfer()
     transfer.state(block[state], StateTransfer())
+    tags = (Tag(ValueExpr(block[state])["marker"] > case.value(threshold)),)
+    if grow_by_momentum:
+        momentum_threshold = case.param(RuntimeParam("refine_momentum", default=1.))
+        tags += (Tag(ValueExpr(block[state])["mx"] > case.value(momentum_threshold)),)
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(n, 4*n), periodic=PeriodicAxes((angular,))),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,)*(levels-1)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["marker"] > case.value(threshold)), Buffer(cells=1)),
+        tagging=AMRTagging(rules=(*tags, Buffer(cells=1)),
                           hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
-        regrid=AMRRegrid(schedule=every(100, clock=program.clock)), transfer=transfer,
+        regrid=AMRRegrid(schedule=every(regrid_every, clock=program.clock)), transfer=transfer,
         execution=AMRExecution.synchronous())
     return case, layout
 
@@ -158,3 +163,33 @@ def test_generated_mapped_disk_schur_uses_actual_auxiliary_geometry_and_converge
     fine = _measurement(16, levels)
     assert fine[0] < coarse[0]/2.5
     assert fine[1] < max(coarse[1]/1.5, 2e-8)
+
+
+def test_store_only_scalar_history_survives_new_fine_coverage(record_property):
+    case, layout = _case(8, 2, warm_start=False, regrid_every=1, grow_by_momentum=True)
+    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    runtime = pops.bind(artifact, resources={"execution_context": artifact_execution_context(artifact)})
+    before = runtime.amr.patch_table().to_dict()["per_level"][1]["cells"]
+    initial_mass = runtime.integral("disk", 0)
+    first = pops.run(runtime, t_end=DT, max_steps=1)
+    assert first.accepted_steps == 1
+    assert runtime.history_ncomp("disk.potential") == 1
+    assert runtime.history_depth("disk.potential") == 2
+    expanded = runtime.amr.patch_table().to_dict()["per_level"][1]["cells"]
+    assert expanded > before
+    # This is the point where a pre-store AB2-style history read used to fail.
+    later = pops.run(runtime, t_end=3*DT, max_steps=2)
+    assert later.accepted_steps == 2 and runtime.macro_step() == 3
+    assert runtime.amr.explain_regrid().to_dict()["regrid_count"] >= 4
+    assert runtime.integral("disk", 0) == pytest.approx(initial_mass, rel=3e-14, abs=3e-14)
+    for level in range(2):
+        shape = (32*2**level, 8*2**level)
+        newest = np.asarray(runtime.history_global("disk.potential", level, 1)).reshape(shape)
+        valid = np.full(shape, level == 0, dtype=bool)
+        for patch_level, lower, upper in runtime.patch_boxes():
+            if patch_level == level:
+                valid[lower[1]:upper[1]+1, lower[0]:upper[0]+1] = True
+        assert np.all(np.isfinite(newest[valid])) and np.max(np.abs(newest[valid])) > .1
+        assert runtime.history_slot_dt("disk.potential", level, 1) == pytest.approx(DT)
+    record_property("fine_cells_before", before)
+    record_property("fine_cells_after_first_step", expanded)
