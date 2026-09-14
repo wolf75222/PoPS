@@ -81,7 +81,15 @@ def test_native_analytic_metric_and_periodic_faces_match_conservative_update(
                 conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid(schedule=every(100, clock=program.clock)), transfer=transfer,
             execution=AMRExecution.synchronous())
-    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    # Pytest supplies a different isolated cache on each MPI rank. Publish one
+    # exact binary through the established collective helper before binding.
+    from pops._native_selector import select_native_dimension
+    select_native_dimension(2)
+    from pops import _pops
+    from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
+    artifact = compile_resolved_plan_once(
+        _pops.mpi_world(), pops.resolve(pops.validate(case), layout=layout),
+        route="analytic-metric-" + layout_kind, compile_artifact=pops.compile)
     runtime = pops.bind(artifact,
         resources={"execution_context": pops.ExecutionContext.mpi_world(artifact)})
     initial = np.asarray(runtime.block_level_state_global("tracer", 0)
