@@ -1,53 +1,55 @@
 name: Docs
 
-# Documentation reset lane: this workflow runs the transitional docs lint only. It is path-filtered
-# on pushes to avoid noisy skipped runs, and it never builds `_pops`, Sphinx, Doxygen or Kokkos.
-# If the full site returns, keep the heavy publish path explicit (for example `[docs]` on master and
-# `docs-full` on PRs) instead of charging every docs-only push.
+# One deterministic documentation contract for pull requests and master.
 on:
   push:
     branches: [master]
     paths:
+      - '**.md'
       - 'docs/**'
       - 'scripts/build_docs.sh'
-      - 'README.md'
-      - 'CONTRIBUTING.md'
-      - '.github/workflows/docs*.yml'
-  schedule:
-    - cron: '0 5 * * 0'
+      - '.codespellrc'
+      - '.markdownlint*'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - '**.md'
+      - 'docs/**'
+      - 'scripts/build_docs.sh'
+      - '.codespellrc'
+      - '.markdownlint*'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 concurrency:
-  group: docs
-  cancel-in-progress: false
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    name: documentation reset check
+  check:
+    name: documentation conformance
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
+          # The documentation freshness check compares source and document history.
           fetch-depth: 0
-
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-
-      - name: Docs mode
-        run: |
-          {
-            echo "### Docs mode"
-            echo ""
-            echo "- event : ${{ github.event_name }}"
-            echo "- reset lint : yes"
-            echo '- `_pops` / Sphinx / Doxygen build : no'
-            echo "- Kokkos build : no"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Build docs
+      - name: Check documentation
         run: bash scripts/build_docs.sh
+      - name: codespell (advisory)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          python -m pip install codespell==2.4.2
+          codespell docs examples benchmarks README.md CONTRIBUTING.md SECURITY.md CHANGELOG.md
+      - name: markdownlint (advisory)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: npx -y markdownlint-cli2@0.22.1

@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from types import MappingProxyType
 from typing import Any
+
+from pops._frozen_data import freeze_containers
 
 
 def flatten_freeze_members(*values: Any) -> list[Any]:
@@ -59,7 +60,7 @@ class FreezableRegistry:
                 if callable(member_freeze):
                     member_freeze()
             replacements = {
-                name: _immutable_copy(value)
+                name: freeze_containers(value)
                 for name, value in vars(self).items()
                 if name != "_frozen" and isinstance(
                     value, (Mapping, list, tuple, set, frozenset))
@@ -82,19 +83,6 @@ class FreezableRegistry:
             raise RuntimeError(
                 "pops.Case registry is frozen: cannot %s after pops.validate accepted the Case; "
                 "author a fresh Case and repeat resolve/compile." % what)
-
-
-def _immutable_copy(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return MappingProxyType({
-            _immutable_copy(key): _immutable_copy(item)
-            for key, item in value.items()
-        })
-    if isinstance(value, (list, tuple)):
-        return tuple(_immutable_copy(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_immutable_copy(item) for item in value)
-    return value
 
 
 def inspection_copy(value: Any) -> Any:

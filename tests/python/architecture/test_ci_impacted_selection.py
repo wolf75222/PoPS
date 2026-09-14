@@ -17,9 +17,14 @@ Ground-truth edges asserted below were verified by reading the source:
 """
 import importlib.util
 import json
+import os
 import pathlib
 import re
+import shutil
+import signal
+import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -886,6 +891,7 @@ def test_ci_gate_verdict_is_fail_closed_but_allows_an_unrouted_skip():
 
 
 def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
+    heartbeat = (SCRIPTS / "ci_heartbeat.sh").read_text()
     workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     changes_block = workflow.split("\n  changes:\n", 1)[1].split("\n  set-mode:\n", 1)[0]
     set_mode = workflow.split("\n  set-mode:\n", 1)[1].split("\n  gate-cpp-prewarm:\n", 1)[0]
@@ -952,15 +958,15 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "test \"${#cache_archives[@]}\" -eq 3" in cpp_shards_block
     assert "test \"${#compile_contracts[@]}\" -eq 3" in cpp_shards_block
     assert "--verify-contracts" in cpp_shards_block
-    assert cpp_shards_block.count("run_with_heartbeat() {") == 1
+    assert cpp_shards_block.count("source scripts/ci_heartbeat.sh") == 1
     assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 18m' in cpp_shards_block
     assert "test_watchdog=7m" in cpp_shards_block
     assert (
         'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" '
         '"$test_watchdog"' in cpp_shards_block
     )
-    assert "timeout --signal=TERM --kill-after=30s" in cpp_shards_block
-    assert "mem_available=" in cpp_shards_block
+    assert "timeout --signal=TERM --kill-after=30s" in heartbeat
+    assert "mem_available=" in heartbeat
     assert "NINJA_STATUS='[%f/%t elapsed=%es active=%r] '" in cpp_shards_block
 
     gate_block = workflow.split("\n  gate:\n", 1)[1].split("\n  mpi:\n", 1)[0]
@@ -1008,7 +1014,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "--verify-contracts" in mpi_block
     assert 'run_with_heartbeat "MPI Python module link" 14m' in mpi_block
     assert 'run_with_heartbeat "MPI native test build" 28m' in mpi_block
-    assert "mem_available=" in mpi_block
+    assert "source scripts/ci_heartbeat.sh" in mpi_block
     assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
     assert "scripts/ci_select_tests.py cpp-label" in mpi_block
     assert "--label mpi" in mpi_block
@@ -1170,7 +1176,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert openmp_block.count("--verify-contracts") == 2
     assert "openmp-prewarm-cpp-contract-*.json" in openmp_block
     assert "openmp-prewarm-python-contract-*.json" in openmp_block
-    assert openmp_block.count("run_with_heartbeat() {") == 2
+    assert openmp_block.count("source scripts/ci_heartbeat.sh") == 2
     openmp_cpp_build = openmp_block[
         openmp_block.index("- name: Configure + build (backend Kokkos OpenMP)"):
         openmp_block.index("- name: Test (ctest, backend Kokkos OpenMP)")
@@ -1379,12 +1385,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "compression-level: 0" in python_prewarm_block
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=4" in python_prewarm_block
     assert "-DCMAKE_CXX_FLAGS=\"-ffile-prefix-map=${{ github.workspace }}=.\"" in python_prewarm_block
-    assert python_prewarm_block.count("run_with_heartbeat() {") == 1
+    assert python_prewarm_block.count("source scripts/ci_heartbeat.sh") == 1
     assert (
         'run_with_heartbeat "Python prewarm ${{ matrix.lane }}" "$lane_watchdog"'
         in python_prewarm_block
     )
-    assert "mem_available=${mem_available_mib}MiB" in python_prewarm_block
+    assert "mem_available=${mem_available_mib}MiB" in heartbeat
     assert 'amr-runtime|amr-fields) lane_parallelism=2 ;;' in python_prewarm_block
     assert "system)" in python_prewarm_block
     assert "lane_watchdog=24m" in python_prewarm_block
@@ -1593,3 +1599,78 @@ def test_ci_control_plane_inputs_force_full_functional_selection():
     assert "scripts/ci_python_dimensions.py" in selector.PYTHON_BROAD_FILES
     assert "tests/python/native_dimensions.json" in selector.PYTHON_BROAD_FILES
     assert "scripts/ci_import_closure.py" in selector.PYTHON_BROAD_FILES
+
+
+@pytest.mark.parametrize("limit,command,status", [
+    ("5s", "exit 0", 0),
+    ("5s", "exit 7", 7),
+    ("0.1s", "sleep 5", 124),
+])
+def test_shared_ci_watchdog_preserves_status_and_reaps_heartbeat(limit, command, status):
+    """A short command must finish promptly, including timeout/failure under errexit."""
+    timeout = shutil.which("timeout")
+    if timeout is None:
+        pytest.skip("the Linux CI watchdog requires GNU timeout")
+    version = subprocess.run([timeout, "--version"], capture_output=True, text=True)
+    if "GNU coreutils" not in version.stdout:
+        pytest.skip("the Linux CI watchdog requires GNU timeout")
+    result = subprocess.run(
+        ["bash", "-e", "-c",
+         'source "$1"; run_with_heartbeat fixture "$2" bash -c "$3"',
+         "bash", str(SCRIPTS / "ci_heartbeat.sh"), limit, command],
+        capture_output=True, text=True, timeout=3,
+    )
+    assert result.returncode == status, result.stdout + result.stderr
+    assert "fixture: watchdog=" in result.stdout
+    if status == 124:
+        assert "exceeded its" in result.stdout
+
+
+@pytest.mark.parametrize("cancel_signal,status", [(signal.SIGTERM, 143), (signal.SIGINT, 130)])
+def test_shared_ci_watchdog_cancellation_stops_child(tmp_path, cancel_signal, status):
+    if shutil.which("timeout") is None:
+        pytest.skip("the Linux CI watchdog requires GNU timeout")
+    pid_file = tmp_path / "child.pid"
+    process = subprocess.Popen(
+        ["bash", "-e", "-c",
+         'source "$1"; run_with_heartbeat cancellation 5s '
+         'bash -c \'echo $$ > "$1"; exec sleep 5\' bash "$2"',
+         "bash", str(SCRIPTS / "ci_heartbeat.sh"), str(pid_file)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+    )
+    child = None
+    try:
+        deadline = time.monotonic() + 3
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        child = int(pid_file.read_text())
+        process.send_signal(cancel_signal)
+        stdout, stderr = process.communicate(timeout=3)
+        assert process.returncode == status, stdout + stderr
+        with pytest.raises(ProcessLookupError):
+            os.kill(child, 0)
+    finally:
+        # Also keep a failing witness bounded: timeout creates its own process group.
+        if child is not None:
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate(timeout=3)
+
+
+def test_shared_ci_watchdog_restores_caller_signal_handlers():
+    if shutil.which("timeout") is None:
+        pytest.skip("the Linux CI watchdog requires GNU timeout")
+    result = subprocess.run(
+        ["bash", "-e", "-c",
+         'source "$1"; trap : TERM INT; previous=$(trap -p TERM INT); '
+         'run_with_heartbeat handlers 1s true; test "$(trap -p TERM INT)" = "$previous"',
+         "bash", str(SCRIPTS / "ci_heartbeat.sh")],
+        capture_output=True, text=True, timeout=3,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

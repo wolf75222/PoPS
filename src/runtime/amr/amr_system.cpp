@@ -555,8 +555,7 @@ HistoryFluxCheckpointCapacity history_flux_checkpoint_capacity(
     // A raw leaf can outlive its producer ring through a projected history on any finer level.
     // Count all possible target rings, rather than assuming source and target rotations coincide.
     const auto source_copies = mul(copies_per_level, level_cells.size() - level);
-    result.shard =
-        add(result.shard, mul(source_copies, add(raw_fixed, mul(cells, patch_bytes))));
+    result.shard = add(result.shard, mul(source_copies, add(raw_fixed, mul(cells, patch_bytes))));
     // Every ancestor contributes metadata. This includes a source-identity bound even for
     // projection nodes whose producer leaves it empty, and a ratio on the terminal raw node.
     const std::size_t node =
@@ -4002,12 +4001,13 @@ struct AmrSystem<Dim>::Impl {
       else if (embedded &&
                embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
         relative = &embedded->volume_fraction();
-      views.push_back({&block_state(selected, level), prepared_hierarchy->active_coverage[level].get(),
-                       extent, relative});
+      views.push_back({&block_state(selected, level),
+                       prepared_hierarchy->active_coverage[level].get(), extent, relative});
     }
-    const runtime::amr::CompositeReductionResult mass = runtime::amr::composite_reduce<Dim, memory_space>(
-        views, plan.composite_mean_component, runtime::amr::CompositeReductionKind::Sum,
-        *prepared_hierarchy->lane);
+    const runtime::amr::CompositeReductionResult mass =
+        runtime::amr::composite_reduce<Dim, memory_space>(views, plan.composite_mean_component,
+                                                          runtime::amr::CompositeReductionKind::Sum,
+                                                          *prepared_hierarchy->lane);
     if (!(mass.active_measure > Real(0)) || !std::isfinite(mass.active_measure) ||
         !std::isfinite(mass.value))
       throw std::runtime_error("composite-mean neutralizing lost a finite composite mass");
@@ -4043,11 +4043,10 @@ struct AmrSystem<Dim>::Impl {
     // |RHS|_1 < 1.  If the leftover is only that association residual, finish it in
     // the same composite measure the nullspace check uses.  A brick that is not
     // eps*M00 leaves a leftover above this bound and still fails the gate.
-    const Real consistency =
-        Real(256) * std::numeric_limits<Real>::epsilon() *
-        std::max(std::abs(plan.composite_mean_eps) *
-                     std::max(std::abs(mass.value), mass.active_measure),
-                 Real(1));
+    const Real consistency = Real(256) * std::numeric_limits<Real>::epsilon() *
+                             std::max(std::abs(plan.composite_mean_eps) *
+                                          std::max(std::abs(mass.value), mass.active_measure),
+                                      Real(1));
     if (std::abs(leftover.value) <= consistency && leftover.active_measure > Real(0) &&
         std::isfinite(leftover.value) && std::isfinite(leftover.active_measure))
       add_fma(Real(1), -leftover.value / leftover.active_measure);
@@ -6409,8 +6408,7 @@ struct AmrSystem<Dim>::Impl {
                                                 const ExecutionLane& lane) {
     const long present = detached.storage && detached.views ? 1L : 0L;
     if (all_reduce_min(present, lane) != all_reduce_max(present, lane))
-      throw std::runtime_error(
-          "AMR dynamic boundary remap presence differs between MPI ranks");
+      throw std::runtime_error("AMR dynamic boundary remap presence differs between MPI ranks");
     if (present == 0 || lane.size() <= 1)
       return;
     long invalid = 0;
@@ -6436,11 +6434,9 @@ struct AmrSystem<Dim>::Impl {
       const Box<Dim>& domain = engine->hierarchy().layout(level).domain();
       for (std::size_t dependency = 0; dependency < context.states.size(); ++dependency) {
         const field_type* state = context.states[dependency];
-        const long needs_remap =
-            state != nullptr && !state->distribution().replicated() ? 1L : 0L;
+        const long needs_remap = state != nullptr && !state->distribution().replicated() ? 1L : 0L;
         if (all_reduce_min(needs_remap, lane) != all_reduce_max(needs_remap, lane))
-          throw std::runtime_error(
-              "AMR dynamic boundary remap decision differs between MPI ranks");
+          throw std::runtime_error("AMR dynamic boundary remap decision differs between MPI ranks");
         if (needs_remap == 0)
           continue;
         auto remapped = std::make_unique<field_type>(
@@ -6463,8 +6459,7 @@ struct AmrSystem<Dim>::Impl {
         if (all_reduce_max(write_error ? 1L : 0L, lane) != 0) {
           if (lane.size() == 1 && write_error)
             std::rethrow_exception(write_error);
-          throw std::runtime_error(
-              "AMR dynamic boundary remapped state write failed collectively");
+          throw std::runtime_error("AMR dynamic boundary remapped state write failed collectively");
         }
       }
       detached.views->bind(level, context.view());
@@ -11509,15 +11504,12 @@ void AmrSystem<Dim>::set_compiled_block(int ncomp, double gamma, int substeps,
 }
 
 template <int Dim>
-void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string& so_path,
-                                      const std::string& expected_model_identity,
-                                      const std::string& expected_binary_identity,
-                                      const std::string& limiter, const std::string& riemann,
-                                      const std::string& recon, const std::string& time,
-                                      double gamma, int substeps, int stride,
-                                      const std::vector<double>& params, double positivity_floor,
-                                      double weno_epsilon, bool wave_speed_cache,
-                                      NewtonOptions newton, bool newton_diagnostics) {
+void AmrSystem<Dim>::add_native_block(
+    const std::string& name, const std::string& so_path, const std::string& expected_model_identity,
+    const std::string& expected_binary_identity, const std::string& limiter,
+    const std::string& riemann, const std::string& recon, const std::string& time, double gamma,
+    int substeps, int stride, const std::vector<double>& params, double positivity_floor,
+    double weno_epsilon, bool wave_speed_cache, NewtonOptions newton, bool newton_diagnostics) {
   p_->require_no_native_package_callback("add_native_block");
   using register_auxiliary_type = void (*)(AmrSystem<Dim>*);
   using install_type = void (*)(void*, const char*, const char*, const char*, const char*,
@@ -14531,8 +14523,7 @@ void AmrSystem<Dim>::install_block_state_route(const std::string& name,
                                                const std::string& state_identity) {
   require_amr_assembling(p_->lifecycle, "install_block_state_route");
   if (!p_->blocks.empty())
-    throw std::logic_error(
-        "AmrSystem state routes must be installed before any compiled package");
+    throw std::logic_error("AmrSystem state routes must be installed before any compiled package");
   if (std::any_of(p_->blocks.begin(), p_->blocks.end(),
                   [&](const auto& block) { return block.name == name; }))
     throw std::logic_error("AmrSystem state routes must be installed before their block");
@@ -14722,9 +14713,8 @@ std::string AmrSystem<Dim>::register_field_solver_provider(
     throw std::invalid_argument("AMR component field provider slot must be non-empty");
   if (spec.provider_slot != provider_slot)
     throw std::invalid_argument("AMR component field provider slot differs from its specification");
-  register_field_solver_provider(
-      runtime::amr::make_component_exact_amr_field_solver_provider<Dim>(
-          std::move(spec), std::move(topology), std::move(solver)));
+  register_field_solver_provider(runtime::amr::make_component_exact_amr_field_solver_provider<Dim>(
+      std::move(spec), std::move(topology), std::move(solver)));
   return provider_slot;
 }
 
@@ -17296,13 +17286,13 @@ void AmrSystem<Dim>::complete_program_step_() {
 
 template <int Dim>
 void AmrSystem<Dim>::suspend_program_map(std::string identity, bool target,
-                                      std::vector<MultiFab<Dim>*> fields,
-                                      std::function<void()> continuation,
-                                      std::uint64_t stage_generation) {
+                                         std::vector<MultiFab<Dim>*> fields,
+                                         std::function<void()> continuation,
+                                         std::uint64_t stage_generation) {
   if (stage_generation == 0)
     throw std::invalid_argument("AMR map port requires a native attempt generation");
   p_->program.suspend_program_map(std::move(identity), target, std::move(fields),
-                                 std::move(continuation), stage_generation);
+                                  std::move(continuation), stage_generation);
 }
 
 template <int Dim>
@@ -17320,7 +17310,7 @@ std::string AmrSystem<Dim>::advance_program_region(double dt) {
         "AMR Program region failed collectively", [&] {
           p_->program.require_step_installed("AmrSystem::advance_program_region");
           port = p_->program.advance_cadence_region(p_->accepted_time, p_->macro_step, dt,
-                                                   "AmrSystem");
+                                                    "AmrSystem");
         });
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("amr-program-region-port"), port}}, lane))
@@ -17707,7 +17697,8 @@ void AmrSystem<Dim>::stage_program_exchange(runtime::program::ExchangeRecord rec
 template <int Dim>
 void AmrSystem<Dim>::stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records) {
   runtime::program::stage_exchange_batch_collectively(
-      p_->program.accepted_exchanges_, records, p_->require_prepared_engine_lane("AMR exchange batch staging"));
+      p_->program.accepted_exchanges_, records,
+      p_->require_prepared_engine_lane("AMR exchange batch staging"));
 }
 
 template <int Dim>
@@ -20780,26 +20771,28 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
     std::size_t maximum_shared_samples = 0, maximum_shared_terms = 0;
     for (const auto& level : interface_production.levels) {
       maximum_shared_samples = std::max(maximum_shared_samples, level.sample_count_per_application);
-      maximum_shared_terms = std::max(maximum_shared_terms, level.sample_payload_terms_per_application);
+      maximum_shared_terms =
+          std::max(maximum_shared_terms, level.sample_payload_terms_per_application);
     }
     // Shared sample record: 29 scalar/count primitives, 64 canonical route-digest characters,
     // exact source-point strings, endpoint component map, and one physical density per face/component.
     std::size_t shared_sample_fixed = 29 * sizeof(std::uint64_t) + 64;
-    for (std::size_t characters : {interface_production.maximum_interface_identity_characters,
-                                  maximum_clock_identity,
-                                  expression.interface_coupling_identity_character_bound})
+    for (std::size_t characters :
+         {interface_production.maximum_interface_identity_characters, maximum_clock_identity,
+          expression.interface_coupling_identity_character_bound})
       shared_sample_fixed = checked_size_sum(shared_sample_fixed, characters,
                                              "AMR shared history identity capacity exceeds size_t");
-    shared_sample_fixed = checked_size_sum(
-        shared_sample_fixed, checked_size_product(maximum_components, sizeof(std::uint64_t),
-                                                  "AMR shared component map exceeds size_t"),
-        "AMR shared sample capacity exceeds size_t");
+    shared_sample_fixed =
+        checked_size_sum(shared_sample_fixed,
+                         checked_size_product(maximum_components, sizeof(std::uint64_t),
+                                              "AMR shared component map exceeds size_t"),
+                         "AMR shared sample capacity exceeds size_t");
     const std::size_t shared_samples_bytes = checked_size_sum(
         sizeof(std::uint64_t),
         checked_size_sum(checked_size_product(maximum_shared_samples, shared_sample_fixed,
-                                               "AMR shared samples capacity exceeds size_t"),
+                                              "AMR shared samples capacity exceeds size_t"),
                          checked_size_product(maximum_shared_terms, sizeof(double),
-                                               "AMR shared density capacity exceeds size_t"),
+                                              "AMR shared density capacity exceeds size_t"),
                          "AMR shared history capacity exceeds size_t"),
         "AMR shared history capacity exceeds size_t");
     std::size_t history_depth = 0;
@@ -20876,10 +20869,10 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
         interface_production.maximum_interface_identity_characters;
     shape.interface_program_identity_characters =
         expression.interface_coupling_identity_character_bound;
-    shape.interface_stage_characters = std::max(
-        std::string_view("program-stage:").size() + 2 * signed_decimal_characters + 1,
-        std::string_view("shared-source////weight//").size() +
-            3 * signed_decimal_characters + 2 * nonnegative_int_decimal_characters);
+    shape.interface_stage_characters =
+        std::max(std::string_view("program-stage:").size() + 2 * signed_decimal_characters + 1,
+                 std::string_view("shared-source////weight//").size() +
+                     3 * signed_decimal_characters + 2 * nonnegative_int_decimal_characters);
     shape.interface_payload_terms = interface.max_payload_terms_per_window;
     shape.synchronization_event_count = checked_size_product(
         checked_size_product(p_->blocks.size(), configured_levels - 1,
@@ -21675,13 +21668,10 @@ template void AmrSystem<kNativeDimension>::set_compiled_block(
     int, double, int, AmrCompiledBlockBuilder<kNativeDimension>, const std::string&, bool,
     const std::string&, int, const std::vector<std::string>&, const std::vector<std::string>&,
     double, double, bool);
-template void AmrSystem<kNativeDimension>::add_native_block(const std::string&, const std::string&,
-                                                            const std::string&, const std::string&,
-                                                            const std::string&, const std::string&,
-                                                            const std::string&, const std::string&,
-                                                            double, int, int,
-                                                            const std::vector<double>&, double,
-                                                            double, bool, NewtonOptions, bool);
+template void AmrSystem<kNativeDimension>::add_native_block(
+    const std::string&, const std::string&, const std::string&, const std::string&,
+    const std::string&, const std::string&, const std::string&, const std::string&, double, int,
+    int, const std::vector<double>&, double, double, bool, NewtonOptions, bool);
 template void AmrSystem<kNativeDimension>::register_external_riemann_package(
     const std::string&, const std::string&, const std::string&, const std::string&, int, int,
     const std::string&, const std::string&, const std::string&, const std::string&,
@@ -21723,8 +21713,8 @@ template std::size_t AmrSystem<kNativeDimension>::apply_prepared_amr_program_can
     runtime::multiblock::InterfaceFluxFragmentPublication*);
 template std::vector<runtime::multiblock::InterfaceFluxSample>
 AmrSystem<kNativeDimension>::capture_prepared_amr_interface_residual(
-    const runtime::multiblock::BoundaryEvaluationPoint&, std::span<MultiFab<kNativeDimension>* const>,
-    std::span<MultiFab<kNativeDimension>* const>);
+    const runtime::multiblock::BoundaryEvaluationPoint&,
+    std::span<MultiFab<kNativeDimension>* const>, std::span<MultiFab<kNativeDimension>* const>);
 template std::string AmrSystem<kNativeDimension>::authenticate_prepared_amr_interface_sample(
     const runtime::multiblock::InterfaceFluxSample&) const;
 template void AmrSystem<kNativeDimension>::publish_prepared_amr_program_candidates(
@@ -21960,8 +21950,9 @@ template void AmrSystem<kNativeDimension>::set_field_solver_plan(
 template AmrFieldSolverConfiguration AmrSystem<kNativeDimension>::field_solver_configuration(
     const std::string&) const;
 template void AmrSystem<kNativeDimension>::set_field_reaction(const std::string&, double);
-template void AmrSystem<kNativeDimension>::set_field_composite_mean_neutralizing(
-    const std::string&, const std::string&, int, double);
+template void AmrSystem<kNativeDimension>::set_field_composite_mean_neutralizing(const std::string&,
+                                                                                 const std::string&,
+                                                                                 int, double);
 template void AmrSystem<kNativeDimension>::set_field_topology_authority(const std::string&,
                                                                         const std::string&,
                                                                         const std::string&,

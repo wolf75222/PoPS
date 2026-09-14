@@ -62,8 +62,8 @@ def main() -> int:
     )
     helper = str(source / "scripts/run_installed_example.py")
     profiles = (
-        ("scalar_tutorial_openmp", "docs/tuto/scalar_advection/06_openmp_amr_explicit_ssprk2.py", (), 1),
-        ("scalar_tutorial_mpi2", "docs/tuto/scalar_advection/08_mpi_amr_explicit_ssprk2.py", (), 2),
+        ("scalar_tutorial_openmp", "docs/tutorials/scalar_advection/06_openmp_amr_explicit_ssprk2.py", (), 1),
+        ("scalar_tutorial_mpi2", "docs/tutorials/scalar_advection/08_mpi_amr_explicit_ssprk2.py", (), 2),
         ("scalar_full", "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py", ("--output-dir", str(output / "scalar_full")), 1),
         ("multiphysics_full", "examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py", ("--output-dir", str(output / "multiphysics_full")), 1),
         ("imex_amr_full", "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py", ("--output-dir", str(output / "imex_amr_full")), 1),

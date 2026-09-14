@@ -1,12 +1,6 @@
-// Config markdownlint-cli2 (lane PR : .github/workflows/docs-pr.yml, continue-on-error).
-//
-// Politique : informatif d'abord. La doc adc_cpp est en reset et garde quelques
-// notes de conception qui precedent ce linter. On NE reformate PAS ces documents : on desactive les
-// regles purement stylistiques qui se battent avec les conventions etablies (prose longue non
-// wrappee, tables denses, HTML inline pour la mise en page du README), et on GARDE les regles qui
-// attrapent de vrais defauts structurels (liens inverses, espace manquant dans un titre, nombre de
-// colonnes de table coherent). Chaque desactivation est justifiee ci-dessous, observee sur un run
-// reel (markdownlint-cli2 0.22.1) sur docs/**/*.md + README.md.
+// Config markdownlint-cli2 (lane PR : .github/workflows/docs.yml, continue-on-error).
+// Advisory structural checks for maintained project, tutorial, example, and benchmark docs.
+// Historical design notes keep their established prose and mathematical formatting.
 {
   "config": {
     "default": true,
@@ -64,7 +58,7 @@
     // MD011 no-reversed-links : la notation math (1/det)[[1,w]] ressemble a un lien inverse.
     "MD011": false,
   },
-  "globs": ["docs/**/*.md", "README.md"],
+  "globs": ["*.md", "docs/**/*.md", "examples/**/*.md", "benchmarks/**/*.md"],
   "ignores": [
     "docs/_build",
     "docs/_site",

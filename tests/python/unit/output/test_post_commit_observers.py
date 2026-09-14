@@ -2010,7 +2010,7 @@ def test_scalar_tutorial_pipeline_executes_with_real_catalyst_when_available():
     pytest.importorskip("catalyst")
     pytest.importorskip("catalyst_conduit")
     pipeline = (
-        Path(__file__).resolve().parents[4] / "docs/tuto/scalar_advection/catalyst_pipeline.py"
+        Path(__file__).resolve().parents[4] / "docs/tutorials/scalar_advection/catalyst_pipeline.py"
     )
     session = Catalyst(pipeline=str(pipeline)).open_session(_serial_context())
     frame = _frame(field_name="U", component_names=("rho",))

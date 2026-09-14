@@ -318,7 +318,7 @@ from pathlib import Path
 
 from pops.output import Catalyst, LiveVisualization, ParallelMode, ReportOnly
 
-pipeline = Path("docs/tuto/scalar_advection/catalyst_pipeline.py").resolve()
+pipeline = Path("docs/tutorials/scalar_advection/catalyst_pipeline.py").resolve()
 live = LiveVisualization(
     observer=Catalyst(
         pipeline=str(pipeline),

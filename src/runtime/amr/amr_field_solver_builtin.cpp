@@ -43,15 +43,15 @@ elliptic::amr::CompositeFacBuildRequest<Dim> make_partitioned_fac_request(
   request.budget.parent_child_patch_pairs = 1'000'000;
   request.budget.interpolation_regions = 1'000'000;
   request.budget.local_scratch_cells = 10'000'000;
-  request.budget.same_level_halo = ::pops::HaloScheduleBudget{
-      ::pops::mesh::BoxArrayValidationBudget{1024, 1'000'000},
-      1'000'000,
-      2'000'000,
-      1024,
-      1024,
-      10'000'000,
-      10'000'000,
-      10'000'000};
+  request.budget.same_level_halo =
+      ::pops::HaloScheduleBudget{::pops::mesh::BoxArrayValidationBudget{1024, 1'000'000},
+                                 1'000'000,
+                                 2'000'000,
+                                 1024,
+                                 1024,
+                                 10'000'000,
+                                 10'000'000,
+                                 10'000'000};
   request.budget.parent_gather = {1'000'000, 1024, 10'000'000, 10'000'000, 10'000'000};
   request.budget.fine_restriction = {1'000'000, 1024, 10'000'000, 10'000'000, 10'000'000};
   return request;

@@ -280,3 +280,39 @@ def test_codesign_command_is_reachable_only_after_the_darwin_guard():
     helper = HELPER.read_text(encoding="utf-8")
     assert helper.index('if sys.platform != "darwin"') \
         < helper.index('shutil.which("codesign")')
+
+
+@pytest.mark.parametrize("invalid_sibling", ["unmanifested", "corrupt-unselected"])
+def test_darwin_preflights_all_variants_before_signing(tmp_path, monkeypatch, invalid_sibling):
+    helper = _helper()
+    package_root = tmp_path / "pops"
+    sibling = _installed_variant(helper, package_root, dimension=1, payload=b"dim1")
+    requested = _installed_variant(helper, package_root, dimension=2, payload=b"dim2")
+    manifest = package_root / "_native" / "variants.json"
+    if invalid_sibling == "corrupt-unselected":
+        helper.write_manifest_atomic(manifest, [sibling.row, requested.row])
+        sibling.path.write_bytes(b"changed dim1")
+    before_manifest = manifest.read_bytes()
+    before_extension = requested.path.read_bytes()
+    package = importlib.util.spec_from_loader("pops", loader=None, is_package=True)
+    package.submodule_search_locations = [str(package_root)]
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(tuple(command))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(command, 1, "", "unsigned")
+        if "--force" in command:
+            requested.path.write_bytes(b"signed dim2")
+        evidence = "Signature=adhoc\n" if "--display" in command else ""
+        return subprocess.CompletedProcess(command, 0, "", evidence)
+
+    monkeypatch.setattr(helper.sys, "platform", "darwin")
+    monkeypatch.setattr(helper.importlib.util, "find_spec", lambda name: package)
+    monkeypatch.setattr(helper.shutil, "which", lambda command: "/usr/bin/codesign")
+    monkeypatch.setattr(helper.subprocess, "run", run)
+    with pytest.raises((helper.CodesignError, helper.NativeVariantManifestError)):
+        helper.codesign_imported_extensions((2,))
+    assert calls == [], "invalid sibling state must be rejected before any codesign call"
+    assert manifest.read_bytes() == before_manifest
+    assert requested.path.read_bytes() == before_extension

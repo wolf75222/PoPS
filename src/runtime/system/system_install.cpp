@@ -34,8 +34,8 @@ namespace pops {
 namespace {
 
 template <class FieldPlans>
-auto select_field_rhs_binding(FieldPlans& plans, const std::string& block,
-                              const std::string& field, const std::string& identity = {}) {
+auto select_field_rhs_binding(FieldPlans& plans, const std::string& block, const std::string& field,
+                              const std::string& identity = {}) {
   using Selection = std::pair<decltype(plans.begin()), std::string>;
   const auto select = [&](const auto& matches) -> Selection {
     Selection selected{plans.end(), {}};
@@ -53,9 +53,8 @@ auto select_field_rhs_binding(FieldPlans& plans, const std::string& block,
     return selected;
   };
   if (!identity.empty()) {
-    auto exact = select([&](const auto&, const auto& binding) {
-      return binding.identity == identity;
-    });
+    auto exact =
+        select([&](const auto&, const auto& binding) { return binding.identity == identity; });
     if (exact.first != plans.end()) {
       if (field != exact.second && field != exact.first->second.output_key)
         throw std::logic_error("System elliptic RHS identity differs from its provider/output key");
@@ -1742,20 +1741,17 @@ std::string System<Dim>::last_dt_bound() const {
 }
 
 template <int Dim>
-void System<Dim>::register_native_package(const std::string& name, const std::string& so_path,
-                                          const std::string& expected_model_identity,
-                                          const std::string& expected_binary_identity,
-                                          const std::string& limiter, const std::string& riemann,
-                                          const std::string& recon, const std::string& time,
-                                          double gamma, int substeps, bool evolve, int stride,
-                                          const std::vector<double>& params,
-                                          double positivity_floor, NewtonOptions newton,
-                                          bool newton_diagnostics) {
+void System<Dim>::register_native_package(
+    const std::string& name, const std::string& so_path, const std::string& expected_model_identity,
+    const std::string& expected_binary_identity, const std::string& limiter,
+    const std::string& riemann, const std::string& recon, const std::string& time, double gamma,
+    int substeps, bool evolve, int stride, const std::vector<double>& params,
+    double positivity_floor, NewtonOptions newton, bool newton_diagnostics) {
   require_assembling(p_->lifecycle_, "register_native_package");
-  native_loader::register_native_package<Dim>(
-      this, name, so_path, expected_model_identity, expected_binary_identity, limiter, riemann,
-      recon, time, gamma, substeps, evolve, stride, params, positivity_floor, newton,
-      newton_diagnostics);
+  native_loader::register_native_package<Dim>(this, name, so_path, expected_model_identity,
+                                              expected_binary_identity, limiter, riemann, recon,
+                                              time, gamma, substeps, evolve, stride, params,
+                                              positivity_floor, newton, newton_diagnostics);
 }
 
 template <int Dim>
@@ -2206,8 +2202,7 @@ void System<Dim>::finalize_native_packages() {
         std::exception_ptr field_error;
         try {
           const auto [selected, provider_key] = [&]() {
-            if (attachment.role ==
-                runtime::system::NativeEllipticAttachmentRole::rhs_only) {
+            if (attachment.role == runtime::system::NativeEllipticAttachmentRole::rhs_only) {
               const auto field_plan = snapshot->field_plans.find(attachment.field_slot);
               if (field_plan == snapshot->field_plans.end())
                 throw std::logic_error("System RHS-only attachment has no exact field slot");
@@ -2225,9 +2220,8 @@ void System<Dim>::finalize_native_packages() {
                     "System RHS-only attachment differs from its exact provider binding");
               return std::make_pair(field_plan, attachment.field);
             }
-            return select_field_rhs_binding(
-                snapshot->field_plans, package.capability->identity, attachment.field,
-                attachment.rhs_identity);
+            return select_field_rhs_binding(snapshot->field_plans, package.capability->identity,
+                                            attachment.field, attachment.rhs_identity);
           }();
           if (selected == snapshot->field_plans.end()) {
             // Convenience ChargeDensity packages emit an RHS-only fields_from_state

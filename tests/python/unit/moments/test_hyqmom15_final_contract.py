@@ -460,7 +460,7 @@ def test_exact_speeds_hyqmom15_keeps_measured_qr_iteration_cap() -> None:
 
 
 def test_magnetic_wave_selects_the_matlab_complex_spectrum_order() -> None:
-    source = (ROOT / "docs/tuto/hyqmom/05_openmp_magnetic_wave_hll.py").read_text(
+    source = (ROOT / "docs/tutorials/hyqmom/05_openmp_magnetic_wave_hll.py").read_text(
         encoding="utf-8")
     assert "np.lexsort((np.angle(eigenvalues), np.abs(eigenvalues)))" in source
     assert "np.argsort(eigenvalues.real)" not in source

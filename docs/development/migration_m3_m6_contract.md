@@ -367,7 +367,7 @@ requires M6.3 and M6.4 after the two foundation leaves in this document.
 
 **Related issue references:** ADC-677, ADC-756.
 
-**Source and code:** Specification sections 9.4, 10.1-10.2, 13/M5; PDF sections 8.2.1-8.2.3 and 10.2-10.3. Paths: `python/pops/time/_program/authoring.py`; `python/pops/time/_program/commit_validation.py`; `python/pops/codegen/module_lowering.py`; `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py`; `docs/tuto/scalar_advection/06_openmp_amr_explicit_ssprk2.py`.
+**Source and code:** Specification sections 9.4, 10.1-10.2, 13/M5; PDF sections 8.2.1-8.2.3 and 10.2-10.3. Paths: `python/pops/time/_program/authoring.py`; `python/pops/time/_program/commit_validation.py`; `python/pops/codegen/module_lowering.py`; `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py`; `docs/tutorials/scalar_advection/06_openmp_amr_explicit_ssprk2.py`.
 
 **Evidence status:** all seven levels `pending`; matrix declaration `pending`.
 

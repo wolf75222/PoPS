@@ -349,8 +349,8 @@ struct MaterializeMetricKernel {
       lower_samples[axis] = phi(lower);
       upper_samples[axis] = phi(upper);
     }
-    const auto fractions = nd::cut_cell_fractions_from_samples<Dim>(
-        center, lower_samples, upper_samples, cut_theta_min);
+    const auto fractions = nd::cut_cell_fractions_from_samples<Dim>(center, lower_samples,
+                                                                    upper_samples, cut_theta_min);
     kappa(index) = fractions.volume_fraction;
     const Real effective =
         fractions.volume_fraction > kappa_min ? fractions.volume_fraction : kappa_min;
@@ -538,26 +538,23 @@ prepare_embedded_boundary_geometry_collectively(
     for_each_cell(fields.mask.fab(local).grown_box(),
                   MaterializeMaskKernel<Dim>{phi, fields.mask.fab(local).view()});
     for_each_cell(fields.kappa.box(local),
-                  MaterializeMetricKernel<Dim>{phi, fields.kappa.fab(local).view(),
-                                               fields.inverse.fab(local).view(),
-                                               fields.face_lower.fab(local).view(),
-                                               fields.face_upper.fab(local).view(),
-                                               thresholds.kappa_min, thresholds.cut_theta_min});
+                  MaterializeMetricKernel<Dim>{
+                      phi, fields.kappa.fab(local).view(), fields.inverse.fab(local).view(),
+                      fields.face_lower.fab(local).view(), fields.face_upper.fab(local).view(),
+                      thresholds.kappa_min, thresholds.cut_theta_min});
     local_active += for_each_cell_reduce_sum(
         fields.mask.box(local),
         ActiveIndicator<Dim>{static_cast<const MultiFab<Dim>&>(fields.mask).fab(local).view()});
-    local_invalid_metric =
-        Kokkos::fmax(local_invalid_metric,
-                     for_each_cell_reduce_max(
-                         fields.kappa.box(local),
-                         MetricInvalidIndicator<Dim>{
-                             static_cast<const MultiFab<Dim>&>(fields.mask).fab(local).view(),
-                             static_cast<const MultiFab<Dim>&>(fields.kappa).fab(local).view(),
-                             static_cast<const MultiFab<Dim>&>(fields.inverse).fab(local).view(),
-                             static_cast<const MultiFab<Dim>&>(fields.face_lower).fab(local).view(),
-                             static_cast<const MultiFab<Dim>&>(fields.face_upper)
-                                 .fab(local)
-                                 .view()}));
+    local_invalid_metric = Kokkos::fmax(
+        local_invalid_metric,
+        for_each_cell_reduce_max(
+            fields.kappa.box(local),
+            MetricInvalidIndicator<Dim>{
+                static_cast<const MultiFab<Dim>&>(fields.mask).fab(local).view(),
+                static_cast<const MultiFab<Dim>&>(fields.kappa).fab(local).view(),
+                static_cast<const MultiFab<Dim>&>(fields.inverse).fab(local).view(),
+                static_cast<const MultiFab<Dim>&>(fields.face_lower).fab(local).view(),
+                static_cast<const MultiFab<Dim>&>(fields.face_upper).fab(local).view()}));
   }
   const double global_active = all_reduce_sum(static_cast<double>(local_active), communicator);
   const double global_invalid_metric =
@@ -611,8 +608,8 @@ void fill_prepared_eb_transport_state_ghosts(MultiFab<Dim>& state,
       state.layout().tiles_exactly(embedded.geometry().domain(), budget.layout)
           ? HaloLayoutCoverage::full_domain
           : HaloLayoutCoverage::sparse_level;
-  const HaloSchedule<Dim> schedule = prepare_halo_schedule(
-      state, embedded.geometry().domain(), embedded.topology(), coverage, budget);
+  const HaloSchedule<Dim> schedule = prepare_halo_schedule(state, embedded.geometry().domain(),
+                                                           embedded.topology(), coverage, budget);
   if (schedule.has_remote_jobs()) {
     fill_boundary(state, schedule, lane,
                   HaloExchangeContext{embedded.generation(), embedded.generation(),
@@ -628,10 +625,10 @@ void require_prepared_eb_active_mask_matches_phi(
   Real local_mismatch = Real(0);
   for (std::size_t local = 0; local < embedded.phi().local_size(); ++local) {
     local_mismatch = Kokkos::fmax(
-        local_mismatch,
-        for_each_cell_reduce_max(embedded.phi().fab(local).grown_box(),
-                                 MaskPhiMismatchKernel<Dim>{embedded.phi().fab(local).view(),
-                                                            embedded.active_mask().fab(local).view()}));
+        local_mismatch, for_each_cell_reduce_max(
+                            embedded.phi().fab(local).grown_box(),
+                            MaskPhiMismatchKernel<Dim>{embedded.phi().fab(local).view(),
+                                                       embedded.active_mask().fab(local).view()}));
   }
   if (all_reduce_max(static_cast<double>(local_mismatch), lane.communicator()) != 0.0)
     throw std::invalid_argument(
