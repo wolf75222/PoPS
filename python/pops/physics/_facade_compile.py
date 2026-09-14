@@ -168,14 +168,19 @@ class _FacadeCompileMixin(_FacadeModel):
             pops_include,
         )
         from pops.codegen.cache import (
+            _artifact_cache_lock,
+            _artifact_cache_staging_path,
             _dsl_optflags,
             _identity_cache_so_path,
             _platform_cache_key,
             _precision_cache_key,
+            _record_artifact_identity,
             _registry_cache_key,
         )
         from pops.codegen.compile_link_flags import deterministic_component_link_flags
         from pops.codegen.compile_provenance import (
+            artifact_sidecar_path,
+            publish_staged_artifact,
             verify_cached_artifact,
             write_artifact_sidecar,
         )
@@ -287,23 +292,10 @@ class _FacadeCompileMixin(_FacadeModel):
             libraries=(),
         )
 
-        # OUT-OF-SOURCE cache when so_path is omitted: we RESOLVE the keyed path here (with the
-        # params-included hash) and pass it explicitly to the engine -- the cache of HyperbolicModel.compile
-        # would otherwise use the hash WITHOUT params (the Model facade adds the Param). HIT -> we skip the
-        # compilation. Explicit so_path -> forced path, always recompiles (strict backward-compat).
-        cache_requested = so_path is None
-        if cache_requested:
-            so_path = _identity_cache_so_path(spec_identity)
-
-        if cache_requested and os.path.isfile(so_path):
-            binary_identity, final_artifact_identity = verify_cached_artifact(
-                so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
-            )
-            out_path = so_path
-        else:
+        def _compile_to(path: Any) -> Any:
             # The loader emits the target-specific fixed ABI entry point.
-            out_path = m.compile(
-                so_path,
+            return m.compile(
+                path,
                 include,
                 backend=backend,
                 name=name,
@@ -318,6 +310,39 @@ class _FacadeCompileMixin(_FacadeModel):
                 consumer_owner_qid=consumer_owner_qid,
                 declare_auxiliary_providers=declare_auxiliary_providers,
             )
+
+        # The facade owns the params-included identity, so its cache cannot delegate the
+        # destination choice to HyperbolicModel. Passing that destination explicitly also
+        # bypasses the engine's cache lock: hold the same publication protocol here instead.
+        # A waiting MPI rank must never authenticate or load another compiler's partial output.
+        if so_path is None:
+            so_path = _identity_cache_so_path(spec_identity)
+            with _artifact_cache_lock(so_path):
+                if os.path.exists(so_path):
+                    binary_identity, final_artifact_identity = verify_cached_artifact(
+                        so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
+                    )
+                else:
+                    staging = _artifact_cache_staging_path(so_path)
+                    staged_output = staging
+                    try:
+                        staged_output = _compile_to(staging)
+                        binary_identity, final_artifact_identity = publish_staged_artifact(
+                            staged_output, so_path,
+                            semantic_identity=semantic_identity, spec_identity=spec_identity,
+                        )
+                    finally:
+                        for path in {staging, staged_output}:
+                            for leftover in (path, artifact_sidecar_path(path)):
+                                try:
+                                    os.remove(leftover)
+                                except FileNotFoundError:
+                                    pass
+                _record_artifact_identity(so_path, spec_identity)
+            out_path = so_path
+        else:
+            # An explicit user destination still forces compilation on every call.
+            out_path = _compile_to(so_path)
             binary_identity, final_artifact_identity = write_artifact_sidecar(
                 out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
             )
