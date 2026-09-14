@@ -9,6 +9,7 @@ All simulation construction is deliberately linear and at module scope.
 """
 # ruff: noqa: E402
 
+from fractions import Fraction
 from pathlib import Path
 import json
 import math
@@ -65,6 +66,8 @@ CFL = float(os.environ.get("POPS_CFL", "0.3"))
 MAX_DT = float(os.environ.get("POPS_MAX_DT", "0.001"))
 T_END = float(os.environ.get("POPS_T_END", "10.0"))
 OUTPUT_INTERVAL = float(os.environ.get("POPS_OUTPUT_INTERVAL", "0.05"))
+GROWTH_OUTPUT_INTERVAL = min(OUTPUT_INTERVAL, 0.01)
+GROWTH_OUTPUT_END = 1.5
 WALL_SECONDS = float(os.environ.get("POPS_RUN_WALLTIME_SECONDS", "inf"))
 OUTPUT = Path(os.environ.get("POPS_RUN_OUTPUT", "hoffart-euler-mode%d" % MODE)).resolve()
 CHECKPOINT = Path(os.environ.get("POPS_RUN_CHECKPOINT", str(OUTPUT / "checkpoint.npz"))).resolve()
@@ -73,8 +76,11 @@ if MODE not in (3, 4, 5) or NR < 16 or NR % 8 or NTHETA < 32 or NTHETA % 8 or MA
     raise ValueError("use mode3/4/5, NR>=16 and Ntheta>=32 divisible by8, and at least one level")
 if min(COARSE_MAX_GRID, CLUSTER_MAX_GRID) < 4 or COARSE_MAX_GRID % 2 or CLUSTER_MAX_GRID % 2:
     raise ValueError("coarse patch and parent cluster maxima must be even and at least4")
-if not 0.0 < CFL <= 0.5 or MAX_DT <= 0 or T_END <= 0 or OUTPUT_INTERVAL <= 0:
+if (not all(math.isfinite(value) for value in (CFL, MAX_DT, T_END, OUTPUT_INTERVAL))
+        or not 0.0 < CFL <= 0.5 or MAX_DT <= 0 or T_END <= 0 or OUTPUT_INTERVAL <= 0):
     raise ValueError("time intervals must be positive and CFL must lie in (0,0.5]")
+if math.isnan(WALL_SECONDS) or WALL_SECONDS <= 0:
+    raise ValueError("wall budget must be positive (infinity means unbounded)")
 WORLD = MPI.COMM_WORLD
 RANK = WORLD.Get_rank()
 if RANK == 0:
@@ -288,7 +294,11 @@ parameters = dict(model="Euler", mode=MODE, radius=R, ring=(R0, R1), alpha=ALPHA
     omega=OMEGA, temperature=TEMPERATURE, background=BACKGROUND, mean_ring=MEAN_RING,
     perturbation=PERTURBATION, nr=NR, ntheta=NTHETA, max_levels=MAX_LEVELS, cfl=CFL,
     coarse_max_grid=COARSE_MAX_GRID, cluster_max_grid=CLUSTER_MAX_GRID, distribute_coarse=True,
-    potential_history_slot=1, field_initial_guess="zero",
+    potential_history_slot=1, potential_history_contract="scalar-output-field-v1",
+    potential_history_transfer="authenticated-1to1-retain-overlap-v1", field_initial_guess="zero",
+    time_calendar="absolute cap-safe subdivisions of exact decimal output intervals",
+    output_interval=OUTPUT_INTERVAL, growth_output_interval=GROWTH_OUTPUT_INTERVAL,
+    growth_output_end=GROWTH_OUTPUT_END,
     max_dt=MAX_DT, t_end=T_END, split="source-first Lie", source="CN Schur, full Gauss restart",
     spatial="mapped MUSCL Minmod Rusanov, SSPRK2", mpi_ranks=WORLD.Get_size(),
     kokkos_threads=int(os.environ.get("POPS_THREADS", "1")),
@@ -300,33 +310,72 @@ if RANK == 0:
 # 10. Actual numerical snapshots and checkpoints at accepted native boundaries.
 # The first real interval supplies a native near-zero-time Fourier normalization.
 # Every potential is timestamped at its actual source midpoint, never at density's endpoint.
-targets = sorted(set([0., 1e-10, *np.arange(OUTPUT_INTERVAL, T_END, OUTPUT_INTERVAL),
-    *[t for t in (.1, 1.25, 2.5, 3.75, 5., 6.25, 7.5, 8.75, 10.) if t <= T_END], T_END]))
-targets = [float(t) for t in targets if t >= simulation.time()]
+# Form the schedule exactly before converting each target once to native binary64.
+# This prevents unions of decimal cadences from introducing one-ULP duplicate times.
+final_target = Fraction(str(T_END))
+target_fractions = {Fraction(0), final_target}
+for cadence, stop in ((Fraction(str(OUTPUT_INTERVAL)), final_target),
+                      (Fraction(str(GROWTH_OUTPUT_INTERVAL)),
+                       min(final_target, Fraction(str(GROWTH_OUTPUT_END))))):
+    target_fractions.update(cadence * index for index in range(1, math.floor(stop / cadence) + 1))
+for fixed in ("0.0000000001", "0.1", "1.25", "2.5", "3.75", "5", "6.25", "7.5", "8.75", "10"):
+    if Fraction(fixed) <= final_target:
+        target_fractions.add(Fraction(fixed))
+targets = [float(value) for value in sorted(target_fractions)]
+if any(right <= left for left, right in zip(targets, targets[1:], strict=False)):
+    raise ValueError("distinct requested output times collapse in native binary64")
 diagnostics = []
 maximum_chunk_seconds = 0.0
 last_checkpoint_wall = start_wall
 last_checkpoint_step = -1
 wall_stop = False
-for target in targets:
-    while target > simulation.time():
+for target_index, target in enumerate(targets):
+    if target < simulation.time():
+        continue
+    # Always anchor subdivisions at the global scheduled interval, including after
+    # restart. Regenerating the remaining interval would change accepted dt values.
+    interval_start = targets[max(0, target_index - 1)]
+    chunk_count = max(1, math.ceil((target - interval_start) / MAX_DT))
+    chunk_ends = np.array([target])
+    if target > interval_start:
+        while True:
+            chunk_ends = np.linspace(interval_start, target, chunk_count + 1)
+            chunk_widths = np.diff(chunk_ends)
+            if np.any(chunk_widths <= 0):
+                raise ValueError("requested timestep calendar is not representable in binary64")
+            if np.all(chunk_widths <= MAX_DT):
+                break
+            chunk_count += 1
+        chunk_ends = chunk_ends[1:]
+    for chunk_end in chunk_ends:
+        chunk_end = float(chunk_end)
+        if chunk_end <= simulation.time():
+            continue
         elapsed = WORLD.allreduce(time.monotonic() - start_wall, op=MPI.MAX)
         if WALL_SECONDS - elapsed <= max(60.0, 2.5 * maximum_chunk_seconds):
             wall_stop = True
             break
         chunk_start = time.monotonic()
-        # Bound each public invocation by one maximum physical time interval.
-        # AdaptiveCFL may take several smaller accepted native steps within it.
-        chunk_end = min(target, simulation.time() + MAX_DT)
+        chunk_start_time = simulation.time()
+        # AdaptiveCFL may take several smaller steps; public run must reach this
+        # absolute endpoint. Neither max_steps nor clock guards are relaxed.
         report = pops.run(simulation, t_end=chunk_end, max_steps=100_000_000, console=False)
         chunk_seconds = WORLD.allreduce(time.monotonic() - chunk_start, op=MPI.MAX)
         maximum_chunk_seconds = max(maximum_chunk_seconds, chunk_seconds)
+        last_accepted_dt = simulation.history_slot_dt("plasma.potential", 0, 1)
         if RANK == 0:
             progress = dict(time=simulation.time(), macro_step=simulation.macro_step(),
-                n_levels=simulation.n_levels(), elapsed_seconds=time.monotonic() - start_wall)
+                n_levels=simulation.n_levels(), elapsed_seconds=time.monotonic() - start_wall,
+                chunk_start_time=chunk_start_time, requested_chunk_end=chunk_end,
+                calendar_interval_start=interval_start, calendar_interval_end=target,
+                calendar_subintervals=chunk_count, chunk_seconds=chunk_seconds,
+                accepted_steps_in_chunk=report.accepted_steps,
+                rejected_steps_in_chunk=report.rejected_steps, last_accepted_dt=last_accepted_dt)
             progress_tmp = OUTPUT / ".progress.json.tmp"
             progress_tmp.write_text(json.dumps(progress) + "\n")
             progress_tmp.replace(OUTPUT / "progress.json")
+            with (OUTPUT / "chunks.jsonl").open("a") as stream:
+                stream.write(json.dumps(progress) + "\n")
         checkpoint_elapsed = WORLD.allreduce(time.monotonic() - last_checkpoint_wall, op=MPI.MAX)
         if checkpoint_elapsed >= 300.0:
             simulation.checkpoint(CHECKPOINT.parent / ("step-%012d.npz" % simulation.macro_step()))

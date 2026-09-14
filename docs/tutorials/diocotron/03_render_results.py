@@ -62,7 +62,9 @@ SIGNATURE_KEYS = ("model", "mode", "radius", "ring", "alpha", "omega", "temperat
                   "background", "mean_ring", "perturbation", "nr", "ntheta", "max_levels",
                   "cfl", "max_dt", "split", "source", "spatial", "artifact_identity")
 OPTIONAL_SIGNATURE_KEYS = ("coarse_max_grid", "cluster_max_grid", "distribute_coarse",
-                           "potential_history_slot", "field_initial_guess")
+                           "potential_history_slot", "potential_history_contract",
+                           "potential_history_transfer", "field_initial_guess", "time_calendar",
+                           "output_interval", "growth_output_interval", "growth_output_end")
 COLORS = plt.colormaps["Blues"](np.linspace(0, 1, 256))
 COLORS[0] = (1., 1., 1., 1.)
 COLOR_MAP = ListedColormap(COLORS)
@@ -159,12 +161,20 @@ for records, run_summary in trajectories:
     parameters = records[0]["parameters"]
     qualified_potential_times = type(parameters.get("potential_history_slot")) is int \
         and parameters["potential_history_slot"] == 1
+    qualified_potential_transfer = (
+        parameters.get("potential_history_contract") == "scalar-output-field-v1"
+        and parameters.get("potential_history_transfer") == "authenticated-1to1-retain-overlap-v1")
+    qualified_potential = qualified_potential_times and qualified_potential_transfer
     run_summary["potential_timestamp_status"] = (
         "newest accepted raw history slot 1" if qualified_potential_times else
         "unqualified legacy slot convention; Fourier samples omitted")
-    if not qualified_potential_times:
+    run_summary["potential_transfer_status"] = (
+        "authenticated equal-clock scalar output; retained overlap preserved"
+        if qualified_potential_transfer else
+        "unqualified legacy AMR history transfer; Fourier samples omitted")
+    if not qualified_potential:
         summary["warnings"].append(run_summary["label"] +
-            ": legacy potential timestamps are not qualified; density figures remain available.")
+            ": potential timestamps or AMR transfer are unqualified; density figures remain available.")
     radius, ring_radius = float(parameters["radius"]), float(parameters["ring"][0])
     nr, ntheta, mode = int(parameters["nr"]), int(parameters["ntheta"]), int(parameters["mode"])
     density_min = float(parameters["background"] if args.density_min is None else args.density_min)
@@ -307,7 +317,7 @@ for records, run_summary in trajectories:
 
 
                 # 6. Sample only valid potential values, at their actual midpoint time.
-                if metadata["potential_time"] is not None and qualified_potential_times:
+                if metadata["potential_time"] is not None and qualified_potential:
                     psi = np.asarray(stored["psi_level%d" % level], dtype=np.float64)
                     if psi.shape != valid.shape or not np.all(np.isfinite(psi[valid])):
                         raise ValueError("nonfinite or incorrectly shaped valid potential cells")
@@ -331,7 +341,7 @@ for records, run_summary in trajectories:
         if sample_summary["negative_density_cells"]:
             run_summary["warnings"].append("%s contains %d negative physical density cells" %
                 (record["path"].name, sample_summary["negative_density_cells"]))
-        if metadata["potential_time"] is not None and qualified_potential_times:
+        if metadata["potential_time"] is not None and qualified_potential:
             if np.any(circle_level < 0) or not np.all(np.isfinite(circle)):
                 raise ValueError("incomplete valid potential coverage of the Fourier circle")
             coefficient = np.sum(circle*np.exp(-1j*mode*circle_theta))/angular_count
@@ -522,6 +532,70 @@ if growth_modes:
     plt.close(figure)
 else:
     summary["warnings"].append("No normalized growth curve: a qualified near-zero potential sample is required.")
+
+# Figure 5.4(d)'s comparison has rows only for successfully fitted numerical curves.
+rate_rows = []
+for run_summary in growth_runs:
+    parameters, fourier = run_summary["parameters"], run_summary["fourier"]
+    fit = fourier["fit"]
+    if fit["status"] != "fitted":
+        continue
+    nominal_rate = fourier["reference_theory"]["nominal_vacuum_annulus_growth_rate"]
+    mean_rate = fourier["reference_theory"]["mean_density_vacuum_annulus_growth_rate"]
+    rate_rows.append(dict(run=run_summary["label"], model=parameters["model"],
+        mode=int(parameters["mode"]), nr=parameters["nr"], ntheta=parameters["ntheta"],
+        max_levels=parameters["max_levels"], max_dt=parameters["max_dt"],
+        fit_lower=fit["window"][0], fit_upper=fit["window"][1],
+        samples=fit["samples_in_window"], growth_rate=fit["growth_rate"],
+        slope_standard_error=fit["slope_standard_error"], log_rmse=fit["log_rmse"],
+        nominal_theory=nominal_rate, mean_density_theory=mean_rate,
+        signed_percent_difference_from_nominal=(100*(fit["growth_rate"]/nominal_rate-1)
+                                                if nominal_rate is not None else None)))
+summary["growth_rate_rows"] = rate_rows
+summary["growth_rate_outputs"] = []
+if rate_rows:
+    rate_path = output/"fourier-growth-rates.csv"
+    with rate_path.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=tuple(rate_rows[0]))
+        writer.writeheader()
+        writer.writerows(rate_rows)
+    summary["growth_rate_outputs"].append(str(rate_path))
+    columns = ["Run / base grid / levels", "Mode", "Fit interval", "Samples", r"Measured $\gamma$",
+               "Fit slope SE", "Log RMSE"]
+    include_nominal = all(row["nominal_theory"] is not None for row in rate_rows)
+    if include_nominal:
+        columns.extend([r"Nominal $\gamma$", "Difference (%)"])
+    table_rows = []
+    for row in rate_rows:
+        cells = ["%s: %s %d×%d / L≤%d" %
+                 (row["run"].split("-", 1)[0], row["model"], row["nr"], row["ntheta"], row["max_levels"]),
+                 str(row["mode"]), "%g–%g" % (row["fit_lower"], row["fit_upper"]),
+                 str(row["samples"]), "%.6g" % row["growth_rate"],
+                 "%.2g" % row["slope_standard_error"], "%.2g" % row["log_rmse"]]
+        if include_nominal:
+            cells.extend(["%.6g" % row["nominal_theory"],
+                          "%+.3g" % row["signed_percent_difference_from_nominal"]])
+        table_rows.append(cells)
+    figure, axis = plt.subplots(figsize=(14 if include_nominal else 11, 2.1+.38*len(rate_rows)))
+    axis.axis("off")
+    table = axis.table(cellText=table_rows, colLabels=columns, cellLoc="center", loc="center",
+                       colWidths=([.26]+[.74/(len(columns)-1)]*(len(columns)-1)))
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.6)
+    for column in range(len(columns)):
+        table[0, column].set_facecolor("#eaf1f8")
+    figure.suptitle("Fitted Fourier growth rates at r=6; fixed paper windows"
+                   + ("\n"+args.context_label if args.context_label else ""), fontsize=11)
+    figure.text(.5, .03, "Fit slope SE is a regression statistic, not a discretization-error estimate.\n"
+                "Nominal vacuum-annulus theory and mean-density theory are recorded separately in the CSV.",
+                ha="center", fontsize=8)
+    figure.tight_layout(rect=(.01, .13, .99, .82))
+    for extension in ("png", "pdf"):
+        rate_path = output/("fourier-growth-rates."+extension)
+        figure.savefig(rate_path, dpi=args.dpi)
+        summary["growth_rate_outputs"].append(str(rate_path))
+    plt.close(figure)
 
 
 # 10. Preserve every source, transform, fit, missing time and actual animation timestamp.

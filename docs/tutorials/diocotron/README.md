@@ -59,6 +59,11 @@ flux at the pole. The source update uses the reconstructed midpoint mean.
 Each solve starts from zero with the stated convergence tolerance. Its diagnostic
 potential history is stored without a lagged warm-start read, allowing newly
 refined cells to receive the current hierarchy solution before history rotation.
+At an equal-clock regrid, authenticated scalar output histories retain existing
+fine-cell values and obtain only new coverage from the matching parent sample.
+The two history-contract markers embedded in every snapshot identify this
+implementation; old archives without them are excluded from Fourier analysis.
+Run the tutorials with the native library rebuilt from the same source revision.
 For HYQMOM15, one common affine Cayley velocity map updates all fifteen moments;
 the higher moments are not frozen during the Lorentz/electric update.
 
@@ -87,6 +92,19 @@ the public PoPS compile/bind/run interfaces.
 Coarse patches are explicitly distributed across MPI ranks. `POPS_COARSE_MAX_GRID`
 bounds coarse patches; `POPS_CLUSTER_MAX_GRID` bounds clusters in parent tagging
 cells before factor-two refinement. The latter is not a bound in child-cell units.
+
+Output targets are formed from exact decimal cadences, then converted once to
+native binary64. Each global output interval is divided into comparable absolute
+subintervals whose represented widths do not exceed `POPS_MAX_DT`; an extra
+subinterval is used when floating-point rounding requires it. This avoids the
+microscopic cap-limited remainder steps produced by repeated `time + max_dt`.
+The same global endpoints are regenerated after restart. AdaptiveCFL may still
+select smaller physical steps. `chunks.jsonl` records the actual returned time,
+step count, latest accepted dt and cost of every public invocation.
+
+Snapshots are saved at intervals of at most `0.01` through `t=1.5`, covering all
+three fixed growth-fit windows; later output uses `POPS_OUTPUT_INTERVAL` and the
+exact paper times. Include this early sampling cadence when estimating storage.
 
 `POPS_RUN_OUTPUT`, `POPS_RUN_CHECKPOINT`, `POPS_RUN_RESTART`, and
 `POPS_RUN_WALLTIME_SECONDS` support bounded scheduler segments. A checkpoint is
