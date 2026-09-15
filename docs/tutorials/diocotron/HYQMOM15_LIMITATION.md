@@ -1,18 +1,93 @@
 # Scientific limitation of the requested HYQMOM15 case
 
-The exact fifteen-moment case currently fails its initial characteristic-speed
-check. This is a mathematical limitation of the supplied transport closure on
-these data, not merely an ill-conditioned eigensolver. The formulas in the attached
-`main.pdf` correspond to **Appendix B.1** of the published paper; the paper's
-**Eq. (40)** is a different closure. Both have genuinely complex characteristics
-in oblique directions, including for strictly realizable Gaussian states.
-The case remains fail-closed. No alternative closure is implemented by this note.
+The exact fifteen-moment case fails its initial characteristic-speed check on
+the retained Hoffart finite-volume data. An independent audit found no
+implementation or moment-conversion defect in the compared PoPS and active
+RIEMOM2D paths. It establishes two distinct mathematical results:
+
+- At the unit isotropic Maxwellian, a common positive definite symmetrizer proves
+  real diagonalizability in **every spatial direction**.
+- At a particular strictly realizable correlated Gaussian, and at representative
+  actual Gauss-averaged Hoffart initial cells, oblique characteristics are
+  genuinely complex even though the Cartesian spectra are real.
+
+The formulas in the original closure attachment correspond to **Appendix B.1**
+of the published paper; **Eq. (40)** is a different closure. A subsequently
+supplied, different `main.pdf` studies the Maxwellian linearization. Its result
+does not contradict the correlated-state counterexample. The exact case remains
+fail-closed; this note changes neither the closure nor its guards and makes no
+claim that every HYQMOM method or correction is impossible.
 
 For a two-dimensional conservation law, hyperbolicity requires real
 diagonalizability of `n_x J_x + n_y J_y` for every real spatial direction `n`.
 Checking the Cartesian axes alone does not establish this property.
 
-## Exact Gaussian counterexample
+## The supplied Maxwellian analysis
+
+The new document is Sacha Dupuy's *Waves dispersion in 2D 15 moments magnetic
+HyQMOM model* (19 March 2026), six pages, 151561 bytes, SHA256
+`dae8fd182835fbdddbe2d26f122e34711e7a8beb87bc388e51076449829c3d54`.
+Its page-3 order, also used by this case, is
+
+`[M00,M10,M20,M30,M40,M01,M11,M21,M31,M02,M12,M22,M03,M13,M04]`.
+
+Set density to one, mean to zero and covariance to the identity. Removing all
+magnetic and electric-field terms from the printed matrix and stripping the
+Fourier factor `i` gives `kx Jx + ky Jy`. Independent exact differentiation of
+the [PoPS closure](../../../python/pops/moments/closures/hyqmom15.py) through the
+complete [raw/central/standardized conversion chain](../../../python/pops/moments/model_builder.py)
+agrees with **all 225 entries of each** matrix in the
+[RIEMOM Maxwellian Jacobian](https://github.com/Ahcas28/RIEMOM2D/blob/0f2a1967485256d0525e5255ec8a1c4b4de5e2ea/linearized_Jacobian_fluid.m).
+
+The literal printed PDF differs at two combined entries, using one-based indices:
+
+| Row / column | Literal printed entry | Closure and RIEMOM entry |
+|---|---|---|
+| 12 / 4: M22 / M30 | `i ky` | `i kx` |
+| 12 / 8: M22 / M21 | `-3 i ky` | `+3 i ky` |
+
+These are independently detectable shared-moment inconsistencies:
+`Jy[row M31] = Jx[row M22] = grad(M32)` and
+`Jy[row M22] = Jx[row M13] = grad(M23)` must hold. Both identities fail in the
+literal printed matrix and hold exactly in the source-derived matrices; the
+corresponding M41 and M14 identities pass in both. The literal printed Jy has
+the pair `+/- i sqrt(3)`, inconsistent with the document's statement that its
+x and y speeds agree. The printed matrix is retained separately from its
+source-consistent interpretation in the audit; these document discrepancies
+are not a difference between Appendix B.1 and Eq. (40).
+
+For the source-derived Maxwellian matrices, either Cartesian characteristic
+polynomial is
+
+\[
+\lambda^3(\lambda-1)^2(\lambda+1)^2
+(\lambda^2-6)(\lambda^2-3)(\lambda^4-6\lambda^2+3).
+\]
+
+This agrees with the document's stated block polynomials. Repeated eigenvalues
+have complete eigenspaces. More strongly, let `T` convert raw moments to the
+fixed tensor probabilists-Hermite moments
+`h_pq = integral He_p(vx) He_q(vy) f dv`, through total degree four. Use weights
+`1/(p!q!)`, replacing the two pure fourth-order weights by `1/6`:
+
+\[
+W_{pq}=\frac{1}{p!q!},\qquad W_{40}=W_{04}=\frac16.
+\]
+
+Exact rational arithmetic verifies `det(T)=1` and, with `H=T^T W T`,
+
+\[
+H>0,\qquad HJ_x=(HJ_x)^T,\qquad HJ_y=(HJ_y)^T.
+\]
+
+Hence `H^(1/2) (nx Jx + ny Jy) H^(-1/2)` is real symmetric for every real
+direction: the isotropic Maxwellian has a complete real characteristic basis
+in all directions. This is a pointwise Maxwellian proof, not merely an angular
+scan and not a theorem for arbitrary realizable moments. The speeds can still
+depend on angle: for unit normal `(1,1)/sqrt(2)`, the largest speed is
+`2.81344556503634`, versus `sqrt(6)` on either axis.
+
+## Exact correlated-Gaussian counterexample
 
 Take unit density, zero mean, and a Gaussian velocity distribution with covariance
 
@@ -20,7 +95,8 @@ Take unit density, zero mean, and a Gaussian velocity distribution with covarian
 \Theta=\begin{pmatrix}1&1/2\\1/2&1\end{pmatrix}.
 \]
 
-Its covariance eigenvalues are `1/2` and `3/2`. Its full degree-four moment matrix
+This Gaussian is not an isotropic Maxwellian. Its covariance eigenvalues are
+`1/2` and `3/2`. Its full degree-four moment matrix
 is positive definite: the integral of the square of any nonzero quadratic
 polynomial against this positive Gaussian is strictly positive. The raw moments
 `M_pq = integral(v_x^p v_y^q f dv)` in the case's component order are:
@@ -101,22 +177,33 @@ moments. Evaluating `A=J_x-J_y` at the table above gives
 
 This polynomial was computed using exact rational forward differentiation and
 the Faddeev–LeVerrier recurrence; the exact Cayley–Hamilton residual is zero.
-It can be reproduced from the formulas above with rational arithmetic or a
-symbolic algebra system. For an independent exact root count:
+The new independent source-derived audit reproduces it and its factorization:
 
-1. Compute `gcd(P,P')=lambda²` and the degree-13 squarefree polynomial `Q=P/lambda²`.
-2. Form the Sturm sequence `Q, Q', -rem(Q,Q'), ...`, without changing signs of its
-   members.
-3. Its signs at negative infinity are
-   `-,+,-,+,-,+,-,+,-,+,+,+,-,+` (11 variations).
-   At positive infinity they are
-   `+,+,+,+,+,+,+,+,+,+,-,+,+,+` (2 variations).
+\[
+P(\lambda)=\frac{\lambda^3(\lambda^2-1)}{16}
+(4\lambda^4-39\lambda^2+9)
+(4\lambda^6-91\lambda^4+384\lambda^2-459).
+\]
 
-Thus `Q` has nine distinct real roots and **four distinct nonreal roots**.
-Normalizing `(1,-1)` by `sqrt(2)` rescales the eigenvalues and does not make them
-real. This counterexample also excludes a common SPD symmetrizer at this state:
-such a symmetrizer would make every directional Jacobian similar to a symmetric
-matrix.
+The final factor is the cubic `4z^3-91z^2+384z-459` in `z=lambda^2`.
+Its discriminant is exactly `-4627764`, so it has two nonreal roots and one
+real root. The latter is positive because the cubic is strictly negative for
+`z<=0`. This gives **four nonreal lambda roots**. Exact real-root isolation
+independently finds eleven real roots with multiplicity and four nonreal roots.
+Both Cartesian-axis spectra at this correlated state remain real.
+
+For the **unit** normal `(1,-1)/sqrt(2)`, the nonreal roots are
+
+\[
+\lambda=\pm1.12660841487331220086731
+\;\pm\;0.0648866203337799047907267\,i.
+\]
+
+The imaginary magnitudes agree at 80 and 140 decimal digits. The largest relative
+eigenpair residual over the fifteen eigenpairs is below `6.03e-141`, using
+`||Av-lambda v||inf / ((||A||inf+|lambda|)||v||inf)`.
+This counterexample excludes a common SPD symmetrizer **at this correlated
+state**, while the isotropic Maxwellian above has one.
 
 ## Consequence for the Hoffart initialization
 
@@ -128,16 +215,35 @@ and 2048 active refined cells had positive-definite degree-four raw moment Gram
 matrices, certified by exact rational elimination; the 512 covered base cells
 were classified separately and were also positive definite.
 
-Two active refined-cell examples on the `32×128` level, in zero-based `(r,theta)`
-indices, have the following B.1 characteristic pairs. Independent 100-digit
-calculations used the exact stored binary64 moments:
+These are Gauss-averaged cell moments of spatially varying initial velocity
+distributions, not pointwise isotropic Maxwellians and not the analytic
+correlated Gaussian above. Two active refined-cell examples on the `32×128`
+level, in zero-based `(r,theta)` indices, were independently rechecked at 100 and
+160 decimal digits from the exact stored binary64 values:
 
-| Cell | Mapped direction | Complex characteristic pair |
-|---|---|---|
-| (16,27) | radial | `0.516791092499429 ± 0.0284818715630624 i` |
-| (12,53) | angular | `0.0910019678477633 ± 0.0146128113977802 i` |
+| Cell | Mapped direction | Representative complex pair | Maximum relative eigenpair residual, 160 digits |
+|---|---|---|---:|
+| (16,27) | radial | `0.5167910924994291 ± 0.02848187156306240 i` | `3.30e-161` |
+| (12,53) | angular | `0.09100196784776332 ± 0.01461281139778020 i` | `8.94e-161` |
 
-The relative eigenpair residuals are below `3.4e-101`. The native run stopped
+PoPS stores `q=r*M`; the closure Jacobians on q and physical M=q/r agree exactly
+by density homogeneity, also verified entry by entry for these cells. The full
+source-builder square-root/standardization chain agrees with independently
+derived exact rational Jacobians, with maximum relative matrix error below
+`6.68e-158` at 160 digits. The fixed raw-to-centered/scaled similarity error is
+below `1.21e-160`. Both Cartesian-axis calculations have zero computed imaginary
+part at 100 and 160 digits. Both cells have exactly positive degree-four Gram
+leading minors.
+
+Mapped covectors were reconstructed from retained coordinates and documented
+geometry, not obtained from a new native auxiliary-field observation. Dividing
+each covector by its length preserves nonreal unit-normal characteristics:
+the largest imaginary magnitudes become approximately `0.02848473131` and
+`0.09130256433`. The archive's values and all benchmark constants are unchanged;
+this is an offline recheck of historical time-zero evidence, not a new native
+bind, accepted step, checkpoint or trajectory.
+
+The native run stopped
 before its first accepted step with an invalid local maximum speed; there is no
 accepted HYQMOM15 trajectory or checkpoint to interpret as a successful run.
 The published Cartesian corrections and even a full Gaussian higher-moment
@@ -159,11 +265,18 @@ The active [RIEMOM2D closure at
 `0f2a1967485256d0525e5255ec8a1c4b4de5e2ea`](https://github.com/Ahcas28/RIEMOM2D/blob/0f2a1967485256d0525e5255ec8a1c4b4de5e2ea/closureS5.m#L14)
 has exactly the six B.1 polynomials used here. An exact rational comparison also
 matches its generated raw-moment Jacobian at the Gaussian counterexample above.
-Its [speed routine](https://github.com/Ahcas28/RIEMOM2D/blob/0f2a1967485256d0525e5255ec8a1c4b4de5e2ea/eigenvalues15_2D.m#L91)
-takes the real parts of eigenvalues before selecting bounds; that operation does
-not establish hyperbolicity and is not used in this PoPS case. RIEMOM2D's
-electrostatic example uses a warm periodic square with different constants,
-so its execution cannot qualify the selected conducting-disk benchmark.
+The [active flux path](https://github.com/Ahcas28/RIEMOM2D/blob/0f2a1967485256d0525e5255ec8a1c4b4de5e2ea/Flux_closure15_2D.m)
+uses `M2CS4_15` and diagonal standardization. All six polynomials agree
+coefficient by coefficient; the compared M-to-C, C-to-S and closed C5-to-M5
+expressions agree in values and derivatives at the Maxwellian, correlated
+Gaussian and a positive skew Gaussian mixture. No implementation or conversion
+defect was found in these compared paths.
+
+The supplied explanation that RIEMOM's `real(...)` conversion was only for
+typing is accepted. No intent to remove instability is inferred from it, and
+the results here do not depend on that routine. RIEMOM2D's electrostatic example
+uses a warm periodic square with different constants, so its execution does not
+by itself qualify the selected conducting-disk benchmark.
 
 The revised [Riemann35.jl planar
 closure](https://github.com/comp-physics/Riemann35.jl/blob/3dd0fef3d69faee4c333e07604af3d6a68fa8db0/src/moments/hyqmom_3D.jl#L15)
@@ -182,3 +295,28 @@ would require its own equations and validation: for example, the
 has an all-normal theorem, but changes the transport equations and cannot be
 labelled the attached HYQMOM15 closure. These findings do not establish that
 every future HYQMOM15 algorithm or correction is impossible.
+
+## Reproducible evidence
+
+The independent audit was evaluated against PoPS source
+`65b0658617b44b185b4068c6d71215986607ac43` without loading PoPS or running its
+native runtime. The sealed campaign archive, maintained separately from the
+source checkout, is
+`output/evidence/hyqmom15-maxwellian-independent-20260915-v1/`.
+Its archive-relative files and SHA256 hashes identify the evidence without
+depending on a particular user's filesystem layout:
+
+| Artifact | SHA256 |
+|---|---|
+| `REPORT.md` | `bf28480e89d4872dba3083327f09d19755d52199d7f8371ad4a7c3bc3b33cf1f` |
+| `SHA256_MANIFEST.json` | `c1ae5fb8c4d3fcb316c3441b10dd178d5c68fa6e9858453271d91790022d4e9b` |
+| `MAXWELLIAN_SYMMETRIZER.json` | `d4692fb0f9696cbbdb72d6698f7ab1265afb90e5696aac3b81a93eb112f480f7` |
+| `ACTUAL_CELLS.json` | `520c78bfcdadd100510137f0bd9a4717232f874ed64a590a4a84e8c86a46ccaa` |
+
+The bundle includes the exact source snapshots and new PDF, all 450 printed
+versus source entry comparisons, every source-derived Jacobian, exact
+characteristic polynomials, complete high-precision spectra/residuals, and
+standalone `audit.py`, `export_and_symmetrizer.py` and `actual_cells.py` scripts.
+The historical native initial-state archive has SHA256
+`7a5eb9040b20e777edb7e0f0a3143e2b84db7ccd0e04ab2217cf37cdc4aa4137`;
+the two cell records were matched to it bit for bit before differentiation.

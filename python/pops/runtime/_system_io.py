@@ -55,15 +55,18 @@ def _validated_uniform_phi_alias(payload, *, spatial_shape: tuple[int, ...], fie
 
     ``phi`` is only an alias for the installed default field.  A field-free checkpoint retains the
     member for wire compatibility, but it has exactly one permitted representation: C-contiguous
-    binary64 positive zero at every spatial cell.
+    binary64 positive zero at every spatial cell, in the legacy logical-axis shape.  A materialized
+    default field instead uses the native binding's ranked NumPy storage: reversed spatial axes,
+    with native axis zero contiguous.  The authenticated slot selects exactly one stored shape.
     """
     import numpy as np
 
+    stored_shape = spatial_shape[::-1] if _DEFAULT_FIELD_SLOT in field_slots else spatial_shape
     phi = np.asarray(payload["phi"])
-    if phi.dtype != np.dtype(np.float64) or phi.shape != spatial_shape:
+    if phi.dtype != np.dtype(np.float64) or phi.shape != stored_shape:
         raise ValueError(
             "restart: potential payload must be a binary64 array with spatial shape %r"
-            % (spatial_shape,)
+            % (stored_shape,)
         )
     if _DEFAULT_FIELD_SLOT not in field_slots:
         if not phi.flags.c_contiguous:
@@ -79,10 +82,10 @@ def _validated_uniform_phi_alias(payload, *, spatial_shape: tuple[int, ...], fie
     if key not in payload:
         raise RuntimeError("checkpoint default field potential is missing")
     default_phi = np.asarray(payload[key])
-    if default_phi.dtype != np.dtype(np.float64) or default_phi.shape != spatial_shape:
+    if default_phi.dtype != np.dtype(np.float64) or default_phi.shape != stored_shape:
         raise RuntimeError(
             "checkpoint default field potential must be a binary64 array with spatial shape %r"
-            % (spatial_shape,)
+            % (stored_shape,)
         )
     if not phi.flags.c_contiguous or not default_phi.flags.c_contiguous:
         raise ValueError("restart: default field potential payloads must be C-contiguous")
