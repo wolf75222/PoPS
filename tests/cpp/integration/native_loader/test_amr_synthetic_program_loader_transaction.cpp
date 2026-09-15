@@ -1280,6 +1280,11 @@ TEST(test_amr_synthetic_program_loader_transaction,
       }
     return image;
   };
+  const auto read_wire8 = [](const std::vector<std::uint8_t>& bytes) {
+    pops::runtime::program::checkpoint_detail::Reader header(bytes);
+    header.expect_raw(pops::runtime::program::checkpoint_detail::kMagic);
+    return pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes);
+  };
   constexpr double first_dt = 0.125;
   constexpr double second_dt = 0.1875;
   Image checkpoint;
@@ -1289,6 +1294,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
     ASSERT_EQ(system.history_names(), names);
     ASSERT_NO_THROW(checkpoint = capture());
   }
+  const auto checkpoint_program = read_wire8(checkpoint.accepted);
+  ASSERT_EQ(checkpoint_program.accepted_attempt, 1u);
   ASSERT_EQ(checkpoint.histories.size(), 4u);
   for (const auto& history : checkpoint.histories) {
     ASSERT_TRUE(history.initialized);
@@ -1304,6 +1311,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
     ASSERT_NO_THROW(system.step(second_dt));
     ASSERT_NO_THROW(uninterrupted = capture());
   }
+  const auto uninterrupted_program = read_wire8(uninterrupted.accepted);
+  ASSERT_EQ(uninterrupted_program.accepted_attempt, 2u);
   ASSERT_NE(uninterrupted.histories, checkpoint.histories);
   for (const auto& history : uninterrupted.histories)
     ASSERT_EQ(history.fill, 2);
@@ -1369,6 +1378,7 @@ TEST(test_amr_synthetic_program_loader_transaction,
   ASSERT_NO_THROW(system.rollback_restart_transaction());
   EXPECT_EQ(capture(), uninterrupted);
 
+  std::optional<std::uint64_t> third_accepted_attempt, fourth_accepted_attempt;
   {
     SCOPED_TRACE("failed resource publication restores the previous CPS captures");
     system.begin_restart_transaction();
@@ -1390,6 +1400,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
     system.begin_step_transaction();
     ASSERT_NO_THROW(system.step(second_dt));
     ASSERT_NO_THROW(system.commit_step_transaction());
+    third_accepted_attempt = read_wire8(system.program_accepted_state()).accepted_attempt;
+    ASSERT_EQ(third_accepted_attempt, 3u);
     reject_refresh(pops::my_rank() == 0);
     EXPECT_THROW(system.rollback_step_transaction(), std::exception);
     EXPECT_TRUE(system.has_active_step_transaction());
@@ -1400,6 +1412,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
     EXPECT_EQ(capture(), uninterrupted);
     system.begin_step_transaction();
     ASSERT_NO_THROW(system.step(second_dt));
+    fourth_accepted_attempt = read_wire8(system.program_accepted_state()).accepted_attempt;
+    ASSERT_EQ(fourth_accepted_attempt, 4u);
     ASSERT_NO_THROW(system.rollback_step_transaction());
     EXPECT_EQ(capture(), uninterrupted);
   }
@@ -1438,7 +1452,44 @@ TEST(test_amr_synthetic_program_loader_transaction,
   {
     SCOPED_TRACE("continue the fully restored checkpoint");
     ASSERT_NO_THROW(system.step(second_dt));
-    EXPECT_EQ(capture(), uninterrupted);
+    const Image continued = capture();
+    const auto continued_program = read_wire8(continued.accepted);
+    ASSERT_EQ(continued_program.accepted_attempt, 5u);
+    ASSERT_TRUE(fourth_accepted_attempt.has_value());
+    EXPECT_EQ(continued_program.accepted_attempt, *fourth_accepted_attempt + 1u);
+    // This is an in-place restore after accepted attempts 3 and 4 were rolled back. Their
+    // allocator IDs remain consumed; the older reference has C2, while this continuation has C5.
+    // Fresh-context whole-image equality is covered separately by the interior restart witness.
+    EXPECT_EQ(continued.boxes, uninterrupted.boxes);
+    EXPECT_EQ(continued.owners, uninterrupted.owners);
+    EXPECT_EQ(continued.states, uninterrupted.states);
+    EXPECT_EQ(continued.histories, uninterrupted.histories);
+    EXPECT_EQ(continued.exchanges, uninterrupted.exchanges);
+    EXPECT_EQ(continued.flux_shard, uninterrupted.flux_shard);
+    EXPECT_EQ(continued.regrids, uninterrupted.regrids);
+    EXPECT_EQ(continued.step, uninterrupted.step);
+    EXPECT_EQ(continued.epoch, uninterrupted.epoch);
+    EXPECT_EQ(continued.time, uninterrupted.time);
+    EXPECT_EQ(continued.last_dt, uninterrupted.last_dt);
+
+    // Both complete wire8 images were decoded and validated above. Derive the one u64 field's
+    // extent from the native prefix schema; compare every other original byte without rewriting.
+    ASSERT_EQ(continued_program.spatial_contract, uninterrupted_program.spatial_contract);
+    pops::runtime::program::checkpoint_detail::CountingWriter prefix;
+    prefix.raw(pops::runtime::program::checkpoint_detail::kMagic);
+    prefix.i32(Dim);
+    prefix.string(continued_program.spatial_contract);
+    prefix.u64(continued_program.topology_epoch);
+    prefix.u64(continued_program.materialization_generation);
+    const std::size_t attempt_begin = prefix.count();
+    prefix.u64(*continued_program.accepted_attempt);
+    const std::size_t attempt_end = prefix.count();
+    ASSERT_EQ(continued.accepted.size(), uninterrupted.accepted.size());
+    ASSERT_LE(attempt_end, continued.accepted.size());
+    EXPECT_TRUE(std::equal(continued.accepted.begin(), continued.accepted.begin() + attempt_begin,
+                           uninterrupted.accepted.begin()));
+    EXPECT_TRUE(std::equal(continued.accepted.begin() + attempt_end, continued.accepted.end(),
+                           uninterrupted.accepted.begin() + attempt_end));
   }
 
   // The declared post-restore regrid consumes a complete incoming image and creates a new
