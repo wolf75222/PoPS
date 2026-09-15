@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 from types import ModuleType
@@ -218,7 +219,80 @@ def test_cmake_authenticates_and_installs_the_exact_linked_leaf():
     assert '"$<TARGET_FILE:_pops>"' in source
     assert '--dimension "${POPS_NATIVE_DIM}"' in source
     assert '--version "${PROJECT_VERSION}"' in source
-    assert 'install(FILES "${POPS_PY_NATIVE_MANIFEST}" DESTINATION pops/_native)' in source
+    assert 'install(FILES "${POPS_PY_NATIVE_MANIFEST}"' not in source
+    assert source.index("install(TARGETS _pops") < source.index("install(CODE")
+
+
+@pytest.mark.parametrize("valid_native_facts", [True, False])
+def test_cmake_install_authenticates_transformed_staged_bytes_or_fails(
+    tmp_path, valid_native_facts,
+):
+    """Execute the real install hook with a relocated prefix and a native-fact loader stub."""
+    cmake = shutil.which("cmake")
+    if cmake is None:
+        pytest.skip("CMake is required for the native manifest install contract")
+    source = PYTHON_CMAKE.read_text(encoding="utf-8")
+    hook = re.search(r'^  install\(CODE ".*?^  "\)', source, re.MULTILINE | re.DOTALL)
+    assert hook is not None
+    project = tmp_path / "stage project"
+    scripts = project / "scripts"
+    scripts.mkdir(parents=True)
+    linked = _extension(project / "build native", 2, b"linked before RPATH rewriting")
+    transformed = project / "transformed native"
+    transformed.write_bytes(b"installed after RPATH rewriting and signing")
+    # Keep the real writer and byte authentication. Only loading compiled facts is stubbed, so
+    # this install-contract regression does not compile a second native extension.
+    (scripts / WRITER.name).write_text(
+        "import importlib.util\nfrom types import SimpleNamespace\n"
+        f"spec = importlib.util.spec_from_file_location('writer', {str(WRITER)!r})\n"
+        "writer = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(writer)\n"
+        "writer._load_exact_extension = lambda path: SimpleNamespace(\n"
+        f"    __native_dimension__={2 if valid_native_facts else 3}, __version__='1.2.3',\n"
+        "    __has_mpi__=True, __has_kokkos__=True, abi_key=lambda: 'staged-abi')\n"
+        "raise SystemExit(writer.main())\n",
+        encoding="utf-8",
+    )
+    (project / "CMakeLists.txt").write_text(
+        "cmake_minimum_required(VERSION 3.21)\n"
+        "project(native_stage VERSION 1.2.3 LANGUAGES NONE)\n"
+        "add_library(_pops MODULE IMPORTED)\n"
+        f'set_target_properties(_pops PROPERTIES IMPORTED_LOCATION "{linked.as_posix()}")\n'
+        f'set(Python_EXECUTABLE "{Path(sys.executable).as_posix()}")\n'
+        "set(POPS_NATIVE_DIM 2)\n"
+        f'install(FILES "{transformed.as_posix()}" DESTINATION pops/_native/dim2 '
+        f'RENAME "{linked.name}")\n'
+        + hook.group(0) + "\n",
+        encoding="utf-8",
+    )
+    build = tmp_path / "cmake build"
+    configured_prefix = tmp_path / "configure prefix"
+    installed_prefix = tmp_path / "install prefix"
+    destination = tmp_path / "DESTDIR root"
+    environment = {**os.environ, "DESTDIR": str(destination), "PYTHONDONTWRITEBYTECODE": "1"}
+    configured = subprocess.run(
+        [cmake, "-S", str(project), "-B", str(build),
+         f"-DCMAKE_INSTALL_PREFIX={configured_prefix}"],
+        env=environment, capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    installed = subprocess.run(
+        [cmake, "--install", str(build), "--prefix", str(installed_prefix)],
+        env=environment, capture_output=True, text=True, timeout=30, check=False,
+    )
+    native_root = destination / installed_prefix.as_posix().lstrip("/") / "pops/_native"
+    manifest = native_root / "variants.json"
+    assert linked.read_bytes() == b"linked before RPATH rewriting"
+    assert not (destination / configured_prefix.as_posix().lstrip("/")).exists()
+    if not valid_native_facts:
+        assert installed.returncode != 0
+        assert "expected Dim=2" in installed.stdout + installed.stderr
+        assert not manifest.exists()
+        return
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    rows = _writer().load_manifest(manifest, expected_dimensions=(2,))
+    assert rows[0]["sha256"] == hashlib.sha256(transformed.read_bytes()).hexdigest()
+    assert rows[0]["sha256"] != hashlib.sha256(linked.read_bytes()).hexdigest()
+    assert rows[0]["abi_key"] == "staged-abi"
 
 
 def test_process_harness_accepts_only_an_authenticated_selected_nested_leaf(tmp_path):
