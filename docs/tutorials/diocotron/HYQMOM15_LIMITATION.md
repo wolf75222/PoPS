@@ -155,6 +155,24 @@ The inspected reference implementation is
 Its [eigenvalue correction](https://github.com/comp-physics/HyQMOM.jl/blob/54cf5770d7017c9abdee620da3583912e7bafeab/src/numerics/eigenvalues6_hyperbolic_3D.jl)
 checks Cartesian axes; this does not provide an all-normal proof for the disk.
 
+The active [RIEMOM2D closure at
+`0f2a1967485256d0525e5255ec8a1c4b4de5e2ea`](https://github.com/Ahcas28/RIEMOM2D/blob/0f2a1967485256d0525e5255ec8a1c4b4de5e2ea/closureS5.m#L14)
+has exactly the six B.1 polynomials used here. An exact rational comparison also
+matches its generated raw-moment Jacobian at the Gaussian counterexample above.
+Its [speed routine](https://github.com/Ahcas28/RIEMOM2D/blob/0f2a1967485256d0525e5255ec8a1c4b4de5e2ea/eigenvalues15_2D.m#L91)
+takes the real parts of eigenvalues before selecting bounds; that operation does
+not establish hyperbolicity and is not used in this PoPS case. RIEMOM2D's
+electrostatic example uses a warm periodic square with different constants,
+so its execution cannot qualify the selected conducting-disk benchmark.
+
+The revised [Riemann35.jl planar
+closure](https://github.com/comp-physics/Riemann35.jl/blob/3dd0fef3d69faee4c333e07604af3d6a68fa8db0/src/moments/hyqmom_3D.jl#L15)
+and its [device flux](https://github.com/comp-physics/Riemann35.jl/blob/3dd0fef3d69faee4c333e07604af3d6a68fa8db0/src/numerics/flux_closure_dev.jl#L248)
+also match B.1. Both Julia projects evolve 35 moments in three velocity
+dimensions; selecting one spatial layer does not produce a fifteen-moment model.
+These reference comparisons preserve the distinction between B.1 and Eq. (40)
+and do not remove the exact oblique counterexample.
+
 This note records a scientific limitation, not an implementation of a correction.
 No moment projection, covariance floor, heating, characteristic-guard bypass,
 normal-frame closure replacement, or alternative model was applied. The exact
