@@ -1,3 +1,15 @@
+void retain_subcycling_attempt_authority_() const noexcept {
+  if (multiblock_subcycling_)
+    allocated_subcycling_attempt_ =
+        std::max(allocated_subcycling_attempt_, multiblock_subcycling_->last_allocated_attempt());
+}
+
+void retire_multiblock_subcycling_engine_() const noexcept {
+  retain_subcycling_attempt_authority_();
+  multiblock_subcycling_.reset();
+  multiblock_subcycling_has_accepted_step_ = false;
+}
+
 void begin_interface_flux_attempt_() const {
   const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
   std::optional<typename interface_flux_ledger_type::PreparedBegin> prepared_begin;
@@ -93,9 +105,12 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
           stage_prepared_publication_candidates_(level, pack);
         },
         operation == "advance_composite_hierarchy");
+    retain_subcycling_attempt_authority_();
     commit_interface_flux_attempt_();
+    accepted_subcycling_attempt_ = multiblock_subcycling_->last_accepted_attempt();
     multiblock_subcycling_has_accepted_step_ = true;
   } catch (...) {
+    retain_subcycling_attempt_authority_();
     rhs_input_traces_.clear();
     if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
       interface_flux_ledger_->rollback();
@@ -294,6 +309,8 @@ void prepare_multiblock_subcycling_engine_() const {
     throw std::runtime_error("AMR Program subcycling preparation failed collectively");
   }
 
+  retain_subcycling_attempt_authority_();
+  prepared->restore_attempt_authority(allocated_subcycling_attempt_, accepted_subcycling_attempt_);
   multiblock_subcycling_ = std::move(prepared);
   multiblock_subcycling_has_accepted_step_ = false;
   prepared_rhs_basis_bounds_ = std::move(rhs_basis_bounds);

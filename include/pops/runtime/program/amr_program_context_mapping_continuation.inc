@@ -62,8 +62,10 @@ void advance_mapping_hierarchy(double dt, Body&& body, std::shared_ptr<AmrProgra
         {0, static_cast<std::int64_t>(facade_->macro_step()), {0, 1}, facade_->time()},
         {0, static_cast<std::int64_t>(facade_->macro_step()), {1, 1}, facade_->time() + dt}};
     multiblock_subcycling_->begin_synchronized(root);
+    retain_subcycling_attempt_authority_();
     resume_mapping_hierarchy_(std::move(owner));
   } catch (...) {
+    retain_subcycling_attempt_authority_();
     cancel_mapping_hierarchy_();
     throw;
   }
@@ -200,6 +202,7 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
             stage_prepared_publication_candidates_(level, pack);
           });
       commit_interface_flux_attempt_();
+      accepted_subcycling_attempt_ = multiblock_subcycling_->last_accepted_attempt();
       multiblock_subcycling_has_accepted_step_ = true;
       rhs_input_traces_.clear();
       synchronized_level_envelopes_.clear();

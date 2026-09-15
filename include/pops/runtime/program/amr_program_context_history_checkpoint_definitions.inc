@@ -21,6 +21,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         interface_flux_ledger_(
             std::make_unique<interface_flux_ledger_type>(*owner.interface_flux_ledger_)),
         accepted_synchronization_events_(owner.accepted_synchronization_events_),
+        accepted_subcycling_attempt_(owner.accepted_subcycling_attempt_),
         accepted_state_revision_(owner.accepted_state_revision_) {}
 
   AcceptedContextSnapshot(const AcceptedContextSnapshot& accepted)
@@ -43,6 +44,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         interface_flux_ledger_(
             std::make_unique<interface_flux_ledger_type>(*accepted.interface_flux_ledger_)),
         accepted_synchronization_events_(accepted.accepted_synchronization_events_),
+        accepted_subcycling_attempt_(accepted.accepted_subcycling_attempt_),
         accepted_state_revision_(accepted.accepted_state_revision_) {}
 
   std::unique_ptr<AcceptedProgramContextSnapshot> prepare_restore() const override {
@@ -86,8 +88,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     owner_->hierarchy_tensor_topology_epoch_ = std::numeric_limits<std::uint64_t>::max();
     owner_->hierarchy_tensor_materialization_generation_ =
         std::numeric_limits<std::uint64_t>::max();
-    owner_->multiblock_subcycling_.reset();
-    owner_->multiblock_subcycling_has_accepted_step_ = false;
+    owner_->retire_multiblock_subcycling_engine_();
     owner_->multiblock_subcycling_epoch_ = std::numeric_limits<std::uint64_t>::max();
     owner_->multiblock_subcycling_generation_ = std::numeric_limits<std::uint64_t>::max();
     owner_->multiblock_subcycling_program_budget_contract_.swap(discarded_subcycling_contract_);
@@ -100,6 +101,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     owner_->interface_flux_commit_guard_.reset();
     owner_->interface_flux_ledger_.swap(interface_flux_ledger_);
     owner_->accepted_synchronization_events_.swap(accepted_synchronization_events_);
+    owner_->accepted_subcycling_attempt_ = accepted_subcycling_attempt_;
     owner_->accepted_state_revision_ = accepted_state_revision_;
     for (const auto& diagnostic : owner_->cell_temporal_diagnostics_)
       if (diagnostic)
@@ -128,6 +130,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
       accepted_face_flux_;
   std::unique_ptr<interface_flux_ledger_type> interface_flux_ledger_;
   std::vector<AmrProgramSynchronizationEvent> accepted_synchronization_events_;
+  std::uint64_t accepted_subcycling_attempt_ = 0;
   std::uint64_t accepted_state_revision_ = std::numeric_limits<std::uint64_t>::max();
   std::map<ScratchKey, field_type> discarded_scratches_;
   std::string discarded_subcycling_contract_;

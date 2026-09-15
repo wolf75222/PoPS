@@ -64,6 +64,7 @@ AmrProgramAcceptedState<Dim> accepted_state_() const {
   state.spatial_contract = runtime_->spatial_contract();
   state.topology_epoch = runtime_->topology_epoch();
   state.materialization_generation = runtime_->materialization_generation();
+  state.accepted_attempt = accepted_subcycling_attempt_;
   state.level_clocks.reserve(runtime_->hierarchy().num_levels());
   for (std::size_t level = 0; level < runtime_->hierarchy().num_levels(); ++level)
     state.level_clocks.push_back(
@@ -177,6 +178,10 @@ void import_accepted_state_(bool force) const {
   const std::uint64_t revision = facade_->program_accepted_state_revision();
   if (!force && revision == accepted_state_revision_)
     return;
+  if (!active_attempt_states_.empty() ||
+      (multiblock_subcycling_ && multiblock_subcycling_->has_attempt_candidates()) ||
+      (interface_flux_ledger_ && interface_flux_ledger_->in_transaction()))
+    throw std::logic_error("AMR accepted-state import crossed an active Program attempt");
   try {
     prepare_multiblock_subcycling_engine_();
   } catch (const std::exception& exception) {
@@ -325,7 +330,10 @@ void import_accepted_state_(bool force) const {
   interface_flux_commit_guard_.reset();
   interface_flux_ledger_.swap(restored_interface_flux);
   accepted_synchronization_events_.swap(state.synchronization_events);
-  multiblock_subcycling_has_accepted_step_ = false;
+  retire_multiblock_subcycling_engine_();
+  accepted_subcycling_attempt_ = *state.accepted_attempt;
+  allocated_subcycling_attempt_ =
+      std::max(allocated_subcycling_attempt_, accepted_subcycling_attempt_);
   accepted_state_revision_ = revision;
 }
 
@@ -527,8 +535,7 @@ void restart_regrid_() const {
     end_restart_regrid_history_sequence();
     throw;
   }
-  multiblock_subcycling_.reset();
-  multiblock_subcycling_has_accepted_step_ = false;
+  retire_multiblock_subcycling_engine_();
   accepted_face_flux_ = {};
   accepted_face_evidence_provenance_.reset();
   interface_flux_commit_guard_.reset();
@@ -544,8 +551,7 @@ void restart_regrid_() const {
 void resync_after_restart_() const {
   if (!active_attempt_states_.empty())
     throw std::logic_error("AMR restart resynchronization crossed an active Program attempt");
-  multiblock_subcycling_.reset();
-  multiblock_subcycling_has_accepted_step_ = false;
+  retire_multiblock_subcycling_engine_();
   // rebuild_hierarchy publishes a temporary newer topology epoch; restore_checkpoint_counters
   // then republishes the authenticated checkpoint epoch. The interface-flux ledger followed
   // the temporary epoch and must be requalified rather than treated as a live regression.

@@ -444,6 +444,10 @@ public:
   mutable ::pops::amr::ClockWindow active_subcycling_window_{};
   mutable std::uint64_t active_subcycling_attempt_ = 0;
   mutable std::unique_ptr<multiblock_subcycling_type> multiblock_subcycling_;
+  // Only the committed cursor is accepted/checkpointed. Rejected allocations remain burned in
+  // this live context, including across engine reconstruction and accepted-snapshot rollback.
+  mutable std::uint64_t allocated_subcycling_attempt_ = 0;
+  mutable std::uint64_t accepted_subcycling_attempt_ = 0;
   mutable bool multiblock_subcycling_has_accepted_step_ = false;
   mutable std::uint64_t multiblock_subcycling_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t multiblock_subcycling_generation_ =

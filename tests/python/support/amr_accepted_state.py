@@ -9,8 +9,8 @@ from __future__ import annotations
 
 def accepted_tagging_hysteresis_span(encoded: bytes, *, dimension: int) -> tuple[bytes, int]:
     version = encoded[:8]
-    if version not in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7"):
-        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4/v5/v6/v7")
+    if version not in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7", b"POPSAND8"):
+        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4/v5/v6/v7/v8")
     cursor = 8
 
     def take(size: int, field: str) -> bytes:
@@ -31,6 +31,10 @@ def accepted_tagging_hysteresis_span(encoded: bytes, *, dimension: int) -> tuple
         raise AssertionError("accepted-state native dimension differs from the probe")
     framed("spatial contract")
     take(2 * 8, "topology epoch and materialization generation")
+    if version == b"POPSAND8":
+        # AND8 carries committed authority even when the accepted face ledger is empty.
+        # Legacy inspection must not invent this field or upgrade a continuation image.
+        take(8, "committed attempt")
     take(word() * 40, "level clocks")
     for _ in range(word()):
         framed("logical clock identity")
@@ -44,8 +48,8 @@ def accepted_tagging_hysteresis_span(encoded: bytes, *, dimension: int) -> tuple
     for _ in range(word()):
         framed("history slot name")
         take(5 * 8, "history slot provenance")
-        if version == b"POPSAND7":
-            # AND7 adds kind, start_bits, interval_bits and ordinal. AND4/5/6
+        if version in (b"POPSAND7", b"POPSAND8"):
+            # AND7/8 carry kind, start_bits, interval_bits and ordinal. AND4/5/6
             # have no sample identity; these are not interchangeable layouts.
             take(4 * 8, "history sample identity")
     for _ in range(word()):
