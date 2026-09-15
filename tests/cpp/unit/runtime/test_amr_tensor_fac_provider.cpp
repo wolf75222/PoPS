@@ -112,11 +112,16 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<Dim> request(
   const Geometry<Dim> geometry =
       Geometry<Dim>::from_bounds(domain, coordinates<Dim>(Real(0)), coordinates<Dim>(Real(1)));
   const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
-  const mesh::RankSpace<Dim> rank_space{Index<Dim>{}, extents<Dim>(1)};
+  const ExecutionLane lane = ExecutionLane::world("pops.test.tensor-request");
+  Extent<Dim> rank_extent = extents<Dim>(1);
+  rank_extent[0] = lane.size();
+  Index<Dim> local_rank{};
+  local_rank[0] = lane.rank();
+  const mesh::RankSpace<Dim> rank_space{Index<Dim>{}, rank_extent};
   const mesh::Distribution<Dim> distribution =
       mesh::Distribution<Dim>::replicated(layout, rank_space);
   HierarchyTensorLevelBuildRequest<Dim> level{geometry, homogeneous_dirichlet(geometry), layout,
-                                              distribution, Index<Dim>{}};
+                                              distribution, local_rank};
 
   HierarchyTensorSolverBuildRequest<Dim> result;
   result.block = 4;
@@ -133,7 +138,7 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<Dim> request(
         fine_layout, rank_space, std::vector<Index<Dim>>{Index<Dim>{}});
     result.levels.push_back(
         HierarchyTensorLevelBuildRequest<Dim>{fine_geometry, homogeneous_dirichlet(fine_geometry),
-                                              fine_layout, fine_distribution, Index<Dim>{}});
+                                              fine_layout, fine_distribution, local_rank});
     result.ratios.push_back(ratio);
   }
   result.plan_identity = "pops.test.tensor-plan";
@@ -221,7 +226,9 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<2> manufactured_reques
   const Geometry<2> coarse_geometry = Geometry<2>::from_bounds(
       coarse_domain, RealVector<2>{Real(0), Real(0)}, RealVector<2>{Real(1), Real(1)});
   const mesh::BoxArray<2> coarse_layout(std::vector<Box<2>>{coarse_domain});
-  const mesh::RankSpace<2> rank_space{Index<2>{0, 0}, Extent<2>{1, 1}};
+  const ExecutionLane lane = ExecutionLane::world("pops.test.nd-tensor-mms-request");
+  const mesh::RankSpace<2> rank_space{Index<2>{0, 0}, Extent<2>{lane.size(), 1}};
+  const Index<2> local_rank{lane.rank(), 0};
   const mesh::Distribution<2> coarse_distribution =
       mesh::Distribution<2>::replicated(coarse_layout, rank_space);
 
@@ -239,10 +246,10 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<2> manufactured_reques
   result.components = 1;
   result.levels.push_back(
       HierarchyTensorLevelBuildRequest<2>{coarse_geometry, homogeneous_dirichlet(coarse_geometry),
-                                          coarse_layout, coarse_distribution, Index<2>{0, 0}});
+                                          coarse_layout, coarse_distribution, local_rank});
   result.levels.push_back(
       HierarchyTensorLevelBuildRequest<2>{fine_geometry, homogeneous_dirichlet(fine_geometry),
-                                          fine_layout, fine_distribution, Index<2>{0, 0}});
+                                          fine_layout, fine_distribution, local_rank});
   result.ratios.push_back(ratio);
   result.plan_identity = "pops.test.nd-tensor-mms";
   result.operator_contract_identity =
@@ -290,12 +297,14 @@ pops::Real solve_manufactured_error(int coarse_cells) {
 
   const auto& fine = prepared->solution(1);
   Real error = Real(0);
-  Kokkos::parallel_reduce(
-      "pops_nd_tensor_mms_error", Kokkos::RangePolicy<std::int64_t>(0, comparison.numPts()),
-      ManufacturedError{geometries[1], std::as_const(fine.fab(0)).view(), comparison},
-      Kokkos::Max<Real>(error));
+  if (fine.local_size() != 0) {
+    Kokkos::parallel_reduce(
+        "pops_nd_tensor_mms_error", Kokkos::RangePolicy<std::int64_t>(0, comparison.numPts()),
+        ManufacturedError{geometries[1], std::as_const(fine.fab(0)).view(), comparison},
+        Kokkos::Max<Real>(error));
+  }
   Kokkos::fence();
-  return error;
+  return static_cast<Real>(all_reduce_max(static_cast<double>(error), lane));
 }
 
 template <int Dim>
