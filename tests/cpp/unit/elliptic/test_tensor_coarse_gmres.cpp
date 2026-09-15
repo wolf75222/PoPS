@@ -13,7 +13,7 @@ constexpr Real pi = Real(3.141592653589793238462643383279502884L);
 // physical/periodic boundary route. Inverting that RHS exercises the new operator session at
 // both walls, between patches, and across the angular seam without changing the reference action.
 struct RootProblem {
-  ExecutionLane lane = ExecutionLane::world("tests.tensor-coarse-gmres");
+  ExecutionLane lane = ExecutionLane::duplicate_world_collectively("tests.tensor-coarse-gmres");
   Geometry<2> geometry;
   PhysicalBoundaryConditions<2> boundary;
   mesh::BoxArray<2> layout;
@@ -249,7 +249,7 @@ TEST(TensorCoarseGMRES, SingularAndChangedPreparedMethodAreRefused) {
 }
 
 TEST(TensorCoarseGMRES, CompositeMappedDiskConvergesAndRejectsFailedInnerSolve) {
-  const auto lane = ExecutionLane::world("tests.tensor-coarse-gmres.composite");
+  const auto lane = ExecutionLane::duplicate_world_collectively("tests.tensor-coarse-gmres.composite");
   const auto solved = pops::test::mapped_disk_fac_witness(
       8, 48, false, lane, {1u, 2u, true}, 4, 64, 512, 200, Real(0.5), Real(2e-9),
       CoarseCorrectionMethod::gmres);

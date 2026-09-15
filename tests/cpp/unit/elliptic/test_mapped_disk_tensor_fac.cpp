@@ -3,7 +3,7 @@
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 
 TEST(MappedDiskTensorFAC, RejectsBoundaryMasksThatDisagreeWithNativeTopology) {
-  const auto lane = pops::ExecutionLane::world("tests.mapped-disk-fac-boundary");
+  const auto lane = pops::ExecutionLane::duplicate_world_collectively("tests.mapped-disk-fac-boundary");
   using Options = pops::elliptic::nd::CartesianTensorStencilOptions;
   for (const auto options : {Options{16u, 2u, true}, Options{1u, 1u, true},
                             Options{4u, 2u, true}, Options{2u, 1u, true}})
@@ -26,7 +26,7 @@ TEST(MappedDiskTensorFAC, RejectsInvalidAuthoredDampingInNativeWireContract) {
 }
 
 TEST(MappedDiskTensorFAC, MappedFullDiskConvergesWithPartialPeriodicAMR) {
-  const auto lane = pops::ExecutionLane::world("tests.mapped-disk-fac-mms");
+  const auto lane = pops::ExecutionLane::duplicate_world_collectively("tests.mapped-disk-fac-mms");
   const auto coarse = pops::test::mapped_disk_fac_witness(8, 48, false, lane,
                                                        {1u, 2u, true}, 4, 64, 512, 200, 0.5);
   const auto fine = pops::test::mapped_disk_fac_witness(16, 96, false, lane,
