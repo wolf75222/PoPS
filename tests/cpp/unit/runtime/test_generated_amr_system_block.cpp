@@ -2148,8 +2148,9 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesUnsynchronizedHierarchyBefore
   EXPECT_THROW(
       context->advance_hierarchy(0.01, [&](double) { context->state(0).set_val(pops::Real(9)); }),
       std::runtime_error);
-  EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(0)), pops::Real(1));
-  EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(1)), pops::Real(1));
+  // Fine patches can leave a rank empty; reduce on the installed execution lane.
+  EXPECT_EQ(context->max_component(system.engine()->hierarchy().state(0), 0), pops::Real(1));
+  EXPECT_EQ(context->max_component(system.engine()->hierarchy().state(1), 0), pops::Real(1));
 }
 
 TEST(GeneratedAmrSystemBlock, SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes) {
