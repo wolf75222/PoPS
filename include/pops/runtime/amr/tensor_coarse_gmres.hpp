@@ -8,6 +8,7 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
+#include <pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp>
 
 #include <array>
 #include <cmath>
@@ -18,6 +19,8 @@
 #include <string>
 
 namespace pops::runtime::program::tensor_fac {
+
+enum class CoarsePreconditionerKind : std::uint8_t { diagonal, polar_poisson };
 
 /// The Krylov basis and coefficient/diagonal layouts are constructed eagerly. Operator sessions
 /// first prepare from real staged coefficients, before the first recurrence, and subsequently
@@ -39,6 +42,7 @@ class TensorCoarseGmres {
     const PreparedPhysicalBoundary<Dim>* boundary;
     elliptic::nd::CartesianTensorStencilOptions options;
     std::string contract;
+    CoarsePreconditionerKind preconditioner;
     std::array<field_type, static_cast<std::size_t>(Dim * Dim)> coefficients;
     field_type inverse_diagonal;
     OperatorEvaluationSnapshot snapshot{};
@@ -46,9 +50,10 @@ class TensorCoarseGmres {
 
     Data(const field_type& prototype, const Geometry<Dim>& geometry_value,
          const HaloSchedule<Dim>& halo_value, const PreparedPhysicalBoundary<Dim>& boundary_value,
-         elliptic::nd::CartesianTensorStencilOptions stencil_options, std::string_view owner)
+         elliptic::nd::CartesianTensorStencilOptions stencil_options, std::string_view owner,
+         CoarsePreconditionerKind preconditioner_kind)
         : geometry(geometry_value), halo(&halo_value), boundary(&boundary_value),
-          options(stencil_options), contract(owner),
+          options(stencil_options), contract(owner), preconditioner(preconditioner_kind),
           inverse_diagonal(prototype.layout(), prototype.distribution(), prototype.local_rank(),
                            1, Extent<Dim>{}),
           distribution(prototype.distribution().replicated()
@@ -58,6 +63,8 @@ class TensorCoarseGmres {
       parameters.text(contract).text(distribution.layout_contract(prototype))
           .scalar(options.zero_flux_faces).scalar(options.dirichlet_faces)
           .scalar(options.arithmetic_diagonal);
+      if (preconditioner != CoarsePreconditionerKind::diagonal)
+        parameters.text("tensor-coarse-preconditioner-v1").scalar(preconditioner);
       for (int axis = 0; axis < Dim; ++axis) {
         parameters.scalar(geometry.domain().lo[axis]).scalar(geometry.domain().hi[axis])
             .scalar(geometry.lower()[axis]).scalar(geometry.upper()[axis])
@@ -245,24 +252,65 @@ class TensorCoarseGmres {
     PreconditionSession make_session(const ExecutionLane&) const { return {data}; }
   };
 
+  struct PolarPreconditionSession {
+    std::shared_ptr<const Data> data;
+    std::unique_ptr<elliptic::polar::PreparedPolarPoissonInverse<Dim>> inverse;
+
+    PolarPreconditionSession(std::shared_ptr<const Data> source, const ExecutionLane& lane)
+        : data(std::move(source)),
+          inverse(std::make_unique<elliptic::polar::PreparedPolarPoissonInverse<Dim>>(
+              data->coefficients[0], data->geometry, *data->boundary, data->options, lane)) {}
+
+    void prepare() {
+      if (!data->snapshot.valid())
+        throw std::logic_error("tensor coarse GMRES polar preconditioner is unprepared");
+      inverse->prepare();
+    }
+    PreparedApplyResult apply(field_type& out, const field_type& in) noexcept {
+      return inverse->apply(out, in);
+    }
+    std::size_t allocation_count() const noexcept { return 1 + inverse->allocation_count(); }
+  };
+
+  struct PolarPreconditionSource {
+    std::shared_ptr<const Data> data;
+    static constexpr PreparedProviderIdentity provider_identity() noexcept {
+      return {"pops.tensor-fac.coarse-fixed-polar-poisson", 1};
+    }
+    void serialize_exact_parameters(ExactContractBuilder& contract) const {
+      contract.text(data->contract);
+    }
+    PolarPreconditionSession make_session(const ExecutionLane& lane) const { return {data, lane}; }
+  };
+
  public:
   TensorCoarseGmres(const field_type& prototype, const Geometry<Dim>& geometry,
                    const HaloSchedule<Dim>& halo,
                    const PreparedPhysicalBoundary<Dim>& homogeneous_boundary,
                    elliptic::nd::CartesianTensorStencilOptions options,
-                   const ExecutionLane& parent, std::string_view exact_owner, int restart)
+                   const ExecutionLane& parent, std::string_view exact_owner, int restart,
+                   CoarsePreconditionerKind preconditioner = CoarsePreconditionerKind::diagonal)
       : parent_(&parent), restart_(restart) {
     long failed = 0;
     try {
       if (restart < 1 || restart >= KrylovWorkspace<Dim>::max_batched_basis_extent())
         throw std::invalid_argument("tensor coarse GMRES restart exceeds its prepared basis limit");
+      if ((preconditioner != CoarsePreconditionerKind::diagonal &&
+           preconditioner != CoarsePreconditionerKind::polar_poisson) ||
+          (preconditioner == CoarsePreconditionerKind::polar_poisson && Dim != 2))
+        throw std::invalid_argument("unsupported tensor coarse GMRES preconditioner");
       data_ = std::make_shared<Data>(prototype, geometry, halo, homogeneous_boundary, options,
-                                     exact_owner);
+                                     exact_owner, preconditioner);
     } catch (...) {
       failed = 1;
     }
     if (all_reduce_max(failed, parent) != 0)
       throw std::invalid_argument("tensor coarse GMRES local preparation failed collectively");
+    const long kind = static_cast<long>(preconditioner);
+    const long minimum_kind = all_reduce_min(kind, parent);
+    const long maximum_kind = all_reduce_max(kind, parent);
+    if (minimum_kind != maximum_kind)
+      throw std::invalid_argument("tensor coarse GMRES preconditioner differs across ranks");
 #ifdef POPS_HAS_MPI
     const auto parent_communicator = ExecutionCommunicator::borrowed(
         "pops.tensor-fac.coarse-gmres.parent", parent.native_handle());
@@ -272,10 +320,15 @@ class TensorCoarseGmres {
     const KrylovFootprint<Dim> footprint{1, prototype.ghosts(), true};
     problem_ = PreparedAffineLinearProblem<Dim>::make_shared_collectively(
         parent_communicator, "pops.tensor-fac.coarse-gmres.problem", [&] {
+          auto provider = [&] {
+            if (data_->preconditioner == CoarsePreconditionerKind::polar_poisson)
+              return PreparedLinearPreconditionerProvider<Dim>(PolarPreconditionSource{data_});
+            return PreparedLinearPreconditionerProvider<Dim>(PreconditionSource{data_});
+          }();
           return typename PreparedAffineLinearProblem<Dim>::ConstructionInputs{
               std::cref(prototype), PreparedAffineOperatorProvider<Dim>(ApplySource{data_}),
               PreparedLinearPreconditioner<Dim>(
-                  prototype, PreparedLinearPreconditionerProvider<Dim>(PreconditionSource{data_}),
+                  prototype, std::move(provider),
                   data_->distribution),
               LinearOperatorProperties::general(), footprint,
               PreparedNullspacePolicy<Dim>::nonsingular(),
@@ -293,7 +346,7 @@ class TensorCoarseGmres {
   TensorCoarseGmres& operator=(const TensorCoarseGmres&) = delete;
 
   /// Copy the full coefficient image once per FAC solve. No alias into staged user storage is
-  /// visible to an active GMRES recurrence, and all applications use the same fixed diagonal.
+  /// visible to an active GMRES recurrence. Its selected preconditioner has a fixed linear action.
   void prepare_coefficients(const coefficient_fields& source) {
     // A failed refresh must never leave a usable solver pointing at a partially replaced bank.
     prepared_ = false;

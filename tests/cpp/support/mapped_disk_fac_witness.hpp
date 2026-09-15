@@ -26,14 +26,16 @@ struct MappedDiskFacMeasurement {
 // offset=n/2 is interior; offset=3*n/2 splits the patch across the seam.
 inline MappedDiskFacMeasurement mapped_disk_fac_witness(
     int n, int fine_offset, bool replicated_parent, const ExecutionLane& lane,
-    elliptic::nd::CartesianTensorStencilOptions stencil_options =
-        {.zero_flux_faces=1u, .dirichlet_faces=2u, .arithmetic_diagonal=true},
+    elliptic::nd::CartesianTensorStencilOptions stencil_options = {.zero_flux_faces = 1u,
+                                                                   .dirichlet_faces = 2u,
+                                                                   .arithmetic_diagonal = true},
     int angular_ratio = 1, int fine_sweeps = 64, int coarse_cycles = 512,
-    int maximum_iterations = 200, Real damping = Real(1),
-    Real relative_tolerance = Real(2e-9),
+    int maximum_iterations = 200, Real damping = Real(1), Real relative_tolerance = Real(2e-9),
     runtime::program::tensor_fac::CoarseCorrectionMethod coarse_method =
         runtime::program::tensor_fac::CoarseCorrectionMethod::gauss_seidel,
-    int coarse_restart = 64) {
+    int coarse_restart = 64,
+    runtime::program::tensor_fac::CoarsePreconditionerKind coarse_preconditioner =
+        runtime::program::tensor_fac::CoarsePreconditionerKind::diagonal) {
   using namespace runtime::program::tensor_fac;
   using Field = MultiFab<2>;
   constexpr Real pi = Real(3.141592653589793238462643383279502884L);
@@ -162,8 +164,8 @@ inline MappedDiskFacMeasurement mapped_disk_fac_witness(
   }
   const std::array<amr::RefinementRatio<2>, 1> ratios{
       amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
-  FullTensorCompositeFac<2> solver(bindings, ratios, lane, stencil_options,
-                                  coarse_method, coarse_restart);
+  FullTensorCompositeFac<2> solver(bindings, ratios, lane, stencil_options, coarse_method,
+                                   coarse_restart, coarse_preconditioner);
   Controls controls;
   controls.relative_tolerance = relative_tolerance;
   controls.absolute_tolerance = Real(1e-12);
@@ -172,6 +174,7 @@ inline MappedDiskFacMeasurement mapped_disk_fac_witness(
   controls.coarse_cycles = coarse_cycles;
   controls.coarse_method = coarse_method;
   controls.coarse_restart = coarse_restart;
+  controls.coarse_preconditioner = coarse_preconditioner;
   controls.coarse_relative_tolerance = Real(1e-11);
   controls.correction_damping = damping;
   MappedDiskFacMeasurement result;

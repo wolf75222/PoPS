@@ -83,6 +83,12 @@ _HIERARCHY_POTENTIAL_AMPLITUDE = 0.01
         {"coarse_method": "gmres", "coarse_restart": 1 << 31},
         {"coarse_method": "gauss_seidel", "coarse_restart": 32},
         {"coarse_restart": 32},
+        {"coarse_preconditioner": True},
+        {"coarse_preconditioner": None},
+        {"coarse_preconditioner": "Polar_Poisson"},
+        {"coarse_preconditioner": "polar_poisson"},
+        {"coarse_method": "gmres", "coarse_preconditioner": "polar_poisson"},
+        {"coarse_method": "gauss_seidel", "coarse_preconditioner": "polar_poisson", "diagonal_average": "arithmetic"},
         {"coarse_rel_tol": True},
         {"coarse_rel_tol": 0},
         {"coarse_rel_tol": 1},
@@ -111,6 +117,7 @@ def test_identity_owns_complete_flat_and_refined_solve_contract():
     assert default.coarse_cycles is None
     assert default.coarse_method == "gauss_seidel"
     assert default.coarse_restart == 64
+    assert default.coarse_preconditioner == "diagonal"
     assert default.verbose is None
 
     configured = CompositeTensorFAC(
@@ -218,6 +225,58 @@ def test_coarse_gmres_restart_accepts_exact_native_int_endpoints(restart):
     descriptor = CompositeTensorFAC(coarse_method="gmres", coarse_restart=restart)
     assert descriptor.canonical_options()["coarse_restart"] == restart
     assert descriptor.prepare_program_solve().options["coarse_restart"] == restart
+
+
+@pytest.mark.parametrize("method", ("gauss_seidel", "gmres"))
+def test_explicit_diagonal_preconditioner_preserves_default_identity_and_emission(method):
+    from test_hierarchy_scoped_solve_emit import _build
+
+    implicit = CompositeTensorFAC(coarse_method=method)
+    explicit = CompositeTensorFAC(coarse_method=method, coarse_preconditioner="diagonal")
+    assert explicit.canonical_identity() == implicit.canonical_identity()
+    assert explicit.identity == implicit.identity
+    assert "coarse_preconditioner" not in explicit.canonical_options()
+    _, implicit_source = _build(implicit)
+    _, explicit_source = _build(explicit)
+    assert "fac.coarse_preconditioner" not in implicit_source
+    assert "fac.coarse_preconditioner" not in explicit_source
+
+
+def test_polar_preconditioner_is_authenticated_and_emitted_as_a_distinct_option():
+    from test_hierarchy_scoped_solve_emit import _build
+
+    diagonal = CompositeTensorFAC(coarse_method="gmres", diagonal_average="arithmetic")
+    polar = replace(diagonal, coarse_preconditioner="polar_poisson")
+    assert polar.identity != diagonal.identity
+    prepared = polar.prepare_program_solve()
+    assert prepared.identity == polar.identity
+    assert prepared.options["coarse_preconditioner"] == "polar_poisson"
+    program, source = _build(polar)
+    assert '{"fac.coarse_preconditioner", std::string{"polar_poisson"}}' in source
+    assert '{"fac.coarse_method", std::string{"gmres"}}' in source
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    assert solve.attrs["hierarchy_solver_identity"] == polar.identity.token
+    assert prepared_hierarchy_solver_provider_from_attrs(solve.attrs).provider_id == (
+        "pops.hierarchy.composite-tensor-fac"
+    )
+    provider = prepared_hierarchy_solver_provider_by_id("pops.hierarchy.composite-tensor-fac")
+    for change in ({"coarse_preconditioner": "diagonal"},
+                   {"coarse_preconditioner": "POLAR_POISSON"},
+                   {"coarse_method": "gauss_seidel"},
+                   {"diagonal_average": "harmonic"}):
+        forged = replace(prepared, _options_json=json.dumps(
+            {**prepared.options, **change}, sort_keys=True, separators=(",", ":")))
+        with pytest.raises((TypeError, ValueError)):
+            provider.authenticate_prepared(forged)
+        attrs = dict(solve.attrs)
+        attrs["hierarchy_solver_options"] = {**attrs["hierarchy_solver_options"], **change}
+        with pytest.raises((TypeError, ValueError)):
+            prepared_hierarchy_solver_provider_from_attrs(attrs)
+    attrs = dict(solve.attrs)
+    attrs["hierarchy_solver_options"] = dict(attrs["hierarchy_solver_options"])
+    del attrs["hierarchy_solver_options"]["coarse_preconditioner"]
+    with pytest.raises(ValueError, match="canonical|identity"):
+        prepared_hierarchy_solver_provider_from_attrs(attrs)
 
 
 @pytest.mark.parametrize(

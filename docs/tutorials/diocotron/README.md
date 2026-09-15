@@ -89,7 +89,15 @@ are `POPS_NR`, `POPS_NTHETA`, `POPS_MAX_LEVELS`, `POPS_MODE`, `POPS_CFL`,
 `POPS_MAX_DT`, `POPS_T_END`, and `POPS_OUTPUT_INTERVAL`. The tutorials use
 synchronous AMR steps, conservative transfer, accepted-state checkpoints, and
 the public PoPS compile/bind/run interfaces.
-The FAC coarse correction uses prepared GMRES with a fixed diagonal preconditioner.
+The FAC coarse correction uses prepared GMRES with an explicitly selected fixed
+polar-Poisson preconditioner. The provider's general default remains diagonal.
+The polar option inverts the finite-volume metric operator `-div(K grad)` using
+a periodic discrete Fourier transform and radial tridiagonal factors. It includes
+the zero-conormal pole and conducting wall; the zero Fourier mode is nonsingular.
+The coarse inverse uses bounded replicated buffers with authenticated ownership
+and persistent Kokkos storage. Its resource limits and geometric requirements are
+checked during native preparation. No convergence or speedup follows from merely
+selecting this option; the recorded native and scientific qualification is required.
 Every matrix application retains the complete finite-Omega tensor and the conducting-disk
 boundary law. GMRES uses Euclidean Arnoldi products and an explicitly authenticated
 physical infinity norm for stopping. Its reference, initial and final residual checks
@@ -100,7 +108,8 @@ is a solver change; it does not replace the equation by its drift limit. The fir
 coefficient snapshot prepares the persistent GMRES sessions before iteration. Runtime
 and numerical qualification of a new solver revision are recorded separately from its
 implementation; no speedup is assumed from selecting GMRES.
-Coarse patches are explicitly distributed across MPI ranks. `POPS_COARSE_MAX_GRID`
+Coarse patches and the full tensor action are explicitly distributed across MPI ranks.
+Only the selected approximate coarse inverse uses replicated buffers. `POPS_COARSE_MAX_GRID`
 bounds coarse patches; `POPS_CLUSTER_MAX_GRID` bounds clusters in parent tagging
 cells before factor-two refinement. The latter is not a bound in child-cell units.
 

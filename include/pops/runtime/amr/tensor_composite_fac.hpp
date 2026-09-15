@@ -67,6 +67,7 @@ struct Controls {
   Real correction_damping = Real(1);
   CoarseCorrectionMethod coarse_method = CoarseCorrectionMethod::gauss_seidel;
   int coarse_restart = 64;
+  CoarsePreconditionerKind coarse_preconditioner = CoarsePreconditionerKind::diagonal;
 };
 
 namespace detail {
@@ -422,6 +423,10 @@ inline void validate_controls(const Controls& controls) {
       controls.coarse_restart < 1 ||
       (controls.coarse_method == CoarseCorrectionMethod::gauss_seidel &&
        controls.coarse_restart != 64) ||
+      (controls.coarse_preconditioner != CoarsePreconditionerKind::diagonal &&
+       controls.coarse_preconditioner != CoarsePreconditionerKind::polar_poisson) ||
+      (controls.coarse_preconditioner == CoarsePreconditionerKind::polar_poisson &&
+       controls.coarse_method != CoarseCorrectionMethod::gmres) ||
       !std::isfinite(static_cast<double>(controls.relative_tolerance)) ||
       controls.relative_tolerance <= Real(0) ||
       !std::isfinite(static_cast<double>(controls.absolute_tolerance)) ||
@@ -458,14 +463,16 @@ class FullTensorCompositeFac {
                          const ExecutionLane& lane,
                          elliptic::nd::CartesianTensorStencilOptions stencil_options = {},
                          CoarseCorrectionMethod coarse_method = CoarseCorrectionMethod::gauss_seidel,
-                         int coarse_restart = 64)
+                         int coarse_restart = 64,
+                         CoarsePreconditionerKind coarse_preconditioner = CoarsePreconditionerKind::diagonal)
       : bindings_(bindings.begin(), bindings.end()),
         ratios_(ratios.begin(), ratios.end()),
         lane_(&lane),
         lane_borrow_(lane.borrow_immutably()),
         stencil_options_(stencil_options),
         coarse_method_(coarse_method),
-        coarse_restart_(coarse_restart) {
+        coarse_restart_(coarse_restart),
+        coarse_preconditioner_(coarse_preconditioner) {
     static_assert(
         Kokkos::SpaceAccessibility<Kokkos::DefaultExecutionSpace, MemorySpace>::accessible,
         "FullTensorCompositeFac requires DefaultExecutionSpace access to its memory space");
@@ -474,6 +481,7 @@ class FullTensorCompositeFac {
       Controls prepared_controls;
       prepared_controls.coarse_method = coarse_method_;
       prepared_controls.coarse_restart = coarse_restart_;
+      prepared_controls.coarse_preconditioner = coarse_preconditioner_;
       detail::validate_controls(prepared_controls);
       validate_bindings_();
       levels_.reserve(bindings_.size());
@@ -530,7 +538,7 @@ class FullTensorCompositeFac {
         auto& coarse = *levels_.front();
         coarse_gmres_.emplace(coarse.correction, *coarse.binding.geometry, coarse.halo_schedule,
                              coarse.homogeneous_boundary, stencil_options_, lane, exact_contract_,
-                             coarse_restart_);
+                             coarse_restart_, coarse_preconditioner_);
       } else {
         throw std::invalid_argument("tensor FAC GMRES requires the native Krylov memory space");
       }
@@ -573,7 +581,8 @@ class FullTensorCompositeFac {
       throw std::invalid_argument(
           "dimension-generic tensor FAC requires its prepared execution lane");
     if (all_reduce_max(controls.coarse_method != coarse_method_ ||
-                           controls.coarse_restart != coarse_restart_ ? 1L : 0L, lane) != 0)
+                           controls.coarse_restart != coarse_restart_ ||
+                           controls.coarse_preconditioner != coarse_preconditioner_ ? 1L : 0L, lane) != 0)
       throw std::invalid_argument("tensor FAC coarse method differs from its prepared contract");
     detail::validate_controls(controls);
     for (std::size_t level = 0; level < levels_.size(); ++level)
@@ -674,8 +683,14 @@ class FullTensorCompositeFac {
         return report;
       }
     }
-    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kFailRun,
-                       "nd_tensor_fac_iteration_limit");
+    // Preserve the measured failure and criterion in the surfaced reason. Callers may only
+    // retain this text when rejecting a step; no additional solve or tolerance change occurs.
+    std::ostringstream context;
+    context << "nd_tensor_fac_iteration_limit"
+            << std::setprecision(std::numeric_limits<Real>::max_digits10)
+            << " [iterations=" << report.iters << ", residual_linf=" << report.residual_norm
+            << ", reference_linf=" << reference << ", requested_tolerance=" << stop << ']';
+    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kFailRun, context.str());
     return report;
   }
 
@@ -1194,6 +1209,8 @@ class FullTensorCompositeFac {
     if (coarse_method_ != CoarseCorrectionMethod::gauss_seidel)
       contract.text("pops.tensor-fac.coarse-method@1")
           .scalar(coarse_method_).scalar(coarse_restart_);
+    if (coarse_preconditioner_ != CoarsePreconditionerKind::diagonal)
+      contract.text("pops.tensor-fac.coarse-preconditioner@1").scalar(coarse_preconditioner_);
     for (const auto& binding : bindings_) {
       for (int axis = 0; axis < Dim; ++axis)
         contract.scalar(binding.geometry->domain().lo[axis])
@@ -1582,6 +1599,7 @@ class FullTensorCompositeFac {
   std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
   CoarseCorrectionMethod coarse_method_;
   int coarse_restart_;
+  CoarsePreconditionerKind coarse_preconditioner_;
   std::optional<TensorCoarseGmres<Dim>> coarse_gmres_{};
 };
 

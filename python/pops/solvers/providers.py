@@ -761,7 +761,7 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
         values = CompositeTensorFAC().canonical_options()
     if not _COMPOSITE_OPTION_NAMES <= set(values) or set(values) - _COMPOSITE_OPTION_NAMES - {
         "boundary_conditions", "diagonal_average", "correction_damping",
-        "coarse_method", "coarse_restart",
+        "coarse_method", "coarse_restart", "coarse_preconditioner",
     }:
         raise TypeError("%s options do not match the provider schema" % where)
     from pops.identity.scalar import exact_cpp_int, scalar_data
@@ -784,6 +784,12 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
     )
     if coarse_method == "gauss_seidel" and coarse_restart != 64:
         raise ValueError("CompositeTensorFAC coarse_restart applies only to GMRES")
+    coarse_preconditioner = values.get("coarse_preconditioner", "diagonal")
+    if type(coarse_preconditioner) is not str or coarse_preconditioner not in ("diagonal", "polar_poisson"):
+        raise ValueError("CompositeTensorFAC coarse_preconditioner must be diagonal or polar_poisson")
+    if coarse_preconditioner == "polar_poisson" and (
+            coarse_method != "gmres" or values.get("diagonal_average", "harmonic") != "arithmetic"):
+        raise ValueError("CompositeTensorFAC polar_poisson requires GMRES and arithmetic diagonal averaging")
     verbose = values["verbose"]
     if verbose is not None and type(verbose) is not bool:
         raise TypeError("%s verbose must be a Python bool or None" % where)
@@ -815,6 +821,8 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
     }
     if coarse_method == "gmres":
         result.update(coarse_method=coarse_method, coarse_restart=coarse_restart)
+    if coarse_preconditioner != "diagonal":
+        result["coarse_preconditioner"] = coarse_preconditioner
     if "boundary_conditions" in values:
         boundary_data = _tensor_boundary_data(values["boundary_conditions"])
         result["boundary_conditions"] = None if boundary_data is None else {
@@ -1091,6 +1099,8 @@ def _emit_composite_tensor_fac(
             '{"fac.coarse_method", std::string{"gmres"}}',
             '{"fac.coarse_restart", std::int64_t{%d}}' % options["coarse_restart"],
         ))
+    if options.get("coarse_preconditioner", "diagonal") != "diagonal":
+        native_options.append('{"fac.coarse_preconditioner", std::string{"polar_poisson"}}')
     if verbose is not None:
         native_options.append(
             '{"fac.verbose", %s}' % ("true" if verbose else "false")
@@ -1216,7 +1226,10 @@ class CompositeTensorFAC:
     complete conormal flux; Dirichlet(0) is a homogeneous conducting boundary. Periodic faces
     must agree with mesh topology. Smooth mapped metrics may use arithmetic diagonal averaging.
     The optional GMRES coarse correction applies the same complete tensor stencil with a
-    fixed diagonal preconditioner. It requires a nonsingular coarse problem. ``coarse_cycles``
+    fixed preconditioner. The default is diagonal. ``polar_poisson`` uses a bounded replicated
+    inverse of the FV polar metric on a conducting disk; native preparation checks geometry,
+    face laws and full coarse ownership. It requires GMRES and arithmetic diagonal averaging.
+    It changes only the approximate inverse of the full tensor. ``coarse_cycles``
     caps iterations of the selected coarse method; ``coarse_restart`` sizes the prepared
     GMRES basis. The outer FAC convergence criterion is unchanged.
     """
@@ -1230,6 +1243,7 @@ class CompositeTensorFAC:
     coarse_cycles: int | None = None
     coarse_method: str = "gauss_seidel"
     coarse_restart: int = 64
+    coarse_preconditioner: str = "diagonal"
     verbose: bool | None = None
     boundary_conditions: Any = None
     diagonal_average: str = "harmonic"
@@ -1266,6 +1280,11 @@ class CompositeTensorFAC:
             self.coarse_restart, where="CompositeTensorFAC(coarse_restart=)", minimum=1))
         if self.coarse_method == "gauss_seidel" and self.coarse_restart != 64:
             raise ValueError("CompositeTensorFAC coarse_restart applies only to GMRES")
+        if type(self.coarse_preconditioner) is not str or self.coarse_preconditioner not in ("diagonal", "polar_poisson"):
+            raise ValueError("CompositeTensorFAC coarse_preconditioner must be diagonal or polar_poisson")
+        if self.coarse_preconditioner == "polar_poisson" and (
+                self.coarse_method != "gmres" or self.diagonal_average != "arithmetic"):
+            raise ValueError("CompositeTensorFAC polar_poisson requires GMRES and arithmetic diagonal averaging")
         if self.coarse_rel_tol is not None:
             object.__setattr__(
                 self,
@@ -1316,6 +1335,8 @@ class CompositeTensorFAC:
         }
         if self.coarse_method == "gmres":
             result.update(coarse_method=self.coarse_method, coarse_restart=self.coarse_restart)
+        if self.coarse_preconditioner != "diagonal":
+            result["coarse_preconditioner"] = self.coarse_preconditioner
         if self.boundary_conditions is not None:
             result["boundary_conditions"] = {
                 str(index): law for index, law in enumerate(self.boundary_conditions)}

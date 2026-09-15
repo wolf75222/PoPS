@@ -65,6 +65,7 @@ OPTIONAL_SIGNATURE_KEYS = ("coarse_max_grid", "cluster_max_grid", "distribute_co
                            "potential_history_slot", "potential_history_contract",
                            "potential_history_transfer", "field_initial_guess", "time_calendar",
                            "field_coarse_method", "field_coarse_restart", "field_coarse_iteration_cap",
+                           "field_coarse_preconditioner",
                            "output_interval", "growth_output_interval", "growth_output_end")
 COLORS = plt.colormaps["Blues"](np.linspace(0, 1, 256))
 COLORS[0] = (1., 1., 1., 1.)
@@ -393,7 +394,7 @@ for records, run_summary in trajectories:
         suffix = "-schlieren-panels" + ("-partial" if len(available) < 9 else "")
         for extension in ("png", "pdf"):
             figure_path = output/(run_summary["label"]+suffix+"."+extension)
-            plate.savefig(figure_path, dpi=args.dpi)
+            plate.savefig(figure_path, dpi=args.dpi, bbox_inches="tight")
             run_summary["outputs"].append(str(figure_path))
         plt.close(plate)
     if len(frames) >= 2:

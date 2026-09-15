@@ -20,6 +20,7 @@ TEST(HierarchyTensorExactRank, CoarseGmresNativeOptionsKeepExactWireTypes) {
   const auto defaults = tensor_elliptic_detail::decode_controls(options);
   EXPECT_FALSE(defaults.coarse_method.has_value());
   EXPECT_FALSE(defaults.coarse_restart.has_value());
+  EXPECT_FALSE(defaults.coarse_preconditioner.has_value());
   options.values.emplace("fac.coarse_method", std::string{"gmres"});
   options.values.emplace("fac.coarse_restart", std::int64_t{32});
   const auto gmres = tensor_elliptic_detail::decode_controls(options);
@@ -45,6 +46,28 @@ TEST(HierarchyTensorExactRank, CoarseGmresNativeOptionsKeepExactWireTypes) {
     options.values.at("fac.coarse_restart") = invalid;
     EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
   }
+}
+
+TEST(HierarchyTensorExactRank, PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES) {
+  using namespace pops::runtime::program;
+  using tensor_fac::CoarsePreconditionerKind;
+  auto options = tensor_elliptic_detail::default_options();
+  options.values.emplace("fac.coarse_preconditioner", std::string{"diagonal"});
+  EXPECT_EQ(tensor_elliptic_detail::decode_controls(options).coarse_preconditioner,
+            CoarsePreconditionerKind::diagonal);
+  options.values.at("fac.coarse_preconditioner") = std::string{"polar_poisson"};
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.emplace("fac.coarse_method", std::string{"gmres"});
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.emplace("operator.arithmetic_diagonal", true);
+  EXPECT_EQ(tensor_elliptic_detail::decode_controls(options).coarse_preconditioner,
+            CoarsePreconditionerKind::polar_poisson);
+  options.values.at("fac.coarse_preconditioner") = std::string{"POLAR_POISSON"};
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.at("fac.coarse_preconditioner") = true;
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.at("fac.coarse_preconditioner") = std::int64_t{1};
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
 }
 
 template <int Dim>
