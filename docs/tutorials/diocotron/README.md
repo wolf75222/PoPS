@@ -1,8 +1,11 @@
 # Hoffart diocotron in PoPS finite volumes
 
 `01_mpi_kokkos_hoffart_euler.py` builds the full barotropic Euler–Poisson case.
-`02_mpi_kokkos_hoffart_hyqmom15.py` builds the corresponding fifteen-moment case.
-Both are deliberately linear tutorials: all authoring, compilation, execution,
+`02_mpi_kokkos_hoffart_hyqmom15.py` builds the exact HYQMOM15 case, whose
+characteristic obstruction is documented below.
+`04_mpi_kokkos_hoffart_fan_li15.py` builds the separately named full Fan–Li15
+system described in [FAN_LI15_METHOD.md](FAN_LI15_METHOD.md).
+All three are deliberately linear tutorials: all authoring, compilation, execution,
 diagnostics, and checkpointing occur in numbered stages at module scope.
 `03_render_results.py` plots genuine native snapshots and generates a GIF.
 
@@ -144,9 +147,20 @@ Implementation checks, native manufactured solutions, short case integration,
 and paper-scale scientific qualification are separate evidence. The presence of
 these scripts does not establish that a long run or a figure reproduction passed.
 
-The current Euler implementation has passed short native MPI/AMR integration
-and checkpoint continuation. The current HYQMOM15 implementation remains under
-qualification: the attached notes' fifth-moment formulas correspond to Appendix
+Earlier Euler revisions passed short native MPI/AMR integration and one
+checkpoint continuation across a regrid. A subsequent Fan–Li15 run exposed
+missing attempt-counter restoration in the shared AMR runtime: restarting
+between regrids reproduced numerical fields but changed native checkpoint
+authority. That defect requires a native repair and fresh restart qualification;
+the earlier regrid-aligned comparison did not cover it.
+
+Fan–Li15 has completed an actual mode-5 MPI2/OpenMP2 run on a 16×64 two-level
+hierarchy through `t=0.002`. Its saved raw moments pass the strict finite/H1
+checks. This is a short integration result; sustained admissibility, expanded
+AMR, full restart parity and paper-scale figures remain separate gates.
+
+The exact HYQMOM15 implementation has a documented mathematical obstruction:
+the attached notes' fifth-moment formulas correspond to Appendix
 B.1 of [Bryngelson, Fox and Laurent (2026)](https://comp-physics.group/papers/bryngelson-JCP-26.pdf),
 and its actual cold initial data produce complex characteristic pairs. The
 native speed check therefore refuses the first step. The complete published

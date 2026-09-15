@@ -1,10 +1,10 @@
 # Numerical snapshots and rendering
 
-Run `03_render_results.py` on output from tutorial 01 or 02. Each argument is one physical trajectory; the renderer searches its segment subdirectories recursively. Pass separate trajectory directories to compare models, resolutions or modes 3/4/5. For a restarted trajectory, pass their common output parent so the original near-zero potential sample remains available.
+Run `03_render_results.py` on output from tutorial 01, 02 or 04. Each argument is one physical trajectory; the renderer searches its segment subdirectories recursively. Pass separate trajectory directories to compare models, resolutions or modes 3/4/5. For a restarted trajectory, pass their common output parent so the original near-zero potential sample remains available.
 
 ```sh
 env -u PYTHONPATH python docs/tutorials/diocotron/03_render_results.py \
-  /path/to/euler-mode5/results /path/to/hyqmom15-mode5/results \
+  /path/to/euler-mode5/results /path/to/fan-li15-mode5/results \
   --output /path/to/new-render-directory
 ```
 
@@ -20,6 +20,7 @@ Each `snapshot-<macro_step>.npz` contains plain arrays and scalar JSON strings; 
 |---|---|
 | `q0_levelL` | `float64` shape `(ntheta*2**L, nr*2**L)`, computational cell average of `q0=r*rho`. Validity is determined by the patch table. |
 | `psi_levelL` | Same shape; potential `psi=phi/alpha` at the stored source midpoint. Absent only for the true initial state. |
+| `moments_levelL` | Required for Fan–Li15: `float64` shape `(15, ntheta*2**L, nr*2**L)`, all raw `q=r*M` components in q-outer order. Component zero must match `q0_levelL`. |
 | `metadata` | JSON with `time`, `potential_time`, `macro_step`, `mass`, `initial_mass`, `levels`, and run diagnostics. `time` belongs to density; `potential_time` belongs to potential and is initially `null`. |
 | `parameters` | The complete authored case parameter dictionary, including model, mode, geometry, numerical settings and native artifact identity. |
 | `patches` | Unmodified `simulation.amr.patch_table().to_dict()`. |
@@ -28,11 +29,11 @@ The depth-two named potential ring rotates at the end of each accepted step. Sna
 
 Fourier analysis also requires `potential_history_contract="scalar-output-field-v1"` and `potential_history_transfer="authenticated-1to1-retain-overlap-v1"`. These source-cohort markers identify the equal-clock scalar-output transfer that preserves retained fine coverage and fills only new cells from authenticated parent history. A correct slot and timestamp alone do not establish that the spatial remap preserved the saved solution: older AMR expansion replaced even retained fine values. The markers are embedded in each snapshot's parameters and included in trajectory identity checks. They are not a substitute for the run's pinned source, rebuilt native artifact and executed AMR qualification; never add them retroactively to legacy data. Unmarked archives remain available for density figures and GIFs, but their potential curves are omitted.
 
-`progress.json` is atomically replaced after each successful public `pops.run` chunk. It records `time`, `macro_step`, `n_levels`, and `elapsed_seconds`. It proves that chunk returned successfully; only a completed checkpoint proves durable restart state.
+`progress.json` is atomically replaced after each successful public `pops.run` chunk. It records `time`, `macro_step`, `n_levels`, and `elapsed_seconds`. It proves that chunk returned successfully. A completed checkpoint supplies durable accepted-state bytes; restoration and continuation parity require their own qualification.
 
 `PatchReport.per_level[L].boxes` contains flattened **inclusive** tuples `(lo_r, lo_theta, hi_r, hi_theta)`. Its base entry has no boxes and covers the entire domain. Fine entries provide the actual global patch boxes. The renderer checks dimensions, census, nested coverage and complete parent-cell alignment. It masks cells covered by the next finer level and ignores invalid fine-array entries. It recomputes composite mass from active `q0*dr*dtheta` cells and records the difference from the native diagnostic.
 
-Overlapping segment snapshots are merged only if their state/potential arrays, patch tables, physical timestamps and mass agree exactly. Segment-local `initial_mass` and elapsed wall time may differ. Conflicting data or different physical/numerical/artifact identities inside one trajectory are refused.
+Overlapping segment snapshots are merged only if their state/potential arrays, patch tables, physical timestamps and mass agree exactly. Every stored raw-moment component is included, so identical density cannot hide different higher moments. Fan–Li15 inputs must declare the complete raw-moment ordering and contain finite values on all present cells. These representation checks do not certify H1 admissibility or degree-four moment realizability. Segment-local `initial_mass` and elapsed wall time may differ. Conflicting data or different physical/numerical/artifact identities inside one trajectory are refused, including changes to the source rotation, weak path or field-interface coupling.
 
 ## Density, schlieren and actual time panels
 

@@ -1,6 +1,6 @@
-"""Render only numerical snapshots saved by tutorials 01 and 02.
+"""Render only numerical snapshots saved by tutorials 01, 02 and 04.
 
-Example: python 03_render_results.py /path/to/euler-mode5 /path/to/hyqmom-mode5 \
+Example: python 03_render_results.py /path/to/euler-mode5 /path/to/fan-li15-mode5 \
     --output /path/to/figures
 
 Each input directory is one trajectory; its segment subdirectories are searched
@@ -66,6 +66,9 @@ OPTIONAL_SIGNATURE_KEYS = ("coarse_max_grid", "cluster_max_grid", "distribute_co
                            "potential_history_transfer", "field_initial_guess", "time_calendar",
                            "field_coarse_method", "field_coarse_restart", "field_coarse_iteration_cap",
                            "field_coarse_preconditioner",
+                           "field_interface_coupling", "source_rotation", "transport_path",
+                           "transport_conserved_components", "transport_regularized_indices",
+                           "admissibility", "snapshot_raw_moments",
                            "output_interval", "growth_output_interval", "growth_output_end")
 COLORS = plt.colormaps["Blues"](np.linspace(0, 1, 256))
 COLORS[0] = (1., 1., 1., 1.)
@@ -117,8 +120,20 @@ for run_number, directory in enumerate(args.runs):
                 raise ValueError("invalid accepted-state metadata: %s" % path)
             q_keys = {"q0_level%d" % level for level in range(levels)}
             psi_keys = {"psi_level%d" % level for level in range(levels)}
+            moment_keys = {key for key in stored.files if key.startswith("moments_level")}
             if {key for key in stored.files if key.startswith("q0_level")} != q_keys:
                 raise ValueError("incomplete density hierarchy: %s" % path)
+            if parameters["model"] == "FanLi15":
+                if (parameters.get("snapshot_raw_moments") !=
+                        "all fifteen q=r*M components, q-outer ordering"
+                        or moment_keys != {"moments_level%d" % level for level in range(levels)}):
+                    raise ValueError("FanLi15 requires its complete declared raw-moment hierarchy: %s" % path)
+                for level in range(levels):
+                    moments = stored["moments_level%d" % level]
+                    q0 = stored["q0_level%d" % level]
+                    if (moments.dtype != np.dtype(np.float64) or moments.shape != (15,) + q0.shape
+                            or not np.array_equal(moments[0], q0)):
+                        raise ValueError("FanLi15 raw-moment shape, precision or density disagrees: %s" % path)
             if potential_time is None:
                 if step != 0 or any(key.startswith("psi_level") for key in stored.files):
                     raise ValueError("only the true initial state can omit its potential: %s" % path)
@@ -132,7 +147,9 @@ for run_number, directory in enumerate(args.runs):
                     # initial_mass and elapsed_seconds are segment-local diagnostics.
                     for key in ("time", "potential_time", "macro_step", "mass", "levels"):
                         same = same and metadata[key] == previous["metadata"][key]
-                    for key in q_keys | (psi_keys if potential_time is not None else set()):
+                    same = same and moment_keys == {
+                        key for key in earlier.files if key.startswith("moments_level")}
+                    for key in q_keys | moment_keys | (psi_keys if potential_time is not None else set()):
                         same = same and key in earlier.files and np.array_equal(stored[key], earlier[key])
                 if not same:
                     raise ValueError("conflicting snapshots at macro step %d: %s" % (step, path))
@@ -151,7 +168,7 @@ for run_number, directory in enumerate(args.runs):
            for left, right in zip(records, records[1:], strict=False)):
         raise ValueError("accepted times and macro steps must increase: %s" % directory)
     parameters = records[0]["parameters"]
-    if parameters["model"] not in ("Euler", "HYQMOM15") or int(parameters["mode"]) not in FIT_WINDOWS:
+    if parameters["model"] not in ("Euler", "HYQMOM15", "FanLi15") or int(parameters["mode"]) not in FIT_WINDOWS:
         raise ValueError("this renderer accepts only the authored diocotron models and modes")
     run_summary["parameters"] = parameters
     run_summary["status"] = "actual snapshots available"
@@ -285,6 +302,12 @@ for records, run_summary in trajectories:
                 q0 = np.asarray(stored["q0_level%d" % level], dtype=np.float64)
                 if q0.shape != valid.shape or not np.all(np.isfinite(q0[valid])):
                     raise ValueError("nonfinite or incorrectly shaped valid density cells")
+                if parameters["model"] == "FanLi15":
+                    moments = stored["moments_level%d" % level]
+                    if not np.all(np.isfinite(moments[:, valid])):
+                        raise ValueError("nonfinite valid FanLi15 raw-moment cells")
+                    sample_summary["raw15_validated_cells"] = (
+                        sample_summary.get("raw15_validated_cells", 0) + int(valid.sum()))
                 rho = np.where(valid, q0/centers_r[None, :], 0.)
                 right, left = np.roll(valid, -1, axis=1), np.roll(valid, 1, axis=1)
                 right[:, -1], left[:, 0] = False, False
