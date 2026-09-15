@@ -1401,26 +1401,30 @@ class FullTensorCompositeFac {
         }
         auto result = coarse_gmres_->solve(coarse.correction, coarse.residual, stop,
                                             controls.coarse_cycles);
+        Real residual = std::numeric_limits<Real>::quiet_NaN();
+        if (result.solved() || result.status == SolveStatus::kIterationLimit) {
+          // Inspect a completed capped candidate for diagnostics only. Its failure is retained.
+          // Use the original FAC coefficients and the authored infinity-norm criterion.
+          fill_solution_ghosts_(0, coarse.correction, true);
+          for (std::size_t local = 0; local < coarse.correction.local_size(); ++local)
+            for_each_cell(coarse.correction.box(local),
+                          detail::ResidualKernel<Dim>{coarse.scratch.fab(local).view(),
+                              std::as_const(coarse.residual.fab(local)).view(),
+                              std::as_const(coarse.covered.fab(local)).view(),
+                              stencil_(coarse, local, coarse.correction), false});
+          Kokkos::fence();
+          residual = global_norm_inf_(coarse.scratch);
+        }
         if (!result.solved()) {
           std::ostringstream context;
           context << result.reason << std::setprecision(std::numeric_limits<Real>::max_digits10)
                   << " [coarse_iterations=" << result.iters
                   << ", true_residual_l2=" << result.residual_norm
+                  << ", original_candidate_linf=" << residual
                   << ", rhs_linf=" << reference << ", requested_tolerance=" << stop << ']';
           result.reason = context.str();
           return result;
         }
-        // Confirm with the original FAC coefficient storage and exact infinity-norm criterion.
-        // The helper's Euclidean stopping rule is deliberately at least as strict.
-        fill_solution_ghosts_(0, coarse.correction, true);
-        for (std::size_t local = 0; local < coarse.correction.local_size(); ++local)
-          for_each_cell(coarse.correction.box(local),
-                        detail::ResidualKernel<Dim>{coarse.scratch.fab(local).view(),
-                            std::as_const(coarse.residual.fab(local)).view(),
-                            std::as_const(coarse.covered.fab(local)).view(),
-                            stencil_(coarse, local, coarse.correction), false});
-        Kokkos::fence();
-        const Real residual = global_norm_inf_(coarse.scratch);
         if (!std::isfinite(static_cast<double>(residual)) || residual > stop)
           result.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                              "tensor_coarse_gmres_original_infinity_residual");
