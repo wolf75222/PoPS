@@ -508,6 +508,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_composite_fac_variable_k
   test_composite_fac_tensor
   test_tensor_coarse_gmres
+  test_tensor_fac_partial_hierarchy
   test_prepared_polar_poisson_inverse
   test_mapped_disk_tensor
   test_mapped_disk_tensor_fac

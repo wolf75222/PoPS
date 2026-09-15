@@ -660,6 +660,9 @@ class FullTensorCompositeFac {
       report.step_norm = controls.correction_damping * global_norm_inf_(levels_.front()->correction);
       add_active_(*levels_.front(), levels_.front()->correction, controls.correction_damping);
       prolong_correction_tower_(controls.correction_damping);
+      // Prolongation changes children while add_active_ leaves covered parent cells untouched.
+      // Refresh those parent values before fine smoothers interpolate their boundary ghosts.
+      average_solution_down_();
       for (std::size_t level = 1; level < levels_.size(); ++level)
         smooth_(level, *levels_[level]->binding.solution, *levels_[level]->binding.rhs, post, true,
                 false);
