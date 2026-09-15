@@ -330,15 +330,16 @@ class TensorCoarseGmres {
     prepared_ = true;
   }
 
-  /// The caller also checks the infinity norm with the original FAC stencil. Euclidean <= tau
-  /// implies infinity <= tau, so this inner stopping rule never loosens the coarse tolerance.
+  /// The physical convergence norm is the original FAC infinity norm; Arnoldi retains its
+  /// Euclidean inner product. The caller independently rechecks the original coefficient image.
   SolveReport solve(field_type& correction, const field_type& rhs, Real tau, int maximum) {
     if (!prepared_ || !std::isfinite(static_cast<double>(tau)) || tau <= Real(0) || maximum < 1)
       throw std::invalid_argument("tensor coarse GMRES solve has no valid prepared tolerance");
     correction.set_val(Real(0));
+    KrylovControls<Dim> controls{gmres_krylov_method<Dim>(restart_), Real(0), tau, maximum};
+    controls.physical_norm = KrylovPhysicalNorm::component_linf;
     return ::pops::detail::solve_prepared_affine_in_place(
-        *problem_, *workspace_, correction, rhs,
-        KrylovControls<Dim>{gmres_krylov_method<Dim>(restart_), Real(0), tau, maximum});
+        *problem_, *workspace_, correction, rhs, controls);
   }
 
  private:

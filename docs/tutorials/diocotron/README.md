@@ -91,8 +91,11 @@ synchronous AMR steps, conservative transfer, accepted-state checkpoints, and
 the public PoPS compile/bind/run interfaces.
 The FAC coarse correction uses prepared GMRES with a fixed diagonal preconditioner.
 Every matrix application retains the complete finite-Omega tensor and the conducting-disk
-boundary law. The coarse solve checks the original residual, and the outer FAC solve keeps
-its original composite residual tolerances, fine smoothing and correction damping. This
+boundary law. GMRES uses Euclidean Arnoldi products and an explicitly authenticated
+physical infinity norm for stopping. Its reference, initial and final residual checks
+use that cellwise norm with the unchanged coarse tolerance. FAC independently checks
+the original tensor residual, and the outer solve keeps its original composite residual
+tolerances, fine smoothing and correction damping. This
 is a solver change; it does not replace the equation by its drift limit. The first real
 coefficient snapshot prepares the persistent GMRES sessions before iteration. Runtime
 and numerical qualification of a new solver revision are recorded separately from its

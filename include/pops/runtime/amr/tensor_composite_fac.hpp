@@ -1419,7 +1419,7 @@ class FullTensorCompositeFac {
           std::ostringstream context;
           context << result.reason << std::setprecision(std::numeric_limits<Real>::max_digits10)
                   << " [coarse_iterations=" << result.iters
-                  << ", true_residual_l2=" << result.residual_norm
+                  << ", true_residual_linf=" << result.residual_norm
                   << ", original_candidate_linf=" << residual
                   << ", rhs_linf=" << reference << ", requested_tolerance=" << stop << ']';
           result.reason = context.str();

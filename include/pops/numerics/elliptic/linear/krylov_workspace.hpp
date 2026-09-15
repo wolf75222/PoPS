@@ -71,6 +71,7 @@ struct KrylovControls {
   Real abs_tol = Real(0);
   int max_iterations = 1;
   KrylovFailureActions failure_actions{};
+  KrylovPhysicalNorm physical_norm = KrylovPhysicalNorm::metric_l2;
 };
 
 template <int Dim>
@@ -661,6 +662,7 @@ class KrylovWorkspace {
     payload.append(std::bit_cast<std::uint64_t>(controls.rel_tol));
     payload.append(std::bit_cast<std::uint64_t>(controls.abs_tol));
     payload.append(controls.max_iterations);
+    payload.append(static_cast<std::uint8_t>(controls.physical_norm));
   }
 
   void append_collective_state_(detail::KrylovCollectivePayload& payload) const noexcept {

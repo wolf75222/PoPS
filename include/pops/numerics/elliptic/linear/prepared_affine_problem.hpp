@@ -1276,6 +1276,10 @@ class PreparedNullspacePolicy {
   bool prepared_ = false;
 };
 
+/// Physical stopping measurement, separate from the inner-product metric used by a recurrence.
+/// component_linf measures every owned valid component using the prepared distribution.
+enum class KrylovPhysicalNorm : std::uint8_t { metric_l2, component_linf };
+
 /// Scale-safe physical reference used by the authored stopping criterion.  The field returned with
 /// this value is divided by `reference_norm` only for the one nullspace-compatibility check; the
 /// iterative equation chooses a separate scale from the actual warm-start residual.
@@ -1460,7 +1464,7 @@ struct KrylovCollectivePayload {
       4u * kFingerprintBytes + sizeof(int) + kMaximumGhostBytes + 3u * sizeof(std::uint8_t) +
       8u * sizeof(std::uint64_t) + kSnapshotBytes;
   static constexpr std::size_t kControlsBytes =
-      kFingerprintBytes + 2u * sizeof(std::uint64_t) + sizeof(int) + 3u * sizeof(std::uint8_t);
+      kFingerprintBytes + 2u * sizeof(std::uint64_t) + sizeof(int) + 4u * sizeof(std::uint8_t);
   static constexpr std::size_t kFieldContractBytes = sizeof(int) + kMaximumGhostBytes;
   static constexpr std::size_t kMaximumKnownPayloadBytes =
       kPreparedProblemAccessBytes + kWorkspaceStateBytes + kControlsBytes +
@@ -2576,13 +2580,18 @@ class PreparedAffineLinearProblem {
   PreparedEquationReference prepare_compatibility_rhs_prepared_(MultiFab<Dim>& out,
                                                                 const MultiFab<Dim>& rhs,
                                                                 std::span<double> metric_scratch,
-                                                                const ExecutionLane& lane) const {
+                                                                const ExecutionLane& lane,
+                                                                KrylovPhysicalNorm physical_norm) const {
     require_hot_apply_ready_();
     // Form the exact floating-point R(0)=b-A(0) first. The scale-safe norm below avoids squaring
     // overflow/underflow without globally rescaling b and A(0) before subtraction, which could
     // erase a small but representable residual on cells far below an unrelated global maximum.
     detail::PreparedFieldAlgebra::lincomb(out, Real(1), rhs, Real(-1), constant_);
-    const Real reference = metric_.norm(out, metric_scratch, lane);
+    // Select the reference on the raw stored R(0), before the compatibility normalization.
+    // Recovering Linf from a Euclidean-normalized field would introduce another rounding step.
+    const Real reference = physical_norm == KrylovPhysicalNorm::component_linf
+        ? detail::PreparedFieldAlgebra::max_abs(out, vector_distribution_, metric_scratch, lane)
+        : metric_.norm(out, metric_scratch, lane);
     if (!std::isfinite(static_cast<double>(reference)))
       return {reference};
     if (reference > Real(0)) {
@@ -2836,8 +2845,9 @@ struct PreparedProblemAccess {
 
   static PreparedEquationReference prepare_compatibility_rhs(
       const PreparedAffineLinearProblem<Dim>& problem, MultiFab<Dim>& out, const MultiFab<Dim>& rhs,
-      std::span<double> metric_scratch, const ExecutionLane& lane) {
-    return problem.prepare_compatibility_rhs_prepared_(out, rhs, metric_scratch, lane);
+      std::span<double> metric_scratch, const ExecutionLane& lane,
+      KrylovPhysicalNorm physical_norm = KrylovPhysicalNorm::metric_l2) {
+    return problem.prepare_compatibility_rhs_prepared_(out, rhs, metric_scratch, lane, physical_norm);
   }
   static void require_nullspace_compatible(const PreparedAffineLinearProblem<Dim>& problem,
                                            const MultiFab<Dim>& normalized_rhs,
