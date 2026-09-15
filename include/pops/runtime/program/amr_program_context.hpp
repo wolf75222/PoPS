@@ -44,6 +44,7 @@
 #include <exception>
 #include <functional>
 #include <initializer_list>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <memory>
@@ -51,6 +52,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -360,6 +362,7 @@ public:
 #include <pops/runtime/program/amr_program_context_flux_basis.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_runtime.inc>
 #include <pops/runtime/program/amr_program_context_shared_flux.inc>
+#include <pops/runtime/program/amr_program_context_path_rhs.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_services.inc>
 #include <pops/runtime/program/amr_program_context_general_field_services.inc>

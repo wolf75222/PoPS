@@ -194,6 +194,8 @@ class ResolvedOperationPlan:
         from ._resolved_operation_authority import require_operation_authority
 
         require_operation_authority(self, operation, module)
+        from .nonconservative_lowering import require_path_numerical_authority
+        require_path_numerical_authority(operation, module)
         current = dict(native_realizations or {})
         if native_realizations is None:
             for definition in module.operator_registry():

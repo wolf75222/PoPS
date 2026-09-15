@@ -498,11 +498,14 @@ class Module(ModuleFreezable):
             contract = self._rate_contracts[rate]
         except KeyError:
             raise ValueError("rate handle is not registered by this Module") from None
-        return {
+        result = {
             "state": contract["state"],
             "flux": contract["flux"],
             "sources": tuple(contract["sources"]),
         }
+        if contract.get("nonconservative_products"):
+            result["nonconservative_products"] = tuple(contract["nonconservative_products"])
+        return result
 
     def eigenvalues(self, **directions: Any) -> Any:
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of

@@ -7,6 +7,7 @@
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
+#include <pops/numerics/fv/fan_li15_path_flux.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/spatial/embedded_boundary/cut_geometry.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
@@ -108,6 +109,54 @@ struct GeneratedAmrLevelContext {
 /// The face fields are retained rather than reconstructed from the cell residual.  The Program
 /// reflux primitive can therefore authenticate and accumulate exactly the fluxes that produced
 /// this candidate update.
+/// Path terms are integrated, signed recipient contributions, independent of conservative flux.
+/// A canonical face supplies both sides; neither side may enter the conservative face ledger.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+struct PreparedAmrPathFaceData {
+  std::string operator_identity;
+  std::vector<nd::FaceField<Dim, MemorySpace>> integrated_left_ncp;
+  std::vector<nd::FaceField<Dim, MemorySpace>> integrated_right_ncp;
+  std::vector<nd::FaceField<Dim, MemorySpace>> speed_bounds;
+
+  static PreparedAmrPathFaceData prepare(const MultiFab<Dim, MemorySpace>& prototype,
+                                          std::string_view identity) {
+    if (identity.empty())
+      throw std::invalid_argument("prepared AMR path faces require an exact operator identity");
+    PreparedAmrPathFaceData result;
+    result.operator_identity = identity;
+    result.integrated_left_ncp = nd::make_face_flux_workspace(prototype);
+    result.integrated_right_ncp = nd::make_face_flux_workspace(prototype);
+    result.speed_bounds.reserve(prototype.local_size());
+    for (std::size_t local = 0; local < prototype.local_size(); ++local)
+      result.speed_bounds.emplace_back(prototype.box(local), 1);
+    result.clear();
+    return result;
+  }
+
+  void require_layout(const MultiFab<Dim, MemorySpace>& prototype,
+                      std::string_view identity) const {
+    if (identity.empty() || operator_identity != identity ||
+        integrated_left_ncp.size() != prototype.local_size() ||
+        integrated_right_ncp.size() != prototype.local_size() ||
+        speed_bounds.size() != prototype.local_size())
+      throw std::invalid_argument("prepared AMR path faces differ from their operator/layout");
+    for (std::size_t local = 0; local < prototype.local_size(); ++local) {
+      for (const auto* side : {&integrated_left_ncp[local], &integrated_right_ncp[local]})
+        if (side->cell_box() != prototype.box(local) || side->ncomp() != prototype.ncomp())
+          throw std::invalid_argument("prepared AMR path side has a foreign patch/width");
+      if (speed_bounds[local].cell_box() != prototype.box(local) ||
+          speed_bounds[local].ncomp() != 1)
+        throw std::invalid_argument("prepared AMR path speed has a foreign patch/width");
+    }
+  }
+
+  void clear() {
+    for (auto* values : {&integrated_left_ncp, &integrated_right_ncp, &speed_bounds})
+      for (auto& faces : *values)
+        faces.set_val(Real(0));
+  }
+};
+
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 struct PreparedAmrLevelEvaluation {
   runtime::multiblock::BoundaryEvaluationPoint point;
@@ -116,9 +165,17 @@ struct PreparedAmrLevelEvaluation {
   std::uint64_t materialization_generation = 0;
   MultiFab<Dim, MemorySpace> residual;
   std::vector<nd::FaceField<Dim, MemorySpace>> integrated_face_fluxes;
+  std::optional<PreparedAmrPathFaceData<Dim, MemorySpace>> path_faces;
 };
 
 namespace generated_amr_detail {
+
+template <class Model>
+inline constexpr bool path_conservative_model = [] {
+  if constexpr (requires { Model::path_conservative; })
+    return static_cast<bool>(Model::path_conservative);
+  return false;
+}();
 
 template <class Model>
 concept ExactGeneratedModelContract = requires(const Model& model, ExactContractBuilder& contract) {
@@ -533,7 +590,8 @@ class PreparedGeneratedAmrLevelBlock {
       Evaluator flux_core_evaluator, Evaluator boundary_evaluator, BoundaryJvp boundary_jvp,
       SourceEvaluator source_evaluator, ImplicitSourceSolver implicit_source_solver,
       Speed maximum_speed, PoissonRhs poisson_rhs, PointwiseProjection pointwise_projection,
-      Speed source_frequency, std::optional<Real> parabolic_frequency, Speed stability_dt)
+      Speed source_frequency, std::optional<Real> parabolic_frequency, Speed stability_dt,
+      std::string path_operator_identity = {})
       : runtime_(&runtime),
         level_(level),
         state_(&state),
@@ -557,6 +615,7 @@ class PreparedGeneratedAmrLevelBlock {
         source_frequency_(std::move(source_frequency)),
         parabolic_frequency_(std::move(parabolic_frequency)),
         stability_dt_(std::move(stability_dt)),
+        path_operator_identity_(std::move(path_operator_identity)),
         topology_epoch_(runtime.topology_epoch()),
         materialization_generation_(runtime.materialization_generation()) {
     if (level_ >= runtime.hierarchy().num_levels() || state_ == nullptr || lane_ == nullptr ||
@@ -572,6 +631,7 @@ class PreparedGeneratedAmrLevelBlock {
   std::string_view state_identity() const noexcept { return state_identity_; }
   std::string_view provider_identity() const noexcept { return provider_identity_; }
   std::string_view collective_contract() const noexcept { return collective_contract_; }
+  std::string_view path_operator_identity() const noexcept { return path_operator_identity_; }
 
   void prepare(const point_type& point, field_type& state) const {
     generated_amr_detail::collective_phase(
@@ -595,6 +655,7 @@ class PreparedGeneratedAmrLevelBlock {
   }
 
   void evaluate(const point_type& point, field_type& state, evaluation_type& evaluation) const {
+    require_conservative_evaluation_();
     require_live_();
     require_state_(point, state);
     require_bound_state_(state);
@@ -610,6 +671,7 @@ class PreparedGeneratedAmrLevelBlock {
 
   void evaluate_flux(const point_type& point, field_type& state,
                      evaluation_type& evaluation) const {
+    require_conservative_evaluation_();
     require_live_();
     require_state_(point, state);
     require_bound_state_(state);
@@ -623,8 +685,24 @@ class PreparedGeneratedAmrLevelBlock {
     evaluate_flux(point, *state_, evaluation);
   }
 
+  /// Called only by the facade's friend-only synchronous hierarchy RHS preparation seam.
+  /// The ordinary residual/implicit APIs cannot consume one unreconciled path level.
+  void evaluate_path_flux(const point_type& point, field_type& state,
+                          evaluation_type& evaluation) const {
+    if (path_operator_identity_.empty())
+      throw std::invalid_argument("generated AMR path RHS requires an installed path operator");
+    require_live_();
+    require_state_(point, state);
+    require_bound_state_(state);
+    require_evaluation_contract_(evaluation);
+    require_prepared_point_(point, evaluation.point);
+    flux_evaluator_(point, state, evaluation);
+    stamp_point_(point, evaluation.point);
+  }
+
   void evaluate_core(const point_type& point, field_type& state, bool flux_only,
                      evaluation_type& evaluation) const {
+    require_conservative_evaluation_();
     require_live_();
     require_state_(point, state);
     require_bound_state_(state);
@@ -636,6 +714,7 @@ class PreparedGeneratedAmrLevelBlock {
 
   void evaluate_boundary(const point_type& point, field_type& state,
                          evaluation_type& evaluation) const {
+    require_conservative_evaluation_();
     require_live_();
     require_state_(point, state);
     require_bound_state_(state);
@@ -647,6 +726,7 @@ class PreparedGeneratedAmrLevelBlock {
 
   void boundary_jvp(const point_type& point, field_type& state, const field_type& direction,
                     field_type& result) const {
+    require_conservative_evaluation_();
     require_live_();
     require_state_(point, state);
     require_state_contract_(direction);
@@ -820,6 +900,16 @@ class PreparedGeneratedAmrLevelBlock {
           evaluation.integrated_face_fluxes[local].ncomp() != state_->ncomp())
         throw std::invalid_argument(
             "generated AMR evaluation face output differs from its prepared patch layout");
+    if (evaluation.path_faces.has_value() != !path_operator_identity_.empty())
+      throw std::invalid_argument("generated AMR evaluation has a foreign path payload kind");
+    if (evaluation.path_faces)
+      evaluation.path_faces->require_layout(*state_, path_operator_identity_);
+  }
+
+  void require_conservative_evaluation_() const {
+    if (!path_operator_identity_.empty())
+      throw std::invalid_argument(
+          "generated AMR path operator requires its synchronous hierarchy RHS barrier");
   }
 
   void require_live_() const {
@@ -853,6 +943,7 @@ class PreparedGeneratedAmrLevelBlock {
   Speed source_frequency_;
   std::optional<Real> parabolic_frequency_;
   Speed stability_dt_;
+  std::string path_operator_identity_;
   std::uint64_t topology_epoch_ = 0;
   std::uint64_t materialization_generation_ = 0;
 };
@@ -1044,6 +1135,12 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   if (request.provider_consumer_qid.empty())
     throw std::invalid_argument("generated AMR block requires one explicit provider consumer qid");
   constexpr int provider_count = provider_count_for<Model, Dim>();
+  std::string path_operator_identity;
+  if constexpr (path_conservative_model<Model>) {
+    path_operator_identity = Model::path_operator_identity();
+    if (path_operator_identity.empty())
+      throw std::invalid_argument("generated AMR path model has no exact operator contract");
+  }
   const auto spatial_factory =
       [model = request.model, reconstruction, numerical,
        positivity_floor = request.routes.positivity_floor](const Geometry<Dim>& geometry) {
@@ -1122,6 +1219,8 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       .bytes(model_contract)
       .scalar(static_cast<double>(request.routes.positivity_floor))
       .scalar(static_cast<double>(request.routes.weno_epsilon));
+  if constexpr (path_conservative_model<Model>)
+    package_contract.text("path-operator").bytes(path_operator_identity);
   append_variable_set_contract(package_contract, result.conservative_variables);
   append_variable_set_contract(package_contract, result.primitive_variables);
   for (int axis = 0; axis < Dim; ++axis)
@@ -1131,7 +1230,8 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   result.materialize_level = [model, spatial_factory, reconstruction, numerical,
                               positivity_floor = request.routes.positivity_floor, required_ghosts,
                               provider_identity, staircase_provider_identity,
-                              cut_cell_provider_identity](runtime::amr::AmrRuntime<Dim>& runtime,
+                              cut_cell_provider_identity,
+                              path_operator_identity](runtime::amr::AmrRuntime<Dim>& runtime,
                                                           GeneratedAmrLevelContext<Dim> context) {
     require_level_context(runtime, context, Model::n_vars, provider_count, required_ghosts,
                           staircase_provider_identity, cut_cell_provider_identity);
@@ -1152,11 +1252,30 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     const std::size_t level = context.level;
     const ExecutionLane* const lane = context.lane;
 
+    if constexpr (path_conservative_model<Model>) {
+      if ((embedded_boundary && embedded_boundary->mode() !=
+                                    runtime::system::PreparedEmbeddedBoundaryMode::inactive) ||
+          external_boundary_flux)
+        throw std::invalid_argument("generated AMR path faces have no embedded/shared flux authority");
+      const auto zero_faces = Model::path_zero_measure_faces();
+      if (physical_boundary)
+        for (int axis = 0; axis < Dim; ++axis)
+          for (int side : {-1, 1}) {
+            const std::size_t ordinal = static_cast<std::size_t>(2 * axis + (side > 0));
+            const auto law = physical_boundary->face(axis, side).law;
+            if (physical_boundary->omitted_interface_faces()[ordinal] ||
+                (law == HyperbolicBoundaryLaw::NoFlux && !zero_faces[ordinal]) ||
+                (law == HyperbolicBoundaryLaw::Periodic && zero_faces[ordinal]))
+              throw std::invalid_argument(
+                  "generated AMR path omission requires its explicit nonperiodic zero measure face");
+          }
+    }
+
     struct EvaluationScratch {
       static PreparedAmrLevelEvaluation<Dim> make_evaluation(
           const MultiFab<Dim>& prototype, std::string_view spatial_contract,
           std::uint64_t topology_epoch, std::uint64_t materialization_generation,
-          std::size_t clock_capacity) {
+          std::size_t clock_capacity, std::string_view path_identity) {
         PreparedAmrLevelEvaluation<Dim> evaluation{
             .spatial_contract = std::string(spatial_contract),
             .topology_epoch = topology_epoch,
@@ -1165,13 +1284,16 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                 MultiFab<Dim>(prototype.layout(), prototype.distribution(), prototype.local_rank(),
                               prototype.ncomp(), prototype.ghosts()),
             .integrated_face_fluxes = nd::make_face_flux_workspace(prototype)};
+        if (!path_identity.empty())
+          evaluation.path_faces.emplace(PreparedAmrPathFaceData<Dim>::prepare(prototype,
+                                                                              path_identity));
         evaluation.point.clock.reserve(clock_capacity);
         return evaluation;
       }
 
       EvaluationScratch(const MultiFab<Dim>& prototype, std::string_view spatial_contract,
                         std::uint64_t topology_epoch, std::uint64_t materialization_generation,
-                        std::size_t clock_capacity)
+                        std::size_t clock_capacity, std::string_view path_identity)
           : physical(prototype.layout(), prototype.distribution(), prototype.local_rank(),
                      prototype.ncomp(), prototype.ghosts()),
             core(prototype.layout(), prototype.distribution(), prototype.local_rank(),
@@ -1191,11 +1313,20 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                       prototype.ncomp(), prototype.ghosts()),
             spatial(prototype),
             core_evaluation(make_evaluation(prototype, spatial_contract, topology_epoch,
-                                            materialization_generation, clock_capacity)),
+                                            materialization_generation, clock_capacity,
+                                            path_identity)),
             base_evaluation(make_evaluation(prototype, spatial_contract, topology_epoch,
-                                            materialization_generation, clock_capacity)),
+                                            materialization_generation, clock_capacity,
+                                            path_identity)),
             shifted_evaluation(make_evaluation(prototype, spatial_contract, topology_epoch,
-                                               materialization_generation, clock_capacity)) {}
+                                               materialization_generation, clock_capacity,
+                                               path_identity)) {
+        if (!path_identity.empty()) {
+          path_spatial.reserve(prototype.local_size());
+          for (std::size_t local = 0; local < prototype.local_size(); ++local)
+            path_spatial.emplace_back(prototype.box(local), prototype.ncomp());
+        }
+      }
       std::recursive_mutex mutex;
       MultiFab<Dim> physical;
       MultiFab<Dim> core;
@@ -1206,13 +1337,15 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       MultiFab<Dim> source_status;
       MultiFab<Dim> perturbed;
       nd::PreparedCartesianOperatorScratch<Dim> spatial;
+      std::vector<nd::PreparedCartesianPathFaceScratch<Dim>> path_spatial;
       PreparedAmrLevelEvaluation<Dim> core_evaluation;
       PreparedAmrLevelEvaluation<Dim> base_evaluation;
       PreparedAmrLevelEvaluation<Dim> shifted_evaluation;
     };
     auto evaluation_scratch = std::make_shared<EvaluationScratch>(
         *context.state, runtime.spatial_contract(), runtime.topology_epoch(),
-        runtime.materialization_generation(), context.clock_identity_capacity);
+        runtime.materialization_generation(), context.clock_identity_capacity,
+        path_operator_identity);
     evaluation_scratch->spatial.require_layout(*context.state);
 
     if (physical_boundary)
@@ -1287,6 +1420,8 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
               evaluation.residual.set_val(Real(0));
               for (auto& faces : evaluation.integrated_face_fluxes)
                 faces.set_val(Real(0));
+              if (evaluation.path_faces)
+                evaluation.path_faces->clear();
             },
             "generated AMR evaluation workspace reset failed collectively");
         prepare_state_with_physical(point, image, physical);
@@ -1295,7 +1430,32 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
         collective_phase(
             *lane,
             [&] {
-              if (embedded_boundary &&
+              if constexpr (path_conservative_model<Model>) {
+                if (!physical || !evaluation.path_faces)
+                  throw std::invalid_argument("AMR path RHS requires its full typed physical evaluation");
+                auto& path = *evaluation.path_faces;
+                path.require_layout(image, Model::path_operator_identity());
+                const auto omitted_faces = Model::path_zero_measure_faces();
+                for (std::size_t local = 0; local < image.local_size(); ++local) {
+                  if constexpr (provider_count == 0)
+                    spatial.materialize_path_face_contributions(
+                        image.fab(local), faces[local], path.integrated_left_ncp[local],
+                        path.integrated_right_ncp[local], path.speed_bounds[local],
+                        evaluation_scratch->path_spatial.at(local), omitted_faces);
+                  else
+                    spatial.materialize_path_face_contributions(
+                        image.fab(local),
+                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                            provider_plan, provider_storage, local),
+                        faces[local], path.integrated_left_ncp[local],
+                        path.integrated_right_ncp[local], path.speed_bounds[local],
+                        evaluation_scratch->path_spatial.at(local), omitted_faces);
+                  spatial.assemble_residual_from_path_faces(
+                      faces[local], path.integrated_left_ncp[local], path.integrated_right_ncp[local],
+                      residual.fab(local), evaluation_scratch->spatial.residual_candidate().fab(local),
+                      evaluation_scratch->spatial.residual_status().fab(local));
+                }
+              } else if (embedded_boundary &&
                   embedded_boundary->mode() !=
                       runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
                 for (std::size_t local = 0; local < image.local_size(); ++local) {
@@ -1622,6 +1782,11 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     }
     std::string contract =
         level_contract(runtime, context, provider_identity, parabolic_frequency_bound);
+    if constexpr (path_conservative_model<Model>) {
+      ExactContractBuilder path_contract;
+      path_contract.bytes(contract).text("path-operator").bytes(path_operator_identity);
+      contract = std::move(path_contract).release();
+    }
     MultiFab<Dim>* const bound_state = context.state;
     return PreparedGeneratedAmrLevelBlock<Dim>(
         runtime, level, *bound_state, std::move(context.state_identity), provider_identity,
@@ -1630,7 +1795,8 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
         std::move(flux_core_evaluator), std::move(boundary_evaluator), std::move(boundary_jvp),
         std::move(source_evaluator), std::move(implicit_source_solver), std::move(speed),
         std::move(poisson_rhs), std::move(pointwise_projection), std::move(source_frequency_bound),
-        std::move(parabolic_frequency_bound), std::move(stability_dt_bound));
+        std::move(parabolic_frequency_bound), std::move(stability_dt_bound),
+        path_operator_identity);
   };
 
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
@@ -1655,6 +1821,20 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
 template <int Dim, nd::ReconstructionVariables Variables, class Request, class Reconstruction>
 PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction reconstruction) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
+  if constexpr (path_conservative_model<Model>) {
+    // The complete authored path carrier chooses this distinct F/L/R interface.
+    // Rusanov specifies its dissipation; it never invokes an ordinary flux-only RHS.
+    if constexpr (std::is_same_v<Reconstruction, NoSlope> &&
+                  Variables == nd::ReconstructionVariables::Conservative) {
+      if (parse_riemann_route(request.routes.riemann, "generated AMR path block") ==
+          RiemannRouteId::kRusanov)
+        return materialize_system<Dim, Model, Reconstruction, FanLi15PathRusanovFlux,
+                                  Variables>(std::move(request), reconstruction,
+                                             FanLi15PathRusanovFlux{});
+    }
+    throw std::invalid_argument(
+        "Fan-Li15 path transport requires first-order conservative Rusanov");
+  } else {
   switch (parse_riemann_route(request.routes.riemann, "generated AMR block")) {
     case RiemannRouteId::kRusanov:
       return materialize_system<Dim, Model, Reconstruction, RusanovFlux, Variables>(
@@ -1683,6 +1863,7 @@ PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction recon
   }
   throw std::invalid_argument(
       "generated model does not satisfy the requested AMR Riemann capability");
+  }
 }
 
 template <int Dim, nd::ReconstructionVariables Variables, class Request>

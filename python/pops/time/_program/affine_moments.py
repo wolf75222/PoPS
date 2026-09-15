@@ -13,13 +13,15 @@ from pops.time.values import ProgramValue
 
 def affine_moment_update(
     program: Any, state: Any, mean: Any, *, linear_operator: Any,
-    theta_dt: Any, order: int, name: Any,
+    theta_dt: Any, order: int, name: Any, rotation: str = "cayley",
 ) -> Any:
     """Author the kernel; model/frame/AMR validation remains explicit and fail-closed."""
     from pops.moments.model_builder import moment_names
 
     if isinstance(order, bool) or not isinstance(order, int) or not 1 <= order <= 4:
         raise ValueError("affine_moment_update order must be an integer from one to four")
+    if not isinstance(rotation, str) or rotation not in ("cayley", "exponential"):
+        raise ValueError("affine_moment_update rotation must be 'cayley' or 'exponential'")
     for label, value in (("state", state), ("mean", mean)):
         if not isinstance(value, ProgramValue) or value.vtype != "state":
             raise TypeError("affine_moment_update %s must be a typed State value" % label)
@@ -36,9 +38,13 @@ def affine_moment_update(
         program, linear_operator, where="affine_moment_update linear_operator",
         expected_kinds="local_linear_operator", values=(state, mean))
     coefficient = program._coeff_dict(theta_dt, "theta_dt", "affine_moment_update")
+    attrs = {"linear_operator": operator.name, "order": order, "theta_dt": coefficient}
+    # Keep existing Cayley IR/identity bytes unchanged, including an explicit default.
+    if rotation != "cayley":
+        attrs["rotation"] = rotation
     return program._new(
         "state", "affine_moment_update", (state, mean),
-        {"linear_operator": operator.name, "order": order, "theta_dt": coefficient},
+        attrs,
         name, state.block, space=state.space, point=mean.point,
         field_context=mean.field_context, state_ref=state.state_ref,
     )
@@ -48,9 +54,9 @@ class _ProgramAffineMoments:
     @atomic_authoring
     def affine_moment_update(
         self, state: Any, mean: Any, *, linear_operator: Any,
-        theta_dt: Any, order: int = 4, name: Any = None,
+        theta_dt: Any, order: int = 4, rotation: str = "cayley", name: Any = None,
     ) -> Any:
-        """Push the common Cayley velocity map through all 2V raw moments.
+        """Push one common affine velocity map through all 2V raw moments.
 
         ``mean`` is the actual first-moment endpoint from the electric/magnetic
         solve, in the same complete state space as ``state``. Its density must be
@@ -59,6 +65,15 @@ class _ProgramAffineMoments:
         interval and may depend on ``Program.dt``. Both first moments are copied
         exactly; higher moments follow the same affine velocity map.
 
+        ``rotation="cayley"`` preserves the existing CN rotation and program
+        identity. ``rotation="exponential"`` uses the exact centered gyro phase
+        ``2*Omega*theta_dt`` for the represented inputs, with a compensated
+        product. The full interval and phase product must be finite; an
+        unsupported phase is refused without falling back to Cayley. This
+        integrates centered moments exactly for a homogeneous source cell with
+        constant Omega. The supplied coupled mean remains approximate when
+        obtained by CN, so this is not a full exact or AP source integrator.
+
         Refined AMR supports only a source-first prefix followed by conservative
         transport. Any transport ancestry is refused, since a source applied
         before reflux cannot stand in for a source applied after synchronization.
@@ -66,7 +81,7 @@ class _ProgramAffineMoments:
         """
         return affine_moment_update(
             self, state, mean, linear_operator=linear_operator,
-            theta_dt=theta_dt, order=order, name=name)
+            theta_dt=theta_dt, order=order, name=name, rotation=rotation)
 
 
 def validate_affine_moment_prefix(program: Any) -> None:

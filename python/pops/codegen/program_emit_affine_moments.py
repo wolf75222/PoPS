@@ -15,6 +15,12 @@ def emit_affine_moment_kernel(
 ) -> list[str]:
     impl = _model_impl(model)
     order = attrs["order"]
+    rotation = attrs.get("rotation", "cayley")
+    if not isinstance(rotation, str) or rotation not in ("cayley", "exponential"):
+        raise ValueError("affine_moment_update rotation must be 'cayley' or 'exponential'")
+    template = str(order)
+    if rotation == "exponential":
+        template += ", pops::moments::AffineVelocityRotation::exponential"
     count = (order + 1) * (order + 2) // 2
     if len(impl.cons_names) != count:
         raise ValueError("affine_moment_update model does not own the declared complete moment basis")
@@ -49,8 +55,8 @@ def emit_affine_moment_kernel(
     body.extend([
         "    const bool skew = std::isfinite(jxy) && jxx == pops::Real(0)"
         " && jyy == pops::Real(0) && jyx == -jxy;",
-        "    const bool valid = skew && pops::moments::affine_velocity_push_forward<%d>("
-        "old_moments, endpoint, jxy, %s, mapped);" % (order, _coeff_cpp(attrs["theta_dt"])),
+        "    const bool valid = skew && pops::moments::affine_velocity_push_forward<%s>("
+        "old_moments, endpoint, jxy, %s, mapped);" % (template, _coeff_cpp(attrs["theta_dt"])),
         "    statusA(index, 0) = valid ? pops::Real(0) : pops::Real(1);",
     ])
     for component in range(count):

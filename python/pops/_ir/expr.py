@@ -633,13 +633,14 @@ class RateExpr(RateTerm):
             if not isinstance(term, (tuple, list)) or len(term) != 3:
                 raise TypeError("a rate term must be a (kind, payload, sign) triple")
             kind, payload, sign = term
-            if kind not in ("flux", "diffusion", "drift", "source", "projection"):
+            if kind not in ("flux", "diffusion", "drift", "source", "projection", "nonconservative"):
                 raise ValueError("unknown rate term kind %r" % (kind,))
             if kind == "projection":
                 from .application import RateApplicationProjection
                 if not isinstance(payload, RateApplicationProjection):
                     raise TypeError("a projection rate term requires a whole typed RateSpace projection")
-            elif getattr(payload, "kind", None) != ({"diffusion":"diffusive_flux","drift":"drift_flux"}.get(kind,kind)):
+            elif getattr(payload, "kind", None) != ({"diffusion": "diffusive_flux",
+                    "drift": "drift_flux", "nonconservative": "nonconservative_product"}.get(kind, kind)):
                 raise TypeError("rate term %s payload must be a matching declaration Handle" % kind)
             sign = exact_numeric_scalar(sign, where="rate term sign")
             normalized.append((kind, payload, sign))

@@ -103,6 +103,7 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             consumer_owner_qid=block.instance_owner_qid,
             declare_auxiliary_providers=block.declares_auxiliary_providers,
             resolved_operations=block.resolved_operations,
+            numerics=block.numerics,
         )
     return compiled
 
@@ -135,6 +136,7 @@ def compile_install_model(
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
     resolved_operations: Any = None,
+    numerics: Any = None,
 ) -> Any:
     from pops.codegen.loader import CompiledModel
     from pops.codegen._compiled_model_boundary import validate_compiled_model_result
@@ -183,7 +185,7 @@ def compile_install_model(
     facade = model
     model, source_module = lower_and_validate(
         model, facade=facade, state_space=state_spaces[0],
-        resolved_operations=resolved_operations)
+        resolved_operations=resolved_operations, numerics=numerics)
     if source_module is None:
         raise TypeError(
             "resolved block %r compiler lowering has no operator-first Module authority" % name

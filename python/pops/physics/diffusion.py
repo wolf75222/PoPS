@@ -181,25 +181,26 @@ def _coefficient_tensor(value: Any, dimension: int) -> tuple[tuple[Expr, ...], .
                        for j in range(dimension)) for i in range(dimension))
 
 
-def _authenticate_expression(model: Any, expression: Expr, state: Any) -> None:
+def _authenticate_expression(model: Any, expression: Expr, state: Any, *,
+                             label: str = "diffusive law") -> None:
     pending = [expression]
     primitives = set()
     while pending:
         node = pending.pop()
         if isinstance(node, QuantityRef):
             if node.handle.owner_path != model.owner_path:
-                raise ValueError("diffusive law reads a foreign quantity owner")
+                raise ValueError(label + " reads a foreign quantity owner")
         elif isinstance(node, Var):
             if node.kind == "prim" and node.name in model._dsl._m.prim_defs:
                 if node.name not in primitives:
                     primitives.add(node.name)
                     pending.append(model._dsl._m.prim_defs[node.name])
-            elif node.kind != "aux" or node.name not in model._dsl._m._provider_components:
-                raise ValueError("diffusive law requires qualified state or declared field quantities")
+            elif node.kind != "aux" or node.name not in model._dsl._m._aux_name_set():
+                raise ValueError(label + " requires qualified state or declared field quantities")
         pending.extend(_children(node))
     for reference in expression.declaration_references():
         if reference.owner_path != model.owner_path:
-            raise ValueError("diffusive law reads a foreign declaration")
+            raise ValueError(label + " reads a foreign declaration")
 
 
 def _law_inputs(model,state,expressions):

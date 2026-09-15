@@ -38,6 +38,7 @@ class _HyperbolicModel:
     prim_state: Any
     _recovery_admissibility: Any
     _provider_components: Any
+    _auxiliary_spaces: Any
     gamma: Any
     _flux: Any
     _flux_terms: Any

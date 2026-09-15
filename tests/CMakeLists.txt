@@ -685,6 +685,9 @@ pops_add_gtest_suite(NAME test_amr_multiblock_compiled SOURCES "${_src}" EXTRA_L
 pops_test_source(_src test_amr_hierarchy_barrier_continuation)
 pops_add_gtest_suite(NAME test_amr_hierarchy_barrier_continuation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_amr_path_rhs_barrier)
+pops_add_gtest_suite(NAME test_amr_path_rhs_barrier SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_hierarchy_field_scratch)
 pops_add_gtest_suite(NAME test_amr_hierarchy_field_scratch SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
@@ -887,6 +890,11 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_krylov_workspace_reentrancy 2)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
+  set(POPS_MPI_RANKS_test_tensor_coarse_gmres 2)
+  set(POPS_MPI_RANKS_test_tensor_fac_partial_hierarchy 2)
+  set(POPS_MPI_RANKS_test_tensor_fac_conservative_interface 2)
+  set(POPS_MPI_RANKS_test_prepared_polar_poisson_inverse 2)
+  set(POPS_MPI_RANKS_test_mapped_disk_tensor_fac 2)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
   set(POPS_MPI_RANKS_test_composite_general_field 2)
   set(POPS_MPI_RANKS_test_prepared_resource_cache 2)
@@ -894,6 +902,8 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_amr_layout_transfer 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_implicit_transaction 2)
   set(POPS_MPI_RANKS_test_amr_hierarchy_barrier_continuation 2)
+  set(POPS_MPI_RANKS_test_amr_path_rhs_barrier 2)
+  set(POPS_MPI_RANKS_test_amr_scalar_output_history 2)
   set(POPS_MPI_RANKS_test_amr_hierarchy_field_scratch 2)
   set(POPS_MPI_RANKS_test_amr_synchronized_continuation 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_substeps 2)
@@ -1065,6 +1075,12 @@ if(POPS_HAS_MPI)
     test_krylov_workspace_reentrancy
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
+    # These existing tensor/polar witnesses include distributed and empty-owner contracts.
+    test_tensor_coarse_gmres
+    test_tensor_fac_partial_hierarchy
+    test_tensor_fac_conservative_interface
+    test_prepared_polar_poisson_inverse
+    test_mapped_disk_tensor_fac
     test_coupled_fieldsolve
     # Two real patches per level are partitioned over ranks 0/1, including
     # coarse/fine flux replacement and collective incompatible-RHS refusal.
@@ -1079,6 +1095,9 @@ if(POPS_HAS_MPI)
     test_amr_multiblock_implicit_transaction
     # Rank-local barrier mismatch/callback failure must reject collectively, then retry.
     test_amr_hierarchy_barrier_continuation
+    # Canonical fine subfaces and signed NCP terms publish before any level update.
+    test_amr_path_rhs_barrier
+    test_amr_scalar_output_history
     # Rank-local field shape and solve-identity refusals must remain collective.
     test_amr_hierarchy_field_scratch
     test_amr_synchronized_continuation

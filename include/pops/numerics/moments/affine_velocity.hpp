@@ -16,6 +16,8 @@ struct CartesianMomentBasis {
   }
 };
 
+enum class AffineVelocityRotation { cayley, exponential };
+
 /// Cayley transform of Omega [[0,1],[-1,0]], avoiding overflow in Omega*theta_dt.
 POPS_HD inline bool cayley_rotation(Real omega, Real theta_dt, Real& c, Real& s) {
   if (!std::isfinite(omega) || !std::isfinite(theta_dt) || theta_dt < Real(0))
@@ -40,21 +42,52 @@ POPS_HD inline bool cayley_rotation(Real omega, Real theta_dt, Real& c, Real& s)
   return std::isfinite(c) && std::isfinite(s);
 }
 
+/// Exact centered gyro phase for the represented inputs; theta_dt is half the interval.
+/// The full interval and its product with Omega must be finite. No Cayley fallback
+/// or approximate 2*pi reduction is used when the exponential range is exceeded.
+POPS_HD inline bool exponential_rotation(Real omega, Real theta_dt, Real& c, Real& s) {
+  if (!std::isfinite(omega) || !std::isfinite(theta_dt) || theta_dt < Real(0))
+    return false;
+  if (omega == Real(0) || theta_dt == Real(0)) {
+    c = Real(1);
+    s = Real(0);
+    return true;
+  }
+  const Real dt = Real(2) * theta_dt;
+  const Real high = omega * dt;
+  if (!std::isfinite(dt) || !std::isfinite(high))
+    return false;
+  // Preserve the product's low part before library trig performs argument reduction.
+  // Reassociation of the fused residual into omega*dt-high would discard this part.
+  const Real low = std::fma(omega, dt, -high);
+  const Real ch = std::cos(high), sh = std::sin(high);
+  const Real cl = std::cos(low), sl = std::sin(low);
+  c = std::fma(ch, cl, -sh * sl);
+  s = std::fma(sh, cl, ch * sl);
+  return std::isfinite(c) && std::isfinite(s);
+}
+
 /// Push one common affine velocity map through every moment. The supplied mean
 /// endpoint is the result of the caller's coupled first-moment/field solve.
 /// theta_dt is one half of that source interval (Crank-Nicolson).
 ///
-/// R=Cayley(theta_dt*Omega*J), d=u_endpoint-R*u_old. Thus this is the
+/// By default R=Cayley(theta_dt*Omega*J), d=u_endpoint-R*u_old. Thus this is the
 /// push-forward of a positive velocity measure, not independent CN solves of
 /// moment-degree blocks. Density and both first moments are copied exactly.
+/// The opt-in exponential R=exp(2*theta_dt*Omega*J) gives exact centered moments
+/// for a cell-homogeneous source with constant Omega. The supplied mean remains
+/// approximate when obtained by CN; this is not a full exact or AP source method.
 /// A common positive metric factor on all moments (for example r*M) is legal.
 /// No density/covariance floor or realizability repair is performed.
-template <int Order>
+template <int Order, AffineVelocityRotation Rotation = AffineVelocityRotation::cayley>
 POPS_HD inline bool affine_velocity_push_forward(
     const Real (&old)[CartesianMomentBasis<Order>::size],
     const Real (&endpoint)[CartesianMomentBasis<Order>::size],
     Real omega, Real theta_dt,
     Real (&output)[CartesianMomentBasis<Order>::size]) {
+  static_assert(Rotation == AffineVelocityRotation::cayley ||
+                Rotation == AffineVelocityRotation::exponential,
+                "unsupported affine velocity rotation");
   using Basis = CartesianMomentBasis<Order>;
   constexpr int N = Basis::size;
   constexpr int X = Basis::index(1, 0);
@@ -66,8 +99,13 @@ POPS_HD inline bool affine_velocity_push_forward(
   if (!(old[0] > Real(0)) || endpoint[0] != old[0])
     return false;
   Real c, s;
-  if (!cayley_rotation(omega, theta_dt, c, s))
-    return false;
+  if constexpr (Rotation == AffineVelocityRotation::cayley) {
+    if (!cayley_rotation(omega, theta_dt, c, s))
+      return false;
+  } else {
+    if (!exponential_rotation(omega, theta_dt, c, s))
+      return false;
+  }
   const Real ux = old[X] / old[0];
   const Real uy = old[Y] / old[0];
   const Real bx = endpoint[X] / old[0] - (c * ux + s * uy);

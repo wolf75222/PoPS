@@ -93,6 +93,7 @@ struct MappingContinuation {
 mutable std::unique_ptr<MappingContinuation> mapping_continuation_;
 
 void cancel_mapping_hierarchy_() const noexcept {
+  staged_path_rhs_.clear();
   rhs_input_traces_.clear();
   if (multiblock_subcycling_)
     multiblock_subcycling_->abort_synchronized();
@@ -146,8 +147,8 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
         agree_continuation_ports_();
         const auto kind = frame.ports.front().kind;
         suspended = kind == MappingPortKind::map;
-        internal =
-            kind == MappingPortKind::linear_solve || kind == MappingPortKind::field_publication;
+        internal = kind == MappingPortKind::linear_solve ||
+                   kind == MappingPortKind::field_publication || kind == MappingPortKind::spatial_rhs;
         if (internal) {
           runtime::program::collective_step_rejection_phase(
               prepared_execution_lane().communicator(),
@@ -185,6 +186,10 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
             multiblock_subcycling_->synchronized_attempt());
         return;
       }
+      prepare_spatial_collectively([&] {
+        if (!staged_path_rhs_.empty())
+          throw std::logic_error("AMR hierarchy completed with an unpublished path RHS stage");
+      });
       multiblock_subcycling_->finish_synchronized(
           [&](multiblock_reflux_context_type& reflux) { reconcile_multiblock_reflux_(reflux); },
           [&](std::size_t block, std::size_t level, const field_type& candidate) {

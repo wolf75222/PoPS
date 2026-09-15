@@ -882,6 +882,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if defer_bound:
             key = ("partition_stability_deferred",)
             var[key] = var.get(key, frozenset()) | frozenset((v.id,))
+    elif v.op == "rhs" and v.attrs.get("path_conservative", False):
+        from pops.codegen.program_emit_path import emit_path_rhs
+        emit_path_rhs(v, var, lines, node_model, provider_plans, bidx, target)
     elif v.op == "rhs":
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id

@@ -37,9 +37,14 @@ def requires_rhs_input_trace(value: Any) -> bool:
     return False
 
 
-def emit_rhs_input_trace(value: Any, block: int, state: str, lines: list[str], target: str) -> str | None:
-    if target != "amr_system" or not requires_rhs_input_trace(value):
+def emit_rhs_input_trace(value: Any, block: int, state: str, lines: list[str], target: str,
+                         *, force: bool = False) -> str | None:
+    if target != "amr_system" or not (requires_rhs_input_trace(value) or force):
         return None
+    if force:
+        from pops.time._program.value_validation import TOP_LEVEL_REGION
+        if value.region != TOP_LEVEL_REGION or value.attrs.get("schedule") is not None:
+            raise ValueError("path RHS traces require unscheduled top-level stage inputs")
     name = "rhs_input_trace_%d" % value.id
     source_id = value.prog._canonical_value(value.inputs[0]).id
     lines.append("auto %s = ctx.capture_rhs_input_trace(%d, %s, %d, %d);"

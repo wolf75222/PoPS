@@ -148,6 +148,7 @@ class ProgramModelGraph:
                     facade=block.model,
                     state_space=block.state_spaces[0],
                     resolved_operations=operation_plan,
+                    numerics=block.numerics,
                 )
                 lowered_by_authority[authority_key] = lowered
             emit_model, source_module = lowered

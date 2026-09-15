@@ -1578,7 +1578,7 @@ bool same_field_contract(const MultiFab<Dim>& left, const MultiFab<Dim>& right) 
 template <int Dim>
 PreparedAmrLevelEvaluation<Dim> make_prepared_level_evaluation_workspace(
     const MultiFab<Dim>& prototype, std::string_view spatial_contract, std::uint64_t topology_epoch,
-    std::uint64_t materialization_generation) {
+    std::uint64_t materialization_generation, std::string_view path_operator_identity = {}) {
   PreparedAmrLevelEvaluation<Dim> evaluation{
       .spatial_contract = std::string(spatial_contract),
       .topology_epoch = topology_epoch,
@@ -1590,6 +1590,9 @@ PreparedAmrLevelEvaluation<Dim> make_prepared_level_evaluation_workspace(
   evaluation.residual.set_val(Real(0));
   for (auto& faces : evaluation.integrated_face_fluxes)
     faces.set_val(Real(0));
+  if (!path_operator_identity.empty())
+    evaluation.path_faces.emplace(
+        PreparedAmrPathFaceData<Dim>::prepare(prototype, path_operator_identity));
   return evaluation;
 }
 
@@ -3504,6 +3507,8 @@ struct AmrSystem<Dim>::Impl {
   mutable int checkpoint_regrid_count_value = 0;
   mutable std::vector<int> last_replay_regrid_steps;
   std::string last_dt_reason;
+  // Invocation authority, not accepted state: only step_cfl installs it while step runs.
+  std::optional<double> active_step_courant;
   NewtonReport last_newton_report{};
   mutable std::vector<std::uint8_t> program_accepted_bytes;
   mutable std::uint64_t program_accepted_revision = 0;
@@ -8009,14 +8014,21 @@ struct AmrSystem<Dim>::Impl {
           };
           prepared_level.emplace(
               prepared_block.prepare_level(candidate_engine, std::move(context)));
+          // Authenticate every path edge from its compiled operator before any fine ghost
+          // schedule is prepared. A coarse-only candidate has no transfer edge to authorize.
+          if (!prepared_level->path_operator_identity().empty())
+            for (std::size_t parent = 0; parent + 1 < level_count; ++parent)
+              require_path_transfer_injection(static_cast<int>(parent), block_index);
           candidate->block_evaluations[block_index][level].emplace(
               make_prepared_level_evaluation_workspace(state, candidate->spatial_contract,
                                                        candidate->topology_epoch,
-                                                       candidate->materialization_generation));
+                                                       candidate->materialization_generation,
+                                                       prepared_level->path_operator_identity()));
           candidate->block_evaluation_candidates[block_index][level].emplace(
               make_prepared_level_evaluation_workspace(state, candidate->spatial_contract,
                                                        candidate->topology_epoch,
-                                                       candidate->materialization_generation));
+                                                       candidate->materialization_generation,
+                                                       prepared_level->path_operator_identity()));
           candidate->block_stage_scratch[block_index][level] =
               std::make_unique<typename PreparedHierarchy::StageScratch>(state);
         } catch (...) {
@@ -9242,6 +9254,38 @@ struct AmrSystem<Dim>::Impl {
       throw std::invalid_argument("AMR coarse/fine selected an unsupported native kernel");
     }
     return selected;
+  }
+
+  void require_path_transfer_injection(int parent_level, std::size_t runtime_block) const {
+    if (runtime_block >= blocks.size())
+      throw std::out_of_range("AMR path transfer block is outside its prepared package");
+    const std::string& subject = boundary_registry.state_route(blocks[runtime_block].name);
+    for (const std::string operation : {"prolongation", "coarse_fine_fill"}) {
+      const auto selected = bootstrap_subject_routes.find(std::make_pair(subject, operation));
+      if (selected == bootstrap_subject_routes.end())
+        throw std::invalid_argument(
+            "AMR path state requires an explicit constant-injection " + operation + " route");
+      const auto provider = bootstrap_transfer_routes.find(selected->second);
+      if (provider == bootstrap_transfer_routes.end())
+        throw std::logic_error("AMR path transfer lost its exact provider authority");
+      const auto& route = provider->second;
+      bool exact = route.kernel == "conservative_injection" && route.order == 1 &&
+                   route.space == "cell" && route.centering == "cell" &&
+                   route.representation == "conservative" && route.storage == "dense";
+      const int ghosts = operation == "prolongation" ? 0 : 1;
+      for (int axis = 0; axis < Dim; ++axis)
+        exact = exact && route.ghost_depth[axis] == ghosts;
+      if (!exact)
+        throw std::invalid_argument(
+            "AMR path state requires exact order-one conservative constant injection for " +
+            operation);
+    }
+    // Authenticate the policies actually consumed by regridding and state ghost preparation.
+    // A route attached to another block must not silently authorize this path state's traces.
+    if (regrid_transfer_kind(parent_level, runtime_block) !=
+            amr::transfer::TransferKind::ConstantInjection ||
+        coarse_fine_transfer_kind(parent_level) != amr::transfer::TransferKind::ConstantInjection)
+      throw std::invalid_argument("AMR path state selected a reconstructed hierarchy transfer");
   }
 
   std::uint64_t tagging_generation() const {
@@ -13641,6 +13685,18 @@ void AmrSystem<Dim>::validate_prepared_amr_block_level_batch(
           candidate->materialization_generation !=
               p_->prepared_hierarchy->materialization_generation)
         throw std::logic_error("prepared AMR evaluation batch workspace contract is unavailable");
+      const std::string_view path_identity =
+          p_->prepared_hierarchy->block_levels[block_index][level_index].path_operator_identity();
+      if (candidate->path_faces.has_value() != !path_identity.empty() ||
+          published->path_faces.has_value() != !path_identity.empty())
+        throw std::logic_error("prepared AMR evaluation batch changed its path payload kind");
+      if (candidate->path_faces) {
+        candidate->path_faces->require_layout(p_->block_state(block_index, level_index),
+                                               path_identity);
+        published->path_faces->require_layout(p_->block_state(block_index, level_index),
+                                               path_identity);
+        contract.text("path-operator").bytes(path_identity);
+      }
       contract.scalar(std::int32_t{runtime_block})
           .scalar(std::int32_t{level})
           .scalar(candidate->topology_epoch)
@@ -14275,6 +14331,97 @@ void AmrSystem<Dim>::prepared_amr_block_level_source_into_at(
       p_->prepared_hierarchy->block_stage_scratch[block][static_cast<std::size_t>(parent_level)]
           ->backup,
       [&] { prepared_amr_block_level_source_into_at(runtime_block, point, state, rhs); });
+}
+
+template <int Dim>
+std::string AmrSystem<Dim>::prepared_amr_block_path_operator_identity_(int runtime_block,
+                                                                     int level) const {
+  // Stage-pack validation calls this on each rank before entering its next collective.
+  if (!p_->engine || !p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+    throw std::logic_error("prepared AMR path identity requires an existing live hierarchy");
+  if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size() ||
+      level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
+    throw std::out_of_range("prepared AMR path operator target is out of range");
+  return std::string(p_->prepared_hierarchy
+                         ->block_levels[static_cast<std::size_t>(runtime_block)]
+                                       [static_cast<std::size_t>(level)]
+                         .path_operator_identity());
+}
+
+template <int Dim>
+double AmrSystem<Dim>::active_program_step_courant_() const {
+  if (!p_->active_step_courant || !std::isfinite(*p_->active_step_courant) ||
+      !(*p_->active_step_courant > 0.0))
+    throw std::logic_error("AMR path RHS requires the active authored AdaptiveCFL invocation");
+  return *p_->active_step_courant;
+}
+
+template <int Dim>
+typename AmrSystem<Dim>::PreparedLevelEvaluation&
+AmrSystem<Dim>::prepare_prepared_amr_block_level_path_rhs_at(
+    int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+    MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent) {
+  p_->ensure_engine();
+  std::lock_guard execution_lock(p_->prepared_hierarchy->execution_mutex);
+  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  std::exception_ptr error;
+  try {
+    if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size() ||
+        point.level < 0 ||
+        static_cast<std::size_t>(point.level) >= p_->engine->hierarchy().num_levels())
+      throw std::out_of_range("prepared AMR path RHS target is out of range");
+    if ((point.level == 0 && (parent_level != -1 || staged_parent != nullptr)) ||
+        (point.level > 0 && (parent_level != point.level - 1 || staged_parent == nullptr)))
+      throw std::invalid_argument("prepared AMR path RHS requires its exact current-stage parent");
+    if (prepared_amr_block_path_operator_identity_(runtime_block, point.level).empty())
+      throw std::invalid_argument("prepared AMR path RHS has no installed path operator");
+    if (p_->program_hierarchy_candidates.size() != p_->blocks.size())
+      p_->program_hierarchy_candidates.resize(p_->blocks.size(), nullptr);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane,
+                                 "prepared AMR path RHS preflight failed collectively");
+  const std::size_t block = static_cast<std::size_t>(runtime_block);
+  const std::size_t level = static_cast<std::size_t>(point.level);
+  authenticate_generated_block_point<Dim>("path-rhs", runtime_block, p_->blocks[block].name,
+                                          point, p_->multiblock_hierarchy->collective_contract(),
+                                          lane.communicator());
+  auto evaluate = [&]() -> PreparedLevelEvaluation& {
+    MultiFab<Dim>& live = p_->block_state(block, level);
+    auto& candidate = p_->prepared_hierarchy->block_evaluation_candidates[block][level];
+    auto& stage = *p_->prepared_hierarchy->block_stage_scratch[block][level];
+    std::exception_ptr workspace_error;
+    try {
+      if (!candidate || !candidate->path_faces)
+        throw std::logic_error("prepared AMR path RHS workspace is unavailable");
+    } catch (...) {
+      workspace_error = std::current_exception();
+    }
+    collectively_rethrow_exception(workspace_error, lane,
+                                   "prepared AMR path RHS workspace failed collectively");
+    stage.staged = stage_exact_field_collectively(state, live, stage.backup, lane.communicator());
+    std::exception_ptr evaluation_error;
+    try {
+      p_->prepared_hierarchy->block_levels[block][level].evaluate_path_flux(point, live, *candidate);
+    } catch (...) {
+      evaluation_error = std::current_exception();
+    }
+    restore_exact_field_collectively(stage.staged, stage.backup, live, lane.communicator());
+    collectively_rethrow_exception(evaluation_error, lane,
+                                   "prepared AMR path RHS evaluation failed collectively");
+    return *candidate;
+  };
+  if (point.level == 0)
+    return evaluate();
+  return invoke_with_staged_parent<Dim>(
+      runtime_block, p_->blocks[block].name, point.level, parent_level, staged_parent,
+      p_->block_state(block, static_cast<std::size_t>(parent_level)),
+      p_->multiblock_hierarchy->collective_contract(), lane.communicator(),
+      p_->program_hierarchy_candidates[block],
+      p_->prepared_hierarchy->block_stage_scratch[block][static_cast<std::size_t>(parent_level)]
+          ->backup,
+      evaluate);
 }
 
 template <int Dim>
@@ -17600,6 +17747,8 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
   long request_failure = 0;
   try {
     p_->program.require_step_installed("AmrSystem::step_cfl");
+    if (p_->active_step_courant)
+      throw std::logic_error("AmrSystem::step_cfl cannot nest an active Courant invocation");
     if (!std::isfinite(cfl) || cfl <= 0.0 || !std::isfinite(speed_floor) || speed_floor <= 0.0)
       throw std::invalid_argument("AmrSystem::step_cfl requires positive finite CFL inputs");
     if (std::isnan(max_dt) || max_dt <= 0.0 || !std::isfinite(min_dt) || min_dt < 0.0)
@@ -17879,6 +18028,13 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
           {{std::string_view("amr-step-cfl-decision"), std::string_view(decision_contract)}}, lane))
     throw std::runtime_error("AmrSystem::step_cfl selected different bounds across MPI ranks");
   p_->last_dt_reason = std::move(reason);
+  struct ActiveCourantScope {
+    std::optional<double>& slot;
+    explicit ActiveCourantScope(std::optional<double>& target, double value) : slot(target) {
+      slot = value;
+    }
+    ~ActiveCourantScope() { slot.reset(); }
+  } active_courant(p_->active_step_courant, cfl);
   step(selected);
   return selected;
 }
@@ -22065,6 +22221,13 @@ AmrSystem<kNativeDimension>::prepare_prepared_amr_block_level_at(
 template const PreparedAmrLevelEvaluation<kNativeDimension>&
 AmrSystem<kNativeDimension>::prepare_prepared_amr_block_level_flux_at(
     int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&);
+template PreparedAmrLevelEvaluation<kNativeDimension>&
+AmrSystem<kNativeDimension>::prepare_prepared_amr_block_level_path_rhs_at(
+    int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&, int,
+    const MultiFab<kNativeDimension>*);
+template std::string AmrSystem<kNativeDimension>::prepared_amr_block_path_operator_identity_(
+    int, int) const;
+template double AmrSystem<kNativeDimension>::active_program_step_courant_() const;
 template void AmrSystem<kNativeDimension>::validate_prepared_amr_block_level_batch(
     std::span<const std::pair<int, int>>) const;
 template void AmrSystem<kNativeDimension>::publish_prepared_amr_block_level_batch(

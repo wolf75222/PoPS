@@ -589,7 +589,32 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     def aux(self, name: Any) -> Any:
         """Declare one ordinary auxiliary field read by the model."""
         name = require_name(name, "aux field name")
+        if name in self._dsl._m._auxiliary_spaces:
+            raise ValueError("this name already declares an imposed AuxSpace")
         return self._dsl.aux(name)
+
+    def auxiliary(self, name: Any, kind: str = "cell_scalar", *,
+                  representation: Any = "auxiliary", centering: Any = "cell",
+                  unit: Any = None, frame: Any = "model", clock: Any = "simulation") -> Any:
+        """Declare an imposed AuxSpace and return its symbolic scalar read.
+
+        The typed declaration persists through physical-model authoring. Register its
+        AnalyticAux/InputAux/DerivedAux producer on the final ``model.module`` using
+        ``module.aux_handle(module.aux()[name])``. No legacy FieldSpace is created.
+        """
+        from pops.model import AuxSpace
+        from pops._ir import Var
+        self._guard_mutable("declare an imposed auxiliary")
+        name = require_name(name, "auxiliary name")
+        hyp = self._dsl._m
+        if name in hyp._aux_name_set():
+            raise ValueError("auxiliary %r is already declared" % name)
+        declaration = AuxSpace(name, kind, representation=representation,
+                               centering=centering, unit=unit, frame=frame, clock=clock)
+        hyp._auxiliary_spaces = {**hyp._auxiliary_spaces, name: declaration}
+        self._dsl._invalidate_authoring_views()
+        self._invalidate_authoring_views()
+        return Var(name, "aux")
 
     def field(self, name: Any, *, components: Any = None) -> Any:
         """Declare a solved scalar or a multi-component field space.

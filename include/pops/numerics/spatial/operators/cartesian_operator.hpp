@@ -8,6 +8,7 @@
 #include <pops/mesh/geometry/prepared_metric_provider.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
+#include <pops/numerics/fv/fan_li15_path_flux.hpp>
 #include <pops/numerics/spatial/nd/finite_volume.hpp>
 #include <pops/numerics/spatial/nd/reconstruction.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
@@ -73,6 +74,35 @@ class PreparedCartesianOperatorScratch {
   std::vector<FaceField<Dim, MemorySpace>> face_statuses_;
   MultiFab<Dim, MemorySpace> residual_candidate_;
   MultiFab<Dim, MemorySpace> residual_status_;
+};
+
+/// Patch-owned staging for a complete path face tuple. All allocations happen
+/// during preparation; evaluation publishes none of F/L/R/speed on failure.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+class PreparedCartesianPathFaceScratch {
+ public:
+  PreparedCartesianPathFaceScratch(const Box<Dim>& cells, int nvars)
+      : flux_(cells, nvars),
+        left_ncp_(cells, nvars),
+        right_ncp_(cells, nvars),
+        speed_(cells, 1),
+        status_(cells, 1) {}
+  void require_layout(const Box<Dim>& cells, int nvars) const {
+    if (!(flux_.cell_box() == cells) || flux_.ncomp() != nvars ||
+        !(left_ncp_.cell_box() == cells) || left_ncp_.ncomp() != nvars ||
+        !(right_ncp_.cell_box() == cells) || right_ncp_.ncomp() != nvars ||
+        !(speed_.cell_box() == cells) || speed_.ncomp() != 1 || !(status_.cell_box() == cells) ||
+        status_.ncomp() != 1)
+      throw std::invalid_argument("prepared Cartesian path scratch differs from its patch layout");
+  }
+  FaceField<Dim, MemorySpace>& flux() { return flux_; }
+  FaceField<Dim, MemorySpace>& left_ncp() { return left_ncp_; }
+  FaceField<Dim, MemorySpace>& right_ncp() { return right_ncp_; }
+  FaceField<Dim, MemorySpace>& speed() { return speed_; }
+  FaceField<Dim, MemorySpace>& status() { return status_; }
+
+ private:
+  FaceField<Dim, MemorySpace> flux_, left_ncp_, right_ncp_, speed_, status_;
 };
 
 namespace cartesian_operator_detail {
@@ -279,6 +309,129 @@ struct MaterializeResidual {
   }
 };
 
+/// Status prefixes preserve whether a refusal came from metric/finite-volume
+/// checks (256), extra model conversion (512) or the exact Fan--Li policy (1024).
+/// These small integers remain exactly representable in every supported Real.
+template <int Axis, int Dim, class Model, class Metric, class ProviderStorage>
+struct MaterializePathFace {
+  Model model;
+  Metric metric;
+  FieldView<const Real, Dim> state;
+  ProviderStorage providers;
+  FaceFieldView<Real, Dim> flux, left_ncp, right_ncp, speed, statuses;
+  Box<Dim> domain;
+
+  POPS_HD void clear(const FaceIndex<Dim, Axis>& face, Real status) const {
+    for (int k = 0; k < Model::n_vars; ++k) {
+      flux.template operator()<Axis>(face.coordinate, k) = Real(0);
+      left_ncp.template operator()<Axis>(face.coordinate, k) = Real(0);
+      right_ncp.template operator()<Axis>(face.coordinate, k) = Real(0);
+    }
+    speed.template operator()<Axis>(face.coordinate) = Real(0);
+    statuses.template operator()<Axis>(face.coordinate) = status;
+  }
+  POPS_HD void operator()(const FaceIndex<Dim, Axis>& face) const {
+    constexpr auto zero_faces = Model::path_zero_measure_faces();
+    if ((zero_faces[2 * Axis] && face[Axis] == domain.lo[Axis]) ||
+        (zero_faces[2 * Axis + 1] &&
+         static_cast<std::int64_t>(face[Axis]) == static_cast<std::int64_t>(domain.hi[Axis]) + 1)) {
+      // Authored zero mapped measure, before reading state or provider ghosts.
+      clear(face, Real(0));
+      return;
+    }
+    Index<Dim> left_cell = face.coordinate;
+    --left_cell[Axis];
+    const Index<Dim> right_cell = face.coordinate;
+    const FaceContext context =
+        face[Axis] == flux.cells.lo[Axis]
+            ? metric_face_context<Axis, MetricFaceSide::Lower>(metric, right_cell)
+            : metric_face_context<Axis, MetricFaceSide::Upper>(metric, left_cell);
+    if (!Kokkos::isfinite(context.face_measure) || !(context.face_measure > Real(0)) ||
+        !Kokkos::isfinite(context.cell_measure) || !(context.cell_measure > Real(0))) {
+      clear(face, Real(256) + static_cast<Real>(FiniteVolumeStatus::InvalidMetric));
+      return;
+    }
+    // FirstOrder: exactly the two adjacent conservative stored states. The
+    // path policy performs its own typed raw-SPD certificate on both traces.
+    const auto left = load_state<Model>(state, left_cell),
+               right = load_state<Model>(state, right_cell);
+    const auto evaluation = evaluate_fan_li15_path_at<Axis>(
+        FanLi15PathRusanovFlux{}, model, left, providers, left_cell, right, providers, right_cell);
+    if (!evaluation.succeeded()) {
+      clear(face, Real(1024) + static_cast<Real>(evaluation.status));
+      return;
+    }
+    const auto left_status = model.admissibility(left), right_status = model.admissibility(right);
+    if (left_status != StateConversionStatus::Success ||
+        right_status != StateConversionStatus::Success) {
+      clear(face, Real(512) + static_cast<Real>(left_status != StateConversionStatus::Success
+                                                    ? left_status
+                                                    : right_status));
+      return;
+    }
+    Real f[15], l[15], r[15];
+    for (int k = 0; k < 15; ++k) {
+      f[k] = context.face_measure * evaluation.conservative_flux.values[k];
+      l[k] = context.face_measure * evaluation.left_ncp.values[k];
+      r[k] = context.face_measure * evaluation.right_ncp.values[k];
+      if (!Kokkos::isfinite(f[k]) || !Kokkos::isfinite(l[k]) || !Kokkos::isfinite(r[k])) {
+        clear(face, Real(256) + static_cast<Real>(FiniteVolumeStatus::NonFiniteFaceFlux));
+        return;
+      }
+    }
+    if (!Kokkos::isfinite(evaluation.speed_bound) || evaluation.speed_bound < Real(0)) {
+      clear(face, Real(256) + static_cast<Real>(FiniteVolumeStatus::InvalidWaveSpeed));
+      return;
+    }
+    for (int k = 0; k < 15; ++k) {
+      flux.template operator()<Axis>(face.coordinate, k) = f[k];
+      left_ncp.template operator()<Axis>(face.coordinate, k) = l[k];
+      right_ncp.template operator()<Axis>(face.coordinate, k) = r[k];
+    }
+    speed.template operator()<Axis>(face.coordinate) = evaluation.speed_bound;
+    statuses.template operator()<Axis>(face.coordinate) = Real(0);
+  }
+};
+
+template <int Axis, int Dim, class Model, class Metric, class Storage, class MemorySpace>
+void materialize_path_axes(const Model& model, const Metric& metric,
+                           const Fab<Dim, MemorySpace>& state, const Storage& providers,
+                           PreparedCartesianPathFaceScratch<Dim, MemorySpace>& candidate) {
+  for_each_face<Axis>(state.box(), MaterializePathFace<Axis, Dim, Model, Metric, Storage>{
+                                       model, metric, state.view(), providers,
+                                       candidate.flux().view(), candidate.left_ncp().view(),
+                                       candidate.right_ncp().view(), candidate.speed().view(),
+                                       candidate.status().view(), metric.identity().domain});
+  if constexpr (Axis + 1 < Dim)
+    materialize_path_axes<Axis + 1>(model, metric, state, providers, candidate);
+}
+
+template <int Dim, class Metric, int N>
+struct MaterializePathResidual {
+  Metric metric;
+  FaceFieldView<const Real, Dim> flux, left_ncp, right_ncp;
+  FieldView<Real, Dim> candidate, statuses;
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    auto value = conservative_residual<N>(metric, flux, cell);
+    if (value.succeeded()) {
+      const Real inverse_volume = Real(1) / metric.cell_measure(cell);
+      for (int axis = 0; axis < Dim; ++axis) {
+        Index<Dim> upper = cell;
+        ++upper[axis];
+        for (int k = 0; k < N; ++k)
+          value.value[k] +=
+              inverse_volume * (right_ncp.axes[axis](cell, k) + left_ncp.axes[axis](upper, k));
+      }
+      for (int k = 0; k < N; ++k)
+        if (!Kokkos::isfinite(value.value[k]))
+          value.status = FiniteVolumeStatus::NonFiniteFaceFlux;
+    }
+    for (int k = 0; k < N; ++k)
+      candidate(cell, k) = value.succeeded() ? value.value[k] : Real(0);
+    statuses(cell) = static_cast<Real>(value.status);
+  }
+};
+
 template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
           class Reconstruction, class NumericalFlux, class ProviderStorage, class MemorySpace>
 void materialize_axes(const Model& model, const Metric& metric,
@@ -327,6 +480,37 @@ void require_face_output(const FaceField<Dim, MemorySpace>& output, const Box<Di
   if (!(output.cell_box() == cells) || output.ncomp() != nvars)
     throw std::invalid_argument(
         "prepared ND hyperbolic face output does not match the patch and conservation law");
+}
+
+/// Path publication checks the actual axis allocations too: FaceField is an
+/// owning preparation object; output references must not alias the transaction.
+template <int Dim, class MemorySpace>
+void require_path_face_output(const FaceField<Dim, MemorySpace>& output, const Box<Dim>& cells,
+                              int nvars) {
+  require_face_output(output, cells, nvars);
+  const auto view = output.view();
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto expected = face_box(cells, axis);
+    const auto& field = view.axes[axis];
+    if (field.data == nullptr || field.ncomp != nvars)
+      throw std::invalid_argument("prepared path face axis allocation is invalid");
+    for (int d = 0; d < Dim; ++d)
+      if (field.origin[d] != expected.lo[d] ||
+          field.extents[d] != static_cast<std::int64_t>(expected.hi[d]) - expected.lo[d] + 1)
+        throw std::invalid_argument("prepared path face axis allocation has the wrong extent");
+  }
+}
+
+template <int Dim, class Storage>
+bool path_provider_aliases(const Storage& storage, const Real* output) {
+  if constexpr (requires { storage.data; }) {
+    return storage.data == output;
+  } else if constexpr (requires { storage.storage; }) {
+    for (const auto& field : storage.storage)
+      if (field.data == output)
+        return true;
+  }
+  return false;
 }
 
 template <int Dim, class MemorySpace>
@@ -394,12 +578,103 @@ class PreparedCartesianOperator {
   const Metric& metric() const noexcept { return metric_; }
   Box<Dim> domain() const noexcept { return metric_.identity().domain; }
 
+  /// Publish one indivisible path tuple. F is a conservative face integral;
+  /// L/R are separate integrated side residuals (-P/2), and speed is not integrated.
+  template <class MemorySpace>
+  void materialize_path_face_contributions(
+      const Fab<Dim, MemorySpace>& state, FaceField<Dim, MemorySpace>& flux,
+      FaceField<Dim, MemorySpace>& left_ncp, FaceField<Dim, MemorySpace>& right_ncp,
+      FaceField<Dim, MemorySpace>& speed,
+      PreparedCartesianPathFaceScratch<Dim, MemorySpace>& scratch,
+      const std::array<bool, 2 * Dim>& omitted_faces = {}) const
+    requires(path_conservative_model<Model> && flux_provider_count<Model> == 0)
+  {
+    materialize_path_faces_(state, cartesian_operator_detail::ProviderFreeStorage<Dim>{}, flux,
+                            left_ncp, right_ncp, speed, scratch, omitted_faces);
+  }
+
+  template <class MemorySpace>
+  void materialize_path_face_contributions(
+      const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& providers,
+      FaceField<Dim, MemorySpace>& flux, FaceField<Dim, MemorySpace>& left_ncp,
+      FaceField<Dim, MemorySpace>& right_ncp, FaceField<Dim, MemorySpace>& speed,
+      PreparedCartesianPathFaceScratch<Dim, MemorySpace>& scratch,
+      const std::array<bool, 2 * Dim>& omitted_faces = {}) const
+    requires(path_conservative_model<Model>)
+  {
+    require_provider_patch_(state, providers);
+    materialize_path_faces_(state, providers.view(), flux, left_ncp, right_ncp, speed, scratch,
+                            omitted_faces);
+  }
+
+  template <class MemorySpace, int Count>
+  void materialize_path_face_contributions(
+      const Fab<Dim, MemorySpace>& state, const ProviderStorageView<Dim, Count>& providers,
+      FaceField<Dim, MemorySpace>& flux, FaceField<Dim, MemorySpace>& left_ncp,
+      FaceField<Dim, MemorySpace>& right_ncp, FaceField<Dim, MemorySpace>& speed,
+      PreparedCartesianPathFaceScratch<Dim, MemorySpace>& scratch,
+      const std::array<bool, 2 * Dim>& omitted_faces = {}) const
+    requires(path_conservative_model<Model> && Count == flux_provider_count<Model>)
+  {
+    cartesian_operator_detail::require_provider_face_storage<Model>(state.box(), providers);
+    materialize_path_faces_(state, providers, flux, left_ncp, right_ncp, speed, scratch,
+                            omitted_faces);
+  }
+
+  /// The lower face contributes its right-cell residual; the upper face its
+  /// left-cell residual. Only F belongs to the conservative flux register.
+  template <class MemorySpace>
+  void assemble_residual_from_path_faces(const FaceField<Dim, MemorySpace>& flux,
+                                         const FaceField<Dim, MemorySpace>& left_ncp,
+                                         const FaceField<Dim, MemorySpace>& right_ncp,
+                                         Fab<Dim, MemorySpace>& residual,
+                                         Fab<Dim, MemorySpace>& candidate,
+                                         Fab<Dim, MemorySpace>& statuses) const
+    requires(path_conservative_model<Model>)
+  {
+    require_path_route_({});
+    const auto& cells = flux.cell_box();
+    if (!domain().contains(cells))
+      throw std::invalid_argument("prepared path face patch lies outside the metric domain");
+    const std::array<const FaceField<Dim, MemorySpace>*, 3> inputs{&flux, &left_ncp, &right_ncp};
+    for (const auto* input : inputs)
+      cartesian_operator_detail::require_path_face_output(*input, cells, n_vars);
+    cartesian_operator_detail::require_residual_shape(residual, cells, n_vars);
+    cartesian_operator_detail::require_residual_shape(candidate, cells, n_vars);
+    cartesian_operator_detail::require_residual_shape(statuses, cells, 1);
+    const std::array<const Real*, 3> writes{residual.view().data, candidate.view().data,
+                                            statuses.view().data};
+    for (std::size_t i = 0; i < writes.size(); ++i) {
+      for (std::size_t j = 0; j < i; ++j)
+        if (writes[i] == writes[j])
+          throw std::invalid_argument("prepared path residual output and scratch alias storage");
+      for (const auto* input : inputs)
+        for (const auto& axis : input->view().axes)
+          if (writes[i] == axis.data)
+            throw std::invalid_argument("prepared path residual writes alias a face input");
+    }
+    for_each_cell(cells, cartesian_operator_detail::MaterializePathResidual<Dim, Metric, n_vars>{
+                             metric_, flux.view(), left_ncp.view(), right_ncp.view(),
+                             candidate.view(), statuses.view()});
+    const Real failure = for_each_cell_reduce_max(
+        cells, cartesian_operator_detail::FieldStatusMaximum<Dim>{
+                   static_cast<const Fab<Dim, MemorySpace>&>(statuses).view()});
+    if (failure != Real(0))
+      throw std::runtime_error(hyperbolic_publication_refusal(
+          "prepared Cartesian path residual refused publication", failure));
+    for_each_cell(cells, cartesian_operator_detail::CopyCellField<Dim>{
+                             static_cast<const Fab<Dim, MemorySpace>&>(candidate).view(),
+                             residual.view(), n_vars});
+    device_fence();
+  }
+
   template <class MemorySpace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                FaceField<Dim, MemorySpace>& output,
                                const std::array<bool, 2 * Dim>& omitted_faces = {}) const
     requires(flux_provider_count<Model> == 0)
   {
+    require_ordinary_route_();
     require_state_patch_(state);
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
 
@@ -416,6 +691,7 @@ class PreparedCartesianOperator {
                                const std::array<bool, 2 * Dim>& omitted_faces = {}) const
     requires(flux_provider_count<Model> == 0)
   {
+    require_ordinary_route_();
     if (&output == &candidate || &output == &statuses || &candidate == &statuses)
       throw std::invalid_argument("prepared ND hyperbolic face output and scratch must not alias");
     require_state_patch_(state);
@@ -440,6 +716,7 @@ class PreparedCartesianOperator {
                                const Fab<Dim, MemorySpace>& providers,
                                FaceField<Dim, MemorySpace>& output,
                                const std::array<bool, 2 * Dim>& omitted_faces = {}) const {
+    require_ordinary_route_();
     require_state_patch_(state);
     require_provider_patch_(state, providers);
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
@@ -456,6 +733,7 @@ class PreparedCartesianOperator {
                                FaceField<Dim, MemorySpace>& candidate,
                                FaceField<Dim, MemorySpace>& statuses,
                                const std::array<bool, 2 * Dim>& omitted_faces = {}) const {
+    require_ordinary_route_();
     if (&output == &candidate || &output == &statuses || &candidate == &statuses)
       throw std::invalid_argument("prepared ND hyperbolic face output and scratch must not alias");
     require_state_patch_(state);
@@ -484,6 +762,7 @@ class PreparedCartesianOperator {
                                const std::array<bool, 2 * Dim>& omitted_faces = {}) const
     requires(Count == flux_provider_count<Model>)
   {
+    require_ordinary_route_();
     require_state_patch_(state);
     cartesian_operator_detail::require_provider_face_storage<Model>(state.box(), providers);
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
@@ -502,6 +781,7 @@ class PreparedCartesianOperator {
                                const std::array<bool, 2 * Dim>& omitted_faces = {}) const
     requires(Count == flux_provider_count<Model>)
   {
+    require_ordinary_route_();
     if (&output == &candidate || &output == &statuses || &candidate == &statuses)
       throw std::invalid_argument("prepared ND hyperbolic face output and scratch must not alias");
     require_state_patch_(state);
@@ -527,6 +807,7 @@ class PreparedCartesianOperator {
   template <class MemorySpace>
   void assemble_residual_from_face_fluxes(const FaceField<Dim, MemorySpace>& integrated_fluxes,
                                           Fab<Dim, MemorySpace>& residual) const {
+    require_ordinary_route_();
     const Box<Dim>& cells = integrated_fluxes.cell_box();
     if (!domain().contains(cells))
       throw std::invalid_argument(
@@ -544,6 +825,7 @@ class PreparedCartesianOperator {
                                           Fab<Dim, MemorySpace>& residual,
                                           Fab<Dim, MemorySpace>& candidate,
                                           Fab<Dim, MemorySpace>& cell_statuses) const {
+    require_ordinary_route_();
     if (&residual == &candidate || &residual == &cell_statuses || &candidate == &cell_statuses)
       throw std::invalid_argument(
           "prepared ND hyperbolic residual output and scratch must not alias");
@@ -575,6 +857,7 @@ class PreparedCartesianOperator {
   void assemble_residual(const Fab<Dim, MemorySpace>& state, Fab<Dim, MemorySpace>& residual) const
     requires(flux_provider_count<Model> == 0)
   {
+    require_ordinary_route_();
     require_state_patch_(state);
     cartesian_operator_detail::require_residual_output(state, residual, n_vars);
 
@@ -594,6 +877,7 @@ class PreparedCartesianOperator {
   template <class MemorySpace>
   void assemble_residual(const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& providers,
                          Fab<Dim, MemorySpace>& residual) const {
+    require_ordinary_route_();
     require_state_patch_(state);
     require_provider_patch_(state, providers);
     cartesian_operator_detail::require_residual_output(state, residual, n_vars);
@@ -609,6 +893,7 @@ class PreparedCartesianOperator {
                          Fab<Dim, MemorySpace>& residual) const
     requires(Count == flux_provider_count<Model>)
   {
+    require_ordinary_route_();
     require_state_patch_(state);
     cartesian_operator_detail::require_residual_output(state, residual, n_vars);
     FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
@@ -621,6 +906,7 @@ class PreparedCartesianOperator {
                          MultiFab<Dim, MemorySpace>& residual) const
     requires(flux_provider_count<Model> == 0)
   {
+    require_ordinary_route_();
     if (state.ncomp() != n_vars || residual.ncomp() != n_vars ||
         !(state.layout() == residual.layout()) ||
         !(state.distribution() == residual.distribution()) ||
@@ -644,6 +930,7 @@ class PreparedCartesianOperator {
   void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
                          const MultiFab<Dim, MemorySpace>& providers,
                          MultiFab<Dim, MemorySpace>& residual) const {
+    require_ordinary_route_();
     require_multifab_layout_(state, residual);
     if (providers.layout() != state.layout() || providers.distribution() != state.distribution() ||
         providers.local_rank() != state.local_rank() ||
@@ -667,6 +954,7 @@ class PreparedCartesianOperator {
   void assemble_residual_from_face_fluxes(
       const std::vector<FaceField<Dim, MemorySpace>>& integrated_fluxes,
       MultiFab<Dim, MemorySpace>& residual) const {
+    require_ordinary_route_();
     if (residual.ncomp() != n_vars || integrated_fluxes.size() != residual.local_size())
       throw std::invalid_argument(
           "prepared ND hyperbolic face workspace does not match the residual MultiFab");
@@ -691,6 +979,7 @@ class PreparedCartesianOperator {
       const std::vector<FaceField<Dim, MemorySpace>>& integrated_fluxes,
       MultiFab<Dim, MemorySpace>& residual, MultiFab<Dim, MemorySpace>& candidate,
       MultiFab<Dim, MemorySpace>& statuses) const {
+    require_ordinary_route_();
     if (&residual == &candidate || &residual == &statuses || &candidate == &statuses)
       throw std::invalid_argument(
           "prepared ND hyperbolic divergence output and scratch must not alias");
@@ -718,6 +1007,82 @@ class PreparedCartesianOperator {
   }
 
  private:
+  void require_ordinary_route_() const {
+    if constexpr (path_conservative_model<Model>)
+      throw std::invalid_argument(
+          "a path-conservative model requires the dedicated path face and residual APIs");
+  }
+
+  void require_path_route_(const std::array<bool, 2 * Dim>& omitted_faces) const
+    requires(path_conservative_model<Model>)
+  {
+    static_assert(Dim == 2 && n_vars == 15,
+                  "this native path evaluator implements full-temperature D2/M4 Fan-Li15");
+    if constexpr (!std::is_same_v<Reconstruction, NoSlope> ||
+                  Variables != ReconstructionVariables::Conservative ||
+                  !std::is_same_v<NumericalFlux, RusanovFlux> || DiffusiveModel<Model>)
+      throw std::invalid_argument(
+          "Fan-Li15 path transport requires FirstOrder conservative Rusanov without diffusion");
+    if (!std::isfinite(positivity_floor_) || positivity_floor_ != Real(0))
+      throw std::invalid_argument("Fan-Li15 path transport does not permit a positivity floor");
+    if (Model::path_operator_identity().empty())
+      throw std::invalid_argument("Fan-Li15 path transport requires its exact operator identity");
+    constexpr auto zero_faces = Model::path_zero_measure_faces();
+    for (int face = 0; face < 2 * Dim; ++face)
+      if (omitted_faces[face] && !zero_faces[face])
+        throw std::invalid_argument(
+            "only an authored zero-mapped-measure path face may omit the full face tuple");
+  }
+
+  template <class MemorySpace, class Storage>
+  void materialize_path_faces_(const Fab<Dim, MemorySpace>& state, const Storage& providers,
+                               FaceField<Dim, MemorySpace>& flux,
+                               FaceField<Dim, MemorySpace>& left_ncp,
+                               FaceField<Dim, MemorySpace>& right_ncp,
+                               FaceField<Dim, MemorySpace>& speed,
+                               PreparedCartesianPathFaceScratch<Dim, MemorySpace>& scratch,
+                               const std::array<bool, 2 * Dim>& omitted_faces) const
+    requires(path_conservative_model<Model>)
+  {
+    require_path_route_(omitted_faces);
+    require_state_patch_(state);
+    scratch.require_layout(state.box(), n_vars);
+    const std::array<FaceField<Dim, MemorySpace>*, 9> fields{&flux,
+                                                             &left_ncp,
+                                                             &right_ncp,
+                                                             &speed,
+                                                             &scratch.flux(),
+                                                             &scratch.left_ncp(),
+                                                             &scratch.right_ncp(),
+                                                             &scratch.speed(),
+                                                             &scratch.status()};
+    std::array<const Real*, 9 * Dim> writes{};
+    std::size_t count = 0;
+    for (std::size_t f = 0; f < fields.size(); ++f) {
+      cartesian_operator_detail::require_path_face_output(*fields[f], state.box(),
+                                                          (f == 3 || f >= 7) ? 1 : n_vars);
+      for (const auto& axis : fields[f]->view().axes) {
+        if (axis.data == state.view().data ||
+            cartesian_operator_detail::path_provider_aliases<Dim>(providers, axis.data))
+          throw std::invalid_argument("prepared path face writes alias an input allocation");
+        for (std::size_t i = 0; i < count; ++i)
+          if (axis.data == writes[i])
+            throw std::invalid_argument("prepared path tuple output and scratch alias storage");
+        writes[count++] = axis.data;
+      }
+    }
+    cartesian_operator_detail::materialize_path_axes<0>(model_, metric_, state, providers, scratch);
+    const Real failure = cartesian_operator_detail::maximum_face_status<0>(scratch.status());
+    if (failure != Real(0))
+      throw std::runtime_error(hyperbolic_publication_refusal(
+          "prepared Cartesian path face tuple refused publication", failure));
+    cartesian_operator_detail::copy_face_axes<0>(scratch.flux(), flux, n_vars);
+    cartesian_operator_detail::copy_face_axes<0>(scratch.left_ncp(), left_ncp, n_vars);
+    cartesian_operator_detail::copy_face_axes<0>(scratch.right_ncp(), right_ncp, n_vars);
+    cartesian_operator_detail::copy_face_axes<0>(scratch.speed(), speed, 1);
+    device_fence();
+  }
+
   template <class MemorySpace>
   void require_multifab_layout_(const MultiFab<Dim, MemorySpace>& state,
                                 const MultiFab<Dim, MemorySpace>& residual) const {

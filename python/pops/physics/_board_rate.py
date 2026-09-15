@@ -17,6 +17,13 @@ else:
 class _RateAuthoringMixin(_BoardModel):
     """Retain physical equations and derive checked finite-volume adapters."""
 
+    def nonconservative_product(self, name: Any, *, state: Any, matrices: Any,
+                                 conservative_components: Any = ()) -> Any:
+        """Declare B(U,x) grad(U) without choosing its weak-solution path or stencil."""
+        from .nonconservative import declare_nonconservative_product
+        return declare_nonconservative_product(self, name, state=state, matrices=matrices,
+            conservative_components=conservative_components)
+
     def diffusive_flux(self, name: Any, *, state: Any, value: Any, boundaries: Any = None) -> Any:
         """Declare a constitutive A*grad(W) flux without choosing its discrete gradient."""
         from .diffusion import declare_diffusive_flux
@@ -60,7 +67,7 @@ class _RateAuthoringMixin(_BoardModel):
                     else self._dsl._m.operator_registry())
         inputs = [state.space]
         for kind, payload, _coefficient in terms:
-            if kind in {"diffusion", "drift"}:
+            if kind in {"diffusion", "drift", "nonconservative"}:
                 for space in payload.law.inputs:
                     if space not in inputs:
                         inputs.append(space)
@@ -104,6 +111,7 @@ class _RateAuthoringMixin(_BoardModel):
         state = view.target
         fluxes = tuple(item.payload for item in view.occurrences if item.kind == "flux")
         sources = tuple(item.payload for item in view.occurrences if item.kind == "source")
+        products = tuple(item.payload for item in view.occurrences if item.kind == "nonconservative")
         flux = fluxes[0] if len(fluxes) == 1 else (fluxes or None)
         # An unsupported equation remains scientific IR. In particular it is never
         # encoded as flux=False or an empty source list to make old codegen accept it.
@@ -118,6 +126,8 @@ class _RateAuthoringMixin(_BoardModel):
             self._rate_contracts[result] = {
                 "state": state, "flux": flux, "sources": sources,
             }
+        if products:
+            self._rate_contracts[result]["nonconservative_products"] = products
         self._retained_rates[result] = view
         self._invalidate_authoring_views()
         return result
@@ -181,6 +191,8 @@ class _RateAuthoringMixin(_BoardModel):
         install_diffusive_fluxes(self, module)
         from .drift_diffusion import install_drift_fluxes
         install_drift_fluxes(self,module)
+        from .nonconservative import install_nonconservative_products
+        install_nonconservative_products(self, module)
         for handle, view in getattr(self, "_retained_rates", {}).items():
             reason = view.legacy_incompatibility()
             storage = {}
@@ -198,6 +210,17 @@ class _RateAuthoringMixin(_BoardModel):
                 operator.lowering = lowering
             else:
                 lowering = {"physical_balance": view}
+                requirements = {}
+                if any(term.kind == "nonconservative" for term in view.occurrences):
+                    # The path rate reads the union of its exact physical operands.
+                    # AuxSpace components are not a legacy FieldSpace carrier.
+                    auxiliary_reads = set()
+                    for term in view.occurrences:
+                        if term.kind in {"flux", "nonconservative", "source"}:
+                            operand = registry.get(term.payload.reg_name)
+                            auxiliary_reads.update(operand.requirements.get("aux", ()))
+                    if auxiliary_reads:
+                        requirements["aux"] = tuple(sorted(auxiliary_reads))
                 if joint_balance_supported(view):
                     lowering["joint_balance"] = True
                 elif reason is not None and not source_balance_supported(view):
@@ -206,7 +229,7 @@ class _RateAuthoringMixin(_BoardModel):
                         "reason": reason,
                     }
                 registry.register(Operator(handle.registered_operator_name, "local_rate",
-                    handle.signature, lowering=lowering,
+                    handle.signature, lowering=lowering, requirements=requirements,
                     capabilities={"produces_rate": True, "local": False, **storage},
                     source=ProvenanceRecord(primary=source_span(), owner=self.owner_path,
                         authoring_api="pops.physics.Model.rate")))
@@ -280,8 +303,11 @@ class _RateAuthoringMixin(_BoardModel):
             contract = self._rate_contracts[rate]
         except (KeyError, TypeError):
             raise ValueError("rate handle is not registered by this Model") from None
-        return {"state": contract["state"], "flux": contract["flux"],
-                "sources": tuple(contract["sources"])}
+        result = {"state": contract["state"], "flux": contract["flux"],
+                  "sources": tuple(contract["sources"])}
+        if contract.get("nonconservative_products"):
+            result["nonconservative_products"] = tuple(contract["nonconservative_products"])
+        return result
 
     def finite_volume_rate(self, name: Any, flux: Any = None, riemann: Any = None,
                            reconstruction: Any = None, sources: Any = ()) -> Any:
@@ -390,7 +416,14 @@ class _RateAuthoringMixin(_BoardModel):
         """Authenticate each occurrence without destructuring away its scientific meaning."""
         terms = _bm._as_rate(rhs)._rate_terms()
         for kind, payload, _coefficient in terms:
-            if kind == "drift":
+            if kind == "nonconservative":
+                from .nonconservative import NonconservativeProductHandle
+                if (not isinstance(payload, NonconservativeProductHandle)
+                        or payload.owner_path != self.owner_path
+                        or getattr(self, "_nonconservative_products", {}).get(payload.name) != payload
+                        or payload.state != target):
+                    raise ValueError("a nonconservative term must name this state's exact physical product")
+            elif kind == "drift":
                 from .drift_diffusion import DriftFluxHandle
                 if (not isinstance(payload,DriftFluxHandle) or payload.owner_path!=self.owner_path
                         or getattr(self,"_drift_fluxes",{}).get(payload.name)!=payload or payload.state!=target):

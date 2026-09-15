@@ -16,7 +16,7 @@ def uses_default_flux(value: Any) -> bool:
 
 def groupable_default_rhs(value: Any) -> bool:
     """Whether one RHS can enter a native simultaneous-interface transaction."""
-    if not uses_default_flux(value):
+    if not uses_default_flux(value) or value.attrs.get("path_conservative", False):
         return False
     requested = value.attrs.get("sources")
     return not any(source != "default" for source in (requested or ()))

@@ -123,7 +123,7 @@ POPS_HD inline void union_hll_speed_intervals(Real left_lower, Real left_upper, 
 struct RusanovFlux {
   static constexpr RiemannSolverId solver_id = RiemannSolverId::kRusanov;
 
-  template <PhysicalFlux Physical>
+  template <OrdinaryPhysicalFlux Physical>
   POPS_HD FluxEvaluation<typename Physical::State> operator()(const Physical& physical,
                                                               const typename Physical::Trace& left,
                                                               const typename Physical::Trace& right,
@@ -150,7 +150,7 @@ struct RusanovFlux {
   }
 };
 
-template <PhysicalFlux Physical>
+template <OrdinaryPhysicalFlux Physical>
 POPS_HD void hll_speeds(const Physical& physical, const typename Physical::Trace& left,
                         const typename Physical::Trace& right, const FaceContext& face, Real& lower,
                         Real& upper)
@@ -164,7 +164,7 @@ POPS_HD void hll_speeds(const Physical& physical, const typename Physical::Trace
   detail::union_hll_speed_intervals(left_lower, left_upper, right_lower, right_upper, lower, upper);
 }
 
-template <PhysicalFlux Physical>
+template <OrdinaryPhysicalFlux Physical>
 POPS_HD FluxEvaluation<typename Physical::State> hll_flux_with_speeds(
     const Physical& physical, const typename Physical::Trace& left,
     const typename Physical::Trace& right, const FaceContext& face, Real lower, Real upper) {
@@ -200,7 +200,7 @@ POPS_HD FluxEvaluation<typename Physical::State> hll_flux_with_speeds(
 struct HLLFlux {
   static constexpr RiemannSolverId solver_id = RiemannSolverId::kHll;
 
-  template <PhysicalFlux Physical>
+  template <OrdinaryPhysicalFlux Physical>
   POPS_HD FluxEvaluation<typename Physical::State> operator()(const Physical& physical,
                                                               const typename Physical::Trace& left,
                                                               const typename Physical::Trace& right,
@@ -222,7 +222,7 @@ struct HLLFlux {
 
 template <class Physical>
 concept HLLCPhysicalFlux =
-    PhysicalFlux<Physical> &&
+    OrdinaryPhysicalFlux<Physical> &&
     requires(const Physical& physical, const typename Physical::Trace& trace,
              const typename Physical::State& state, const FaceContext& face, Real& lo, Real& hi,
              Real scalar) {
@@ -240,7 +240,7 @@ concept HLLCPhysicalFlux =
 struct HLLCFlux {
   static constexpr RiemannSolverId solver_id = RiemannSolverId::kHllc;
 
-  template <PhysicalFlux Physical>
+  template <OrdinaryPhysicalFlux Physical>
   POPS_HD FluxEvaluation<typename Physical::State> operator()(const Physical& physical,
                                                               const typename Physical::Trace& left,
                                                               const typename Physical::Trace& right,
@@ -320,7 +320,7 @@ struct HLLCFlux {
 };
 
 template <class Physical>
-concept RoePhysicalFlux = PhysicalFlux<Physical> &&
+concept RoePhysicalFlux = OrdinaryPhysicalFlux<Physical> &&
                           requires(const Physical& physical, const typename Physical::Trace& left,
                                    const typename Physical::Trace& right, const FaceContext& face) {
                             {
@@ -332,7 +332,7 @@ concept RoePhysicalFlux = PhysicalFlux<Physical> &&
 struct RoeFlux {
   static constexpr RiemannSolverId solver_id = RiemannSolverId::kRoe;
 
-  template <PhysicalFlux Physical>
+  template <OrdinaryPhysicalFlux Physical>
   POPS_HD FluxEvaluation<typename Physical::State> operator()(const Physical& physical,
                                                               const typename Physical::Trace& left,
                                                               const typename Physical::Trace& right,
@@ -407,7 +407,7 @@ consteval bool valid_riemann_recovery_chain() {
   return true;
 }
 
-template <class Next, class... Rest, PhysicalFlux Physical>
+template <class Next, class... Rest, OrdinaryPhysicalFlux Physical>
 POPS_HD FluxEvaluation<typename Physical::State> continue_riemann_recovery(
     const Physical& physical, const typename Physical::Trace& left,
     const typename Physical::Trace& right, const FaceContext& face,
@@ -467,7 +467,7 @@ struct PreparedRiemannRecoveryPolicy<First, Rest...> {
   inline static constexpr std::array ordered_solver_ids{
       detail::declared_riemann_solver_id<First>(), detail::declared_riemann_solver_id<Rest>()...};
 
-  template <PhysicalFlux Physical>
+  template <OrdinaryPhysicalFlux Physical>
   POPS_HD FluxEvaluation<typename Physical::State> operator()(const Physical& physical,
                                                               const typename Physical::Trace& left,
                                                               const typename Physical::Trace& right,

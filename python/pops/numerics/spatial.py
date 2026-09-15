@@ -235,6 +235,9 @@ class FiniteVolume(Descriptor):
         if contract["flux"] != self.flux:
             raise ValueError(
                 "FiniteVolume flux does not match the physical flux referenced by the rate")
+        if contract.get("nonconservative_products"):
+            raise ValueError("FiniteVolume cannot omit a physical nonconservative product; "
+                             "select its explicit path-conservative realization")
         state = self.variables.options.get("state")
         if state is not None and state != contract["state"]:
             raise ValueError(

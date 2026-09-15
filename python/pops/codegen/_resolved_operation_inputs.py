@@ -28,6 +28,11 @@ def native_route(module: Any, operator: Any) -> tuple[str | None, str | None]:
     from pops._ir.balance import source_balance_supported
     if source_balance_supported(operator.lowering.get("physical_balance")):
         return "program:source_balance", None
+    from pops.numerics.nonconservative import path_balance_supported
+    if path_balance_supported(operator.lowering.get("physical_balance")):
+        return "program:path_conservative_rhs", None
+    if operator.lowering.get("nonconservative_law") is not None:
+        return "program:nonconservative_constitutive_law", None
     from pops.numerics.diffusion import diffusion_balance_supported
     from pops.numerics.scharfetter_gummel import fitted_balance_supported
     if diffusion_balance_supported(operator.lowering.get("physical_balance")) or fitted_balance_supported(operator.lowering.get("physical_balance")):
@@ -223,7 +228,7 @@ def derive_inputs(module: Any, operator: Any, packs: Any, *, boundary_data: Any 
         if isinstance(value, Handle):
             from pops.model.handles import OperatorHandle
 
-            if isinstance(value, OperatorHandle) or value.kind in {"flux", "source"}:
+            if isinstance(value, OperatorHandle) or value.kind in {"flux", "source", "nonconservative_product"}:
                 return  # Scientific declaration dependency, not a numerical quantity read.
             add(value, by_handle.get(_reference(value)), None, sample, origin,
                 complete=_reference(value) in by_handle)
@@ -356,7 +361,8 @@ def _occurrences(module: Any, operator: Any, identity: str) -> tuple[TermOccurre
     from pops.model.spaces import FieldSpace
 
     if ((operator.kind == "field_operator" or operator.lowering.get("diffusive_law") is not None
-         or operator.lowering.get("drift_law") is not None)
+         or operator.lowering.get("drift_law") is not None
+         or operator.lowering.get("nonconservative_law") is not None)
             and isinstance(target_space, FieldSpace)
             and target_space.name not in module.field_spaces()):
         # A field provider may project one result from a shared registered

@@ -1493,6 +1493,14 @@ class AmrSystem {
   POPS_EXPORT const PreparedLevelEvaluation& prepare_prepared_amr_block_level_flux_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  /// The path operator can only be evaluated through its synchronized Program stage pack.
+  /// The returned workspace remains detached until the complete hierarchy batch is published.
+  POPS_EXPORT PreparedLevelEvaluation& prepare_prepared_amr_block_level_path_rhs_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  POPS_EXPORT std::string prepared_amr_block_path_operator_identity_(int runtime_block,
+                                                                    int level) const;
+  POPS_EXPORT double active_program_step_courant_() const;
   /// The validation phase is collective and must complete before any caller publishes another
   /// transaction member.  The companion publication only performs proven-noexcept swaps/stores.
   POPS_EXPORT void validate_prepared_amr_block_level_batch(

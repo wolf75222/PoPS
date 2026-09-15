@@ -125,11 +125,14 @@ sdk-support pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp
 api pops/numerics/elliptic/poisson/poisson_fft_solver.hpp
 api pops/numerics/elliptic/poisson/poisson_operator.hpp
 sdk-root pops/numerics/moments/affine_velocity.hpp
+api pops/numerics/moments/fan_li15_path.hpp
+api pops/numerics/moments/fan_li15_interface.hpp
 api pops/numerics/elliptic/polar/polar_geometry.hpp
 api pops/numerics/elliptic/polar/polar_poisson_solver.hpp
 sdk-support pops/numerics/elliptic/polar/polar_tensor_operator.hpp
 sdk-support pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp
 api pops/numerics/fv/flux_interfaces.hpp
+api pops/numerics/fv/fan_li15_path_flux.hpp
 api pops/numerics/fv/flux_failure.hpp
 api pops/numerics/fv/numerical_flux.hpp
 api pops/numerics/fv/reconstruction.hpp
@@ -301,6 +304,7 @@ sdk-support pops/runtime/program/amr_program_context_history_checkpoint_services
 sdk-root pops/runtime/program/amr_program_context.hpp
 sdk-support pops/runtime/program/amr_program_context_spatial.inc
 sdk-support pops/runtime/program/amr_program_context_rhs_input_trace.inc
+sdk-support pops/runtime/program/amr_program_context_path_rhs.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations_services.inc
 sdk-support pops/runtime/program/amr_program_context_hierarchy_barriers.inc

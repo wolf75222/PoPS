@@ -1,6 +1,10 @@
 // Closed internal barrier protocol shared by every level of one persistent AMR attempt.
 public:
-enum class HierarchyBarrierKind : std::uint8_t { linear_solve = 1, field_publication = 2 };
+enum class HierarchyBarrierKind : std::uint8_t {
+  linear_solve = 1,
+  field_publication = 2,
+  spatial_rhs = 3,
+};
 
 template <class Once, class Next>
 void suspend_hierarchy_barrier(HierarchyBarrierKind kind, std::int64_t operation_id,
@@ -11,13 +15,19 @@ void suspend_hierarchy_barrier(HierarchyBarrierKind kind, std::int64_t operation
   if (!mapping_continuation_ || !mapping_continuation_->executing || active_level_ < 0 ||
       static_cast<std::size_t>(active_level_) >= mapping_continuation_->ports.size())
     throw std::logic_error("AMR hierarchy barrier requires an executing level region");
-  if (kind != HierarchyBarrierKind::linear_solve && kind != HierarchyBarrierKind::field_publication)
+  if (kind != HierarchyBarrierKind::linear_solve &&
+      kind != HierarchyBarrierKind::field_publication && kind != HierarchyBarrierKind::spatial_rhs)
     throw std::invalid_argument("AMR hierarchy barrier kind is unknown");
   if (operation_id < 0 || compiled_program_hash.empty() ||
       compiled_program_hash != mapping_continuation_->program_hash ||
       exact_dependency_contract.empty())
     throw std::invalid_argument(
         "AMR hierarchy barrier lacks its installed Program/dependency authority");
+  if (kind == HierarchyBarrierKind::spatial_rhs) {
+    const auto staged = staged_path_rhs_.find(active_level_);
+    if (staged == staged_path_rhs_.end() || staged->second.rate != operation_id)
+      throw std::invalid_argument("AMR spatial RHS barrier lacks its exact staged occurrence");
+  }
   if (denominator <= 0 || numerator < 0 || numerator > denominator)
     throw std::invalid_argument("AMR hierarchy barrier fraction lies outside its step");
   const ::pops::amr::Rational fraction(numerator, denominator);
@@ -62,13 +72,17 @@ void suspend_hierarchy_barrier(HierarchyBarrierKind kind, std::int64_t operation
         .scalar(clock.physical_time);
   port.identity = std::move(contract).release();
   port.kind = kind == HierarchyBarrierKind::linear_solve ? MappingPortKind::linear_solve
-                                                         : MappingPortKind::field_publication;
+              : kind == HierarchyBarrierKind::field_publication
+                  ? MappingPortKind::field_publication
+                  : MappingPortKind::spatial_rhs;
   port.once = std::move(once);
   port.next = std::move(next);
 }
 
 private:
-enum class MappingPortKind : std::uint8_t { complete, map, linear_solve, field_publication };
+enum class MappingPortKind : std::uint8_t {
+  complete, map, linear_solve, field_publication, spatial_rhs
+};
 
 void prepare_mapping_barrier_authority_() const {
   // This facade getter participates in MPI even when prepared. Call it before any local
@@ -95,7 +109,8 @@ void agree_continuation_ports_() const {
   const auto& first = frame.ports.front();
   const bool map = first.kind == MappingPortKind::map;
   const bool internal = first.kind == MappingPortKind::linear_solve ||
-                        first.kind == MappingPortKind::field_publication;
+                        first.kind == MappingPortKind::field_publication ||
+                        first.kind == MappingPortKind::spatial_rhs;
   std::exception_ptr error;
   try {
     for (std::size_t level = 0; level < frame.ports.size(); ++level) {
@@ -117,7 +132,9 @@ void agree_continuation_ports_() const {
   const auto category =
       map ? (first.target ? "map-target" : "map-source")
       : internal
-          ? (first.kind == MappingPortKind::linear_solve ? "linear-solve" : "field-publication")
+          ? (first.kind == MappingPortKind::linear_solve ? "linear-solve"
+             : first.kind == MappingPortKind::field_publication ? "field-publication"
+                                                               : "spatial-rhs")
           : "complete";
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("amr-continuation-contract"), first.identity},
