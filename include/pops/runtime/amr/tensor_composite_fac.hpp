@@ -29,10 +29,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1399,8 +1401,15 @@ class FullTensorCompositeFac {
         }
         auto result = coarse_gmres_->solve(coarse.correction, coarse.residual, stop,
                                             controls.coarse_cycles);
-        if (!result.solved())
+        if (!result.solved()) {
+          std::ostringstream context;
+          context << result.reason << std::setprecision(std::numeric_limits<Real>::max_digits10)
+                  << " [coarse_iterations=" << result.iters
+                  << ", true_residual_l2=" << result.residual_norm
+                  << ", rhs_linf=" << reference << ", requested_tolerance=" << stop << ']';
+          result.reason = context.str();
           return result;
+        }
         // Confirm with the original FAC coefficient storage and exact infinity-norm criterion.
         // The helper's Euclidean stopping rule is deliberately at least as strict.
         fill_solution_ghosts_(0, coarse.correction, true);

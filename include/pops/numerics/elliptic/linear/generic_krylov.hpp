@@ -1446,12 +1446,6 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
           iterate, KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, column, restart),
           basis(column));
 
-    if (iterations == controls.max_iterations && estimate_reached)
-      return terminal_candidate_report(normalization, measurement, iterations,
-                                       SolveStatus::kSolved);
-    if (iterations == controls.max_iterations)
-      return terminal_candidate_report(normalization, measurement, iterations,
-                                       SolveStatus::kIterationLimit);
     measurement =
         physical_true_residual_measurement(problem, workspace, applied_or_residual, rhs, iterate);
     if (!finite(measurement.physical))
@@ -1461,6 +1455,13 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
     // success by itself; the raw scientific residual b-A(u) above is authoritative.
     if (measurement.physical <= normalization.physical_threshold)
       return report_physical(normalization, measurement.physical, iterations, SolveStatus::kSolved);
+    // The last Arnoldi estimate can underestimate the unpreconditioned residual. Confirm it
+    // before classifying the iteration cap, just as at an ordinary restart. This also preserves
+    // a genuine convergence reached on the final allowed iteration. The public wrapper retains
+    // its independent true-residual verification of every method-provider result.
+    if (iterations == controls.max_iterations)
+      return report_physical(normalization, measurement.physical, iterations,
+                             SolveStatus::kIterationLimit);
     rebase_cycle_residual(applied_or_residual, measurement, normalization, cycle_normalization);
     // The next restart is a new Krylov recurrence.  It may choose a fresh scalar-equivalent
     // preconditioner normalization suited to its newly rebased residual; within that cycle the

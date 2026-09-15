@@ -1803,5 +1803,69 @@ TEST(test_krylov_workspace_reentrancy, noncongruent_split_communicator_is_reject
 #endif
 }
 
+TEST(test_krylov_workspace_reentrancy,
+     gmres_confirms_true_residual_before_classifying_the_iteration_cap) {
+  // A=I and b=(1,1), but left P=diag(1,1e-14) makes the first Arnoldi residual tiny
+  // while the scientific residual remains approximately one. An estimate may request a true
+  // check; it cannot make the iteration cap turn that unconverged value into Solved.
+  const TestLayout boxes(std::vector<TestBox>{
+      TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}},
+      TestBox{Index<kDim>{1, 0}, Index<kDim>{1, 0}}});
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  TestField iterate = make_field(boxes, mapping, 1, 0);
+  TestField rhs = make_field(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(1));
+  const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+  const TestKrylovMethod method = gmres_krylov_method<kDim>(2);
+  const TestKrylovFootprint footprint{1, extent(0), true};
+  TestLinearPreconditioner preconditioner(
+      iterate, TestLinearPreconditionerProvider::trusted_extension(
+          {"pops.test.krylov.cap-anisotropic-preconditioner", 1}, {},
+          [](const ExecutionLane&) {
+            return TestLinearPreconditionerCallbacks{
+                [] {},
+                [](TestField& out, const TestField& in) {
+                  for (std::size_t local = 0; local < out.local_size(); ++local) {
+                    const auto output = out.fab(local).view();
+                    const auto values = in.fab(local).view();
+                    for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                      output(index, 0) =
+                          (index[0] == 0 ? Real(1) : Real(1e-14)) * values(index, 0);
+                    });
+                  }
+                  Kokkos::fence();
+                },
+                [] { return std::size_t{0}; }};
+          }));
+  TestAffineProblem problem(
+      iterate,
+      TestAffineOperatorProvider::trusted_reentrant(
+          [](TestField& out, const TestField& in) { detail::PreparedFieldAlgebra::copy(out, in); },
+          [] { return std::size_t{0}; }),
+      std::move(preconditioner), LinearOperatorProperties::general(), footprint,
+      TestNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+  TestKrylovWorkspace workspace(iterate, method, footprint);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+
+  const auto capped = detail::solve_prepared_affine_in_place(
+      problem, workspace, iterate, rhs, TestKrylovControls{method, Real(0), Real(1e-12), 1});
+  EXPECT_EQ(capped.status, SolveStatus::kIterationLimit) << capped.reason;
+  EXPECT_EQ(capped.action, SolveAction::kFailRun);
+  EXPECT_EQ(capped.iters, 1);
+  EXPECT_GT(capped.residual_norm, Real(0.9));
+
+  // A second recurrence starts from the measured physical residual and reaches the solution
+  // exactly at its second iteration. The cap must not downgrade that verified convergence.
+  iterate.set_val(Real(0));
+  const auto converged = detail::solve_prepared_affine_in_place(
+      problem, workspace, iterate, rhs, TestKrylovControls{method, Real(0), Real(1e-12), 2});
+  EXPECT_TRUE(converged.solved()) << converged.reason;
+  EXPECT_EQ(converged.iters, 2);
+  EXPECT_LE(converged.residual_norm, Real(1e-12));
+  EXPECT_LT(max_abs_diff(iterate, rhs), Real(1e-12));
+}
+
 }  // namespace
 }  // namespace pops
