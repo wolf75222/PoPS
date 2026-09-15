@@ -156,7 +156,7 @@ void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext
     facade_->install_program_resource_refresh(std::move(resource_refresh));
   if (hierarchy_refresh)
     facade_->install_program_hierarchy_refresh(
-        [owner = keep_alive, refresh = std::move(hierarchy_refresh)]() mutable {
+        [owner = keep_alive, refresh = hierarchy_refresh]() mutable {
           refresh();
           owner->refresh_accepted_hierarchy_state_();
         });
@@ -164,8 +164,14 @@ void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext
     facade_->install_program_hierarchy_refresh(
         [owner = keep_alive]() { owner->refresh_accepted_hierarchy_state_(); });
   facade_->install_program_history_remap_accepted(
-      [owner = keep_alive](const AmrProgramHistoryRemapDescriptor& descriptor) {
+      [owner = keep_alive, refresh = std::move(hierarchy_refresh)](
+          const AmrProgramHistoryRemapDescriptor& descriptor) mutable {
         owner->refresh_accepted_hierarchy_state_after_remap_(descriptor);
+        // The accepted remap publishes histories on the new generation and discards old scratch
+        // storage. Rebuild the artifact's captured level resources before that regrid commits.
+        // A failed rebuild remains inside the facade's accepted-state rollback transaction.
+        if (refresh)
+          refresh();
       });
   facade_->install_program_restart_hooks(
       [owner = keep_alive]() { owner->preflight_restart_regrid_(); },

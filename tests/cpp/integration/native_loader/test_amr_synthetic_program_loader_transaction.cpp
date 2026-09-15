@@ -1771,3 +1771,273 @@ TEST(test_amr_synthetic_program_loader_transaction,
   ASSERT_NO_THROW(system.step(.01));
   EXPECT_EQ(fixture.accepted_attempt(), 2u);
 }
+
+TEST(test_amr_synthetic_program_loader_transaction,
+     ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication) {
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_scheduled_history_regrid_" +
+                           std::to_string(pops::my_rank()) + "_" +
+                           std::to_string(static_cast<long>(std::clock()));
+  const std::string source_path = stem + ".cpp";
+  const std::string shared_object = stem + ".so";
+  auto artifact_lane =
+      pops::ExecutionLane::duplicate_world_collectively("test.synthetic-loader.artifact");
+  ASSERT_NO_THROW((void)compile_exact_loader_artifact(source_path, shared_object, artifact_lane,
+                                                      false, true));
+  const auto handle = pops::dynlib::open(shared_object);
+  ASSERT_NE(handle, nullptr);
+  using RejectRefresh = void (*)(bool);
+  auto reject_refresh = reinterpret_cast<RejectRefresh>(
+      pops::dynlib::sym(handle, "pops_test_reject_history_resource_refresh"));
+  ASSERT_NE(reject_refresh, nullptr);
+
+  const std::vector<std::string> names{"tracer.first", "tracer.second"};
+  struct History {
+    std::string name;
+    int level;
+    bool initialized;
+    int fill;
+    std::vector<std::vector<double>> values;
+    std::vector<double> dt;
+    std::vector<std::uint8_t> samples;
+    bool operator==(const History&) const = default;
+  };
+  struct Image {
+    std::vector<pops::AmrPatch<Dim>> boxes;
+    std::vector<std::vector<int>> owners;
+    std::vector<std::string> distribution_modes;
+    std::vector<std::vector<double>> states;
+    std::vector<History> histories;
+    std::vector<std::uint8_t> accepted, exchanges, flux_shard;
+    int regrids, step, cadence_steps;
+    std::uint64_t epoch, revision;
+    double time, last_dt, cadence_dt, cadence_start;
+    bool operator==(const Image&) const = default;
+  };
+  const auto read_wire8 = [](const std::vector<std::uint8_t>& bytes) {
+    pops::runtime::program::checkpoint_detail::Reader header(bytes);
+    header.expect_raw(pops::runtime::program::checkpoint_detail::kMagic);
+    return pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes);
+  };
+  constexpr double first_dt = 0.125;
+  constexpr double second_dt = 0.1875;
+  for (const bool reject_first_publication : {false, true}) {
+    SCOPED_TRACE(reject_first_publication ? "rank-zero scheduled-remap refusal and retry"
+                                         : "uninterrupted scheduled physical regrid");
+    auto settings = config();
+    settings.regrid_every = 1;
+    pops::AmrSystem<Dim> system(settings);
+    ASSERT_NO_THROW(
+        build_refined_system(system, shared_object, initial_state(settings.shape), true));
+    ASSERT_EQ(system.installed_program_hash(),
+              "tests.synthetic-loader/program/history-restart-v1");
+    ASSERT_EQ(system.n_levels(), 2);
+    ASSERT_EQ(system.history_names(), names);
+    const auto capture = [&] {
+      Image image;
+      image.boxes = system.patch_boxes();
+      image.accepted = system.program_accepted_state();
+      image.exchanges = system.checkpoint_program_exchanges();
+      image.flux_shard = system.program_history_flux_snapshot_shard();
+      image.regrids = system.checkpoint_regrid_count();
+      image.epoch = system.checkpoint_topology_epoch();
+      image.revision = system.program_accepted_state_revision();
+      image.step = system.macro_step();
+      image.time = system.time();
+      image.last_dt = system.program_last_dt();
+      image.cadence_dt = system.program_cadence_window_dt();
+      image.cadence_steps = system.program_cadence_window_steps();
+      image.cadence_start = system.program_cadence_window_start_time();
+      for (int level = 0; level < system.n_levels(); ++level) {
+        image.owners.push_back(system.level_owner_ranks(level));
+        image.distribution_modes.push_back(system.level_distribution_mode(level));
+        image.states.push_back(system.block_level_state_global(kBlock, level));
+      }
+      for (const auto& name : names)
+        for (int level = 0; level < system.n_levels(); ++level) {
+          History history{name,
+                          level,
+                          system.history_initialized(name, level),
+                          system.history_fill_count(name, level),
+                          {},
+                          {},
+                          system.history_sample_identity(name, level)};
+          for (int slot = 0; slot < system.history_depth(name); ++slot) {
+            history.values.push_back(system.history_global(name, level, slot));
+            history.dt.push_back(system.history_slot_dt(name, level, slot));
+          }
+          image.histories.push_back(std::move(history));
+        }
+      return image;
+    };
+    const auto fine_coverage = [&] {
+      const auto domain = system.prepared_amr_level_geometry(1).domain();
+      std::set<std::size_t> cells;
+      for (const auto& box : system.prepared_amr_block_state(0, 1).layout().boxes())
+        for (std::int64_t ordinal = 0; ordinal < box.numPts(); ++ordinal) {
+          std::int64_t remaining = ordinal;
+          std::size_t linear = 0, stride = 1;
+          for (int axis = 0; axis < Dim; ++axis) {
+            const auto coordinate = box.lo[axis] + remaining % box.length(axis);
+            remaining /= box.length(axis);
+            linear += static_cast<std::size_t>(coordinate - domain.lo[axis]) * stride;
+            stride *= static_cast<std::size_t>(domain.length(axis));
+          }
+          if (!cells.insert(linear).second)
+            throw std::logic_error("scheduled-history fixture has overlapping fine coverage");
+        }
+      return cells;
+    };
+    const Image initial = capture();
+    const auto initial_program = read_wire8(initial.accepted);
+    const auto initial_coverage = fine_coverage();
+    ASSERT_EQ(initial_program.accepted_attempt, 0u);
+    ASSERT_EQ(initial_program.topology_epoch, initial.epoch);
+    ASSERT_GT(initial_coverage.size(), 0u);
+    ASSERT_LT(initial_coverage.size(),
+              static_cast<std::size_t>(system.prepared_amr_level_geometry(1).domain().numPts()));
+    ASSERT_EQ(initial.histories.size(), 4u);
+    for (const auto& history : initial.histories) {
+      ASSERT_FALSE(history.initialized);
+      ASSERT_EQ(history.fill, 0);
+      ASSERT_EQ(history.values.size(), 2u);
+    }
+
+    if (reject_first_publication) {
+      // The real body initializes both histories before the scheduled remap reaches this hook.
+      // A fresh system keeps the same genuine partial-to-expanded geometry transition available.
+      reject_refresh(pops::my_rank() == 0);
+      std::string refusal;
+      try {
+        system.step(first_dt);
+      } catch (const std::exception& error) {
+        refusal = error.what();
+      }
+      ASSERT_EQ(pops::all_reduce_max(refusal.empty() ? 1L : 0L, artifact_lane), 0L);
+      if (pops::my_rank() == 0)
+        EXPECT_NE(refusal.find("injected history resource refresh"), std::string::npos);
+      std::fprintf(stderr, "scheduled-history-remap rank=%d refused=%s\n", pops::my_rank(),
+                   refusal.c_str());
+      std::fflush(stderr);
+      const Image rolled_back = capture();
+      EXPECT_EQ(rolled_back, initial);
+      EXPECT_EQ(fine_coverage(), initial_coverage);
+      ASSERT_EQ(rolled_back.states.size(), initial.states.size());
+      for (std::size_t level = 0; level < initial.states.size(); ++level)
+        EXPECT_TRUE(byte_exact_equal(rolled_back.states[level], initial.states[level]));
+      ASSERT_EQ(rolled_back.histories.size(), initial.histories.size());
+      for (std::size_t index = 0; index < initial.histories.size(); ++index) {
+        const auto& actual = rolled_back.histories[index];
+        const auto& expected = initial.histories[index];
+        EXPECT_TRUE(byte_exact_equal(actual.dt, expected.dt));
+        ASSERT_EQ(actual.values.size(), expected.values.size());
+        for (std::size_t slot = 0; slot < expected.values.size(); ++slot)
+          EXPECT_TRUE(byte_exact_equal(actual.values[slot], expected.values[slot]));
+      }
+      EXPECT_FALSE(system.has_active_step_transaction());
+      // Do not reset the one-shot flag: rollback and retry must use the refreshed live captures.
+    }
+
+    ASSERT_NO_THROW(system.step(first_dt));
+    const Image first = capture();
+    const auto first_program = read_wire8(first.accepted);
+    const auto expanded_coverage = fine_coverage();
+    const std::uint64_t first_attempt = reject_first_publication ? 2u : 1u;
+    ASSERT_EQ(first_program.accepted_attempt, first_attempt);
+    ASSERT_EQ(first_program.topology_epoch, first.epoch);
+    ASSERT_GT(first.epoch, initial.epoch);
+    ASSERT_GT(first_program.materialization_generation,
+              initial_program.materialization_generation);
+    ASSERT_GT(first.regrids, initial.regrids);
+    ASSERT_GT(expanded_coverage.size(), initial_coverage.size());
+    ASSERT_TRUE(std::includes(expanded_coverage.begin(), expanded_coverage.end(),
+                               initial_coverage.begin(), initial_coverage.end()));
+    ASSERT_NE(first.boxes, initial.boxes);
+    ASSERT_EQ(first.step, 1);
+    ASSERT_EQ(first.time, first_dt);
+    ASSERT_EQ(first.last_dt, first_dt);
+    ASSERT_EQ(first_program.level_clocks.size(), 2u);
+    for (int level = 0; level < 2; ++level) {
+      EXPECT_EQ(first_program.level_clocks[level].level, level);
+      EXPECT_EQ(first_program.level_clocks[level].macro_step, 1);
+      EXPECT_EQ(first_program.level_clocks[level].physical_time, first_dt);
+    }
+    ASSERT_EQ(first.histories.size(), 4u);
+    for (const auto& history : first.histories) {
+      ASSERT_TRUE(history.initialized);
+      ASSERT_EQ(history.fill, 1);
+      ASSERT_EQ(history.values.size(), 2u);
+      EXPECT_EQ(history.dt, (std::vector<double>{first_dt, first_dt}));
+      EXPECT_FALSE(history.samples.empty());
+    }
+    ASSERT_FALSE(first_program.pending_history_remaps.empty());
+    ASSERT_TRUE(first.flux_shard.empty());
+    ASSERT_EQ(first.states.size(), 2u);
+    ASSERT_EQ(first.states[0].size(), initial.states[0].size());
+    for (std::size_t cell = 0; cell < initial.states[0].size(); ++cell)
+      EXPECT_DOUBLE_EQ(first.states[0][cell], 2.0 * initial.states[0][cell]);
+    ASSERT_EQ(first.states[1].size(), initial.states[1].size());
+    for (const std::size_t cell : initial_coverage)
+      EXPECT_DOUBLE_EQ(first.states[1].at(cell), 2.0 * initial.states[1].at(cell));
+    std::fprintf(
+        stderr,
+        "scheduled-history-remap rank=%d retry=%d fine=%zu->%zu epoch=%llu->%llu "
+        "generation=%llu->%llu C=%llu->%llu regrids=%d->%d "
+        "histories=4 initialized=4 fill=1 step=%d time=%.17g\n",
+        pops::my_rank(), reject_first_publication ? 1 : 0, initial_coverage.size(),
+        expanded_coverage.size(), static_cast<unsigned long long>(initial.epoch),
+        static_cast<unsigned long long>(first.epoch),
+        static_cast<unsigned long long>(initial_program.materialization_generation),
+        static_cast<unsigned long long>(first_program.materialization_generation),
+        static_cast<unsigned long long>(*initial_program.accepted_attempt),
+        static_cast<unsigned long long>(*first_program.accepted_attempt), initial.regrids,
+        first.regrids, first.step, first.time);
+    std::fflush(stderr);
+
+    // No checkpoint restore or manual hierarchy edit occurs here. The scheduled physical regrid
+    // itself must rematerialize the generated level bodies before this next real mapping step.
+    ASSERT_NO_THROW(system.step(second_dt));
+    const Image second = capture();
+    const auto second_program = read_wire8(second.accepted);
+    ASSERT_EQ(second_program.accepted_attempt, first_attempt + 1u);
+    ASSERT_EQ(second_program.topology_epoch, second.epoch);
+    EXPECT_GE(second.epoch, first.epoch);
+    EXPECT_GE(second_program.materialization_generation,
+              first_program.materialization_generation);
+    ASSERT_EQ(fine_coverage(), expanded_coverage);
+    ASSERT_EQ(second.step, 2);
+    ASSERT_EQ(second.time, first_dt + second_dt);
+    ASSERT_EQ(second.last_dt, second_dt);
+    ASSERT_EQ(second_program.level_clocks.size(), 2u);
+    for (int level = 0; level < 2; ++level) {
+      EXPECT_EQ(second_program.level_clocks[level].level, level);
+      EXPECT_EQ(second_program.level_clocks[level].macro_step, 2);
+      EXPECT_EQ(second_program.level_clocks[level].physical_time, first_dt + second_dt);
+    }
+    ASSERT_EQ(second.states.size(), first.states.size());
+    for (std::size_t level = 0; level < first.states.size(); ++level) {
+      ASSERT_EQ(second.states[level].size(), first.states[level].size());
+      for (std::size_t cell = 0; cell < first.states[level].size(); ++cell)
+        EXPECT_DOUBLE_EQ(second.states[level][cell], 2.0 * first.states[level][cell]);
+    }
+    ASSERT_EQ(second.histories.size(), 4u);
+    EXPECT_NE(second.histories, first.histories);
+    EXPECT_TRUE(second_program.pending_history_remaps.empty());
+    for (const auto& history : second.histories) {
+      ASSERT_TRUE(history.initialized);
+      ASSERT_EQ(history.fill, 2);
+      ASSERT_EQ(history.values.size(), 2u);
+      EXPECT_EQ(history.dt, (std::vector<double>{first_dt, second_dt}));
+      EXPECT_FALSE(history.samples.empty());
+      // store then rotate puts the just-computed sample in slot 1. ParentDeferred lag slots from
+      // the preceding expansion need not be read by this mapping body; its fresh stores clear them.
+      const auto& newest = history.values[1];
+      const auto& state = second.states.at(history.level);
+      const double factor = history.name == "tracer.first" ? 0.5 : 1.0;
+      ASSERT_EQ(newest.size(), state.size());
+      for (std::size_t cell = 0; cell < state.size(); ++cell)
+        EXPECT_DOUBLE_EQ(newest[cell], factor * state[cell]);
+    }
+    ASSERT_TRUE(second.flux_shard.empty());
+  }
+  // Keep the exact generated source and DSO for failed-test diagnostics, as in the history fixture.
+}
