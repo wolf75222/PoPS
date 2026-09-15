@@ -199,7 +199,7 @@ potential = program.solve(LinearProblem(elliptic, rhs,
     scope=scope, nullspace=None),
     solver=CompositeTensorFAC(max_iter=300, rel_tol=1e-10, abs_tol=1e-12,
         correction_damping=0.5, fine_sweeps=64, coarse_cycles=512,
-        coarse_method="gmres", coarse_restart=64,
+        coarse_method="gmres", coarse_restart=64, interface_coupling="fine_flux",
         boundary_conditions=(Neumann(0.), Dirichlet(0.), Periodic(), Periodic()),
         diagonal_average="arithmetic"), name="midpoint potential").consume(action=FailRun())
 program.store_history("plasma.potential", potential)

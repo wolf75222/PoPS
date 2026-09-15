@@ -761,7 +761,7 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
         values = CompositeTensorFAC().canonical_options()
     if not _COMPOSITE_OPTION_NAMES <= set(values) or set(values) - _COMPOSITE_OPTION_NAMES - {
         "boundary_conditions", "diagonal_average", "correction_damping",
-        "coarse_method", "coarse_restart", "coarse_preconditioner",
+        "coarse_method", "coarse_restart", "coarse_preconditioner", "interface_coupling",
     }:
         raise TypeError("%s options do not match the provider schema" % where)
     from pops.identity.scalar import exact_cpp_int, scalar_data
@@ -790,6 +790,9 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
     if coarse_preconditioner == "polar_poisson" and (
             coarse_method != "gmres" or values.get("diagonal_average", "harmonic") != "arithmetic"):
         raise ValueError("CompositeTensorFAC polar_poisson requires GMRES and arithmetic diagonal averaging")
+    interface_coupling = values.get("interface_coupling", "level_stencil")
+    if type(interface_coupling) is not str or interface_coupling not in ("level_stencil", "fine_flux"):
+        raise ValueError("CompositeTensorFAC interface_coupling must be level_stencil or fine_flux")
     verbose = values["verbose"]
     if verbose is not None and type(verbose) is not bool:
         raise TypeError("%s verbose must be a Python bool or None" % where)
@@ -823,6 +826,8 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
         result.update(coarse_method=coarse_method, coarse_restart=coarse_restart)
     if coarse_preconditioner != "diagonal":
         result["coarse_preconditioner"] = coarse_preconditioner
+    if interface_coupling != "level_stencil":
+        result["interface_coupling"] = interface_coupling
     if "boundary_conditions" in values:
         boundary_data = _tensor_boundary_data(values["boundary_conditions"])
         result["boundary_conditions"] = None if boundary_data is None else {
@@ -1101,6 +1106,8 @@ def _emit_composite_tensor_fac(
         ))
     if options.get("coarse_preconditioner", "diagonal") != "diagonal":
         native_options.append('{"fac.coarse_preconditioner", std::string{"polar_poisson"}}')
+    if options.get("interface_coupling", "level_stencil") == "fine_flux":
+        native_options.append('{"fac.interface_coupling", std::string{"fine_flux"}}')
     if verbose is not None:
         native_options.append(
             '{"fac.verbose", %s}' % ("true" if verbose else "false")
@@ -1232,6 +1239,10 @@ class CompositeTensorFAC:
     It changes only the approximate inverse of the full tensor. ``coarse_cycles``
     caps iterations of the selected coarse method; ``coarse_restart`` sizes the prepared
     GMRES basis. The outer FAC convergence criterion is unchanged.
+    ``interface_coupling="fine_flux"`` selects a conservative composite operator:
+    active coarse rows use the area average of the complete fine tensor face flux.
+    Fine ghost interpolation stays linear. The legacy default ``level_stencil``
+    retains independent level stencil fluxes at coarse/fine interfaces.
     """
 
     max_iter: int = _DEFAULT_MAX_ITER
@@ -1244,6 +1255,7 @@ class CompositeTensorFAC:
     coarse_method: str = "gauss_seidel"
     coarse_restart: int = 64
     coarse_preconditioner: str = "diagonal"
+    interface_coupling: str = "level_stencil"
     verbose: bool | None = None
     boundary_conditions: Any = None
     diagonal_average: str = "harmonic"
@@ -1285,6 +1297,8 @@ class CompositeTensorFAC:
         if self.coarse_preconditioner == "polar_poisson" and (
                 self.coarse_method != "gmres" or self.diagonal_average != "arithmetic"):
             raise ValueError("CompositeTensorFAC polar_poisson requires GMRES and arithmetic diagonal averaging")
+        if type(self.interface_coupling) is not str or self.interface_coupling not in ("level_stencil", "fine_flux"):
+            raise ValueError("CompositeTensorFAC interface_coupling must be level_stencil or fine_flux")
         if self.coarse_rel_tol is not None:
             object.__setattr__(
                 self,
@@ -1337,6 +1351,8 @@ class CompositeTensorFAC:
             result.update(coarse_method=self.coarse_method, coarse_restart=self.coarse_restart)
         if self.coarse_preconditioner != "diagonal":
             result["coarse_preconditioner"] = self.coarse_preconditioner
+        if self.interface_coupling != "level_stencil":
+            result["interface_coupling"] = self.interface_coupling
         if self.boundary_conditions is not None:
             result["boundary_conditions"] = {
                 str(index): law for index, law in enumerate(self.boundary_conditions)}

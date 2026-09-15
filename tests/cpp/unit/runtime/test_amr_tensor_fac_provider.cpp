@@ -70,6 +70,28 @@ TEST(HierarchyTensorExactRank, PolarCoarsePreconditionerRequiresExactWireAndArit
   EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
 }
 
+TEST(HierarchyTensorExactRank, FineFluxCouplingKeepsExactWireAndTypedContracts) {
+  using namespace pops::runtime::program;
+  using tensor_fac::InterfaceCoupling;
+  auto options = tensor_elliptic_detail::default_options();
+  EXPECT_FALSE(tensor_elliptic_detail::decode_controls(options).interface_coupling.has_value());
+  options.values.emplace("fac.interface_coupling", std::string{"level_stencil"});
+  EXPECT_EQ(tensor_elliptic_detail::decode_controls(options).interface_coupling,
+            InterfaceCoupling::level_stencil);
+  options.values.at("fac.interface_coupling") = std::string{"fine_flux"};
+  EXPECT_EQ(tensor_elliptic_detail::decode_controls(options).interface_coupling,
+            InterfaceCoupling::fine_flux);
+  options.values.at("fac.interface_coupling") = std::string{"FINE_FLUX"};
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.at("fac.interface_coupling") = true;
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.at("fac.interface_coupling") = std::int64_t{1};
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  tensor_elliptic_detail::TensorFacControls typed;
+  typed.interface_coupling = static_cast<InterfaceCoupling>(2);
+  EXPECT_THROW(tensor_elliptic_detail::validate_controls(typed), std::invalid_argument);
+}
+
 template <int Dim>
 pops::Extent<Dim> extents(std::int64_t value) {
   pops::Extent<Dim> result{};

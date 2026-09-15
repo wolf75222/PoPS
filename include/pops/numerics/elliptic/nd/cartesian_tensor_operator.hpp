@@ -87,67 +87,79 @@ struct CartesianTensorOperator {
            cell[axis] == (side == 0 ? domain.lo[axis] : domain.hi[axis]);
   }
 
+  // Both faces use positive coordinate-axis orientation. Keep their arithmetic shared with
+  // the level image so coarse/fine replacement retains every tensor cross derivative and
+  // the exact physical-face coefficient and zero-conormal laws.
+  POPS_HD std::array<Real, 2> face_fluxes(const Index<Dim>& cell, int row) const {
+    Index<Dim> lower = cell;
+    Index<Dim> upper = cell;
+    --lower[row];
+    ++upper[row];
+    Real lower_flux = Real(0);
+    Real upper_flux = Real(0);
+    for (int column = 0; column < Dim; ++column) {
+      const Real center_coefficient = coefficients.at(cell, row, column);
+      const Real lower_coefficient = coefficients.at(lower, row, column);
+      const Real upper_coefficient = coefficients.at(upper, row, column);
+      Real lower_face =
+          row == column ? diagonal_face(lower_coefficient, center_coefficient)
+                        : Real(0.5) * (lower_coefficient + center_coefficient);
+      Real upper_face =
+          row == column ? diagonal_face(center_coefficient, upper_coefficient)
+                        : Real(0.5) * (center_coefficient + upper_coefficient);
+      // Smooth coordinate metrics are sampled at physical faces by linear one-sided
+      // extrapolation; coefficient ghosts carry an extrapolation law, not a face location.
+      if (options.arithmetic_diagonal) {
+        const unsigned physical = options.zero_flux_faces | options.dirichlet_faces;
+        if (on_face(cell, row, 0, physical))
+          lower_face = Real(1.5) * center_coefficient - Real(0.5) * upper_coefficient;
+        if (on_face(cell, row, 1, physical))
+          upper_face = Real(1.5) * center_coefficient - Real(0.5) * lower_coefficient;
+      }
+      if (row == column) {
+        lower_flux += lower_face * (phi(cell, 0) - phi(lower, 0)) * inverse_spacing[column];
+        upper_flux += upper_face * (phi(upper, 0) - phi(cell, 0)) * inverse_spacing[column];
+        continue;
+      }
+
+      Index<Dim> cell_lower = cell;
+      Index<Dim> cell_upper = cell;
+      Index<Dim> lower_lower = lower;
+      Index<Dim> lower_upper = lower;
+      Index<Dim> upper_lower = upper;
+      Index<Dim> upper_upper = upper;
+      --cell_lower[column];
+      ++cell_upper[column];
+      --lower_lower[column];
+      ++lower_upper[column];
+      --upper_lower[column];
+      ++upper_upper[column];
+      const Real tangent_scale = Real(0.25) * inverse_spacing[column];
+      const Real lower_tangent =
+          (phi(cell_upper, 0) - phi(cell_lower, 0) + phi(lower_upper, 0) - phi(lower_lower, 0)) *
+          tangent_scale;
+      const Real upper_tangent =
+          (phi(cell_upper, 0) - phi(cell_lower, 0) + phi(upper_upper, 0) - phi(upper_lower, 0)) *
+          tangent_scale;
+      lower_flux += lower_face * lower_tangent;
+      upper_flux += upper_face * upper_tangent;
+    }
+    if (on_face(cell, row, 0, options.zero_flux_faces))
+      lower_flux = Real(0);
+    if (on_face(cell, row, 1, options.zero_flux_faces))
+      upper_flux = Real(0);
+    return {lower_flux, upper_flux};
+  }
+
+  POPS_HD Real face_flux(const Index<Dim>& cell, int row, int side) const {
+    return face_fluxes(cell, row)[static_cast<std::size_t>(side)];
+  }
+
   POPS_HD Real image(const Index<Dim>& cell) const {
     Real divergence = Real(0);
     for (int row = 0; row < Dim; ++row) {
-      Index<Dim> lower = cell;
-      Index<Dim> upper = cell;
-      --lower[row];
-      ++upper[row];
-      Real lower_flux = Real(0);
-      Real upper_flux = Real(0);
-      for (int column = 0; column < Dim; ++column) {
-        const Real center_coefficient = coefficients.at(cell, row, column);
-        const Real lower_coefficient = coefficients.at(lower, row, column);
-        const Real upper_coefficient = coefficients.at(upper, row, column);
-        Real lower_face =
-            row == column ? diagonal_face(lower_coefficient, center_coefficient)
-                          : Real(0.5) * (lower_coefficient + center_coefficient);
-        Real upper_face =
-            row == column ? diagonal_face(center_coefficient, upper_coefficient)
-                          : Real(0.5) * (center_coefficient + upper_coefficient);
-        // Smooth coordinate metrics are sampled at physical faces by linear one-sided
-        // extrapolation; coefficient ghosts carry an extrapolation law, not a face location.
-        if (options.arithmetic_diagonal) {
-          const unsigned physical = options.zero_flux_faces | options.dirichlet_faces;
-          if (on_face(cell, row, 0, physical))
-            lower_face = Real(1.5) * center_coefficient - Real(0.5) * upper_coefficient;
-          if (on_face(cell, row, 1, physical))
-            upper_face = Real(1.5) * center_coefficient - Real(0.5) * lower_coefficient;
-        }
-        if (row == column) {
-          lower_flux += lower_face * (phi(cell, 0) - phi(lower, 0)) * inverse_spacing[column];
-          upper_flux += upper_face * (phi(upper, 0) - phi(cell, 0)) * inverse_spacing[column];
-          continue;
-        }
-
-        Index<Dim> cell_lower = cell;
-        Index<Dim> cell_upper = cell;
-        Index<Dim> lower_lower = lower;
-        Index<Dim> lower_upper = lower;
-        Index<Dim> upper_lower = upper;
-        Index<Dim> upper_upper = upper;
-        --cell_lower[column];
-        ++cell_upper[column];
-        --lower_lower[column];
-        ++lower_upper[column];
-        --upper_lower[column];
-        ++upper_upper[column];
-        const Real tangent_scale = Real(0.25) * inverse_spacing[column];
-        const Real lower_tangent =
-            (phi(cell_upper, 0) - phi(cell_lower, 0) + phi(lower_upper, 0) - phi(lower_lower, 0)) *
-            tangent_scale;
-        const Real upper_tangent =
-            (phi(cell_upper, 0) - phi(cell_lower, 0) + phi(upper_upper, 0) - phi(upper_lower, 0)) *
-            tangent_scale;
-        lower_flux += lower_face * lower_tangent;
-        upper_flux += upper_face * upper_tangent;
-      }
-      if (on_face(cell, row, 0, options.zero_flux_faces))
-        lower_flux = Real(0);
-      if (on_face(cell, row, 1, options.zero_flux_faces))
-        upper_flux = Real(0);
-      divergence += (upper_flux - lower_flux) * inverse_spacing[row];
+      const auto flux = face_fluxes(cell, row);
+      divergence += (flux[1] - flux[0]) * inverse_spacing[row];
     }
     if constexpr (Sign == CartesianTensorDivergenceSign::negative_divergence)
       return -divergence;

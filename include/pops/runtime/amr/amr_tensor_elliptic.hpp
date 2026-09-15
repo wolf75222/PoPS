@@ -46,6 +46,7 @@ struct TensorFacControls {
   std::array<int, 6> boundary_kinds{{-1, -1, -1, -1, -1, -1}};
   elliptic::nd::CartesianTensorStencilOptions stencil_options{};
   std::optional<tensor_fac::CoarsePreconditionerKind> coarse_preconditioner;
+  std::optional<tensor_fac::InterfaceCoupling> interface_coupling;
 };
 
 inline void validate_controls(const TensorFacControls& controls) {
@@ -81,6 +82,11 @@ inline void validate_controls(const TensorFacControls& controls) {
       (coarse_method != tensor_fac::CoarseCorrectionMethod::gmres ||
        !controls.stencil_options.arithmetic_diagonal))
     throw std::invalid_argument("tensor FAC polar Poisson requires GMRES and arithmetic diagonals");
+  const auto coupling =
+      controls.interface_coupling.value_or(tensor_fac::InterfaceCoupling::level_stencil);
+  if (coupling != tensor_fac::InterfaceCoupling::level_stencil &&
+      coupling != tensor_fac::InterfaceCoupling::fine_flux)
+    throw std::invalid_argument("tensor FAC interface coupling is unsupported");
   if (controls.correction_damping &&
       (!std::isfinite(static_cast<double>(*controls.correction_damping)) ||
        *controls.correction_damping <= Real(0) || *controls.correction_damping > Real(1)))
@@ -124,6 +130,16 @@ inline TensorFacControls decode_controls(const PreparedProviderOptions& options)
         controls.coarse_preconditioner = tensor_fac::CoarsePreconditionerKind::polar_poisson;
       else
         throw std::invalid_argument("tensor FAC coarse preconditioner must be diagonal or polar_poisson");
+    } else if (key == "fac.interface_coupling") {
+      if (!std::holds_alternative<std::string>(value))
+        throw std::invalid_argument("tensor FAC interface coupling has the wrong wire type");
+      const auto& name = std::get<std::string>(value);
+      if (name == "level_stencil")
+        controls.interface_coupling = tensor_fac::InterfaceCoupling::level_stencil;
+      else if (name == "fine_flux")
+        controls.interface_coupling = tensor_fac::InterfaceCoupling::fine_flux;
+      else
+        throw std::invalid_argument("tensor FAC interface coupling must be level_stencil or fine_flux");
     } else if (key == "fac.coarse_rel_tol" || key == "fac.coarse_abs_tol") {
       if (!std::holds_alternative<double>(value))
         throw std::invalid_argument("tensor FAC tolerance option has the wrong wire type");
@@ -341,7 +357,8 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
           lane, controls_.stencil_options,
           controls_.coarse_method.value_or(tensor_fac::CoarseCorrectionMethod::gauss_seidel),
           controls_.coarse_restart.value_or(64),
-          controls_.coarse_preconditioner.value_or(tensor_fac::CoarsePreconditionerKind::diagonal));
+          controls_.coarse_preconditioner.value_or(tensor_fac::CoarsePreconditionerKind::diagonal),
+          controls_.interface_coupling.value_or(tensor_fac::InterfaceCoupling::level_stencil));
     }
   }
 
@@ -420,6 +437,8 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
     resolved.coarse_restart = controls_.coarse_restart.value_or(64);
     resolved.coarse_preconditioner =
         controls_.coarse_preconditioner.value_or(tensor_fac::CoarsePreconditionerKind::diagonal);
+    resolved.interface_coupling =
+        controls_.interface_coupling.value_or(tensor_fac::InterfaceCoupling::level_stencil);
     resolved.correction_damping = controls_.correction_damping.value_or(Real(1));
     return tensor_fac_->solve(resolved, lane);
   }

@@ -203,6 +203,7 @@ potential = program.solve(LinearProblem(elliptic, rhs,
     solver=CompositeTensorFAC(max_iter=300, rel_tol=1e-10, abs_tol=1e-12,
         correction_damping=0.5, fine_sweeps=64, coarse_cycles=512,
         coarse_method="gmres", coarse_restart=64, coarse_preconditioner="polar_poisson",
+        interface_coupling="fine_flux",
         boundary_conditions=(Neumann(0.), Dirichlet(0.), Periodic(), Periodic()),
         diagonal_average="arithmetic"), name="midpoint potential").consume(action=FailRun())
 program.store_history("plasma.potential", potential)
@@ -299,6 +300,7 @@ parameters = dict(model="Euler", mode=MODE, radius=R, ring=(R0, R1), alpha=ALPHA
     potential_history_transfer="authenticated-1to1-retain-overlap-v1", field_initial_guess="zero",
     field_coarse_method="gmres", field_coarse_restart=64, field_coarse_iteration_cap=512,
     field_coarse_preconditioner="polar_poisson",
+    field_interface_coupling="fine_flux",
     time_calendar="absolute cap-safe subdivisions of exact decimal output intervals",
     output_interval=OUTPUT_INTERVAL, growth_output_interval=GROWTH_OUTPUT_INTERVAL,
     growth_output_end=GROWTH_OUTPUT_END,

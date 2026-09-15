@@ -279,6 +279,58 @@ def test_polar_preconditioner_is_authenticated_and_emitted_as_a_distinct_option(
         prepared_hierarchy_solver_provider_from_attrs(attrs)
 
 
+@pytest.mark.parametrize("method", ("gauss_seidel", "gmres"))
+def test_explicit_level_stencil_coupling_preserves_default_bytes(method):
+    from test_hierarchy_scoped_solve_emit import _build
+
+    implicit = CompositeTensorFAC(coarse_method=method)
+    explicit = replace(implicit, interface_coupling="level_stencil")
+    assert explicit.canonical_identity() == implicit.canonical_identity()
+    assert explicit.identity == implicit.identity
+    assert "interface_coupling" not in explicit.canonical_options()
+    _, implicit_source = _build(implicit)
+    _, explicit_source = _build(explicit)
+    assert "fac.interface_coupling" not in implicit_source
+    assert "fac.interface_coupling" not in explicit_source
+
+
+def test_fine_flux_coupling_authenticates_changed_operator_and_native_option():
+    from test_hierarchy_scoped_solve_emit import _build
+
+    legacy = CompositeTensorFAC()
+    conservative = replace(legacy, interface_coupling="fine_flux")
+    assert conservative.identity != legacy.identity
+    prepared = conservative.prepare_program_solve()
+    assert prepared.identity == conservative.identity
+    assert prepared.options["interface_coupling"] == "fine_flux"
+    program, source = _build(conservative)
+    assert '{"fac.interface_coupling", std::string{"fine_flux"}}' in source
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    assert solve.attrs["hierarchy_solver_identity"] == conservative.identity.token
+    provider = prepared_hierarchy_solver_provider_by_id("pops.hierarchy.composite-tensor-fac")
+    for value in ("level_stencil", "FINE_FLUX", True, 1, None):
+        change = {"interface_coupling": value}
+        forged = replace(prepared, _options_json=json.dumps(
+            {**prepared.options, **change}, sort_keys=True, separators=(",", ":")))
+        with pytest.raises((TypeError, ValueError)):
+            provider.authenticate_prepared(forged)
+        attrs = dict(solve.attrs)
+        attrs["hierarchy_solver_options"] = {**attrs["hierarchy_solver_options"], **change}
+        with pytest.raises((TypeError, ValueError)):
+            prepared_hierarchy_solver_provider_from_attrs(attrs)
+    attrs = dict(solve.attrs)
+    attrs["hierarchy_solver_options"] = dict(attrs["hierarchy_solver_options"])
+    del attrs["hierarchy_solver_options"]["interface_coupling"]
+    with pytest.raises(ValueError, match="canonical|identity"):
+        prepared_hierarchy_solver_provider_from_attrs(attrs)
+
+
+@pytest.mark.parametrize("value", ("FINE_FLUX", "reflux", "", True, 1, None))
+def test_fine_flux_coupling_refuses_invalid_authored_values(value):
+    with pytest.raises(ValueError, match="interface_coupling"):
+        CompositeTensorFAC(interface_coupling=value)
+
+
 @pytest.mark.parametrize(
     "change",
     [
