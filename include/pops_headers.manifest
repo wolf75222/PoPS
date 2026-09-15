@@ -201,6 +201,7 @@ sdk-support pops/runtime/amr/amr_layout_transfer_bridge.hpp
 sdk-support pops/runtime/amr/amr_runtime.hpp
 sdk-support pops/runtime/amr/amr_tensor_elliptic.hpp
 sdk-support pops/runtime/amr/tensor_composite_fac.hpp
+sdk-support pops/runtime/amr/tensor_coarse_gmres.hpp
 api pops/runtime/amr/hierarchy_tensor_solver_provider.hpp
 api pops/runtime/amr/hierarchy_policy_authority.hpp
 sdk-support pops/runtime/amr/bootstrap_transfer_builtins.hpp
