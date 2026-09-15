@@ -111,11 +111,16 @@ std::vector<double> initial_state(const pops::Extent<Dim>& shape) {
   return result;
 }
 
-std::string loader_source(bool interface_blocks = false, bool histories = false) {
+std::string loader_source(bool interface_blocks = false, bool histories = false,
+                          bool attempt_cursor = false, bool with_flux = true,
+                          bool mapping = false) {
   // clang-format off
   return std::string("#define POPS_TEST_INTERFACE_BLOCKS ") +
       (interface_blocks ? "1\n" : "0\n") + "#define POPS_TEST_HISTORIES " +
-      (histories ? "1\n" : "0\n") + R"CPP(
+      (histories ? "1\n" : "0\n") + "#define POPS_TEST_ATTEMPT_CURSOR " +
+      (attempt_cursor ? "1\n" : "0\n") + "#define POPS_TEST_ATTEMPT_FLUX " +
+      (with_flux ? "1\n" : "0\n") + "#define POPS_TEST_ATTEMPT_MAPPING " +
+      (mapping ? "1\n" : "0\n") + R"CPP(
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
@@ -127,6 +132,8 @@ std::string loader_source(bool interface_blocks = false, bool histories = false)
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 #include <utility>
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI)
 #error "synthetic Program loader requires the shared runtime exception ABI"
@@ -175,8 +182,12 @@ struct RelaxingAdvection {
     law.template wave_speeds<Axis>(state, lower, upper);
   }
   POPS_HD State source(const State& state, const pops::ProviderValues<0>&) const {
+#if POPS_TEST_ATTEMPT_CURSOR
+    return {};
+#else
     const pops::Real departure = state[0] - pops::Real(1);
     return State{-decay * (departure + departure * departure * departure)};
+#endif
   }
   POPS_HD void source_jacobian(const State& state, const pops::ProviderValues<0>&,
                                pops::Real (&jacobian)[1][1]) const {
@@ -212,9 +223,11 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
                                         int newton_diagnostics) {
   pops::RealVector<pops::kNativeDimension> velocity{};
   for (int axis = 0; axis < pops::kNativeDimension; ++axis)
-    velocity[axis] = pops::Real(0.2) / pops::Real(axis + 1);
+    velocity[axis] = POPS_TEST_ATTEMPT_CURSOR ? pops::Real(axis + 1)
+                                             : pops::Real(0.2) / pops::Real(axis + 1);
   pops_generated::Model model{
-      pops::nd::ScalarAdvection<pops::kNativeDimension>::prepare(velocity), pops::Real(80)};
+      pops::nd::ScalarAdvection<pops::kNativeDimension>::prepare(velocity),
+      POPS_TEST_ATTEMPT_CURSOR ? pops::Real(0) : pops::Real(80)};
   auto* system = static_cast<pops::AmrSystem<pops::kNativeDimension>*>(sys);
   const pops::NewtonOptions newton = pops::newton_options_from_abi(
       newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
@@ -230,7 +243,13 @@ extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "source-built-synthetic-loader-transaction"; }
 extern "C" const char* pops_program_hash() {
-#if POPS_TEST_HISTORIES
+#if POPS_TEST_ATTEMPT_CURSOR
+  return POPS_TEST_ATTEMPT_MAPPING
+      ? (POPS_TEST_ATTEMPT_FLUX ? "tests.attempt-cursor/mapping-flux@1"
+                                : "tests.attempt-cursor/mapping-empty@1")
+      : (POPS_TEST_ATTEMPT_FLUX ? "tests.attempt-cursor/hierarchy-flux@1"
+                                : "tests.attempt-cursor/hierarchy-empty@1");
+#elif POPS_TEST_HISTORIES
   return "tests.synthetic-loader/program/history-restart-v1";
 #else
   return POPS_TEST_INTERFACE_BLOCKS
@@ -244,7 +263,9 @@ extern "C" int pops_program_block_count() { return POPS_TEST_INTERFACE_BLOCKS ? 
 extern "C" const char* pops_program_block_name(int block) {
   return block == 0 ? "tracer" : (POPS_TEST_INTERFACE_BLOCKS && block == 1 ? "tracer2" : "");
 }
-extern "C" bool pops_program_has_flux_expression() { return true; }
+extern "C" bool pops_program_has_flux_expression() {
+  return !POPS_TEST_ATTEMPT_CURSOR || POPS_TEST_ATTEMPT_FLUX;
+}
 extern "C" int pops_program_flux_expression_budget_count() { return pops_program_block_count(); }
 extern "C" std::uint64_t pops_program_interface_coupling_application_bound() {
   return POPS_TEST_INTERFACE_BLOCKS ? UINT64_C(1) : UINT64_C(0);
@@ -253,10 +274,12 @@ extern "C" std::uint64_t pops_program_interface_coupling_identity_character_boun
   return POPS_TEST_INTERFACE_BLOCKS ? UINT64_C(128) : UINT64_C(0);
 }
 extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int block) {
-  return block == 0 ? UINT64_C(10) : UINT64_C(0);
+  return block == 0 ? (POPS_TEST_ATTEMPT_CURSOR ? (POPS_TEST_ATTEMPT_FLUX ? UINT64_C(1) : UINT64_C(0))
+                                              : UINT64_C(10)) : UINT64_C(0);
 }
 extern "C" std::uint64_t pops_program_flux_coefficient_term_bound(int block) {
-  return block == 0 ? UINT64_C(1) : UINT64_C(0);
+  return block == 0 && (!POPS_TEST_ATTEMPT_CURSOR || POPS_TEST_ATTEMPT_FLUX)
+      ? UINT64_C(1) : UINT64_C(0);
 }
 extern "C" int pops_program_checkpoint_history_count() { return POPS_TEST_HISTORIES ? 2 : 0; }
 extern "C" const char* pops_program_checkpoint_history_name(int history) {
@@ -277,8 +300,12 @@ extern "C" const char* pops_program_checkpoint_history_interpolation_identity(in
 }
 extern "C" int pops_program_checkpoint_history_depth(int) { return POPS_TEST_HISTORIES ? 2 : 0; }
 extern "C" int pops_program_checkpoint_history_components(int) { return POPS_TEST_HISTORIES ? 1 : 0; }
-extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
+extern "C" int pops_program_checkpoint_logical_clock_count() {
+  return POPS_TEST_ATTEMPT_CURSOR ? 2 : 1;
+}
 extern "C" const char* pops_program_checkpoint_logical_clock_identity(int clock) {
+  if (POPS_TEST_ATTEMPT_CURSOR)
+    return clock == 0 ? "clock.macro" : (clock == 1 ? "clock.level.1" : "");
   return clock == 0 ? "tests.synthetic-loader.clock" : "";
 }
 extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {
@@ -307,6 +334,80 @@ extern "C" int pops_module_field_space_count() { return 0; }
 extern "C" const char* pops_module_field_space_name(int) { return ""; }
 extern "C" const char* pops_module_field_space_owner(int) { return ""; }
 
+#if POPS_TEST_ATTEMPT_CURSOR
+namespace pops::runtime::program::detail {
+template <int Dim>
+struct AmrProgramHistoryRemapCollectiveTestAccess {
+  using Context = AmrProgramContext<Dim>;
+  static bool owns(const Context& context, const pops::AmrSystem<Dim>* system) {
+    return context.facade_ == system;
+  }
+  static std::uint64_t generation(const Context& context) {
+    return context.runtime_state().step_install_generation_;
+  }
+  static bool artifact_backed(const Context& context) {
+    return context.runtime_state().artifact_backed_;
+  }
+  static std::uint64_t accepted(const Context& context) {
+    return context.accepted_subcycling_attempt_;
+  }
+  static std::uint64_t allocated(const Context& context) {
+    return context.allocated_subcycling_attempt_;
+  }
+  static void require_active_import_refusal(Context& context) {
+    try {
+      context.import_accepted_state_(true);
+    } catch (const std::logic_error& error) {
+      if (std::string(error.what()) ==
+          "AMR accepted-state import crossed an active Program attempt")
+        return;
+      throw;
+    }
+    throw std::runtime_error("attempt-cursor active import unexpectedly succeeded");
+  }
+};
+}
+using AttemptContext = pops::runtime::program::AmrProgramContext<pops::kNativeDimension>;
+using AttemptAccess = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<
+    pops::kNativeDimension>;
+struct AttemptControl {
+  std::weak_ptr<AttemptContext> context;
+  std::weak_ptr<int> failure;
+  std::uint64_t generation;
+};
+static std::unordered_map<pops::AmrSystem<pops::kNativeDimension>*, AttemptControl>
+    attempt_controls;
+static std::shared_ptr<AttemptContext> require_attempt_context(
+    pops::AmrSystem<pops::kNativeDimension>* system) {
+  const auto found = attempt_controls.find(system);
+  if (found == attempt_controls.end())
+    throw std::logic_error("attempt-cursor control lacks its exact installed system");
+  auto context = found->second.context.lock();
+  if (!context || !AttemptAccess::owns(*context, system) ||
+      AttemptAccess::generation(*context) != found->second.generation ||
+      system->installed_program_hash() != pops_program_hash() ||
+      !AttemptAccess::artifact_backed(*context))
+    throw std::logic_error("attempt-cursor control lost its authenticated installed context");
+  return context;
+}
+extern "C" std::uint64_t pops_test_attempt_observe(
+    pops::AmrSystem<pops::kNativeDimension>* system, int observation) {
+  auto context = require_attempt_context(system);
+  if (observation == 0) return AttemptAccess::accepted(*context);
+  if (observation == 1) return AttemptAccess::allocated(*context);
+  if (observation == 2) return AttemptAccess::artifact_backed(*context) ? 1 : 0;
+  throw std::invalid_argument("attempt-cursor observation is not declared");
+}
+extern "C" void pops_test_attempt_failure(
+    pops::AmrSystem<pops::kNativeDimension>* system, int failure) {
+  (void)require_attempt_context(system);
+  auto control = attempt_controls.at(system).failure.lock();
+  if (!control || failure < 0 || failure > 3)
+    throw std::invalid_argument("attempt-cursor failure control is not declared");
+  *control = failure;
+}
+#endif
+
 static bool reject_interface_refresh = false;
 extern "C" void pops_test_reject_interface_refresh(bool reject) {
   reject_interface_refresh = reject;
@@ -319,6 +420,46 @@ extern "C" void pops_install_program_amr(
     pops::AmrSystem<pops::kNativeDimension>* system) {
   auto context = pops::runtime::program::make_program_execution_provider(system);
   auto inject_retry = std::make_shared<bool>(true);
+#if POPS_TEST_ATTEMPT_CURSOR
+  context->configure_primary_clock("clock.macro");
+  context->declare_clock_relation("clock.macro", "clock.level.1", 1);
+  auto failure = std::make_shared<int>(0);
+  context->install([context, failure](double dt) {
+    const auto body = [context, failure](double level_dt) {
+      auto& state = context->state(0);
+      if (*failure == 3)
+        AttemptAccess::require_active_import_refusal(*context);
+      if (POPS_TEST_ATTEMPT_FLUX) {
+        context->set_stage_time(0, 1);
+        auto& rhs = context->rhs_scratch(700, 0, state);
+        context->rhs_into(0, state, rhs, 701);
+        context->axpy(state, pops::Real(level_dt), rhs);
+      }
+      if (*failure == 1) {
+        state.set_val(pops::Real(9));
+        if (context->prepared_execution_lane().rank() == 0)
+          throw std::runtime_error("attempt-cursor candidate rejection");
+      }
+    };
+    const auto completed = [failure] {
+      if (*failure == 2)
+        throw std::runtime_error("attempt-cursor outer publication rejection");
+    };
+    if (POPS_TEST_ATTEMPT_MAPPING)
+      context->advance_mapping_hierarchy(dt, body, context, completed);
+    else {
+      context->advance_hierarchy(dt, body);
+      completed();
+    }
+  }, context);
+  // Keep context->install's real snapshot/preflight/regrid/resync callbacks. These source-built
+  // tests exercise facade authority and transactions, not Python lowering or scientific accuracy.
+  auto found = attempt_controls.find(system);
+  if (found != attempt_controls.end() && !found->second.context.expired())
+    throw std::logic_error("attempt-cursor context was installed twice for the same system");
+  attempt_controls.insert_or_assign(
+      system, AttemptControl{context, failure, AttemptAccess::generation(*context)});
+#else
   context->configure_primary_clock("tests.synthetic-loader.clock");
 #if POPS_TEST_HISTORIES
   // Cache actual scratch borrows per level, like the generated CPS installer. A restart must
@@ -429,6 +570,7 @@ extern "C" void pops_install_program_amr(
       [] {}, [] {}, [] {},
       [context] { return context->accepted_context_snapshot(); });
 #endif
+#endif
 }
 )CPP";
   // clang-format on
@@ -439,7 +581,8 @@ extern "C" void pops_install_program_amr(
 // when their C++ inputs are identical.
 std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> compile_exact_loader_artifact(
     const std::string& source_path, const std::string& shared_object,
-    const pops::ExecutionLane& lane, bool interface_blocks = false, bool histories = false) {
+    const pops::ExecutionLane& lane, bool interface_blocks = false, bool histories = false,
+    bool attempt_cursor = false, bool with_flux = true, bool mapping = false) {
   const auto broadcast = [&](std::string& payload) {
     const bool length_overflow =
         lane.rank() == 0 &&
@@ -465,7 +608,7 @@ std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> compile_exact_loader_arti
       {
         std::ofstream source(source_path);
         source.exceptions(std::ios::badbit | std::ios::failbit);
-        source << loader_source(interface_blocks, histories);
+        source << loader_source(interface_blocks, histories, attempt_cursor, with_flux, mapping);
       }
       const auto package = pops::test::native_dso::compile_shared(
           source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
@@ -553,6 +696,123 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
                                             "conservative_linear", 1);
   system.commit_bootstrap_level();
   system.mark_bound();
+}
+
+struct AttemptCursorArtifact {
+  std::string path;
+  std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> authenticated;
+  std::uint64_t (*observe)(pops::AmrSystem<Dim>*, int) = nullptr;
+  void (*failure)(pops::AmrSystem<Dim>*, int) = nullptr;
+};
+
+AttemptCursorArtifact make_attempt_cursor_artifact(bool with_flux, bool mapping = false) {
+  AttemptCursorArtifact artifact;
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_attempt_cursor_" +
+                           std::to_string(pops::my_rank()) + "_" +
+                           std::to_string(static_cast<long>(std::clock()));
+  artifact.path = stem + ".so";
+  auto lane = pops::ExecutionLane::duplicate_world_collectively("test.attempt-cursor.artifact");
+  artifact.authenticated = compile_exact_loader_artifact(stem + ".cpp", artifact.path, lane, false,
+                                                         false, true, with_flux, mapping);
+  const auto handle = pops::dynlib::open(artifact.path);
+  if (handle == nullptr)
+    throw std::runtime_error("attempt-cursor artifact could not be opened");
+  artifact.observe = reinterpret_cast<std::uint64_t (*)(pops::AmrSystem<Dim>*, int)>(
+      pops::dynlib::sym(handle, "pops_test_attempt_observe"));
+  artifact.failure = reinterpret_cast<void (*)(pops::AmrSystem<Dim>*, int)>(
+      pops::dynlib::sym(handle, "pops_test_attempt_failure"));
+  if (artifact.observe == nullptr || artifact.failure == nullptr)
+    throw std::runtime_error("attempt-cursor artifact lacks its exact test controls");
+  return artifact;
+}
+
+struct AttemptCursorFixture {
+  std::unique_ptr<pops::AmrSystem<Dim>> system;
+  const AttemptCursorArtifact* artifact = nullptr;
+
+  std::uint64_t accepted_attempt() const { return artifact->observe(system.get(), 0); }
+  std::uint64_t allocated_attempt() const { return artifact->observe(system.get(), 1); }
+  bool program_is_artifact_backed() const { return artifact->observe(system.get(), 2) == 1; }
+  void set_failure(int failure) const { artifact->failure(system.get(), failure); }
+};
+
+AttemptCursorFixture make_attempt_cursor_fixture(const AttemptCursorArtifact& artifact) {
+  AttemptCursorFixture fixture;
+  fixture.artifact = &artifact;
+  pops::AmrSystemConfig<Dim> system_config;
+  system_config.regrid_every = 0;
+  system_config.explicit_bootstrap = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    system_config.shape[axis] = 16;
+    system_config.periodicity[axis] = true;
+    system_config.transition_buffers.front()[axis] = 0;
+    system_config.transition_lookaheads.front()[axis] = 0;
+  }
+  fixture.system = std::make_unique<pops::AmrSystem<Dim>>(system_config);
+  auto& system = *fixture.system;
+  auto lane = std::make_shared<pops::ExecutionLane>(
+      pops::ExecutionLane::duplicate_world_collectively("test.attempt-cursor.package"));
+  auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
+      prepared_execution()->for_lane(*lane));
+  system.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
+  system.set_temporal_relations({1}, {1}, {"integral_only"});
+  system.install_block_state_route(kBlock, kStateRoute);
+  system.add_native_block(kBlock, artifact.path,
+                          "2222222222222222222222222222222222222222222222222222222222222222",
+                          artifact.authenticated->binary_identity(), "minmod", "rusanov",
+                          "conservative", "explicit", 1.4, 1);
+  std::vector<double> initial(cell_count(system_config.shape), 1.0);
+  for (std::size_t cell = 0; cell < initial.size(); ++cell) {
+    std::size_t remainder = cell;
+    bool centered = true;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto index = remainder % 16;
+      remainder /= 16;
+      centered = centered && index >= 4 && index < 12;
+    }
+    if (centered)
+      initial[cell] = 2.0;
+  }
+  system.bind_bootstrap_subject(kStateRoute, kBlock, "bound_level_zero");
+  system.stage_bootstrap_array(kStateRoute, kBlock, "cell", "cell", 1, system.spatial_shape(),
+                               initial);
+  pops::Extent<Dim> transfer_ghosts{}, refinement_ratio{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    transfer_ghosts[axis] = 1;
+    refinement_ratio[axis] = 2;
+  }
+  system.register_bootstrap_transfer_route(
+      "tests.attempt-cursor/bootstrap/prolongation", {kStateRoute},
+      "tests.attempt-cursor/bootstrap/provider", "cell", "cell", "conservative", "dense",
+      "prolongation", "conservative_linear", 2, transfer_ghosts, refinement_ratio);
+  pops::test::install_prepared_refine_coarsen_threshold(
+      system, {kBlock, "u", 1.5, pops::test::PreparedThresholdRelation::Above, kStateRoute},
+      {kBlock, "u", 1.5, pops::test::PreparedThresholdRelation::Below, kStateRoute},
+      "tests.attempt-cursor/tagging@1");
+  // The public loader must grant authority BEFORE explicit materialization. A direct callback
+  // install deliberately cannot qualify the facade's snapshot, restore or RegridOnRestart hooks.
+  system.install_program(artifact.path);
+  if (!fixture.program_is_artifact_backed())
+    throw std::logic_error("attempt-cursor witness requires loader-granted artifact authority");
+  system.begin_bootstrap_plan();
+  (void)system.materialize_bootstrap_action(kStateRoute, "initialize_level_zero",
+                                            "bound_level_zero", 0);
+  if (!system.bootstrap_next_level()) {
+    system.rollback_bootstrap_level();
+    throw std::logic_error("attempt-cursor witness requires an actual partial fine level");
+  }
+  (void)system.materialize_bootstrap_action(kStateRoute, "prolong_from_parent",
+                                            "conservative_linear", 1);
+  system.commit_bootstrap_level();
+  system.mark_bound();
+  if (system.engine()->hierarchy().num_levels() != 2)
+    throw std::logic_error("attempt-cursor witness requires an actual partial fine level");
+  std::int64_t fine_cells = 0;
+  for (const auto& box : system.prepared_amr_block_state(0, 1).layout().boxes())
+    fine_cells += box.numPts();
+  if (fine_cells <= 0 || fine_cells >= system.prepared_amr_level_geometry(1).domain().numPts())
+    throw std::logic_error("attempt-cursor witness requires nonempty, partial fine coverage");
+  return fixture;
 }
 
 double max_difference(const std::vector<double>& left, const std::vector<double>& right) {
@@ -1184,4 +1444,212 @@ TEST(test_amr_synthetic_program_loader_transaction,
   }
   ASSERT_NO_THROW(system.commit_restart_transaction());
   system.finalize_restart_transaction();
+}
+
+// Source-built scalar artifacts authenticate native lifecycle structure only. The retained
+// direct-install failure did not grant facade restart authority; these four witnesses use the
+// actual loader and preserve every C/H, full-image, field, revision, clock and rollback check.
+TEST(test_amr_synthetic_program_loader_transaction,
+     AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage) {
+  for (const bool with_flux : {false, true}) {
+    SCOPED_TRACE(with_flux);
+    auto artifact = make_attempt_cursor_artifact(with_flux);
+    auto cold = make_attempt_cursor_fixture(artifact);
+    ASSERT_TRUE(cold.program_is_artifact_backed());
+    EXPECT_THROW(artifact.observe(nullptr, 0), std::logic_error);
+    auto& original = *cold.system;
+    const auto initial = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+        original.program_accepted_state());
+    EXPECT_EQ(initial.accepted_attempt, 0u);
+    EXPECT_EQ(cold.allocated_attempt(), 0u);
+    for (const auto& axis : initial.accepted_face_flux)
+      EXPECT_TRUE(axis.empty());
+    const auto epoch = original.checkpoint_topology_epoch();
+    ASSERT_NO_THROW(original.step(.01));
+    ASSERT_NO_THROW(original.step(.01));
+    const auto middle = original.program_accepted_state();
+    const auto decoded =
+        pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(middle);
+    EXPECT_EQ(decoded.accepted_attempt, 2u);
+    EXPECT_EQ(original.checkpoint_topology_epoch(), epoch);  // Strictly between regrids.
+    const bool has_faces =
+        std::any_of(decoded.accepted_face_flux.begin(), decoded.accepted_face_flux.end(),
+                    [](const auto& axis) { return !axis.empty(); });
+    EXPECT_EQ(has_faces, with_flux);
+
+    auto resumed = make_attempt_cursor_fixture(artifact);
+    ASSERT_TRUE(resumed.program_is_artifact_backed());
+    auto& restored = *resumed.system;
+    EXPECT_EQ(resumed.allocated_attempt(), 0u);
+    restored.begin_restart_transaction();
+    for (int level = 0; level < original.n_levels(); ++level)
+      restored.set_block_level_state("tracer", level,
+                                     original.block_level_state_global("tracer", level));
+    restored.restore_program_cadence_window(
+        original.program_cadence_window_dt(), original.program_cadence_window_steps(),
+        original.program_cadence_window_start_time(), original.program_last_dt(), original.time(),
+        original.macro_step());
+    restored.set_clock(original.time(), original.macro_step());
+    restored.restore_checkpoint_counters(original.checkpoint_regrid_count(), epoch);
+    ASSERT_NO_THROW(restored.restore_checkpoint_accepted_state(middle));
+    restored.commit_restart_transaction();
+    restored.finalize_restart_transaction();
+    EXPECT_EQ(resumed.accepted_attempt(), 2u);
+    EXPECT_EQ(resumed.allocated_attempt(), 2u);
+    EXPECT_EQ(restored.program_accepted_state(), middle);
+    EXPECT_EQ(restored.program_last_dt(), original.program_last_dt());
+    ASSERT_NO_THROW(original.step(.01));
+    ASSERT_NO_THROW(restored.step(.01));
+    EXPECT_EQ(original.program_accepted_state(), restored.program_accepted_state());
+    for (int level = 0; level < original.n_levels(); ++level)
+      EXPECT_EQ(original.block_level_state_global("tracer", level),
+                restored.block_level_state_global("tracer", level));
+    EXPECT_EQ(cold.accepted_attempt(), 3u);
+    EXPECT_EQ(resumed.accepted_attempt(), 3u);
+  }
+}
+
+TEST(test_amr_synthetic_program_loader_transaction,
+     AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes) {
+  for (const bool mapping : {false, true}) {
+    SCOPED_TRACE(mapping);
+    auto artifact = make_attempt_cursor_artifact(true, mapping);
+    auto fixture = make_attempt_cursor_fixture(artifact);
+    ASSERT_TRUE(fixture.program_is_artifact_backed());
+    auto& system = *fixture.system;
+    ASSERT_NO_THROW(system.step(.01));
+    const auto accepted = system.program_accepted_state();
+    const auto revision = system.program_accepted_state_revision();
+    const auto coarse = system.block_level_state_global("tracer", 0);
+    const auto fine = system.block_level_state_global("tracer", 1);
+    for (const int failure : {1, 2}) {
+      fixture.set_failure(failure);
+      EXPECT_THROW(system.step(.01), std::runtime_error);
+      EXPECT_EQ(system.program_accepted_state(), accepted);
+      EXPECT_EQ(system.program_accepted_state_revision(), revision);
+      EXPECT_EQ(system.block_level_state_global("tracer", 0), coarse);
+      EXPECT_EQ(system.block_level_state_global("tracer", 1), fine);
+      EXPECT_EQ(system.macro_step(), 1);
+      EXPECT_EQ(system.time(), .01);
+      EXPECT_EQ(fixture.accepted_attempt(), 1u);
+      EXPECT_EQ(fixture.allocated_attempt(), 1u + failure);
+    }
+    // Restoring an older accepted image in this SAME context must not recycle either failed ID.
+    ASSERT_NO_THROW(system.restore_checkpoint_accepted_state(accepted));
+    EXPECT_EQ(fixture.allocated_attempt(), 3u);
+    fixture.set_failure(3);
+    ASSERT_NO_THROW(system.step(.01));
+    EXPECT_EQ(fixture.accepted_attempt(), 4u);
+    const auto next = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+        system.program_accepted_state());
+    EXPECT_EQ(next.accepted_attempt, 4u);
+    for (const auto& axis : next.accepted_face_flux)
+      for (const auto& fragment : axis)
+        EXPECT_EQ(fragment.key.attempt, 4u);
+  }
+}
+
+TEST(test_amr_synthetic_program_loader_transaction,
+     AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart) {
+  auto artifact = make_attempt_cursor_artifact(false);
+  auto fixture = make_attempt_cursor_fixture(artifact);
+  ASSERT_TRUE(fixture.program_is_artifact_backed());
+  auto& system = *fixture.system;
+  ASSERT_NO_THROW(system.step(.01));
+  fixture.set_failure(1);
+  EXPECT_THROW(system.step(.01), std::runtime_error);
+  fixture.set_failure(0);
+  const auto old_epoch = system.checkpoint_topology_epoch();
+  // A real coverage expansion forces hierarchy and prepared-engine reconstruction.
+  system.set_conservative_state("tracer", std::vector<double>(std::size_t{1} << (4 * Dim), 2.0));
+  (void)system.execute_prepared_tagging(0);
+  ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+  EXPECT_GT(system.checkpoint_topology_epoch(), old_epoch);
+  EXPECT_EQ(fixture.accepted_attempt(), 1u);
+  EXPECT_EQ(fixture.allocated_attempt(), 2u);
+  EXPECT_EQ(pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+                system.program_accepted_state())
+                .accepted_attempt,
+            1u);
+  ASSERT_NO_THROW(system.step(.01));
+  EXPECT_EQ(fixture.accepted_attempt(), 3u);
+  const auto before_restart_regrid = system.program_accepted_state();
+  system.begin_restart_transaction();
+  ASSERT_NO_THROW(system.restore_checkpoint_accepted_state(before_restart_regrid));
+  ASSERT_NO_THROW(system.preflight_regrid_on_restart());
+  ASSERT_NO_THROW(system.regrid_on_restart());
+  system.commit_restart_transaction();
+  system.finalize_restart_transaction();
+  const auto cleared = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      system.program_accepted_state());
+  EXPECT_EQ(cleared.accepted_attempt, 3u);
+  for (const auto& axis : cleared.accepted_face_flux)
+    EXPECT_TRUE(axis.empty());
+  EXPECT_TRUE(cleared.synchronization_events.empty());
+  ASSERT_NO_THROW(system.step(.01));
+  EXPECT_EQ(fixture.accepted_attempt(), 4u);
+}
+
+TEST(test_amr_synthetic_program_loader_transaction,
+     AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority) {
+  auto artifact = make_attempt_cursor_artifact(true);
+  auto fixture = make_attempt_cursor_fixture(artifact);
+  ASSERT_TRUE(fixture.program_is_artifact_backed());
+  auto& system = *fixture.system;
+  ASSERT_NO_THROW(system.step(.01));
+  const auto accepted = system.program_accepted_state();
+  const auto decoded =
+      pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(accepted);
+  ASSERT_TRUE(std::any_of(decoded.accepted_face_flux.begin(), decoded.accepted_face_flux.end(),
+                          [](const auto& axis) { return !axis.empty(); }));
+  const auto revision = system.program_accepted_state_revision();
+  const auto coarse = system.block_level_state_global("tracer", 0);
+  const auto fine = system.block_level_state_global("tracer", 1);
+  const auto unchanged = [&] {
+    EXPECT_EQ(system.program_accepted_state(), accepted);
+    EXPECT_EQ(system.program_accepted_state_revision(), revision);
+    EXPECT_EQ(system.block_level_state_global("tracer", 0), coarse);
+    EXPECT_EQ(system.block_level_state_global("tracer", 1), fine);
+    EXPECT_EQ(system.time(), .01);
+    EXPECT_EQ(system.macro_step(), 1);
+    EXPECT_EQ(fixture.accepted_attempt(), 1u);
+    EXPECT_EQ(fixture.allocated_attempt(), 1u);
+  };
+  const std::size_t offset = 40u + decoded.spatial_contract.size();
+  auto corrupt = accepted;
+  std::fill(corrupt.begin() + offset, corrupt.begin() + offset + 8, std::uint8_t{0});
+  EXPECT_THROW(system.restore_checkpoint_accepted_state(corrupt), std::invalid_argument);
+  unchanged();
+  auto legacy = accepted;
+  legacy.erase(legacy.begin() + offset, legacy.begin() + offset + 8);
+  legacy[7] = '7';
+  if (pops::n_ranks() == 1)
+    EXPECT_THROW(system.restore_checkpoint_accepted_state(legacy), std::invalid_argument);
+  else
+    EXPECT_THROW(system.restore_checkpoint_accepted_state(legacy), std::runtime_error);
+  unchanged();
+  if (pops::n_ranks() > 1) {
+    auto divergent = decoded;
+    if (pops::my_rank() == 0)
+      divergent.accepted_attempt = 2;
+    EXPECT_THROW(system.restore_checkpoint_accepted_state(
+                     pops::runtime::program::serialize_amr_program_accepted_state(divergent)),
+                 std::runtime_error);
+    unchanged();
+  }
+  // This explicit policy erases the populated report, while preserving its committed authority.
+  system.begin_restart_transaction();
+  system.restore_checkpoint_accepted_state(accepted);
+  system.preflight_regrid_on_restart();
+  system.regrid_on_restart();
+  system.commit_restart_transaction();
+  system.finalize_restart_transaction();
+  const auto cleared = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      system.program_accepted_state());
+  EXPECT_EQ(cleared.accepted_attempt, 1u);
+  for (const auto& axis : cleared.accepted_face_flux)
+    EXPECT_TRUE(axis.empty());
+  EXPECT_EQ(fixture.allocated_attempt(), 1u);
+  ASSERT_NO_THROW(system.step(.01));
+  EXPECT_EQ(fixture.accepted_attempt(), 2u);
 }
