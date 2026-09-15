@@ -1913,8 +1913,9 @@ TEST(test_amr_synthetic_program_loader_transaction,
         refusal = error.what();
       }
       ASSERT_EQ(pops::all_reduce_max(refusal.empty() ? 1L : 0L, artifact_lane), 0L);
-      if (pops::my_rank() == 0)
-        EXPECT_NE(refusal.find("injected history resource refresh"), std::string::npos);
+      EXPECT_EQ(refusal, artifact_lane.size() == 1
+                             ? "injected history resource refresh"
+                             : "AMR Program hierarchy-state publication failed collectively");
       std::fprintf(stderr, "scheduled-history-remap rank=%d refused=%s\n", pops::my_rank(),
                    refusal.c_str());
       std::fflush(stderr);
