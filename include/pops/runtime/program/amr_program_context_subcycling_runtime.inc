@@ -408,7 +408,11 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, double m
     collectively_rethrow_exception(preparation_error, prepared_execution_lane(),
                                    "AMR Program level envelope preparation failed collectively");
     facade_->clear_prepared_amr_level_evaluations();
-    body(current_dt_);
+    // Agree on body completion before a peer can enter retained/shared-flux collectives.
+    const ExecutionLane& body_lane = prepared_execution_lane();
+    runtime::program::collective_step_rejection_phase(
+        body_lane.communicator(), {"pops.amr-level-body.v1", "amr-level-body", false, false},
+        "AMR Program level body failed collectively", [&] { body(current_dt_); });
     if (multiblock_subcycling_->has_synchronized_groups()) {
       for (int level = 0; level < nlev(); ++level)
         with_program_attempt_level(level, [&] {

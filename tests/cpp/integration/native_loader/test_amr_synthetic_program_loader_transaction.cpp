@@ -402,7 +402,7 @@ extern "C" void pops_test_attempt_failure(
     pops::AmrSystem<pops::kNativeDimension>* system, int failure) {
   (void)require_attempt_context(system);
   auto control = attempt_controls.at(system).failure.lock();
-  if (!control || failure < 0 || failure > 3)
+  if (!control || failure < 0 || failure > 5)
     throw std::invalid_argument("attempt-cursor failure control is not declared");
   *control = failure;
 }
@@ -439,6 +439,18 @@ extern "C" void pops_install_program_amr(
         state.set_val(pops::Real(9));
         if (context->prepared_execution_lane().rank() == 0)
           throw std::runtime_error("attempt-cursor candidate rejection");
+      }
+      if (*failure == 4 || *failure == 5) {
+        state.set_val(pops::Real(9));
+        if (context->prepared_execution_lane().rank() == 0) {
+          const bool retry = *failure == 4;
+          throw pops::runtime::program::StepAttemptRejected(
+              retry ? pops::SolveStatus::kIterationLimit : pops::SolveStatus::kInvalidEvaluation,
+              retry ? pops::runtime::program::StepAttemptDisposition::kRetry
+                    : pops::runtime::program::StepAttemptDisposition::kReject,
+              retry ? UINT32_C(0x41544352) : UINT32_C(0x41544354),
+              "attempt-cursor-body", retry ? "rank-zero-retry" : "rank-zero-terminal");
+        }
       }
     };
     const auto completed = [failure] {
@@ -1547,6 +1559,61 @@ TEST(test_amr_synthetic_program_loader_transaction,
       for (const auto& fragment : axis)
         EXPECT_EQ(fragment.key.attempt, 4u);
   }
+}
+
+TEST(test_amr_synthetic_program_loader_transaction,
+     AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback) {
+  auto artifact = make_attempt_cursor_artifact(true);
+  auto fixture = make_attempt_cursor_fixture(artifact);
+  ASSERT_TRUE(fixture.program_is_artifact_backed());
+  auto& system = *fixture.system;
+  ASSERT_NO_THROW(system.step(.01));
+  const auto accepted = system.program_accepted_state();
+  const auto revision = system.program_accepted_state_revision();
+  const auto coarse = system.block_level_state_global("tracer", 0);
+  const auto fine = system.block_level_state_global("tracer", 1);
+  const auto last_dt = system.program_last_dt();
+  std::uint64_t allocated = 1;
+  for (const int failure : {4, 5}) {
+    SCOPED_TRACE(failure);
+    const bool retry = failure == 4;
+    fixture.set_failure(failure);
+    try {
+      system.step(.01);
+      FAIL() << "the rank-local typed body rejection was not surfaced";
+    } catch (const pops::runtime::program::StepAttemptRejected& rejected) {
+      EXPECT_EQ(rejected.status(),
+                retry ? pops::SolveStatus::kIterationLimit : pops::SolveStatus::kInvalidEvaluation);
+      EXPECT_EQ(rejected.disposition(),
+                retry ? pops::runtime::program::StepAttemptDisposition::kRetry
+                      : pops::runtime::program::StepAttemptDisposition::kReject);
+      EXPECT_EQ(rejected.reason_code(), retry ? 0x41544352u : 0x41544354u);
+      EXPECT_EQ(rejected.phase(), "attempt-cursor-body");
+      EXPECT_EQ(rejected.detail(), retry ? "rank-zero-retry" : "rank-zero-terminal");
+    }
+    EXPECT_EQ(system.program_accepted_state(), accepted);
+    EXPECT_EQ(system.program_accepted_state_revision(), revision);
+    EXPECT_EQ(system.block_level_state_global("tracer", 0), coarse);
+    EXPECT_EQ(system.block_level_state_global("tracer", 1), fine);
+    EXPECT_EQ(system.macro_step(), 1);
+    EXPECT_EQ(system.time(), .01);
+    EXPECT_EQ(system.program_last_dt(), last_dt);
+    EXPECT_EQ(fixture.accepted_attempt(), 1u);
+    EXPECT_EQ(fixture.allocated_attempt(), ++allocated);
+  }
+  fixture.set_failure(0);
+  ASSERT_NO_THROW(system.step(.01));
+  EXPECT_EQ(fixture.accepted_attempt(), 4u);
+  EXPECT_EQ(fixture.allocated_attempt(), 4u);
+  EXPECT_EQ(system.macro_step(), 2);
+  EXPECT_EQ(system.time(), .02);
+  const auto next = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      system.program_accepted_state());
+  EXPECT_EQ(next.accepted_attempt, 4u);
+  ASSERT_FALSE(next.accepted_face_flux[0].empty());
+  for (const auto& axis : next.accepted_face_flux)
+    for (const auto& fragment : axis)
+      EXPECT_EQ(fragment.key.attempt, 4u);
 }
 
 TEST(test_amr_synthetic_program_loader_transaction,
