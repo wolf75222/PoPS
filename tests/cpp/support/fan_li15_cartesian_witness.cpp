@@ -169,10 +169,20 @@ struct Tuple {
     speed.set_val(126);
   }
   void unchanged() const {
-    near(get(f.field<0>(), {0, 0}), 123, "F transaction");
-    near(get(l.field<0>(), {0, 0}), 124, "L transaction");
-    near(get(r.field<0>(), {0, 0}), 125, "R transaction");
-    near(get(speed.field<0>(), {0, 0}), 126, "speed transaction");
+    const auto all_equal = [](const Fab<2>& field, Real expected, const char* what) {
+      auto host = field.create_host_mirror();
+      field.copy_to_host(host);
+      for (std::size_t i = 0; i < field.size(); ++i)
+        near(host(i), expected, what);
+    };
+    all_equal(f.field<0>(), 123, "F transaction axis0");
+    all_equal(f.field<1>(), 123, "F transaction axis1");
+    all_equal(l.field<0>(), 124, "L transaction axis0");
+    all_equal(l.field<1>(), 124, "L transaction axis1");
+    all_equal(r.field<0>(), 125, "R transaction axis0");
+    all_equal(r.field<1>(), 125, "R transaction axis1");
+    all_equal(speed.field<0>(), 126, "speed transaction axis0");
+    all_equal(speed.field<1>(), 126, "speed transaction axis1");
   }
 };
 
@@ -219,7 +229,8 @@ void run() {
   const auto box = Box<2>::from_extents(Extent<2>{2, 1});
   // dx=2, dy=3: x-face area=3, cell volume=6.
   const auto geometry = Geometry<2>::from_bounds(box, RealVector<2>{0, 0}, RealVector<2>{4, 3});
-  const auto op = prepare_cartesian_operator<2>(geometry, Composite{});
+  const auto op = prepare_cartesian_operator<2>(geometry, Composite{}, NoSlope{},
+                                                FanLi15PathRusanovFlux{});
   Fab<2> state(box, 15, Extent<2>{1, 1}), providers(box, 2, Extent<2>{1, 1});
   fill(state, [](int i, int, int c) { return gaussian(i <= 0 ? 0 : 1)[c]; });
   fill(providers, [](int i, int, int c) { return c == 0 ? (i <= 0 ? 1. : 3.) : 1.; });
@@ -334,6 +345,26 @@ void run() {
         "ordinary flux lost typed path refusal");
   tuple.unchanged();
   record("ordinary_flux_materialize_residual_refuse_before_provider_binding");
+
+  const auto default_carrier = prepare_cartesian_operator<2>(geometry, Composite{});
+  refuses(
+      [&] {
+        default_carrier.materialize_path_face_contributions(
+            state, providers, tuple.f, tuple.l, tuple.r, tuple.speed, tuple.scratch);
+      },
+      "default ordinary Rusanov carrier accepted dedicated path preparation");
+  tuple.unchanged();
+  const auto ordinary_carrier =
+      prepare_cartesian_operator<2>(geometry, Composite{}, NoSlope{}, RusanovFlux{});
+  refuses(
+      [&] {
+        ordinary_carrier.materialize_path_face_contributions(
+            state, providers, tuple.f, tuple.l, tuple.r, tuple.speed, tuple.scratch);
+      },
+      "explicit ordinary Rusanov carrier accepted dedicated path preparation");
+  tuple.unchanged();
+  record("ordinary_and_default_carriers_refuse_path_preparation");
+
   const PathPhysical grad_formula{PathModel<>{}};
   const auto physical_trace = make_face_trace<PathModel<>>(
       gaussian(1), bind_flux_providers<PathModel<>>(FluxProviderValues<PathModel<>>{}));
@@ -351,7 +382,8 @@ void run() {
       "unauthorized omitted face accepted");
   record("ordinary_noflux_omission_refused");
 
-  const auto zero_op = prepare_cartesian_operator<2>(geometry, PathModel<true, true>{});
+  const auto zero_op = prepare_cartesian_operator<2>(geometry, PathModel<true, true>{}, NoSlope{},
+                                                     FanLi15PathRusanovFlux{});
   fill(state, [](int i, int, int c) { return i < 0 ? 0. : gaussian(0)[c]; });
   fill(providers,
        [](int i, int, int) { return i < 0 ? std::numeric_limits<Real>::quiet_NaN() : 1.; });
@@ -364,24 +396,25 @@ void run() {
   }
   near(get(tuple.speed.field<0>(), {0, 0}), 0, "zero-measure speed");
   record("authored_zero_face_skips_invalid_state_and_provider_ghosts");
-  const auto free_op = prepare_cartesian_operator<2>(geometry, PathModel<false, true>{});
+  const auto free_op = prepare_cartesian_operator<2>(geometry, PathModel<false, true>{}, NoSlope{},
+                                                     FanLi15PathRusanovFlux{});
   free_op.materialize_path_face_contributions(state, tuple.f, tuple.l, tuple.r, tuple.speed,
                                               tuple.scratch);
   record("provider_free_path_route");
   refuses(
       [&] {
         const auto wrong = prepare_cartesian_operator<2>(geometry, PathModel<false, true>{},
-                                                         Minmod{}, RusanovFlux{});
+                                                         Minmod{}, FanLi15PathRusanovFlux{});
         wrong.materialize_path_face_contributions(state, tuple.f, tuple.l, tuple.r, tuple.speed,
                                                   tuple.scratch);
       },
       "higher reconstruction accepted");
   record("non_firstorder_refused");
-  for (Real floor : {Real(-1), std::numeric_limits<Real>::quiet_NaN()}) {
+  for (Real floor : {Real(-1), Real(1), std::numeric_limits<Real>::quiet_NaN()}) {
     refuses(
         [&] {
           const auto wrong = prepare_cartesian_operator<2>(geometry, PathModel<false, true>{},
-                                                           NoSlope{}, RusanovFlux{}, floor);
+                                                           NoSlope{}, FanLi15PathRusanovFlux{}, floor);
           wrong.materialize_path_face_contributions(state, tuple.f, tuple.l, tuple.r, tuple.speed,
                                                     tuple.scratch);
         },

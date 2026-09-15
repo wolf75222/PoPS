@@ -1020,9 +1020,10 @@ class PreparedCartesianOperator {
                   "this native path evaluator implements full-temperature D2/M4 Fan-Li15");
     if constexpr (!std::is_same_v<Reconstruction, NoSlope> ||
                   Variables != ReconstructionVariables::Conservative ||
-                  !std::is_same_v<NumericalFlux, RusanovFlux> || DiffusiveModel<Model>)
+                  !std::is_same_v<NumericalFlux, FanLi15PathRusanovFlux> || DiffusiveModel<Model>)
       throw std::invalid_argument(
-          "Fan-Li15 path transport requires FirstOrder conservative Rusanov without diffusion");
+          "Fan-Li15 path transport requires first-order conservative "
+          "FanLi15PathRusanovFlux without diffusion");
     if (!std::isfinite(positivity_floor_) || positivity_floor_ != Real(0))
       throw std::invalid_argument("Fan-Li15 path transport does not permit a positivity floor");
     if (Model::path_operator_identity().empty())

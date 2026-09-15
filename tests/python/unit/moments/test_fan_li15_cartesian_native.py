@@ -109,7 +109,7 @@ endif()
         (directory / f"omp{workers}.stderr").write_text(result.stderr)
         assert result.returncode == 0, result.stdout + result.stderr
         report = json.loads(result.stdout.strip().splitlines()[-1])
-        assert len(report["tests"]) == 20
+        assert len(report["tests"]) == 21
         assert report["repeat_evaluation_kokkos_allocations"] == 0
         if report["execution_space"] == "OpenMP":
             assert report["concurrency"] == workers
