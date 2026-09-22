@@ -39,7 +39,7 @@ functions or classes. The selected authors' benchmark remains unchanged:
 | Uniform checkpoint shape | Distinguish native reversed array shape from legacy field-free logical shape, preserving byte guards | Revision `8ae9097`: 36 focused Python checks; actual one-rank fresh-process rectangular restart; final Knudsen checkpoint |
 | Exact global gather | Replace arithmetic summation with byte assembly after exact ownership checks, preserving signed zero | Official Dim2/MPI rebuild at `4adfddf`; 36 Python checks, four genuine MPI1/MPI2 capture/restart worlds and six MPI1/2/4 gather CTests passed, including signed zero and refusal before mutation |
 | Generic C++ core | Generate Fan-Li physics in Python over variable-count/dimension-generic path-flux and moment primitives; remove the three model-specific C++ headers | 49 affected tests, OpenMP1/2 witnesses and generated Cartesian/composite syntax checks passed; arbitrary public Python path-model admission is not claimed |
-| CI inventory and scheduling | Account for every native/Python test, prebuild the six loader fixtures, split the complete MPI build into two bounded phases | 199 native targets, 13 C++ shards, 38 Python shards and all 121 MPI launches retained; local planner/fixture checks passed, final GitHub CI remains unverified |
+| CI inventory and scheduling | Account for every native/Python test, prebuild the six loader fixtures, split the complete MPI build into two bounded phases | 199 native targets, 13 C++ shards, 38 Python shards and all 121 MPI launches retained; revision `7d701d2` passes 120 MPI launches, with the remaining collective-exception test expectation repaired and locally checked at MPI1/2; final GitHub CI remains unverified |
 
 ## Actual results
 
@@ -73,9 +73,27 @@ PR revision has passed GitHub CI.
   three and six iterations; nine relevant tests pass at MPI1/2/4. The new
   model-independent two-equation regression fails with the previous headers.
   The change preserves the true-residual acceptance check, iteration caps,
-  workspace size and L2/multicolumn paths. It does not guarantee convergence
-  for every coupled rounding cycle. The full rebuilt L3 trajectory remains
-  unqualified until the actual tutorial passes.
+  workspace size and L2/multicolumn paths. The rebuilt `6dc0bcb` pilot accepts
+  its first authored normalization step at `t=1e-10`, then fails at a later
+  FAC outer ordinal 3: true residual `1.274676468585329e-12`, required
+  `1.0529430645742341e-12`, after 512 iterations. This first small interval is
+  intentional and does not establish a CFL collapse.
+  A subsequent generic correction detects an actual adjacent-value promotion
+  followed by rejected true-residual non-descent. It then applies complete
+  one-column corrections only at the current global residual maxima, including
+  all exact ties. Persistence avoids a demonstrated coupled three-equation
+  rounding cycle; normal multicolumn updates leave this recovery mode.
+  All three captured systems pass in 3/4/10 iterations, and 11 affected tests
+  pass at MPI1/2/4, including asymmetric ownership, cap/reset checks, extreme
+  scaling and terminal provider failure after a coordinated update.
+  Each Linf one-column update now requires a local Kokkos reduction per
+  fab/component; possible activation also requires one MPI maximum on the
+  prepared lane. No prepared field, extra operator application, tolerance or
+  iteration allowance is added. Residual maxima do not generally identify the
+  responsible unknown, so this policy does not guarantee convergence for every
+  coupled operator. The original true-residual guard remains authoritative.
+  Official reconstruction and the complete actual L3 tutorial still determine
+  whether the new source qualifies for the campaign.
 - Fan-Li15 `65b0658`, local MPI2/OpenMP2, `16x64`, two AMR levels: cold and
   genuine expanded restart reached `t=0.03`, 33 accepted steps, zero rejections.
   The fine level grew from 2048 to 2560 cells; full stored state/history endpoint

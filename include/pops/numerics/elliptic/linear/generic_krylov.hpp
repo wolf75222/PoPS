@@ -1284,6 +1284,8 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
   SolveNormalization cycle_normalization = normalization;
   Real preconditioner_scale = Real(0);
   bool damp_next_single_column = false;
+  // Local to this solve: a rounded update alone does not authorize a success or a tolerance change.
+  bool coordinate_recovery = false;
   while (iterations < controls.max_iterations) {
     const Real initial_physical_residual = measurement.physical;
     GmresDiagnosticTrace::Cycle diagnostic;
@@ -1484,6 +1486,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
     if (dimension == 0 || !solve_gmres_upper(workspace, dimension, restart))
       return terminal_candidate_report(normalization, measurement, iterations,
                                        SolveStatus::kBreakdown);
+    bool locally_promoted = false;
     if (recover_stagnation && dimension == 1) {
       // One Arnoldi column is one complete correction. Recover a rounded-away update only
       // where the previous true physical residual exceeded tau. Multi-column sums retain their
@@ -1494,13 +1497,13 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
       // A rejected non-decreasing true residual can signal a cycle between
       // adjacent values. Shorten the next complete correction while retaining
       // recovery of masked lost updates. This proposes another candidate; the
-      // same true-residual guard alone can accept it.
-      const ScaledScalar step =
-          damp_next_single_column
-              ? scaled_product(ScaledScalar::from(Real(0.5)), coefficient)
-              : coefficient;
-      ScaledFieldAlgebra::axpy_adjacent_if_stagnant(iterate, step, basis(0),
-                                                    unconverged_components);
+      // same true-residual guard alone can accept it. Once a coupled rounding cycle is
+      // established below, apply the whole correction only at current residual maxima.
+      const ScaledScalar step = damp_next_single_column && !coordinate_recovery
+                                    ? scaled_product(ScaledScalar::from(Real(0.5)), coefficient)
+                                    : coefficient;
+      locally_promoted = ScaledFieldAlgebra::axpy_adjacent_if_stagnant(
+          iterate, step, basis(0), unconverged_components, coordinate_recovery);
     } else {
       for (int column = 0; column < dimension; ++column)
         ScaledFieldAlgebra::axpy(
@@ -1538,12 +1541,26 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
     if (iterations == controls.max_iterations)
       return report_physical(normalization, measurement.physical, iterations,
                              SolveStatus::kIterationLimit);
-    damp_next_single_column = recover_stagnation && dimension == 1 &&
-                              measurement.physical >= initial_physical_residual;
+    // A promotion plus true non-descent demonstrates a rejected representable update.
+    // Coordinate subsequent one-column corrections at the global residual maxima, including
+    // all ties. The equation maximum need not identify the responsible unknown for a general
+    // operator: these are proposals, still bounded by the original residual guard and cap.
+    // Keep this mode through transient increases; immediately restoring all updates can
+    // recreate a coupled rounding cycle. A multi-column recurrence restores its normal path.
+    const bool non_descent = measurement.physical >= initial_physical_residual;
+    bool promoted_rejection = false;
+    if (recover_stagnation && dimension == 1 && !coordinate_recovery && non_descent)
+      promoted_rejection = all_reduce_max(locally_promoted ? 1L : 0L,
+                                          KrylovWorkspaceAccess::execution_lane(workspace)) != 0;
+    coordinate_recovery =
+        recover_stagnation && dimension == 1 && (coordinate_recovery || promoted_rejection);
+    damp_next_single_column = recover_stagnation && dimension == 1 && non_descent;
     if (recover_stagnation) {
       // Capture the raw scientific residual before normalization can round a component near tau.
       // This mask proposes candidates only; the unchanged global true-residual check is authority.
-      const Real threshold = normalization.physical_threshold;
+      const bool select_maximum = coordinate_recovery;
+      const Real threshold =
+          select_maximum ? measurement.physical : normalization.physical_threshold;
       for (std::size_t local = 0; local < unconverged_components.local_size(); ++local) {
         const auto mask = unconverged_components.fab(local).view();
         const auto residual = std::as_const(applied_or_residual.fab(local)).view();
@@ -1551,7 +1568,10 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
         for_each_cell(unconverged_components.box(local), [=] POPS_HD(const Index<Dim>& index) {
           for (int component = 0; component < components; ++component)
             mask(index, component) =
-                Kokkos::abs(residual(index, component)) > threshold ? Real(1) : Real(0);
+                (select_maximum ? Kokkos::abs(residual(index, component)) >= threshold
+                                : Kokkos::abs(residual(index, component)) > threshold)
+                    ? Real(1)
+                    : Real(0);
         });
       }
     }
