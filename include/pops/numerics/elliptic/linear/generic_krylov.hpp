@@ -1286,6 +1286,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
   bool damp_next_single_column = false;
   // Local to this solve: a rounded update alone does not authorize a success or a tolerance change.
   bool coordinate_recovery = false;
+  bool local_promotion_observed = false;
   while (iterations < controls.max_iterations) {
     const Real initial_physical_residual = measurement.physical;
     GmresDiagnosticTrace::Cycle diagnostic;
@@ -1541,16 +1542,21 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
     if (iterations == controls.max_iterations)
       return report_physical(normalization, measurement.physical, iterations,
                              SolveStatus::kIterationLimit);
-    // A promotion plus true non-descent demonstrates a rejected representable update.
+    // Remember actual promotions throughout this episode of rejected one-column candidates.
+    // A promoted cycle can descend before the next ordinary update increases the true residual;
+    // requiring both events in the same cycle would miss that representable rounding cycle.
+    // Multi-column recurrences and new invocations start with no promotion history.
     // Coordinate subsequent one-column corrections at the global residual maxima, including
     // all ties. The equation maximum need not identify the responsible unknown for a general
     // operator: these are proposals, still bounded by the original residual guard and cap.
     // Keep this mode through transient increases; immediately restoring all updates can
     // recreate a coupled rounding cycle. A multi-column recurrence restores its normal path.
     const bool non_descent = measurement.physical >= initial_physical_residual;
+    local_promotion_observed =
+        recover_stagnation && dimension == 1 && (local_promotion_observed || locally_promoted);
     bool promoted_rejection = false;
     if (recover_stagnation && dimension == 1 && !coordinate_recovery && non_descent)
-      promoted_rejection = all_reduce_max(locally_promoted ? 1L : 0L,
+      promoted_rejection = all_reduce_max(local_promotion_observed ? 1L : 0L,
                                           KrylovWorkspaceAccess::execution_lane(workspace)) != 0;
     coordinate_recovery =
         recover_stagnation && dimension == 1 && (coordinate_recovery || promoted_rejection);

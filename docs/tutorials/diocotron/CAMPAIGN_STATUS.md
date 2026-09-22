@@ -39,7 +39,9 @@ functions or classes. The selected authors' benchmark remains unchanged:
 | Uniform checkpoint shape | Distinguish native reversed array shape from legacy field-free logical shape, preserving byte guards | Revision `8ae9097`: 36 focused Python checks; actual one-rank fresh-process rectangular restart; final Knudsen checkpoint |
 | Exact global gather | Replace arithmetic summation with byte assembly after exact ownership checks, preserving signed zero | Official Dim2/MPI rebuild at `4adfddf`; 36 Python checks, four genuine MPI1/MPI2 capture/restart worlds and six MPI1/2/4 gather CTests passed, including signed zero and refusal before mutation |
 | Generic C++ core | Generate Fan-Li physics in Python over variable-count/dimension-generic path-flux and moment primitives; remove the three model-specific C++ headers | 49 affected tests, OpenMP1/2 witnesses and generated Cartesian/composite syntax checks passed; arbitrary public Python path-model admission is not claimed |
+| Generated-model contracts | Extract `ConservationLaw`, `StateConversion` and `NoSource` from headers containing built-in physics, preserving their bodies and legacy APIs | 38 affected source tests and seven syntax checks passed; actual Euler, Fan-Li15 and source/auxiliary/RHS emissions contain none of the five targeted built-in Euler/force definitions |
 | CI inventory and scheduling | Account for every native/Python test, prebuild the six loader fixtures, split the complete MPI build into two bounded phases | 199 native targets, 13 C++ shards, 38 Python shards and all 121 MPI launches retained; revision `7d701d2` passes 120 MPI launches, with the remaining collective-exception test expectation repaired and locally checked at MPI1/2; final GitHub CI remains unverified |
+| Roe test process budget | Give the coherent two-model compilation/trajectory witness an explicit 450-second limit instead of the default 300 seconds | Actual CI stopped at 300.02 seconds after both models compiled; the scheduling estimate is 380 seconds, explicitly derived from that lower bound. All 24 checks pass locally with identical trajectories; shard/workflow limits and scientific controls are unchanged, and the new Linux CI budget remains unqualified |
 
 ## Actual results
 
@@ -92,8 +94,22 @@ PR revision has passed GitHub CI.
   iteration allowance is added. Residual maxima do not generally identify the
   responsible unknown, so this policy does not guarantee convergence for every
   coupled operator. The original true-residual guard remains authoritative.
-  Official reconstruction and the complete actual L3 tutorial still determine
-  whether the new source qualifies for the campaign.
+  The actual rebuilt `19b2bb5` pilot accepts five steps, zero rejections, through
+  `t=0.00400000006`, then refuses another coarse solve at the same 512 cap:
+  true residual `5.656354536045722e-13`, required `5.0993206885413197e-13`.
+  Its promotions occur in descending cycles; an ordinary update increases the
+  residual on the following cycle without a new promotion. Requiring both events
+  in the same cycle therefore misses the trigger. A local boolean now remembers
+  actual promotions across that rejected single-column episode; the existing MPI
+  reduction combines histories at the next non-descent. Multiple columns and new
+  invocations clear the history. No field, matvec or reduction site is added.
+  All four captured systems pass in 3/4/10/10 iterations; twelve targeted tests
+  pass at MPI1/2/4, including a causal dyadic regression that fails on `19b2bb5`
+  and a distributed companion whose residual maximum belongs to another rank.
+  An independent SPD counterexample retains the stated limitation of selecting
+  unknowns from equation maxima. This repair does not guarantee convergence for
+  every operator. Fresh official reconstruction and the complete actual L3
+  tutorial still determine whether the integrated source qualifies for the campaign.
 - Fan-Li15 `65b0658`, local MPI2/OpenMP2, `16x64`, two AMR levels: cold and
   genuine expanded restart reached `t=0.03`, 33 accepted steps, zero rejections.
   The fine level grew from 2048 to 2560 cells; full stored state/history endpoint
