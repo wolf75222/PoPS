@@ -1113,7 +1113,12 @@ jobs:
 
       - name: ccache stats (Python module)
         if: always() && steps.test-plan.outputs.python_shard_count != '0'
-        run: ccache -s
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            ccache -s
+          else
+            echo "ccache was not installed because this job stopped before dependency setup"
+          fi
 
   # GATE PYTHON COMPILE-CACHE (ADC-623). The final-lifecycle cache proof performs four deliberate
   # cold native package compilations plus exact semantic hits/misses (POPS_PROCESS_TIMEOUT = 900).
