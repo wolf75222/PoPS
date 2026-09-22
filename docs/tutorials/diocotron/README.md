@@ -9,6 +9,10 @@ All three are deliberately linear tutorials: all authoring, compilation, executi
 diagnostics, and checkpointing occur in numbered stages at module scope.
 `03_render_results.py` plots genuine native snapshots and generates a GIF.
 
+See [CAMPAIGN_STATUS.md](CAMPAIGN_STATUS.md) for implemented repairs, actual
+validation results, unresolved failures and the remaining campaign. The current
+low-resolution outputs do not complete the paper's figures.
+
 ## Reference and parameters
 
 The reference is [Hoffart et al., arXiv:2510.11808v1](https://arxiv.org/html/2510.11808v1).
