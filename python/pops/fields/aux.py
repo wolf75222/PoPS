@@ -13,7 +13,12 @@ phase that could make a dependency stale.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops.analytic import ScalarExpr
+    from pops.domain.cartesian import CartesianDomainFrame
+    from pops.domain.rectangle import RectangleFrame
 
 from pops._ir.expr import Expr
 from pops.descriptors import Descriptor
@@ -240,6 +245,8 @@ class AnalyticAux(_AuxProducer):
     producer_kind = "derived"
     restart_policy = "recompute"
     regrid_policy = "recompute"
+    expression: ScalarExpr
+    frame: CartesianDomainFrame | RectangleFrame
 
     def __init__(self, target: Any, expression: Any, *, frame: Any,
                  boundary: Any = None) -> None:

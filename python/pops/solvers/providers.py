@@ -739,11 +739,16 @@ def _tensor_boundary_data(value: Any, *, authored: bool = False) -> tuple[str, .
     for condition in value:
         if type(condition) is Periodic:
             result.append("periodic")
-        elif type(condition) is Dirichlet or type(condition) is Neumann:
-            scalar = condition.value if type(condition) is Dirichlet else condition.flux
+        elif type(condition) is Dirichlet:
+            scalar = condition.value
             if type(scalar) not in (int, float) or scalar != 0:
                 raise ValueError("CompositeTensorFAC supports only homogeneous tensor boundary values")
-            result.append("dirichlet" if type(condition) is Dirichlet else "neumann")
+            result.append("dirichlet")
+        elif type(condition) is Neumann:
+            scalar = condition.flux
+            if type(scalar) not in (int, float) or scalar != 0:
+                raise ValueError("CompositeTensorFAC supports only homogeneous tensor boundary values")
+            result.append("neumann")
         elif not authored and type(condition) is str and condition in ("periodic", "dirichlet", "neumann"):
             result.append(condition)
         else:

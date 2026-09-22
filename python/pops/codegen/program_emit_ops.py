@@ -738,6 +738,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("ctx.note_step_projection(%s);" % json.dumps(step_projection))
         var[v.id] = var[state_in.id]
     elif v.op in {"local_transform", "affine_moment_update"}:
+        bidx = _required_block_index(block_idx, v.block, "emit op %r" % v.name)
         if prelude is None:
             raise NotImplementedError(
                 "%s requires an install-time resource scope" % v.op)
@@ -886,6 +887,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.codegen.program_emit_path import emit_path_rhs
         emit_path_rhs(v, var, lines, node_model, provider_plans, bidx, target)
     elif v.op == "rhs":
+        bidx = _required_block_index(block_idx, v.block, "emit op %r" % v.name)
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
         named_fluxes = _named_fluxes(v)

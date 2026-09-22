@@ -30,10 +30,14 @@ class NonconservativeProductLaw:
         return tuple(value for matrix in self.matrices for row in matrix for value in row)
 
     def product_expressions(self) -> tuple[Expr, ...]:
-        return tuple(sum((self.matrices[axis][row][column] * Partial(variable, axis)
-                          for axis in range(len(self.axes))
-                          for column, variable in enumerate(self.variables)), Const(0))
-                     for row in range(len(self.variables)))
+        products: list[Expr] = []
+        for row in range(len(self.variables)):
+            product: Expr = Const(0)
+            for axis in range(len(self.axes)):
+                for column, variable in enumerate(self.variables):
+                    product = product + self.matrices[axis][row][column] * Partial(variable, axis)
+            products.append(product)
+        return tuple(products)
 
     def declaration_references(self) -> tuple[Handle, ...]:
         from pops._ir.expr_references import collect_reference_value

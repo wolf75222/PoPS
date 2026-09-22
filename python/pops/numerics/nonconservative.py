@@ -101,6 +101,10 @@ class FanLi15RawMomentPath:
         from pops._ir.quantity import local_expression_identity
         from pops.model.hash_data import canonical_hash_data
         from pops.moments.fan_li import fan_li15_expressions
+        from pops.physics.board_handles import FluxHandle
+
+        if not isinstance(flux, FluxHandle):
+            raise TypeError("Fan–Li15 path requires a physical FluxHandle")
         model = self.product._model_ref()
         if model is None:
             raise ValueError("Fan–Li15 path flux authentication requires its declaring Model")
@@ -207,10 +211,12 @@ class PathConservativeFiniteVolume(FiniteVolume):
         return result
 
     def to_data(self) -> dict[str, Any]:
-        if not self.flux.is_resolved or not self.path.product.is_resolved:
+        flux = self.flux
+        if (not isinstance(flux, Handle) or not flux.is_resolved
+                or not self.path.product.is_resolved):
             raise ValueError("PathConservativeFiniteVolume.to_data requires resolved physical handles")
         return {"schema_version": 1, "method": "path_conservative_finite_volume",
-                "flux": self.flux.canonical_identity(), "path": self.path.to_data(),
+                "flux": flux.canonical_identity(), "path": self.path.to_data(),
                 "variables": _brick_data(self.variables),
                 "reconstruction": _brick_data(self.reconstruction),
                 "riemann": _brick_data(self.riemann),
