@@ -139,6 +139,8 @@ template <int Dim>
 struct PreparedInterfaceFluxSpec;
 struct BoundaryEvaluationPoint;
 struct InterfaceFluxSample;
+template <int Dim>
+struct InterfaceFluxSampleProjection;
 }  // namespace multiblock
 }  // namespace runtime
 
@@ -417,6 +419,9 @@ class AmrSystem {
                                           std::span<MultiFab<Dim>* const> program_rhs);
   POPS_EXPORT std::string authenticate_prepared_amr_interface_sample(
       const runtime::multiblock::InterfaceFluxSample& sample) const;
+  POPS_EXPORT runtime::multiblock::InterfaceFluxSampleProjection<Dim>
+  prepare_prepared_amr_interface_sample_projection(
+      const runtime::multiblock::InterfaceFluxSample& sample, int target_level) const;
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);
 

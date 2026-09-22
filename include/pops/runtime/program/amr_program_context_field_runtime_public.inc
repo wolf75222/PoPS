@@ -279,6 +279,13 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
   std::vector<std::size_t> candidate_counts;
   std::uint64_t candidate_identity = 0;
   if (active != 0) {
+    std::vector<std::string> shared_source_bindings;
+    if (!shared_samples.empty())
+      prepare_spatial_collectively([&] {
+        shared_source_bindings.reserve(ordered.size());
+        for (int block : runtime_blocks)
+          shared_source_bindings.push_back(shared_flux_source_binding_(block, shared_samples));
+      });
     std::exception_ptr flux_preparation_error;
     try {
       candidate_registry = active_flux_expressions_;
@@ -297,7 +304,9 @@ void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) co
                                    : FluxBasisProvider::PreparedResidual,
             request.temporal_family, evaluations[index]->topology_epoch,
             evaluations[index]->materialization_generation, *request.rhs, evaluations[index],
-            nullptr, nullptr, interval, candidate_registry, candidate_counts, candidate_identity);
+            nullptr, nullptr, interval, candidate_registry, candidate_counts, candidate_identity,
+            shared_source_bindings.empty() ? std::string_view{}
+                                           : std::string_view(shared_source_bindings[index]));
       }
       attach_grouped_shared_flux_(ordered, runtime_blocks, shared_samples, candidate_registry);
     } catch (...) {

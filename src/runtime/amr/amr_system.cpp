@@ -537,7 +537,7 @@ HistoryFluxCheckpointCapacity history_flux_checkpoint_capacity(
   };
   constexpr std::size_t wire = sizeof(std::uint64_t);
   constexpr std::size_t source_characters =
-      std::string_view("pops.amr.history-face-source-point.v1:sha256:").size() + 64;
+      runtime::program::history_flux::maximum_source_identity_characters;
   constexpr std::size_t raw_characters =
       std::string_view("pops.amr.history-physical-face-snapshot.v1:sha256:").size() + 64;
   constexpr std::size_t projection_characters =
@@ -4960,7 +4960,6 @@ struct AmrSystem<Dim>::Impl {
     runtime::program::checkpoint_detail::CountingWriter out;
     out.u64(0);
     out.size(snapshots.size());
-    constexpr std::string_view source_prefix = "pops.amr.history-face-source-point.v1:sha256:";
     constexpr std::string_view raw_prefix = "pops.amr.history-physical-face-snapshot.v1:sha256:";
     std::size_t maximum_components = 1;
     for (const auto& block : blocks)
@@ -4968,8 +4967,7 @@ struct AmrSystem<Dim>::Impl {
     for (const auto& [token, snapshot] : snapshots) {
       if (!snapshot || snapshot->parent || snapshot->identity != token ||
           !token.starts_with(raw_prefix) || token.size() != raw_prefix.size() + 64 ||
-          !snapshot->source_identity.starts_with(source_prefix) ||
-          snapshot->source_identity.size() != source_prefix.size() + 64 ||
+          !runtime::program::history_flux::valid_source_identity(snapshot->source_identity) ||
           snapshot->rank_count != ranks || snapshot->local_rank != rank || snapshot->level < 0 ||
           snapshot->level >= cfg.level_count || snapshot->components <= 0 ||
           static_cast<std::size_t>(snapshot->components) > maximum_components)
@@ -13263,6 +13261,18 @@ std::string AmrSystem<Dim>::authenticate_prepared_amr_interface_sample(
 }
 
 template <int Dim>
+runtime::multiblock::InterfaceFluxSampleProjection<Dim>
+AmrSystem<Dim>::prepare_prepared_amr_interface_sample_projection(
+    const runtime::multiblock::InterfaceFluxSample& sample, int target_level) const {
+  p_->ensure_engine();
+  if (sample.source_topology_epoch > p_->engine->topology_epoch() || target_level < 0 ||
+      static_cast<std::size_t>(target_level) >= p_->multiblock_hierarchy->level_count())
+    throw std::invalid_argument(
+        "shared flux projection has a foreign source epoch or target level");
+  return p_->multiblock_hierarchy->prepare_interface_sample_projection(sample, target_level);
+}
+
+template <int Dim>
 void AmrSystem<Dim>::publish_prepared_amr_program_candidates(
     int level, std::span<MultiFab<Dim>* const> program_candidates) {
   p_->ensure_engine();
@@ -21294,10 +21304,10 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
         interface_production.maximum_interface_identity_characters;
     shape.interface_program_identity_characters =
         expression.interface_coupling_identity_character_bound;
-    shape.interface_stage_characters =
-        std::max(std::string_view("program-stage:").size() + 2 * signed_decimal_characters + 1,
-                 std::string_view("shared-source////weight//").size() +
-                     3 * signed_decimal_characters + 2 * nonnegative_int_decimal_characters);
+    shape.interface_stage_characters = std::max(
+        std::string_view("program-stage:").size() + 2 * signed_decimal_characters + 1,
+        std::string_view("shared-source////weight//").size() + 3 * signed_decimal_characters +
+            2 * nonnegative_int_decimal_characters + std::string_view("/source/").size() + 64);
     shape.interface_payload_terms = interface.max_payload_terms_per_window;
     shape.synchronization_event_count = checked_size_product(
         checked_size_product(p_->blocks.size(), configured_levels - 1,
@@ -22142,6 +22152,9 @@ AmrSystem<kNativeDimension>::capture_prepared_amr_interface_residual(
     std::span<MultiFab<kNativeDimension>* const>, std::span<MultiFab<kNativeDimension>* const>);
 template std::string AmrSystem<kNativeDimension>::authenticate_prepared_amr_interface_sample(
     const runtime::multiblock::InterfaceFluxSample&) const;
+template runtime::multiblock::InterfaceFluxSampleProjection<kNativeDimension>
+AmrSystem<kNativeDimension>::prepare_prepared_amr_interface_sample_projection(
+    const runtime::multiblock::InterfaceFluxSample&, int) const;
 template void AmrSystem<kNativeDimension>::publish_prepared_amr_program_candidates(
     int, std::span<MultiFab<kNativeDimension>* const>);
 template bool AmrSystem<kNativeDimension>::has_package_assembly_lane() const;

@@ -99,6 +99,18 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
     return context.pending_history_remaps_.contains(context.history_key_(std::string(name), level));
   }
 
+  static std::string shared_stage(const runtime::multiblock::InterfaceFluxSample& sample,
+                                  ::pops::amr::Rational weight, bool projected) {
+    return context_type::shared_flux_stage_(
+        sample, weight, context_type::shared_flux_source_identity_(sample), projected);
+  }
+
+  static std::string shared_binding(std::size_t block,
+                                    const runtime::multiblock::InterfaceFluxSample& sample) {
+    return context_type::shared_flux_source_binding_(
+        block, {std::make_shared<const runtime::multiblock::InterfaceFluxSample>(sample)});
+  }
+
   static const auto& active_expression(const context_type& context,
                                        const typename context_type::field_type& field) {
     return context.active_flux_expressions_.at(&field);
@@ -2627,6 +2639,153 @@ TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomica
   EXPECT_TRUE(system.program_exchange_records().empty());
   system.rollback_step_transaction();
   EXPECT_EQ(system.checkpoint_program_exchanges(), mailbox_bytes);
+}
+
+TEST(GeneratedAmrSystemBlock, ProjectedSharedSourcesKeepDistinctLedgerIdentities) {
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<
+      pops::kNativeDimension>;
+  using Sample = pops::runtime::multiblock::InterfaceFluxSample;
+  using Ledger = pops::amr::TransactionalInterfaceFluxLedger<std::vector<pops::Real>>;
+  using Rational = pops::amr::Rational;
+  Sample source;
+  source.interface_identity = "test.shared-interface";
+  source.route_contract = std::string(64, 'a');
+  source.source_topology_epoch = 7;
+  source.source_point = {"macro", 7, 0, 0, 0, Rational(0, 1), 0.25, 0.0};
+  source.source_point.graph_identity = "test.program";
+  source.source_point.rate_identity = "shared-rhs/0";
+  source.source_point.application_identity = "program-rhs-group";
+  const Rational weight(-1, 2);
+  const auto entry = [&](const Sample& sample, Rational coefficient, bool projected = true) {
+    pops::amr::InterfaceFluxFragmentKey key{
+        source.interface_identity,
+        9,
+        1,
+        2,
+        {2, 7, Rational(0, 1), 0.0},
+        Access::shared_stage(sample, coefficient, projected),
+        "test.program",
+        "shared-rhs/0",
+        "program-rhs-group",
+        {{2, 7, Rational(0, 1), 0.0}, {2, 7, Rational(1, 1), 0.25}},
+        pops::amr::InterfaceFluxOrientation::FineOutward,
+        0,
+        1};
+    return Ledger::Entry{std::move(key), {coefficient, 0.25, 0.25, true}, {pops::Real(1)}};
+  };
+  const auto a = entry(source, weight);
+  auto another_level = source;
+  another_level.level = another_level.source_point.level = 1;
+  const auto b = entry(another_level, weight);
+  auto another_epoch = source;
+  another_epoch.source_topology_epoch = 8;
+  const auto c = entry(another_epoch, weight);
+  auto another_fraction = source;
+  another_fraction.source_point.stage_fraction = Rational(1, 2);
+  another_fraction.source_point.physical_time = 0.125;
+  const auto d = entry(another_fraction, weight);
+  const auto e = entry(source, Rational(3, 2));
+  const auto historical = entry(source, weight, false);
+  EXPECT_EQ(historical.key.stage_identity, "shared-source/7/0/0/weight/-1/2");
+  EXPECT_EQ(a.key.stage_identity.size(),
+            historical.key.stage_identity.size() + std::string_view("/source/").size() + 64);
+  Ledger ledger(9, {8, 8, 1, "test.projected-history-identities"});
+  ledger.begin();
+  auto prepared = ledger.prepare_accumulation({a, b, c, d, e, historical});
+  ledger.publish_prepared_accumulation(prepared);
+  EXPECT_EQ(ledger.pending_size(), 6u);
+  EXPECT_THROW(ledger.prepare_accumulation({entry(source, weight)}), std::runtime_error);
+  EXPECT_EQ(ledger.pending_size(), 6u);
+  ledger.rollback();
+  EXPECT_TRUE(ledger.empty());
+}
+
+TEST(GeneratedAmrSystemBlock, ProjectedSharedSourcesRequireCapturedAssociation) {
+  namespace hf = pops::runtime::program::history_flux;
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<
+      pops::kNativeDimension>;
+  using Sample = pops::runtime::multiblock::InterfaceFluxSample;
+  Sample sample;
+  sample.left_block = 0;
+  sample.right_block = 1;
+  sample.route_contract = std::string(64, 'a');
+  sample.source_topology_epoch = 2;
+  sample.source_point = {"macro", 4, 0, 0, 0, {0, 1}, 0.25, 1.0};
+  sample.source_point.graph_identity = "test.program";
+  sample.source_point.rate_identity = "shared-rhs/0";
+  sample.source_point.application_identity = "program-rhs-group";
+  const auto archive = [&](const Sample& physical, std::size_t endpoint, bool bound) {
+    auto raw = std::make_shared<hf::Snapshot<1>>();
+    raw->level = 0;
+    raw->components = 1;
+    raw->domain = {pops::Index<1>(0), pops::Index<1>(1)};
+    raw->cell_size = {0.5};
+    raw->patches = {raw->domain};
+    raw->owners = {0};
+    hf::OwnedPatch<1> patch;
+    patch.global_patch = 0;
+    patch.density[0] = {1, 2, 3};
+    raw->owned = {patch};
+    raw->source_identity = hf::source_point_identity(endpoint, 1, physical.source_point, 0,
+                                                     hf::BasisProvider::PreparedResidual,
+                                                     physical.source_topology_epoch, 1);
+    if (bound)
+      raw->source_identity = hf::bind_shared_source_identity(
+          raw->source_identity, Access::shared_binding(endpoint, physical));
+    raw->identity = hf::content_identity(*raw, {hf::patch_digest(patch)});
+    return raw;
+  };
+  const auto first = archive(sample, 0, true);
+  auto later = sample;
+  ++later.source_point.tick;
+  later.source_point.physical_time += 0.25;
+  const auto second = archive(later, 0, true);
+  const auto other_endpoint = archive(sample, 1, true);
+  const auto legacy = archive(sample, 0, false);
+  hf::SnapshotMap<1> originals{{first->identity, first},
+                               {second->identity, second},
+                               {other_endpoint->identity, other_endpoint},
+                               {legacy->identity, legacy}};
+  const auto bytes = hf::encode_shard<1>(originals, 2);
+  const auto restored = hf::decode_shards<1>({bytes}, 1, 1, 0, 2, bytes.size());
+  EXPECT_EQ(hf::encode_shard<1>(restored, 2), bytes);
+  EXPECT_THROW(hf::decode_shards<1>({bytes}, 1, 1, 0, 2, bytes.size() - 1), std::invalid_argument);
+  const auto project = [&](const std::string& token) {
+    auto view = std::make_shared<hf::Snapshot<1>>();
+    view->parent = restored.at(token);
+    view->source_identity = view->parent->source_identity;
+    view->level = 1;
+    view->components = 1;
+    view->ratio = {2};
+    view->domain = {pops::Index<1>(0), pops::Index<1>(3)};
+    view->cell_size = {0.25};
+    view->patches = {view->domain};
+    view->owners = {0};
+    view->identity = hf::projection_identity(*view);
+    hf::validate_snapshot(*view, 2);
+    return view;
+  };
+  const auto require = [&](std::shared_ptr<const hf::Snapshot<1>> view, std::size_t endpoint,
+                           const Sample& physical) {
+    hf::require_shared_source_binding(view->source_identity,
+                                      Access::shared_binding(endpoint, physical));
+    return hf::require_projection_lineage<1>(view, 0, 1, 1, 2, [](int level) {
+      return pops::Geometry<1>::from_bounds({pops::Index<1>(0), pops::Index<1>(level == 0 ? 1 : 3)},
+                                            pops::RealVector<1>{0}, pops::RealVector<1>{1});
+    });
+  };
+  EXPECT_FALSE(require(project(first->identity), 0, sample).empty());
+  EXPECT_FALSE(require(project(second->identity), 0, later).empty());
+  EXPECT_FALSE(require(project(other_endpoint->identity), 1, sample).empty());
+  // Every archive and projection is otherwise valid, at the same level/domain/components.
+  EXPECT_THROW(require(project(second->identity), 0, sample), std::invalid_argument);
+  EXPECT_THROW(require(project(first->identity), 1, sample), std::invalid_argument);
+  EXPECT_THROW(require(project(other_endpoint->identity), 0, sample), std::invalid_argument);
+  // Old earned archives still round-trip exactly. They have no newly earned cross-level binding.
+  EXPECT_TRUE(hf::valid_source_identity(restored.at(legacy->identity)->source_identity));
+  EXPECT_THROW(require(project(legacy->identity), 0, sample), std::invalid_argument);
+  EXPECT_EQ(first->source_identity.size(), hf::maximum_source_identity_characters);
+  EXPECT_FALSE(hf::valid_source_identity(first->source_identity + ":extra"));
 }
 
 TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {

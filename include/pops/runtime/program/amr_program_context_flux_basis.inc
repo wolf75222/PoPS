@@ -119,7 +119,7 @@ void prepare_active_flux_basis_impl_(
     const level_evaluation_type* evaluation, const std::array<field_type, Dim>* exact_face_fluxes,
     const std::array<field_type*, Dim>* named_cell_fluxes, const ::pops::amr::ClockWindow& interval,
     FluxExpressionRegistry& candidate_registry, std::vector<std::size_t>& candidate_counts,
-    std::uint64_t& candidate_identity) const {
+    std::uint64_t& candidate_identity, std::string_view shared_source_binding = {}) const {
   const ExecutionLane& lane = prepared_execution_lane();
   const long active = active_attempt_states_.empty() ? 0L : 1L;
   const long active_minimum = all_reduce_min(active, lane);
@@ -351,7 +351,7 @@ void prepare_active_flux_basis_impl_(
   const std::uint64_t identity = candidate_identity + 1;
   auto history_snapshot = capture_history_flux_snapshot_(
       block, identity, point, rhs_identity, provider, topology_epoch, materialization_generation,
-      rhs, evaluation, exact_face_fluxes, named_cell_fluxes);
+      rhs, evaluation, exact_face_fluxes, named_cell_fluxes, shared_source_binding);
   std::optional<FluxExpression> prepared_expression;
   std::exception_ptr expression_error;
   try {
@@ -398,7 +398,8 @@ std::shared_ptr<const HistoryFluxSnapshot> capture_history_flux_snapshot_(
     const runtime::multiblock::BoundaryEvaluationPoint& point, int rhs_identity,
     FluxBasisProvider provider, std::uint64_t topology_epoch, std::uint64_t generation,
     const field_type& rhs, const level_evaluation_type* evaluation,
-    const std::array<field_type, Dim>* exact, const std::array<field_type*, Dim>* named) const {
+    const std::array<field_type, Dim>* exact, const std::array<field_type*, Dim>* named,
+    std::string_view shared_source_binding = {}) const {
   const auto& owners = runtime_state().hist_.owner;
   if (std::none_of(owners.begin(), owners.end(),
                    [&](const auto& entry) { return entry.second == static_cast<int>(block); }))
@@ -408,6 +409,8 @@ std::shared_ptr<const HistoryFluxSnapshot> capture_history_flux_snapshot_(
   prepare_spatial_collectively([&] {
     source = history_flux::source_point_identity(block, basis_identity, point, rhs_identity,
                                                  provider, topology_epoch, generation);
+    if (!shared_source_binding.empty())
+      source = history_flux::bind_shared_source_identity(source, shared_source_binding);
     geometry = facade_->prepared_amr_level_geometry(active_level_);
   });
   return history_flux::execution::capture_owned_snapshot<Dim>(
