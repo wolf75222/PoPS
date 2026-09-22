@@ -1273,6 +1273,13 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
       static_cast<std::size_t>(restart) + 1u)
     throw std::logic_error("prepared GMRES reduction workspace is undersized");
 
+  // An m-column candidate reads only v_0,...,v_(m-1). The otherwise unused v_restart
+  // storage holds a component mask in infinity mode; its final Arnoldi emission is skipped below.
+  // Start empty: recovery is enabled only after this invocation has rejected a real candidate.
+  const bool recover_stagnation = controls.physical_norm == KrylovPhysicalNorm::component_linf;
+  MultiFab<Dim>& unconverged_components = basis(restart);
+  if (recover_stagnation)
+    PreparedFieldAlgebra::zero(unconverged_components);
   int iterations = 0;
   SolveNormalization cycle_normalization = normalization;
   Real preconditioner_scale = Real(0);
@@ -1409,7 +1416,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
       }
       const bool lucky_breakdown = arnoldi_norm == Real(0);
       last_lucky_breakdown = lucky_breakdown;
-      if (!lucky_breakdown) {
+      if (!lucky_breakdown && (!recover_stagnation || column + 1 < restart)) {
         PreparedFieldAlgebra::copy(basis(column + 1), *arnoldi_vector);
         PreparedFieldAlgebra::divide(basis(column + 1), arnoldi_norm);
       }
@@ -1475,10 +1482,19 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
     if (dimension == 0 || !solve_gmres_upper(workspace, dimension, restart))
       return terminal_candidate_report(normalization, measurement, iterations,
                                        SolveStatus::kBreakdown);
-    for (int column = 0; column < dimension; ++column)
-      ScaledFieldAlgebra::axpy(
-          iterate, KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, column, restart),
-          basis(column));
+    if (recover_stagnation && dimension == 1) {
+      // One Arnoldi column is one complete correction. Recover a rounded-away update only
+      // where the previous true physical residual exceeded tau. Multi-column sums retain their
+      // established path; rounding individual terms towards adjacent values could introduce drift.
+      ScaledFieldAlgebra::axpy_adjacent_if_stagnant(
+          iterate, KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, 0, restart),
+          basis(0), unconverged_components);
+    } else {
+      for (int column = 0; column < dimension; ++column)
+        ScaledFieldAlgebra::axpy(
+            iterate, KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, column, restart),
+            basis(column));
+    }
 
     measurement = physical_true_residual_measurement(
         problem, workspace, applied_or_residual, rhs, iterate, controls.physical_norm);
@@ -1510,6 +1526,21 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
     if (iterations == controls.max_iterations)
       return report_physical(normalization, measurement.physical, iterations,
                              SolveStatus::kIterationLimit);
+    if (recover_stagnation) {
+      // Capture the raw scientific residual before normalization can round a component near tau.
+      // This mask proposes candidates only; the unchanged global true-residual check is authority.
+      const Real threshold = normalization.physical_threshold;
+      for (std::size_t local = 0; local < unconverged_components.local_size(); ++local) {
+        const auto mask = unconverged_components.fab(local).view();
+        const auto residual = std::as_const(applied_or_residual.fab(local)).view();
+        const int components = unconverged_components.ncomp();
+        for_each_cell(unconverged_components.box(local), [=] POPS_HD(const Index<Dim>& index) {
+          for (int component = 0; component < components; ++component)
+            mask(index, component) =
+                Kokkos::abs(residual(index, component)) > threshold ? Real(1) : Real(0);
+        });
+      }
+    }
     rebase_cycle_residual(applied_or_residual, measurement, normalization, cycle_normalization);
     // The next restart is a new Krylov recurrence.  It may choose a fresh scalar-equivalent
     // preconditioner normalization suited to its newly rebased residual; within that cycle the

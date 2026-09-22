@@ -1,4 +1,4 @@
-# Hoffart finite-volume campaign: handoff status
+# Hoffart finite-volume campaign: active status
 
 Snapshot: 2026-09-22. This is an unfinished research implementation. The
 low-resolution results below do not qualify the higher-resolution campaign or
@@ -31,13 +31,15 @@ functions or classes. The selected authors' benchmark remains unchanged:
 
 | Area | Change | Retained validation boundary |
 | --- | --- | --- |
-| Mapped field coupling | Full tensor coarse GMRES, polar Poisson preconditioning, original physical infinity residual checks | Local operator/manufactured tests and the low ROMEO runs passed; the larger physical grid still fails below |
-| FAC hierarchy | Synchronize covered parents after corrections; conservative fine-interface flux support | Bounded AMR/operator tests; not a general high-resolution convergence guarantee |
+| Mapped field coupling | Full tensor coarse GMRES, polar Poisson preconditioning, original physical infinity residual checks | Local operator/manufactured tests and the low ROMEO runs passed; the newly repaired larger-grid solve still needs a rebuilt full trajectory |
+| FAC hierarchy | Synchronize covered parents after corrections and after the periodic gauge; conservative fine-interface flux support | Original FAC tolerances pass; covered-parent regression checks pass at `1e-12`; not a general high-resolution convergence guarantee |
 | MPI execution | Serialize public model artifact publication; synchronize AMR body failures before flux publication | Focused MPI/runtime witnesses; not all backend or multi-node coverage |
 | AMR continuation | Preserve accepted-attempt authority, histories and auxiliary images; rebuild generated resources after accepted history remap | Genuine expanded cold/restart comparisons on revision `65b0658` |
 | Native packaging | Authenticate relocated installed extension bytes | Official build/doctor and retained source/installed manifests |
 | Uniform checkpoint shape | Distinguish native reversed array shape from legacy field-free logical shape, preserving byte guards | Revision `8ae9097`: 36 focused Python checks; actual one-rank fresh-process rectangular restart; final Knudsen checkpoint |
-| Exact global gather | Replace arithmetic summation with byte assembly after exact ownership checks, preserving signed zero | Original two-rank defect measured independently; the final patch and expanded native regression still require rebuild and execution |
+| Exact global gather | Replace arithmetic summation with byte assembly after exact ownership checks, preserving signed zero | Official Dim2/MPI rebuild at `4adfddf`; 36 Python checks, four genuine MPI1/MPI2 capture/restart worlds and six MPI1/2/4 gather CTests passed, including signed zero and refusal before mutation |
+| Generic C++ core | Generate Fan-Li physics in Python over variable-count/dimension-generic path-flux and moment primitives; remove the three model-specific C++ headers | 49 affected tests, OpenMP1/2 witnesses and generated Cartesian/composite syntax checks passed; arbitrary public Python path-model admission is not claimed |
+| CI inventory and scheduling | Account for every native/Python test, prebuild the six loader fixtures, split the complete MPI build into two bounded phases | 199 native targets, 13 C++ shards, 38 Python shards and all 121 MPI launches retained; local planner/fixture checks passed, final GitHub CI remains unverified |
 
 ## Actual results
 
@@ -52,8 +54,18 @@ PR revision has passed GitHub CI.
   MPI4/OpenMP2 pilot before any accepted positive-time state. The coarse solve
   exhausted 512 iterations: true/original-stencil infinity residual
   `2.5020132470362846e-12`, required tolerance `2.2716170886597616e-12`.
-  This is a valid refusal. Its cause is not yet isolated; increasing tolerances
-  or treating the small excess as convergence is not authorized.
+  This is a valid refusal. A new local MPI4/OpenMP2 capture after rebuilding
+  `f57f5dd` reproduces the failure at FAC outer ordinal 2, with a true residual
+  of `2.545564254221145e-12` and 512 one-column restart cycles. Corrections of
+  approximately half an ULP disappear when added to the same coefficient.
+  Moving that coefficient one representable value downward yields a true
+  residual of `2.1814437913689897e-12`, below the unchanged tolerance. This is
+  an exact-input diagnostic witness. The generic single-column GMRES recovery
+  now reaches this accepted residual in three iterations on the MPI4 capture.
+  Eight relevant tests pass at MPI1/2/4, including a coupled counterexample
+  that correctly refuses convergence, unchanged iteration caps, extreme
+  preconditioner scaling, and workspace reuse. A rebuilt full trajectory is
+  still pending.
 - Fan-Li15 `65b0658`, local MPI2/OpenMP2, `16x64`, two AMR levels: cold and
   genuine expanded restart reached `t=0.03`, 33 accepted steps, zero rejections.
   The fine level grew from 2048 to 2560 cells; full stored state/history endpoint
@@ -79,16 +91,16 @@ projection or modified closure has been used to manufacture a trajectory.
 ## Required continuation
 
 1. Rebuild the final source with the repository's official incremental workflow.
-   Requalify exact byte gathering and the complete MPI1/MPI2 rectangular
-   checkpoint/restart matrix. The retained `8ae9097` native binary does not
-   include the newly committed gather repair.
-2. Diagnose the larger-grid failure with unchanged 512/64 coarse controls and
-   strict residual acceptance. A separate, unapplied diagnostic patch and
-   failed-input decoder are retained in the local handoff evidence. Its second
-   version addresses the reviewed stream-failure and metadata-size issues;
-   native on/off parity and collective failure tests remain necessary.
-3. Repair the measured numerical cause, rebuild and rerun the relevant local
-   tests and current-revision ROMEO low/restart/larger-grid checks. Do not carry
+   The gather repair is qualified on `4adfddf`; the generic core and diagnostic
+   changes were rebuilt at `f57f5dd`. Each later production change requires a
+   new authenticated native artifact before scientific validation.
+2. Run the real larger-grid case with the qualified generic recovery for
+   captured representability stagnation. The 512/64 coarse controls and the
+   original-stencil residual remain unchanged. Optional capture/trace instrumentation is
+   integrated and has passed on/off parity, exact replay and collective refusal
+   checks at MPI1/2/4. Longer restart cycles and persistent compensated updates
+   were tested on the exact captured input and did not solve the defect.
+3. Run the relevant local tests and current-revision ROMEO low/restart/larger-grid checks. Do not carry
    acceptance across an unverified source or native-artifact change.
 4. Complete the separate Linux Fan-Li check, then approximately two hours of
    measured validation and time/storage estimation. **Zero designated two-hour
@@ -105,5 +117,5 @@ projection or modified closure has been used to manufacture a trajectory.
 The local task's `output/STATUS.md`, `output/FIGURES.md` and
 `output/HANDOFF_ASTRA.md` contain the full job ledger, exact evidence hashes,
 artifact paths and deployment instructions. Raw outputs, private deployment
-metadata and unapplied diagnostic proposals are not shipped as source changes
+metadata and rejected diagnostic prototypes are not shipped as source changes
 in this draft PR.

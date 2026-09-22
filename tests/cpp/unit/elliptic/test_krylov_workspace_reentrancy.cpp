@@ -1806,6 +1806,7 @@ TEST(test_krylov_workspace_reentrancy, noncongruent_split_communicator_is_reject
 
 TEST(test_krylov_workspace_reentrancy,
      gmres_confirms_true_residual_before_classifying_the_iteration_cap) {
+  comm_init();
   // A=I and b=(1,1), but left P=diag(1,1e-14) makes the first Arnoldi residual tiny
   // while the scientific residual remains approximately one. An estimate may request a true
   // check; it cannot make the iteration cap turn that unconverged value into Solved.
@@ -2311,6 +2312,198 @@ TEST(test_krylov_workspace_reentrancy, gmres_infinity_refuses_prepared_nullspace
       detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
   EXPECT_TRUE(report.solved()) << report.reason;
   EXPECT_EQ(report.iters, 0);
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     gmres_single_column_recovers_masked_representable_stagnation) {
+  comm_init();
+  const TestLayout boxes(std::vector<TestBox>{TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}}});
+  const TestDistribution mapping = TestDistribution::replicated(boxes, world_rank_space());
+  const auto vectors = TestVectorDistribution::replicated();
+  const Real base = Real(1.5);
+  const Real ulp = std::nextafter(base, std::numeric_limits<Real>::infinity()) - base;
+  const Real tolerance = Real(0.75) * ulp;
+  const Real high_scale = std::ldexp(Real(1), 2 * std::numeric_limits<Real>::max_exponent / 3);
+  const Real low_scale = Real(1) / high_scale;
+  // All entries are binary fractions. For the first matrix, the exact inverse proposes
+  // (+15/32,-15/32) ulp: both ordinary additions stagnate. Only equation 0 exceeds tau.
+  // Moving x_0 by one ulp passes; moving both components would fail the true residual.
+  // The second matrix is a counterexample to assuming that the mask promises descent:
+  // the proposed x_0 step creates a residual of two ulps in equation 1 and must be rejected.
+  for (const bool coupled_refusal : {false, true}) {
+    for (const int restart : {1, 3}) {
+      for (const Real preconditioner_scale : {Real(1), high_scale, low_scale}) {
+        SCOPED_TRACE(coupled_refusal);
+        SCOPED_TRACE(restart);
+        SCOPED_TRACE(preconditioner_scale);
+        TestField iterate = make_field(boxes, mapping, 2, 0);
+        TestField rhs = make_field(boxes, mapping, 2, 0);
+        const Real initial_first = coupled_refusal ? std::nextafter(base, Real(2)) : base;
+        const Real row_factor = coupled_refusal ? Real(1) : Real(0.25);
+        const Real inverse_factor = coupled_refusal ? Real(0.5) : Real(2);
+        const Real first_rhs = (coupled_refusal ? Real(1.875) : Real(0.9375)) * ulp;
+        const Real second_rhs = coupled_refusal ? Real(3) : Real(0.75);
+        const auto reset = [&] {
+          for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+            const auto x = iterate.fab(local).view();
+            const auto right = rhs.fab(local).view();
+            for_each_cell(iterate.box(local), [=] POPS_HD(const Index<kDim>& index) {
+              x(index, 0) = initial_first;
+              x(index, 1) = base;
+              right(index, 0) = first_rhs;
+              right(index, 1) = second_rhs;
+            });
+          }
+          Kokkos::fence();
+        };
+        reset();
+        const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+        const TestKrylovMethod method = gmres_krylov_method<kDim>(restart);
+        const TestKrylovFootprint footprint{2, extent(0), true};
+        auto preconditioner = TestLinearPreconditionerProvider::trusted_extension(
+            {"pops.test.krylov.masked-stagnation-inverse", 1}, {}, [=](const ExecutionLane&) {
+              return TestLinearPreconditionerCallbacks{
+                  [] {},
+                  [=](TestField& out, const TestField& in) {
+                    for (std::size_t local = 0; local < out.local_size(); ++local) {
+                      const auto output = out.fab(local).view();
+                      const auto input = in.fab(local).view();
+                      for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                        output(index, 0) =
+                            preconditioner_scale *
+                            (Real(0.5) * input(index, 0) + inverse_factor * input(index, 1));
+                        output(index, 1) =
+                            preconditioner_scale *
+                            (-Real(0.5) * input(index, 0) + inverse_factor * input(index, 1));
+                      });
+                    }
+                    Kokkos::fence();
+                  },
+                  [] { return std::size_t{0}; }};
+            });
+        TestAffineProblem problem(
+            iterate,
+            TestAffineOperatorProvider::trusted_reentrant(
+                [=](TestField& out, const TestField& in) {
+                  for (std::size_t local = 0; local < out.local_size(); ++local) {
+                    const auto output = out.fab(local).view();
+                    const auto input = in.fab(local).view();
+                    for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                      output(index, 0) = input(index, 0) - input(index, 1);
+                      output(index, 1) = row_factor * (input(index, 0) + input(index, 1));
+                    });
+                  }
+                  Kokkos::fence();
+                },
+                [] { return std::size_t{0}; }),
+            TestLinearPreconditioner(iterate, std::move(preconditioner), vectors),
+            LinearOperatorProperties::general(), footprint, TestNullspacePolicy::nonsingular(),
+            [&snapshot] { return snapshot; }, {}, vectors);
+        TestKrylovWorkspace workspace(iterate, method, footprint, vectors);
+        problem.prepare(snapshot);
+        workspace.bind(problem);
+        const auto allocated = workspace.allocation_count();
+        for (const auto norm :
+             {KrylovPhysicalNorm::metric_l2, KrylovPhysicalNorm::component_linf}) {
+          for (const int maximum : {1, 2, 1}) {
+            reset();
+            TestKrylovControls controls{method, Real(0), tolerance, maximum};
+            controls.physical_norm = norm;
+            GmresDiagnosticTrace trace;
+            controls.diagnostic_trace = &trace;
+            const auto report =
+                detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+            const bool recover = norm == KrylovPhysicalNorm::component_linf && maximum == 2;
+            EXPECT_EQ(report.solved(), recover && !coupled_refusal) << report.reason;
+            EXPECT_EQ(report.iters, maximum);
+            EXPECT_EQ(workspace.allocation_count(), allocated);
+            ASSERT_EQ(trace.size, static_cast<std::size_t>(maximum));
+            for (std::size_t cycle = 0; cycle < trace.size; ++cycle)
+              EXPECT_EQ(trace.cycles[cycle].dimension, 1);
+            Real residual = 0;
+            for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+              auto host = iterate.fab(local).create_host_mirror();
+              iterate.fab(local).copy_to_host(host);
+              const Real expected_first =
+                  recover ? std::nextafter(initial_first, Real(2)) : initial_first;
+              EXPECT_EQ(host(0), expected_first);
+              EXPECT_EQ(host(1), base);
+              const Real r0 = first_rhs - (host(0) - host(1));
+              const Real r1 = second_rhs - row_factor * (host(0) + host(1));
+              residual = std::max(residual, std::max(std::abs(r0), std::abs(r1)));
+            }
+            residual = all_reduce_max(residual);
+            if (recover && !coupled_refusal)
+              EXPECT_LE(residual, tolerance);
+            else
+              EXPECT_GT(residual, tolerance);
+            if (norm == KrylovPhysicalNorm::component_linf)
+              EXPECT_EQ(report.residual_norm, residual);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     scaled_stagnation_update_preserves_masks_and_exponent_guards) {
+  comm_init();
+  const TestLayout boxes(std::vector<TestBox>{TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}}});
+  const TestDistribution mapping = TestDistribution::replicated(boxes, world_rank_space());
+  TestField destination = make_field(boxes, mapping, 1, 0);
+  TestField reference = make_field(boxes, mapping, 1, 0);
+  TestField source = make_field(boxes, mapping, 1, 0);
+  TestField mask = make_field(boxes, mapping, 1, 0);
+  const Real base = Real(1.5);
+  const Real ulp = std::nextafter(base, Real(2)) - base;
+  using detail::ScaledScalar;
+  const auto run = [&](Real value, const ScaledScalar& coefficient, Real input, bool enabled,
+                       bool expect_adjacent, bool negative) {
+    destination.set_val(value);
+    reference.set_val(value);
+    source.set_val(input);
+    mask.set_val(enabled ? Real(1) : Real(0));
+    detail::ScaledFieldAlgebra::axpy(reference, coefficient, source);
+    detail::ScaledFieldAlgebra::axpy_adjacent_if_stagnant(destination, coefficient, source, mask);
+    for (std::size_t local = 0; local < destination.local_size(); ++local) {
+      auto actual = destination.fab(local).create_host_mirror();
+      destination.fab(local).copy_to_host(actual);
+      auto ordinary = reference.fab(local).create_host_mirror();
+      reference.fab(local).copy_to_host(ordinary);
+      const Real expected =
+          expect_adjacent ? std::nextafter(value, negative ? -std::numeric_limits<Real>::infinity()
+                                                           : std::numeric_limits<Real>::infinity())
+                          : ordinary(0);
+      if (std::isnan(expected))
+        EXPECT_TRUE(std::isnan(actual(0)));
+      else
+        EXPECT_EQ(std::bit_cast<RealBits>(actual(0)), std::bit_cast<RealBits>(expected));
+    }
+  };
+  run(base, ScaledScalar::from(Real(0.25) * ulp), Real(1), false, false, false);
+  run(base, ScaledScalar::from(Real(0.25) * ulp), Real(1), true, true, false);
+  run(base, ScaledScalar::from(-Real(0.25) * ulp), Real(1), true, true, true);
+  run(base, ScaledScalar::zero(), Real(1), true, false, false);
+  run(base, ScaledScalar::from(Real(1)), Real(0), true, false, false);
+  run(std::numeric_limits<Real>::max(), ScaledScalar::from(Real(1)), Real(1), true, false, false);
+  run(base, ScaledScalar::from(Real(1)), std::numeric_limits<Real>::quiet_NaN(), true, false,
+      false);
+  const Real high = std::ldexp(Real(1), 2 * std::numeric_limits<Real>::max_exponent / 3);
+  const Real low = Real(1) / high;
+  const auto huge = ScaledScalar::product(ScaledScalar::from(high), ScaledScalar::from(high));
+  const auto tiny = ScaledScalar::product(ScaledScalar::from(low), ScaledScalar::from(low));
+  Real materialized = Real(0);
+  EXPECT_FALSE(huge.try_materialize(materialized));
+  EXPECT_FALSE(tiny.try_materialize(materialized));
+  ASSERT_TRUE(huge.try_apply(low, materialized));
+  EXPECT_EQ(materialized, high);
+  ASSERT_TRUE(tiny.try_apply(high, materialized));
+  EXPECT_EQ(materialized, low);
+  run(Real(0), huge, low, true, false, false);
+  run(base, tiny, high, true, true, false);
+  run(base, ScaledScalar::negated(tiny), high, true, true, true);
+  run(-high, huge, low, false, false, false);
 }
 
 }  // namespace
