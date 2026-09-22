@@ -191,7 +191,11 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
         "all parent levels in one hierarchy sweep must share one hysteresis cycle" in native_source
     )
     assert "restored.restore_checkpoint_accepted_state(accepted)" in native_source
-    assert "EXPECT_THROW(restored.restore_checkpoint_accepted_state(invalid)" in native_source
+    # The fixture authenticates both the serial exception and collective MPI refusal.
+    assert "expect_restore_refusal([&] { restored.restore_checkpoint_accepted_state(invalid); }" in native_source
+    assert "EXPECT_THROW(restore(), std::invalid_argument)" in native_source
+    assert "EXPECT_STREQ(error.what(), collective_message)" in native_source
+    assert "AMR checkpoint post-requalification validation failed collectively" in native_source
 
 
 def test_m3_final_gate_has_no_deferred_requirement():

@@ -23,6 +23,8 @@ UNCHANGED_CONSUMERS = (
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
         "pops/runtime/program/amr_program_context_spatial.inc",
+        "pops/runtime/program/amr_program_context_rhs_input_trace.inc",
+        "pops/runtime/program/amr_program_context_path_rhs.inc",
         "pops/runtime/program/amr_program_context_spatial_implicit.inc",
         "pops/runtime/program/amr_program_context_spatial_imex.inc",
         "pops/runtime/program/amr_program_context_field_runtime_public.inc",
@@ -58,6 +60,10 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
+    "rhs_input_trace": frozenset(
+        {"pops/runtime/program/amr_program_context_rhs_input_trace.inc"}
+    ),
+    "path_rhs": frozenset({"pops/runtime/program/amr_program_context_path_rhs.inc"}),
     "field_scratch": frozenset(
         {"pops/runtime/program/amr_program_context_general_field_scratch.inc"}
     ),
@@ -133,6 +139,10 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     ),
 }
 PROGRAM_RESPONSIBILITY_BUDGETS = {
+    # Immutable same-SSA parent inputs and synchronized conservative/NCP face publication
+    # are new, separate responsibilities; both remain in the counted semantic closure.
+    "rhs_input_trace": 150,
+    "path_rhs": 560,
     # Collective shape authentication and stable per-level general-field scratch identity.
     "field_scratch": 96,
     "joint_field_publication": 350,
@@ -140,10 +150,12 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     # bounded extension to the former scalar implementation (12 source lines today).
     "spatial_implicit": 400 + 32,
     "diffusion": 180,
-    "spatial_context": 350,
-    "spatial_operations": 900,
+    # Tensor hierarchy access and exact input-trace lifetime extend the existing ports.
+    "spatial_context": 350 + 16,
+    "spatial_operations": 900 + 80,
     "field_runtime": 1_800,
-    "history_checkpoint": 1_800,
+    # Regrids retain accepted diagnostic/auxiliary images and attempt authority.
+    "history_checkpoint": 1_800 + 64,
     "flux_expression": 1_200,
     "shared_flux": 400,
     "flux_family": 128,
@@ -152,7 +164,7 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "mapping_continuation": 250,
     # Authenticate cross-level barrier requests before one collective callback and resume.
     "hierarchy_barriers": 150,
-    "subcycling_runtime": 800,
+    "subcycling_runtime": 800 + 24,
     "cell_temporal_runtime": 800,
 }
 # Intentional Phase 0 policy envelopes: fragment and scaffolding growth remain
@@ -174,10 +186,16 @@ FIELD_SCRATCH_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["field_scratch"]
 # Resumable per-level map ports have their own authority and aggregate allowance.
 MAPPING_CONTINUATION_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["mapping_continuation"]
 HIERARCHY_BARRIER_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["hierarchy_barriers"]
+PATH_INPUT_FRAGMENT_BUDGET = (
+    PROGRAM_RESPONSIBILITY_BUDGETS["rhs_input_trace"]
+    + PROGRAM_RESPONSIBILITY_BUDGETS["path_rhs"]
+)
+TENSOR_INPUT_HISTORY_PORT_BUDGET = 16 + 80 + 64 + 24
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
     + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
+    + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -185,15 +203,20 @@ CONTEXT_RESOURCE_SCAFFOLDING_BUDGET = 32
 # The shared subcycling engine retains synchronized attempts, callback authority and
 # rollback state across begin/resume/finish; this is distinct from context map ports.
 SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET = 200
+# Typed hierarchy tensor selection, retained boundaries and generation identities.
+HIERARCHY_TENSOR_SCAFFOLDING_BUDGET = 64
 PROGRAM_SCAFFOLDING_BUDGET = (
     1_850 + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET
     + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
+    + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
 )
 PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
     + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
     + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
+    + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
+    + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
 )
 SEMANTIC_AUTHORITIES = frozenset(
     {
@@ -224,6 +247,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/parallel/collective_exception.hpp",
         "pops/parallel/execution_lane.hpp",
         "pops/runtime/amr/amr_runtime.hpp",
+        "pops/runtime/amr/amr_tensor_elliptic.hpp",
         "pops/runtime/amr/prepared_multiblock_hierarchy.hpp",
         "pops/runtime/amr_system.hpp",
         "pops/runtime/builders/compiled/generated_amr_system_block.hpp",
