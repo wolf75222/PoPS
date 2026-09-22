@@ -1040,7 +1040,8 @@ jobs:
         run: |
           # The full gate exercises the serial HDF5 writer used by the final examples. h5py remains
           # an optional user dependency; CI installs that capability explicitly instead of skipping.
-          pip install --upgrade pip numpy pytest h5py
+          # mpmath supplies the independent precision oracle in the Fan–Li native witnesses.
+          pip install --upgrade pip numpy pytest h5py 'mpmath>=1.3.0'
           # PoPS est Kokkos-only : les tests DSL qui compilent un loader/.so production ou son ABI
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser
           # via Kokkos_ROOT / POPS_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _pops.
