@@ -50,6 +50,7 @@ except Exception as exc:  # noqa: BLE001 -- optional outside the required MPI la
 
 _COMM = _pops.mpi_world()
 _fails = 0
+_SHARED_CELLS = 16
 _SHARED_DT = 1.0e-3
 _SHARED_SOURCE_STEPS = 2
 _SHARED_VELOCITY_X = 20.0
@@ -443,7 +444,10 @@ def _shared_interface_resolved(component):
     resolved = pops.resolve(
         pops.validate(core.case),
         layout=AMR(
-            grid=CartesianGrid(frame=core.frame, cells=(8, 8)),
+            # The resolved transfer requires buffer=2 plus lookahead=1. On an 8-cell
+            # axis the two boundary bands fill the domain before the first step.
+            # Sixteen cells leave an actual coarse interior for the restart transform.
+            grid=CartesianGrid(frame=core.frame, cells=(_SHARED_CELLS, _SHARED_CELLS)),
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
             tagging=tagging,
             regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
@@ -456,17 +460,17 @@ def _shared_interface_resolved(component):
         compile_options={"include": str(Path(__file__).resolve().parents[4] / "include")},
     )
 
-    left_initial = np.zeros((1, 8, 8), dtype=np.float64)
-    right_initial = np.zeros((1, 8, 8), dtype=np.float64)
+    left_initial = np.zeros((1, _SHARED_CELLS, _SHARED_CELLS), dtype=np.float64)
+    right_initial = np.zeros((1, _SHARED_CELLS, _SHARED_CELLS), dtype=np.float64)
     left_initial[0, :, -1:] = 1.0
     right_initial[0, :, :1] = 3.0
     params = {
         core.case.resolve(handle, block=block): value
         for block in (core.tracer, right)
         for handle, value in (
-            # dx_fine=1/16 and the 2:1 subcycle gives CFL_fine=0.16. Across the two
-            # macro-steps this moves the profile by 0.64 fine cell: enough to change the
-            # thresholded hierarchy without approaching the first-order stability limit.
+            # dx_fine=1/32 and the 2:1 subcycle gives CFL_fine=0.32, below the
+            # AB2/upwind bound 0.5. The two macro-steps move the profile 1.28 fine
+            # cells so the thresholded front extends beyond its initial boundary band.
             (core.velocity_x_param, _SHARED_VELOCITY_X),
             (core.velocity_y_param, 1.0e-12),
             (core.inlet_x_param, 0.0),
@@ -714,6 +718,20 @@ def test_regrid_on_restart_mpi_shared_interface_transaction() -> None:
             console=False,
         )
         source_image = _accepted_image(source, blocks=("tracer", "right"))
+        fine_cells = sum(
+            (upper[0] - lower[0] + 1) * (upper[1] - lower[1] + 1)
+            for level, lower, upper in source_image["boxes"]
+            if level == 1
+        )
+        chk(
+            0 < fine_cells < (2 * _SHARED_CELLS) ** 2,
+            "source leaves a genuine coarse interior for the restart hierarchy transform",
+        )
+        right_coarse = source_image["states"][2].reshape(_SHARED_CELLS, _SHARED_CELLS)
+        chk(
+            bool(np.any(right_coarse[:, 1:] > 0.10)),
+            "short advection moves the tagged right front beyond its initial boundary band",
+        )
         chk(
             report.accepted_steps == _SHARED_SOURCE_STEPS,
             "shared-interface source fills its AB2 history",
