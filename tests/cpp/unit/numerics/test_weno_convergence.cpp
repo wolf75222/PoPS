@@ -7,6 +7,7 @@
 
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/nd/reconstruction.hpp>
+#include <pops/numerics/spatial/nd/state_schema.hpp>
 
 #include <algorithm>
 #include <cmath>

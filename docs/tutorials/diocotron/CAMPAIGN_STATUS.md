@@ -31,7 +31,7 @@ functions or classes. The selected authors' benchmark remains unchanged:
 
 | Area | Change | Retained validation boundary |
 | --- | --- | --- |
-| Mapped field coupling | Full tensor coarse GMRES, polar Poisson preconditioning, original physical infinity residual checks | Local operator/manufactured tests and the low ROMEO runs passed; the newly repaired larger-grid solve still needs a rebuilt full trajectory |
+| Mapped field coupling | Full tensor coarse GMRES, polar Poisson preconditioning, original physical infinity residual checks | Local operator/manufactured tests, the low ROMEO runs and the rebuilt local `97279de` L3 pilot through `t=0.01` passed; current-source Linux and longer trajectories remain pending |
 | FAC hierarchy | Synchronize covered parents after corrections and after the periodic gauge; conservative fine-interface flux support | Original FAC tolerances pass; covered-parent regression checks pass at `1e-12`; not a general high-resolution convergence guarantee |
 | MPI execution | Serialize public model artifact publication; synchronize AMR body failures before flux publication | Focused MPI/runtime witnesses; not all backend or multi-node coverage |
 | AMR continuation | Preserve accepted-attempt authority, histories and auxiliary images; rebuild generated resources after accepted history remap | Genuine expanded cold/restart comparisons on revision `65b0658` |
@@ -109,8 +109,16 @@ PR revision has passed GitHub CI.
   and a distributed companion whose residual maximum belongs to another rank.
   An independent SPD counterexample retains the stated limitation of selecting
   unknowns from equation maxima. This repair does not guarantee convergence for
-  every operator. Fresh official reconstruction and the complete actual L3
-  tutorial still determine whether the integrated source qualifies for the campaign.
+  every operator. After official reconstruction, the actual `97279de` local
+  MPI4/OpenMP2 pilot reaches `t=0.01` on `32x128`, three AMR levels, in eleven
+  accepted steps with zero rejections. It takes 578.90 seconds including binding;
+  the final density and accepted potential history match the checkpoint bit for
+  bit on all three levels. Density is at `t=0.01`, while the potential belongs to
+  the midpoint `t=0.009500000005`. All stored state components are finite; final
+  mass is `79.16885115358725`, compared with analytic mass `79.16885115358781`.
+  The checkpoint manifest and payload digests are authenticated, and the actual
+  process tree is closed. This qualifies the local L3 endpoint only; runtime
+  restart, current-source Linux and long-campaign qualification remain separate.
 - Fan-Li15 `65b0658`, local MPI2/OpenMP2, `16x64`, two AMR levels: cold and
   genuine expanded restart reached `t=0.03`, 33 accepted steps, zero rejections.
   The fine level grew from 2048 to 2560 cells; full stored state/history endpoint
@@ -139,8 +147,8 @@ projection or modified closure has been used to manufacture a trajectory.
    The gather repair is qualified on `4adfddf`; the generic core and diagnostic
    changes were rebuilt at `f57f5dd`. Each later production change requires a
    new authenticated native artifact before scientific validation.
-2. Run the real larger-grid case with the qualified generic recovery for
-   captured representability stagnation. The 512/64 coarse controls and the
+2. Repeat the now-passing local larger-grid case on the rebuilt Linux source.
+   The `97279de` local pilot reaches `t=0.01`; the 512/64 coarse controls and the
    original-stencil residual remain unchanged. Optional capture/trace instrumentation is
    integrated and has passed on/off parity, exact replay and collective refusal
    checks at MPI1/2/4. Longer restart cycles and persistent compensated updates
