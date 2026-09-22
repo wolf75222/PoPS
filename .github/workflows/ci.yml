@@ -248,8 +248,8 @@ jobs:
     # Runtime objects are prewarmed in parallel above. Keep an 18-minute bounded final build for
     # contract verification, ccache hits, shard-owned test executables and links, then seven minutes
     # for tests. A cold common runtime can no longer consume this watchdog independently thirteen times.
-    # Twelve shards keep the complete PR #680 catalog at 900.175 modeled seconds versus
-    # 910.3325 with eleven, preserving the 906-second budget. These are scheduling estimates.
+    # Thirteen shards keep the complete PR #680 catalog at 900.175 modeled seconds versus
+    # 910.3325 with twelve, preserving the 906-second budget. These are scheduling estimates.
     timeout-minutes: 40
     needs: [changes, set-mode, gate-cpp-prewarm]
     strategy:
@@ -1509,11 +1509,8 @@ jobs:
           test -s build-mpi/python-mpi-orchestrators.txt
           test -s build-mpi/mpi-ctest-groups.tsv
 
-      - name: Configure + build (MPI + Kokkos Serial)
-        # Three sequential watchdogs: Python module link, native tests, M4 tests.
-        # Native test compile on a cold runner includes test_program_runtime (~6 min) plus
-        # remaining heavy AMR TUs; 14m stopped the graph at 98/119 on 0a18620d2.
-        timeout-minutes: 60
+      - name: Configure + link Python module (MPI + Kokkos Serial)
+        timeout-minutes: 20
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
         # $KOKKOS_PREFIX (env du job, install en cache). ccache auto-detecte.
         run: |
@@ -1538,19 +1535,45 @@ jobs:
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-mpi \
             --verify-contracts "${compile_contracts[@]}"
-          read -r -a mpi_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_targets }}"
-          mapfile -t m4_targets < <(
-            /usr/bin/python3 scripts/run_m4_gate.py --list-ctest-targets
-          )
-          test "${#m4_targets[@]}" -gt 0
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           # The monolithic Python module link is memory-heavy. Keep it isolated
           # from test compilation/linking so a small hosted runner cannot evict
           # its own worker under peak memory pressure.
           run_with_heartbeat "MPI Python module link" 14m \
             cmake --build --preset ci-mpi --parallel 1 --target _pops
-          run_with_heartbeat "MPI native test build" 28m \
-            cmake --build --preset ci-mpi --parallel 4 --target "${mpi_targets[@]}"
+
+      - name: Build complete native MPI inventory in two phases
+        # The former single 28m watchdog reached only 164/173 build tasks on 4adfddf.
+        # Keep that watchdog per phase; native phases share 60m and the job stays at 180m.
+        # Both phases form an exact disjoint manifest projection; new targets enter
+        # the remaining phase. Cost estimates are documented, not cold-build proof.
+        timeout-minutes: 60
+        run: |
+          source scripts/ci_heartbeat.sh
+          test "${{ steps.mpi-test-plan.outputs.cpp_label_build_phase_count }}" -eq 2
+          read -r -a isolated_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_build_isolated_targets }}"
+          read -r -a remaining_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_build_remaining_targets }}"
+          test "${#isolated_targets[@]}" -gt 0
+          test "${#remaining_targets[@]}" -gt 0
+          test "$(( ${#isolated_targets[@]} + ${#remaining_targets[@]} ))" \
+            -eq "${{ steps.mpi-test-plan.outputs.cpp_label_count }}"
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          # The program runtime TU approached the runner's memory limit. Its phase
+          # also prepares all six loader DSOs, with no competing compile or link.
+          run_with_heartbeat "MPI isolated native test build" 28m \
+            cmake --build --preset ci-mpi --parallel 1 --target "${isolated_targets[@]}"
+          run_with_heartbeat "MPI remaining native test build" 28m \
+            cmake --build --preset ci-mpi --parallel 4 --target "${remaining_targets[@]}"
+
+      - name: Build M4 native tests
+        timeout-minutes: 12
+        run: |
+          source scripts/ci_heartbeat.sh
+          mapfile -t m4_targets < <(
+            /usr/bin/python3 scripts/run_m4_gate.py --list-ctest-targets
+          )
+          test "${#m4_targets[@]}" -gt 0
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           run_with_heartbeat "M4 native test build" 10m \
             cmake --build --preset ci-mpi --parallel 4 --target "${m4_targets[@]}"
 

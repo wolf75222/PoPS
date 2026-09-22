@@ -485,6 +485,80 @@ def test_cpp_mpi_processor_groups_are_an_exact_disjoint_cover():
         assert all(plan[name] == group["processors"] for name in group["names"])
 
 
+@pytest.mark.parametrize("launch_contract", ["mpi_nproc", "mpi_variants"])
+def test_cpp_mpi_build_groups_cover_new_manifest_targets(launch_contract):
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    added = "test_new_mpi_build_contract"
+    manifest["cpp"]["suite"].append(
+        {
+            "name": added,
+            "sources": ["tests/cpp/new_mpi_build_contract.cpp"],
+            "labels": ["mpi"] if launch_contract == "mpi_nproc" else [],
+            launch_contract: [2],
+        }
+    )
+    groups = sel.cpp_mpi_build_groups(manifest)
+    assert [group["name"] for group in groups] == ["isolated", "remaining"]
+    assert len(groups[0]["targets"]) == 4
+    assert "test_program_runtime" in groups[0]["targets"]
+    assert "test_amr_synthetic_program_loader_transaction" in groups[0]["targets"]
+    assert added in groups[1]["targets"]
+    flattened = [target for group in groups for target in group["targets"]]
+    assert sorted(flattened) == sel.cpp_targets_with_label(manifest, "mpi")
+    assert len(flattened) == len(set(flattened))
+
+
+def test_cpp_mpi_build_groups_reject_a_missing_anchor():
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    manifest["cpp"]["suite"] = [
+        suite for suite in manifest["cpp"]["suite"]
+        if suite["name"] != "test_program_runtime"
+    ]
+    with pytest.raises(SystemExit, match="anchors missing.*test_program_runtime"):
+        sel.cpp_mpi_build_groups(manifest)
+
+
+def test_cpp_mpi_build_groups_reject_duplicate_manifest_targets():
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    duplicate = next(
+        suite for suite in manifest["cpp"]["suite"]
+        if suite["name"] == "test_mpi_system_layout_transfer"
+    )
+    manifest["cpp"]["suite"].append(duplicate)
+    with pytest.raises(SystemExit, match="exact nonempty disjoint target cover"):
+        sel.cpp_mpi_build_groups(manifest)
+
+
+def test_cpp_mpi_label_plan_publishes_both_complete_build_phases(tmp_path):
+    sel = _load("ci_select_tests")
+    output = tmp_path / "github-output"
+    explain = tmp_path / "mpi-test-plan.json"
+    assert sel.plan_cpp_label(
+        SimpleNamespace(
+            label="mpi",
+            ctest_groups_file=str(tmp_path / "mpi-ctest-groups.tsv"),
+            github_output=str(output),
+            explain_file=str(explain),
+        )
+    ) == 0
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert fields["cpp_label_build_phase_count"] == "2"
+    isolated = fields["cpp_label_build_isolated_targets"].split()
+    remaining = fields["cpp_label_build_remaining_targets"].split()
+    assert isolated and remaining
+    assert sorted(isolated + remaining) == fields["cpp_label_targets"].split()
+    assert len(set(isolated + remaining)) == int(fields["cpp_label_count"])
+    payload = json.loads(explain.read_text())
+    assert payload["build_groups"] == [
+        {"name": "isolated", "targets": isolated},
+        {"name": "remaining", "targets": remaining},
+    ]
+    assert payload["ctest_count"] == len(sel.cpp_mpi_ctest_plan(sel.load_manifest()))
+
+
 def test_cpp_mpi_ctest_fence_rejects_missing_per_test_timeout(tmp_path):
     sel = _load("ci_select_tests")
     inventory = tmp_path / "mpi-ctest-unbounded.json"
@@ -1020,7 +1094,9 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "test \"${#compile_contracts[@]}\" -eq 3" in mpi_block
     assert "--verify-contracts" in mpi_block
     assert 'run_with_heartbeat "MPI Python module link" 14m' in mpi_block
-    assert 'run_with_heartbeat "MPI native test build" 28m' in mpi_block
+    assert 'run_with_heartbeat "MPI isolated native test build" 28m' in mpi_block
+    assert 'run_with_heartbeat "MPI remaining native test build" 28m' in mpi_block
+    assert 'run_with_heartbeat "M4 native test build" 10m' in mpi_block
     assert "source scripts/ci_heartbeat.sh" in mpi_block
     assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
     assert "scripts/ci_select_tests.py cpp-label" in mpi_block
@@ -1030,7 +1106,20 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "build-mpi/python-mpi-plan.tsv" in mpi_block
     assert "--orchestrator-plan-file build-mpi/python-mpi-orchestrators.txt" in mpi_block
     assert "--parallel 1 --target _pops" in mpi_block
-    assert '--parallel 4 --target "${mpi_targets[@]}"' in mpi_block
+    assert '--parallel 1 --target "${isolated_targets[@]}"' in mpi_block
+    assert '--parallel 4 --target "${remaining_targets[@]}"' in mpi_block
+    assert 'test "${{ steps.mpi-test-plan.outputs.cpp_label_build_phase_count }}" -eq 2' in mpi_block
+    assert "steps.mpi-test-plan.outputs.cpp_label_build_isolated_targets" in mpi_block
+    assert "steps.mpi-test-plan.outputs.cpp_label_build_remaining_targets" in mpi_block
+    assert 'test "${#isolated_targets[@]}" -gt 0' in mpi_block
+    assert 'test "${#remaining_targets[@]}" -gt 0' in mpi_block
+    assert '${#isolated_targets[@]} + ${#remaining_targets[@]}' in mpi_block
+    native_build_step = mpi_block.split(
+        "- name: Build complete native MPI inventory in two phases\n", 1
+    )[1].split("\n      - name: Build M4 native tests\n", 1)[0]
+    assert "timeout-minutes: 60" in native_build_step
+    assert native_build_step.count('28m \\') == 2
+    assert "POPS_HEAVY_TEST_TU_POOL" not in native_build_step
     assert "scripts/ci_select_tests.py verify-cpp-mpi-ctests" in mpi_block
     assert "ctest --preset ci-mpi -N --show-only=json-v1" in mpi_block
     assert "steps.mpi-test-plan.outputs.cpp_label_ctest_count" in mpi_block
