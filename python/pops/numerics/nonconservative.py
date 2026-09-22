@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from pops._ir.expr import Expr, _wrap
 from pops.model import Handle
-from pops.physics.nonconservative import NonconservativeProductHandle
 from .spatial import FiniteVolume, _brick_data, _resolved_brick
+
+if TYPE_CHECKING:
+    from pops._ir.expr import Expr
+    from pops.physics.nonconservative import NonconservativeProductHandle
 
 
 def path_balance_supported(view: Any) -> bool:
@@ -38,6 +40,11 @@ class FanLi15RawMomentPath:
 
     def __init__(self, product: Any, *, frame: Any, covectors: Any) -> None:
         from collections.abc import Mapping
+        from pops._ir.expr import _wrap
+        from pops.physics.nonconservative import NonconservativeProductHandle
+
+        # Physical declarations are authenticated when a path is constructed. Importing the
+        # numerical descriptor catalog itself does not enter that authoring phase.
         if not isinstance(product, NonconservativeProductHandle):
             raise TypeError("FanLi15RawMomentPath requires a physical nonconservative product")
         if (not hasattr(frame, "axes") or len(frame.axes) != 2
@@ -68,6 +75,7 @@ class FanLi15RawMomentPath:
         self.validate_product()
 
     def validate_product(self) -> None:
+        from pops._ir.expr import _wrap
         from pops._ir.quantity import local_expression_identity
         from pops.model.hash_data import canonical_hash_data
         from pops.moments.fan_li import fan_li15_expressions, FAN_LI15_REGULARIZED_COMPONENTS

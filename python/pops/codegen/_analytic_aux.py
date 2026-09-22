@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from pops.runtime._analytic_expression_lowering import lower_analytic_components
+from ._analytic_expression_lowering import lower_analytic_components
 
 
 def emit_analytic_aux_launcher(identity, producer):
