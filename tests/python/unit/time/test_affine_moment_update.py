@@ -153,6 +153,21 @@ def test_amr_source_descendants_capture_every_exact_transport_input(source_kind,
         assert "ctx.capture_rhs_input_trace(" not in uniform
 
 
+@pytest.mark.parametrize("source_kind", ("affine", "condensed"))
+def test_moment_transform_at_additive_stage_still_requires_exact_input_trace(source_kind):
+    from pops.codegen.program_rhs_input_trace import requires_rhs_input_trace
+    from pops.numerics.terms import Flux
+    from pops.time import StagePoint, TimePoint
+
+    _, program, update = _program(affine=source_kind == "affine",
+                                  history_use="guess" if source_kind == "condensed" else None)
+    point = TimePoint(program.clock)
+    update = program._replace_value(update, point=StagePoint(
+        "paired coordinates", {"explicit": point, "implicit": point}))
+    rate = program.rhs(state=update, terms=[Flux()])
+    assert requires_rhs_input_trace(rate)
+
+
 def test_scalar_history_is_qualified_only_as_an_elliptic_initial_guess():
     _, program, _ = _program(history_use="guess")
     validate_affine_moment_prefix(program)
