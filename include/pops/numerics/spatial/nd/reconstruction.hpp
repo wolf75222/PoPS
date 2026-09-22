@@ -6,7 +6,7 @@
 #include <pops/mesh/index/entity_index.hpp>
 #include <pops/mesh/storage/fab.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
-#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/spatial/nd/conservation_law.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <concepts>

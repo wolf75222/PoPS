@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/core/state/state.hpp>
+#include <pops/numerics/spatial/nd/state_conversion.hpp>
 
 #include <array>
 #include <cstddef>
@@ -71,22 +72,6 @@ struct EulerStateSchema {
         result[static_cast<std::size_t>(ordinal++)] = axis;
     return result;
   }
-};
-
-enum class StateConversionStatus : unsigned char {
-  Success = 0,
-  NonFiniteState = 1,
-  NonPositiveDensity = 2,
-  NonPositivePressure = 3,
-  InvalidEquationOfState = 4,
-};
-
-template <class State>
-struct StateConversion {
-  State value{};
-  StateConversionStatus status = StateConversionStatus::NonFiniteState;
-
-  POPS_HD constexpr bool succeeded() const { return status == StateConversionStatus::Success; }
 };
 
 static_assert(ScalarStateSchema<1>::nvars == ScalarStateSchema<3>::nvars);

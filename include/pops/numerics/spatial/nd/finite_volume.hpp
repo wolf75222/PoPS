@@ -5,7 +5,7 @@
 
 #include <pops/mesh/geometry/prepared_metric_provider.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
-#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/spatial/nd/conservation_law.hpp>
 #include <pops/numerics/spatial/nd/face_field.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
 

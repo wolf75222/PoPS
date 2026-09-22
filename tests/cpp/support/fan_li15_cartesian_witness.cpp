@@ -1,6 +1,7 @@
 #include "generated_fan_li15.hpp"
 // Standalone Kokkos witness for the prepared face/residual seam. This does not
 // load the generated runtime or qualify an AMR/time-integration campaign.
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
 #include <pops/physics/composition/composite.hpp>
 

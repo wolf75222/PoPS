@@ -7,6 +7,7 @@
 #include <pops/core/state/variables.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/numerics/linalg/dense_eig.hpp>
+#include <pops/numerics/spatial/nd/conservation_law.hpp>
 #include <pops/numerics/spatial/nd/state_schema.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
@@ -612,18 +613,6 @@ class IdealGasEuler {
     return roe_dissipation_at_runtime_axis(left, left_providers, right, right_providers, axis);
   }
 };
-
-template <int Dim, class Model>
-concept ConservationLaw = Dim >= 1 && Dim <= 3 && Model::dimension == Dim && Model::n_vars >= 1 &&
-                          std::is_trivially_copyable_v<Model> &&
-                          requires(const Model& model, const typename Model::State& state) {
-                            typename Model::Schema;
-                            typename Model::Primitive;
-                            {
-                              model.recover(state)
-                            } -> std::same_as<StateConversion<typename Model::Primitive>>;
-                            { model.admissibility(state) } -> std::same_as<StateConversionStatus>;
-                          };
 
 static_assert(ConservationLaw<1, ScalarAdvection<1>>);
 static_assert(ConservationLaw<2, ScalarAdvection<2>>);

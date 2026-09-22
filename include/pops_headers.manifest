@@ -149,10 +149,12 @@ api pops/numerics/nonlinear/prepared_variable_recovery.hpp
 sdk-support pops/numerics/spatial/embedded_boundary/characteristic.hpp
 sdk-support pops/numerics/spatial/embedded_boundary/cut_geometry.hpp
 sdk-support pops/numerics/spatial/embedded_boundary/operator.hpp
+api pops/numerics/spatial/nd/conservation_law.hpp
 api pops/numerics/spatial/nd/conservation_laws.hpp
 api pops/numerics/spatial/nd/face_field.hpp
 api pops/numerics/spatial/nd/finite_volume.hpp
 api pops/numerics/spatial/nd/reconstruction.hpp
+api pops/numerics/spatial/nd/state_conversion.hpp
 api pops/numerics/spatial/nd/state_schema.hpp
 api pops/numerics/spatial/operators/cartesian_operator.hpp
 sdk-support pops/numerics/spatial/operators/masked_operator.hpp
@@ -199,6 +201,7 @@ api pops/physics/bricks/hyperbolic.hpp
 api pops/physics/bricks/source.hpp
 api pops/physics/composition/composite.hpp
 api pops/physics/composition/exact_brick_contract.hpp
+api pops/physics/composition/no_source.hpp
 api pops/physics/fluids/euler.hpp
 api pops/physics/inversion/inversion.hpp
 api pops/physics/inversion/variable_inversion.hpp

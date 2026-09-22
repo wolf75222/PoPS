@@ -301,7 +301,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "#include <Kokkos_MathematicalFunctions.hpp>",
         "#include <pops/core/identity/prepared_provider.hpp>",
         "#include <pops/numerics/fv/flux_interfaces.hpp>",
-        "#include <pops/numerics/spatial/nd/state_schema.hpp>",
+        "#include <pops/numerics/spatial/nd/state_conversion.hpp>",
         "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_brick)."
         % model.name,
         "// Satisfait pops::HyperbolicModel : flux + max_wave_speed + conversions + descripteurs.",

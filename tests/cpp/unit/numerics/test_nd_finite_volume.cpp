@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/spatial/nd/finite_volume.hpp>
 
 #include <algorithm>

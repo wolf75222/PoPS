@@ -927,7 +927,8 @@ def emit_cpp_native_loader(
         "#include <pops/runtime/dynamic/abi_key.hpp>\n"
         "#include <pops/core/foundation/native_dimension.hpp>\n"
         "#include <pops/runtime/builders/compiled/model_runtime_params.hpp>\n"
-        "#include <pops/physics/bricks/bricks.hpp>\n"
+        "#include <pops/physics/composition/composite.hpp>\n"
+        "#include <pops/physics/composition/no_source.hpp>\n"
         "#include <pops/core/state/variables.hpp>\n"
     )
     head += (
