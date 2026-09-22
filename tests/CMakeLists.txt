@@ -668,6 +668,39 @@ pops_test_source(_src test_amr_synthetic_program_loader_transaction)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_amr_synthetic_program_loader_transaction SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
+# CTest starts a fresh process for every case. Build the six exact source variants once,
+# rather than repeating eleven expensive compiler invocations inside the test watchdog.
+# Reuse native_dso_compiler so compiler, -O2, header ABI, Kokkos and MPI flags stay identical.
+add_executable(pops_build_synthetic_loader_fixture EXCLUDE_FROM_ALL
+  cpp/support/build_synthetic_loader_fixture.cpp)
+target_link_libraries(pops_build_synthetic_loader_fixture PRIVATE pops::pops)
+target_compile_features(pops_build_synthetic_loader_fixture PRIVATE cxx_std_${POPS_CXX_STD})
+target_compile_definitions(pops_build_synthetic_loader_fixture PRIVATE ${_native_defs})
+set(_synthetic_fixture_dir "${CMAKE_CURRENT_BINARY_DIR}/synthetic-loader-fixtures")
+file(MAKE_DIRECTORY "${_synthetic_fixture_dir}")
+set(_synthetic_fixture_headers ${POPS_ALL_CLASSIFIED_HEADERS})
+list(TRANSFORM _synthetic_fixture_headers PREPEND "${POPS_HEADER_ROOT}/")
+# Recompute the authenticated SDK signature before rebuilding any fixture after header edits.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers})
+set(_synthetic_fixture_outputs "")
+foreach(_variant 4 8 9 10 12 28)
+  set(_stem "${_synthetic_fixture_dir}/${_variant}")
+  add_custom_command(OUTPUT "${_stem}.so" "${_stem}.cpp"
+    COMMAND $<TARGET_FILE:pops_build_synthetic_loader_fixture>
+      "${_variant}" "${_stem}.cpp" "${_stem}.so"
+    DEPENDS pops_build_synthetic_loader_fixture
+      cpp/support/synthetic_loader_fixture.hpp cpp/support/native_dso_compiler.hpp
+      "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
+    JOB_POOL pops_heavy_test_tu
+    VERBATIM)
+  list(APPEND _synthetic_fixture_outputs "${_stem}.so" "${_stem}.cpp")
+endforeach()
+add_custom_target(pops_synthetic_loader_fixtures DEPENDS ${_synthetic_fixture_outputs})
+add_dependencies(test_amr_synthetic_program_loader_transaction pops_synthetic_loader_fixtures)
+target_compile_definitions(test_amr_synthetic_program_loader_transaction PRIVATE
+  POPS_TEST_SYNTHETIC_LOADER_FIXTURES="${_synthetic_fixture_dir}")
+
 pops_test_source(_src test_amr_system_contract)
 pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 

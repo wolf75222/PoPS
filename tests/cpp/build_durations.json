@@ -15,6 +15,7 @@
       "test_amr_program_positivity_floor",
       "test_amr_scalar_output_history",
       "test_amr_synchronized_continuation",
+      "test_amr_synthetic_program_loader_transaction",
       "test_amr_transition_invariants",
       "test_box",
       "test_cartesian_poisson_nd",
@@ -86,6 +87,18 @@
       "test_amr_path_rhs_barrier": "309.79 s from test_amr_hierarchy_barrier_continuation: the translation unit instantiates the compiled AMR model and prepared hierarchy execution context.",
       "test_amr_scalar_output_history": "302.32 s from test_amr_history_ring: the translation unit instantiates the compiled scalar AMR model, program context and history/regrid machinery.",
       "elliptic_targets": "The six new elliptic translation units use the existing 2.0 s parallel-share scheduling floor, analogous to test_composite_fac_tensor and test_polar_tensor_elliptic_mms. None instantiate the compiled AMR model/program context."
+    },
+    "pr680_20260922_precompiled_loader": {
+      "target": "test_amr_synthetic_program_loader_transaction",
+      "estimated_seconds": 720,
+      "basis": "Estimated new build wall cost: previous executable weight 43.78 s + six unique native fixture compilations at the largest completed 4adfddf CI case duration 89.87 s each, with 25 percent compile headroom; 717.805 s rounded upward to 720 s. The case durations include runtime work, so they are conservative compilation proxies, not measured build timings.",
+      "ci_observed_complete_case_seconds": [
+        86.2,
+        89.87,
+        86.12
+      ],
+      "ci_source": "PR #680 source 4adfddfb7a68212a008269b36a0dfd3c06cdb78d, Kokkos Serial shard 6, 2026-09-22; watchdog 420 s expired during the fourth case",
+      "refresh": "Replace after a complete CI build/test receipt for this target; preserve all nine cases and the unchanged watchdog."
     }
   },
   "test_amr_compiled_model": 2.0,
@@ -110,7 +123,7 @@
   "test_amr_riemann_native": 26.64,
   "test_amr_seed_no_refine": 26.84,
   "test_amr_spatial_parity": 2.0,
-  "test_amr_synthetic_program_loader_transaction": 43.78,
+  "test_amr_synthetic_program_loader_transaction": 720,
   "test_amr_system_contract": 3.9,
   "test_amr_system_twoblock": 310.5,
   "test_amr_tensor_fac_provider": 2.0,

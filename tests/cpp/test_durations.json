@@ -15,6 +15,7 @@
       "test_amr_program_positivity_floor",
       "test_amr_scalar_output_history",
       "test_amr_synchronized_continuation",
+      "test_amr_synthetic_program_loader_transaction",
       "test_amr_transition_invariants",
       "test_cartesian_poisson_nd",
       "test_cell_temporal_partition_executor",
@@ -90,6 +91,18 @@
       "test_tensor_coarse_gmres": "14.12 s from test_polar_tensor_elliptic_mms: full tensor coarse solves and mapped multilevel/preconditioner checks.",
       "test_tensor_fac_conservative_interface": "45 s conservative scheduling seed, exceeding four times the 10.18 s test_composite_fac_tensor aggregate for conservation, repeated application and three-level manufactured solves.",
       "test_tensor_fac_partial_hierarchy": "45 s conservative scheduling seed; previous local fac-sync-build1-qualification1-partial-gate.json observed 4.673 s MPI1 plus 17.980 s MPI2 across two cases. This is not a CI timing receipt."
+    },
+    "pr680_20260922_precompiled_loader": {
+      "target": "test_amr_synthetic_program_loader_transaction",
+      "estimated_seconds": 30,
+      "basis": "Conservative runtime scheduling estimate for all nine original cases after moving eleven compiler invocations to six build-time fixtures. This is not a measured Linux CI runtime; all state/loader/collective assertions remain.",
+      "ci_observed_complete_case_seconds": [
+        86.2,
+        89.87,
+        86.12
+      ],
+      "ci_source": "PR #680 source 4adfddfb7a68212a008269b36a0dfd3c06cdb78d, Kokkos Serial shard 6, 2026-09-22; watchdog 420 s expired during the fourth case",
+      "refresh": "Replace after a complete CI build/test receipt for this target; preserve all nine cases and the unchanged watchdog."
     }
   },
   "test_amr_compiled_model": 0.01,
@@ -114,7 +127,7 @@
   "test_amr_riemann_native": 5.27,
   "test_amr_seed_no_refine": 4.3,
   "test_amr_spatial_parity": 0.06,
-  "test_amr_synthetic_program_loader_transaction": 14.83,
+  "test_amr_synthetic_program_loader_transaction": 30,
   "test_amr_system_contract": 0.04,
   "test_amr_system_twoblock": 0.84,
   "test_amr_tensor_fac_provider": 0.02,

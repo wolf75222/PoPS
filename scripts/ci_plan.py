@@ -24,7 +24,7 @@ from ci_pytest_timings import SHARD_TOTAL as PYTHON_SHARDS
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "scripts/ci_components.toml"
-CPP_SHARDS = 12
+CPP_SHARDS = 13
 UNKNOWN_DIFF = "__unresolved_pr_change_scope__"
 
 

@@ -247,7 +247,7 @@ jobs:
     runs-on: ubuntu-latest
     # Runtime objects are prewarmed in parallel above. Keep an 18-minute bounded final build for
     # contract verification, ccache hits, shard-owned test executables and links, then seven minutes
-    # for tests. A cold common runtime can no longer consume this watchdog independently twelve times.
+    # for tests. A cold common runtime can no longer consume this watchdog independently thirteen times.
     # Twelve shards keep the complete PR #680 catalog at 900.175 modeled seconds versus
     # 910.3325 with eleven, preserving the 906-second budget. These are scheduling estimates.
     timeout-minutes: 40
@@ -306,7 +306,7 @@ jobs:
             --explain-file "$RUNNER_TEMP/cpp-test-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
             --shard-index "${{ matrix.shard }}" \
-            --shard-total 12 \
+            --shard-total 13 \
             "${force_args[@]}"
           cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           cpp_shard_summary=$(grep '^cpp_shard_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
@@ -1913,7 +1913,7 @@ jobs:
           retention-days: 1
 
   kokkos-openmp:
-    # The OpenMP C++ proof is the same exact twelve-way target partition as the Serial gate:
+    # The OpenMP C++ proof is the same exact thirteen-way target partition as the Serial gate:
     # every non-MPI target belongs to exactly one shard and every built target must expose
     # an authenticated CTest label before its cases can run.  The independent Python/native-ABI
     # proof stays in its own lane because it builds one module rather than the C++ test graph.
@@ -1932,62 +1932,67 @@ jobs:
           - lane: cpp-0
             kind: cpp
             shard: 0
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-1
             kind: cpp
             shard: 1
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-2
             kind: cpp
             shard: 2
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-3
             kind: cpp
             shard: 3
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-4
             kind: cpp
             shard: 4
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-5
             kind: cpp
             shard: 5
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-6
             kind: cpp
             shard: 6
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-7
             kind: cpp
             shard: 7
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-8
             kind: cpp
             shard: 8
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-9
             kind: cpp
             shard: 9
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-10
             kind: cpp
             shard: 10
-            shard_total: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-11
             kind: cpp
             shard: 11
-            shard_total: 12
+            shard_total: 13
+            ccache_maxsize: 2G
+          - lane: cpp-12
+            kind: cpp
+            shard: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: python
             kind: python

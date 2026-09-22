@@ -102,12 +102,19 @@ files or C++ targets and route flags; they do not say that any test ran or that 
 ## Shards, prewarming, and the dedicated cache check
 
 The planner keeps fixed partition identities and publishes only nonempty matrix entries. C++
-targets are packed into the fixed twelve-way partition, and Python files into the fixed thirty
-seven-way partition, using deterministic duration-weighted bin packing. Empty bins are omitted from
+targets are packed into the fixed thirteen-way partition, and Python files into the fixed thirty
+eight-way partition, using deterministic duration-weighted bin packing. Empty bins are omitted from
 the GitHub matrix, but a nonempty bin keeps its original index; indices are never renumbered to
 fit one PR. Python's verification step reconstructs the same partition and fails unless every
 selected file appears exactly once, with the explicitly excluded dedicated file accounted for.
 C++ shards authenticate their selected `cpp-target:*` CTest labels before running cases.
+
+The synthetic AMR Program loader's nine cases consume six source-built fixture variants. CMake
+builds each variant once with the same native compiler, ABI, Kokkos and MPI contract, then each
+case copies and authenticates its binary in fresh local files before constructing fresh runtime
+state. This removes eleven compiler invocations from CTest without dropping cases or changing
+the seven-minute test watchdog. The target's build weight includes all six fixture builds;
+its updated build and test weights remain explicit estimates until complete CI receipts arrive.
 
 The `python_dimensions` output drives the serial native package build and prewarm matrices. They
 contain the selected declared dimensions, limited to native Dim1 and Dim2. With the current
