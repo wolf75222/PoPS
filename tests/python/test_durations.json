@@ -121,7 +121,7 @@
   "tests/python/unit/codegen/test_coupled_implicit_codegen.py": 2.0,
   "tests/python/unit/codegen/test_coupled_rate_codegen.py": 5,
   "tests/python/unit/codegen/test_dsl.py": 0.5,
-  "tests/python/unit/codegen/test_dsl_autodiff_roe.py": 375.0,
+  "tests/python/unit/codegen/test_dsl_autodiff_roe.py": 380.0,
   "tests/python/unit/codegen/test_dsl_aux_naux.py": 0.8,
   "tests/python/unit/codegen/test_dsl_brick.py": 5,
   "tests/python/unit/codegen/test_dsl_codegen.py": 5,
@@ -1617,6 +1617,22 @@
         }
       },
       "refresh": "Replace each estimate from a complete CI gate-python per-file phase receipt plus an explicit collection/cache/scheduler allowance; do not label local qualification totals as CI file measurements."
+    },
+    "pr680_20260922_roe_process_budget": {
+      "file": "tests/python/unit/codegen/test_dsl_autodiff_roe.py",
+      "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4",
+      "run_id": 35717678423,
+      "job_id": 106714408765,
+      "job_url": "https://github.com/wolf75222/PoPS/actions/runs/35717678423/job/106714408765",
+      "observed_timeout_seconds": 300.02,
+      "previous_observed_lower_bound_seconds": 298.82,
+      "previous_observation_run_id": 34760671991,
+      "previous_process_timeout_seconds": 300,
+      "process_timeout_seconds": 450,
+      "previous_estimated_seconds": 375,
+      "estimated_seconds": 380,
+      "basis": "The coherent witness compiles two production models and one shared Euler Program bridge before comparing eight steps. The 300.02-second CI call was interrupted, so it is a lower bound, not a completed duration. Apply the existing 25 percent headroom rule to that bound and round up to 5 seconds for a 380-second scheduling estimate. Declare the existing per-file process-budget mechanism at 450 seconds (50 percent above the old 300-second limit); shard and workflow watchdogs are unchanged.",
+      "refresh": "Replace the scheduling estimate from a complete CI per-file receipt. A local native pass does not qualify the revised Linux CI budget."
     }
   }
 }

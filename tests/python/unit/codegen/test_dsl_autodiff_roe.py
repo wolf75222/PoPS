@@ -40,6 +40,12 @@ from tests.python.support.requirements import (
     repo_include,
     require_native_or_skip,
 )
+
+# Two cold production model compiles plus one shared Euler Program bridge are required.
+# CI reached the default 300-second process limit after both models compiled; allow
+# 50 percent headroom while keeping all symbolic and trajectory checks in one process.
+POPS_PROCESS_TIMEOUT = 450
+
 INCLUDE = repo_include()
 CS2 = 0.5  # vitesse du son au carre (isotherme / pseudo-pression p = cs2 rho)
 fails = 0
