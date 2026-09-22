@@ -1,5 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <bit>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
+#include <unistd.h>
+
 #include "mapped_disk_fac_witness.hpp"
 #include <pops/core/foundation/allocator.hpp>
 
@@ -596,6 +603,90 @@ TEST(TensorCoarseGMRES, PolarPreconditionerTraversesThreeActualMappedLevels) {
   for (const auto& report : {two.report, three.report})
     EXPECT_LE(report.residual_norm,
               std::max(Real(1e-12), Real(2e-9) * report.reference_residual_norm));
+}
+
+
+TEST(TensorCoarseGMRES, OptionalFailureCaptureRetainsCandidateAndExclusiveBytes) {
+  if constexpr (!kRealIsBinary64) GTEST_SKIP() << "Capture schema requires binary64";
+  comm_init();
+  ::pops::detail::ensure_kokkos_initialized();  // Empty owners still prepare halo buffers.
+  struct RestoreCaptureEnvironment {
+    std::optional<std::string> previous;
+    RestoreCaptureEnvironment() {
+      if (const char* value = std::getenv("POPS_TENSOR_FAC_CAPTURE_DIR")) previous = value;
+    }
+    ~RestoreCaptureEnvironment() {
+      if (previous) ::setenv("POPS_TENSOR_FAC_CAPTURE_DIR", previous->c_str(), 1);
+      else ::unsetenv("POPS_TENSOR_FAC_CAPTURE_DIR");
+    }
+  } restore;
+  std::array<char, 128> directory{};
+  if (my_rank() == 0) {
+    std::snprintf(directory.data(), directory.size(), "/tmp/pops-fac-capture-XXXXXX");
+    if (::mkdtemp(directory.data()) == nullptr) directory[0] = '\0';
+  }
+  broadcast_bytes_inplace(directory.data(), directory.size());
+  ASSERT_NE(directory[0], '\0');
+  const std::string path = std::string(directory.data()) + "/coarse-rank-" +
+                           std::to_string(my_rank()) + ".txt";
+  const auto read_bytes = [&] {
+    std::ifstream stream(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+  };
+  const auto candidate_bits = [](const Field& field) {
+    std::vector<RealBits> result;
+    for (std::size_t local = 0; local < field.local_size(); ++local) {
+      auto host = field.fab(local).create_host_mirror();
+      field.fab(local).copy_to_host(host);
+      for (std::size_t index = 0; index < host.size(); ++index)
+        result.push_back(std::bit_cast<RealBits>(host(index)));
+    }
+    return result;
+  };
+  for (const auto [replicated, empty] :
+       std::array<std::pair<bool, bool>, 3>{{{false, false}, {false, true}, {true, false}}}) {
+    SCOPED_TRACE(replicated ? "replicated" : empty ? "empty-owner" : "partitioned");
+    ::unsetenv("POPS_TENSOR_FAC_CAPTURE_DIR");
+    RootProblem original(replicated, empty, CoarsePreconditionerKind::polar_poisson);
+    original.stage(Real(0.1));
+    // One Arnoldi column cannot solve this manufactured full-tensor fixture.
+    // Retain that bounded refusal solely to exercise the observer.
+    constexpr Real tolerance = Real(1e-12);
+    const auto expected = original.gmres->solve(original.correction, original.rhs, tolerance, 1);
+    const Real original_residual = original.original_residual();
+    EXPECT_FALSE(expected.solved());
+    ::setenv("POPS_TENSOR_FAC_CAPTURE_DIR", directory.data(), 1);
+    RootProblem observed(replicated, empty, CoarsePreconditionerKind::polar_poisson);
+    observed.stage(Real(0.1));
+    const auto report = observed.gmres->solve(observed.correction, observed.rhs, tolerance, 1);
+    const Real residual = observed.original_residual();
+    EXPECT_EQ(candidate_bits(observed.correction), candidate_bits(original.correction));
+    EXPECT_EQ(report.status, expected.status);
+    EXPECT_EQ(report.action, expected.action);
+    EXPECT_EQ(report.iters, expected.iters);
+    EXPECT_EQ(report.reason, expected.reason);
+    EXPECT_DOUBLE_EQ(report.residual_norm, expected.residual_norm);
+    EXPECT_DOUBLE_EQ(residual, original_residual);
+    observed.gmres->capture_failure(observed.correction, observed.rhs, report, residual,
+                                    report.reference_residual_norm, tolerance, 1, 1);
+    const auto captured = read_bytes();
+    EXPECT_EQ(captured.find("POPS_TENSOR_COARSE_CAPTURE 1\n"), 0u);
+    EXPECT_NE(captured.find("\nEND\n"), std::string::npos);
+    observed.gmres->capture_failure(observed.correction, observed.rhs, report, residual,
+                                    report.reference_residual_norm, tolerance, 1, 1);
+    EXPECT_EQ(read_bytes(), captured);  // O_EXCL collision must not overwrite existing evidence.
+    EXPECT_FALSE(report.solved());
+    EXPECT_EQ(::unlink(path.c_str()), 0);
+    (void)all_reduce_max(0L);  // Finish per-rank cleanup before the next collective capture.
+  }
+  if (n_ranks() > 1) {
+    if (my_rank() == 0) ::setenv("POPS_TENSOR_FAC_CAPTURE_DIR", directory.data(), 1);
+    else ::unsetenv("POPS_TENSOR_FAC_CAPTURE_DIR");
+    EXPECT_THROW((RootProblem{false, false, CoarsePreconditionerKind::polar_poisson}),
+                 std::invalid_argument);
+  }
+  (void)all_reduce_max(0L);
+  if (my_rank() == 0) EXPECT_EQ(::rmdir(directory.data()), 0);
 }
 
 }  // namespace

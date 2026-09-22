@@ -64,6 +64,29 @@ struct KrylovFailureActions {
   }
 };
 
+/// Optional caller-owned GMRES diagnostics. Recording only copies already-computed scalars:
+/// no callbacks, allocation, operator applications, reductions or convergence authority.
+/// The caller must keep this buffer alive and exclusively borrowed through one invocation.
+struct GmresDiagnosticTrace {
+  static constexpr std::size_t capacity = 512;
+  struct Cycle {
+    int begin_iteration = 0, end_iteration = 0, dimension = 0, second_passes = 0;
+    Real initial_residual = 0, final_residual = 0, beta = 0;
+    Real equation_scale = 0, preconditioner_scale = 0;
+    detail::ScaledScalar estimate = detail::ScaledScalar::zero();
+    detail::ScaledScalar estimate_threshold = detail::ScaledScalar::zero();
+    unsigned end_flags = 0;  // 1: estimate, 2: lucky breakdown, 4: cap, 8: full restart.
+  };
+  std::array<Cycle, capacity> cycles{};
+  std::size_t size = 0;
+  bool overflow = false;
+  void reset() noexcept { size = 0; overflow = false; }
+  void append(const Cycle& cycle) noexcept {
+    if (size == capacity) { overflow = true; return; }
+    cycles[size++] = cycle;
+  }
+};
+
 template <int Dim>
 struct KrylovControls {
   PreparedKrylovMethod<Dim> method{};
@@ -72,6 +95,7 @@ struct KrylovControls {
   int max_iterations = 1;
   KrylovFailureActions failure_actions{};
   KrylovPhysicalNorm physical_norm = KrylovPhysicalNorm::metric_l2;
+  GmresDiagnosticTrace* diagnostic_trace = nullptr;
 };
 
 template <int Dim>

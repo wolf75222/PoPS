@@ -11,12 +11,20 @@
 #include <pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp>
 
 #include <array>
+#include <bit>
+#include <cerrno>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
+#include <fcntl.h>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace pops::runtime::program::tensor_fac {
 
@@ -301,6 +309,16 @@ class TensorCoarseGmres {
         throw std::invalid_argument("unsupported tensor coarse GMRES preconditioner");
       data_ = std::make_shared<Data>(prototype, geometry, halo, homogeneous_boundary, options,
                                      exact_owner, preconditioner);
+      if (const char* configured = std::getenv("POPS_TENSOR_FAC_CAPTURE_DIR");
+          configured && *configured) {
+        capture_root_ = configured;
+        struct stat info{};
+        if (sizeof(Real) != sizeof(double) || capture_root_.size() > 4096 ||
+            capture_root_.front() != '/' || ::lstat(capture_root_.c_str(), &info) != 0 ||
+            !S_ISDIR(info.st_mode) || info.st_uid != ::geteuid() || (info.st_mode & 0077) != 0)
+          throw std::invalid_argument("tensor FAC capture requires a private owned directory");
+        trace_ = std::make_unique<GmresDiagnosticTrace>();
+      }
     } catch (...) {
       failed = 1;
     }
@@ -311,6 +329,9 @@ class TensorCoarseGmres {
     const long maximum_kind = all_reduce_max(kind, parent);
     if (minimum_kind != maximum_kind)
       throw std::invalid_argument("tensor coarse GMRES preconditioner differs across ranks");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"tensor-fac-capture-directory", capture_root_}}, parent))
+      throw std::invalid_argument("tensor FAC capture directory differs across ranks");
 #ifdef POPS_HAS_MPI
     const auto parent_communicator = ExecutionCommunicator::borrowed(
         "pops.tensor-fac.coarse-gmres.parent", parent.native_handle());
@@ -391,8 +412,160 @@ class TensorCoarseGmres {
     correction.set_val(Real(0));
     KrylovControls<Dim> controls{gmres_krylov_method<Dim>(restart_), Real(0), tau, maximum};
     controls.physical_norm = KrylovPhysicalNorm::component_linf;
+    controls.diagnostic_trace = trace_.get();
     return ::pops::detail::solve_prepared_affine_in_place(
         *problem_, *workspace_, correction, rhs, controls);
+  }
+
+  /// Failure evidence only, after the caller's unchanged original-stencil check. Every enabled
+  /// rank enters this post-solve phase; I/O failure cannot change the numerical disposition.
+  /// Files are exclusive, bounded, exact binary64 bit strings, and never scientific checkpoints.
+  void capture_failure(const field_type& correction, const field_type& rhs,
+                       const SolveReport& report, Real original_residual, Real reference,
+                       Real tau, int maximum, int outer_ordinal) const {
+    if (!trace_)
+      return;
+    long failed = 0;
+    int descriptor = -1;
+    try {
+      constexpr std::size_t maximum_values = std::size_t{1} << 20;
+      constexpr std::size_t maximum_bytes = std::size_t{32} << 20;
+      std::size_t values = 0;
+      const auto count = [&](const field_type& field) {
+        for (std::size_t local = 0; local < field.local_size(); ++local) {
+          const auto amount = field.fab(local).storage().extent(0);
+          if (amount > maximum_values - values)
+            throw std::length_error("tensor FAC diagnostic value budget exceeded");
+          values += amount;
+        }
+      };
+      count(rhs); count(correction);
+      for (const auto& field : data_->coefficients) count(field);
+      if (data_->contract.size() > 65536 || report.reason.size() > 65536 ||
+          parent_->identity().size() > 65536 || correction.layout().size() > 4096 ||
+          trace_->overflow)
+        throw std::length_error("tensor FAC diagnostic metadata budget exceeded");
+
+      std::ostringstream output;
+      const auto bits = [&](Real value) { output << std::bit_cast<std::uint64_t>(double(value)); };
+      const auto text = [&](std::string_view value) {
+        constexpr char digits[] = "0123456789abcdef";
+        output << value.size() << ' ';
+        for (const unsigned char c : value) output << digits[c >> 4] << digits[c & 15];
+        output << '\n';
+      };
+      output << "POPS_TENSOR_COARSE_CAPTURE 1\n" << Dim << ' ' << sizeof(Real) << ' '
+             << parent_->rank() << ' ' << parent_->size() << '\n';
+      output << outer_ordinal << ' ' << restart_ << ' ' << maximum << ' '
+             << static_cast<unsigned>(data_->preconditioner) << '\n';
+      bits(tau); output << ' '; bits(reference); output << ' '; bits(original_residual);
+      output << '\n' << static_cast<unsigned>(report.status) << ' '
+             << static_cast<unsigned>(report.action) << ' ' << report.iters << '\n';
+      bits(report.residual_norm); output << ' '; bits(report.reference_residual_norm);
+      output << '\n'; text(report.reason); text(data_->contract); text(parent_->identity());
+      const auto& s = data_->snapshot;
+      for (const auto x : s.authority) output << x << ' ';
+      output << s.revision << ' ' << s.macro_step << ' ' << s.stage_numerator << ' '
+             << s.stage_denominator << ' ' << s.dt_bits << ' ' << s.physical_time_bits << ' '
+             << s.topology_revision << ' ';
+      for (const auto x : s.topology) output << x << ' ';
+      for (const auto x : s.resources) output << x << ' ';
+      output << '\n';  // Raw coarse snapshot; no source-time/dt inference from unused zero fields.
+      for (int axis = 0; axis < Dim; ++axis) {
+        output << data_->geometry.domain().lo[axis] << ' ' << data_->geometry.domain().hi[axis]
+               << ' '; bits(data_->geometry.lower()[axis]); output << ' ';
+        bits(data_->geometry.upper()[axis]); output << ' '; bits(data_->geometry.spacing(axis));
+        output << '\n';
+        for (BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+          const Face<Dim> face{axis, side};
+          const auto& law = data_->boundary->conditions().at(face);
+          output << data_->boundary->conditions().topology().is_periodic(face) << ' '
+                 << static_cast<unsigned>(law.kind) << ' ';
+          bits(law.value); output << ' '; bits(law.alpha); output << ' '; bits(law.beta);
+          output << '\n';
+        }
+      }
+      output << data_->options.zero_flux_faces << ' ' << data_->options.dirichlet_faces << ' '
+             << data_->options.arithmetic_diagonal << '\n';
+      output << correction.distribution().replicated() << ' ' << correction.layout().size() << '\n';
+      for (int axis = 0; axis < Dim; ++axis)
+        output << correction.rank_space().origin()[axis] << ' '
+               << correction.rank_space().extent()[axis] << ' ' << correction.local_rank()[axis] << ' ';
+      output << '\n';
+      for (std::size_t box = 0; box < correction.layout().size(); ++box) {
+        for (int axis = 0; axis < Dim; ++axis) {
+          output << correction.layout().boxes()[box].lo[axis] << ' '
+                 << correction.layout().boxes()[box].hi[axis] << ' ';
+          if (!correction.distribution().replicated())
+            output << correction.distribution().owners()[box][axis] << ' ';
+        }
+        output << '\n';
+      }
+      output << trace_->size << '\n';
+      for (std::size_t index = 0; index < trace_->size; ++index) {
+        const auto& c = trace_->cycles[index];
+        output << c.begin_iteration << ' ' << c.end_iteration << ' ' << c.dimension << ' '
+               << c.second_passes << ' ' << c.end_flags << ' ';
+        for (const Real value : {c.initial_residual, c.final_residual, c.beta,
+                                c.equation_scale, c.preconditioner_scale}) {
+          bits(value); output << ' ';
+        }
+        for (const auto& value : {c.estimate, c.estimate_threshold}) {
+          output << static_cast<unsigned>(value.state()) << ' '; bits(value.mantissa());
+          output << ' ' << value.exponent() << ' ';
+        }
+        output << '\n';
+      }
+      const auto field = [&](std::string_view name, const field_type& value) {
+        output << name << ' ' << value.ncomp() << ' ' << value.local_size();
+        for (int axis = 0; axis < Dim; ++axis) output << ' ' << value.ghosts()[axis];
+        output << '\n';
+        for (std::size_t local = 0; local < value.local_size(); ++local) {
+          const auto& fab = value.fab(local);
+          auto host = fab.create_host_mirror();
+          fab.copy_to_host(host);
+          output << value.local_global_indices()[local] << ' ' << host.size() << '\n';
+          for (std::size_t index = 0; index < host.size(); ++index) {
+            bits(host(index)); output << '\n';
+          }
+        }
+      };
+      field("rhs", rhs); field("candidate", correction);
+      for (std::size_t slot = 0; slot < data_->coefficients.size(); ++slot)
+        field("coefficient-" + std::to_string(slot), data_->coefficients[slot]);
+      output << "END\n";
+      if (!output)
+        throw std::runtime_error("tensor FAC capture serialization failed");
+      const std::string payload = std::move(output).str();
+      if (payload.size() > maximum_bytes)
+        throw std::length_error("tensor FAC diagnostic byte budget exceeded");
+      const std::string path = capture_root_ + "/coarse-rank-" +
+                               std::to_string(parent_->rank()) + ".txt";
+      descriptor = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+      if (descriptor < 0) throw std::runtime_error("tensor FAC capture exclusive open failed");
+      std::size_t offset = 0;
+      while (offset < payload.size()) {
+        const auto count = ::write(descriptor, payload.data() + offset, payload.size() - offset);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) throw std::runtime_error("tensor FAC capture write failed");
+        offset += static_cast<std::size_t>(count);
+      }
+      if (::fsync(descriptor) != 0 || ::fchmod(descriptor, 0444) != 0)
+        throw std::runtime_error("tensor FAC capture durability failed");
+      const int close_status = ::close(descriptor); descriptor = -1;
+      if (close_status != 0) throw std::runtime_error("tensor FAC capture close failed");
+      descriptor = ::open(capture_root_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      if (descriptor < 0 || ::fsync(descriptor) != 0)
+        throw std::runtime_error("tensor FAC capture directory sync failed");
+      const int directory_close = ::close(descriptor); descriptor = -1;
+      if (directory_close != 0) throw std::runtime_error("tensor FAC capture directory close failed");
+    } catch (...) {
+      if (descriptor >= 0) ::close(descriptor);
+      failed = 1;  // Keep partial/existing bytes; their failed diagnostic disposition stays explicit.
+    }
+    const long any_failed = all_reduce_max(failed, *parent_);
+    std::fprintf(stderr, "pops_tensor_fac_capture rank=%d outer=%d status=%s\n",
+                 parent_->rank(), outer_ordinal, any_failed ? "failed" : "complete");
   }
 
  private:
@@ -401,6 +574,8 @@ class TensorCoarseGmres {
   std::shared_ptr<Data> data_;
   std::shared_ptr<PreparedAffineLinearProblem<Dim>> problem_;
   std::shared_ptr<KrylovWorkspace<Dim>> workspace_;
+  std::string capture_root_;
+  std::unique_ptr<GmresDiagnosticTrace> trace_;
   bool prepared_ = false;
 };
 

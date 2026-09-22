@@ -784,7 +784,7 @@ class FullTensorCompositeFac {
 
       compute_composite_residual_();
       restrict_residual_tower_();
-      const auto coarse_report = solve_coarse_correction_(controls);
+      const auto coarse_report = solve_coarse_correction_(controls, iteration + 1);
       if (coarse_report && !coarse_report->solved()) {
         report.residual_norm = composite_residual_norm_();
         report.rel_residual = report.residual_norm / reference;
@@ -801,9 +801,10 @@ class FullTensorCompositeFac {
       for (std::size_t level = 1; level < levels_.size(); ++level)
         smooth_(level, *levels_[level]->binding.solution, *levels_[level]->binding.rhs, post, true,
                 false);
-      average_solution_down_();
       if (nullspace_workspace_)
         nullspace_workspace_->apply_gauge(nullspace_candidates_);
+      // Gauge projection shifts active unknowns; refresh their covered parent images afterwards.
+      average_solution_down_();
 
       compute_composite_residual_();
       ++report.evaluations;
@@ -1822,7 +1823,7 @@ class FullTensorCompositeFac {
                                              levels_[child - 1]->residual);
   }
 
-  std::optional<SolveReport> solve_coarse_correction_(const Controls& controls) {
+  std::optional<SolveReport> solve_coarse_correction_(const Controls& controls, int outer_ordinal) {
     Level& coarse = *levels_.front();
     coarse.correction.set_val(Real(0));
     const Real reference = global_norm_inf_(coarse.residual);
@@ -1863,11 +1864,16 @@ class FullTensorCompositeFac {
                   << ", original_candidate_linf=" << residual
                   << ", rhs_linf=" << reference << ", requested_tolerance=" << stop << ']';
           result.reason = context.str();
+          coarse_gmres_->capture_failure(coarse.correction, coarse.residual, result, residual,
+                                        reference, stop, controls.coarse_cycles, outer_ordinal);
           return result;
         }
         if (!std::isfinite(static_cast<double>(residual)) || residual > stop)
           result.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                              "tensor_coarse_gmres_original_infinity_residual");
+        if (!result.solved())
+          coarse_gmres_->capture_failure(coarse.correction, coarse.residual, result, residual,
+                                        reference, stop, controls.coarse_cycles, outer_ordinal);
         return result;
       }
     }

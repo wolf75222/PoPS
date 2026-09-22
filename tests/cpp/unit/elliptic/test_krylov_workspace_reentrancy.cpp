@@ -1876,6 +1876,7 @@ TEST(test_krylov_workspace_reentrancy,
 }
 
 TEST(test_krylov_workspace_reentrancy, gmres_infinity_stopping_keeps_euclidean_arnoldi) {
+  comm_init();
   // This three-eigenvalue system needs a genuine Arnoldi recurrence. In infinity mode the
   // initial recurrence scale is 10, whereas its Euclidean beta is sqrt(200)/10, not one.
   // The same scientific vector is replicated, so neither norm may multiply by the MPI size.
@@ -1898,10 +1899,12 @@ TEST(test_krylov_workspace_reentrancy, gmres_infinity_stopping_keeps_euclidean_a
   const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
   const TestKrylovMethod method = gmres_krylov_method<kDim>(3);
   const TestKrylovFootprint footprint{3, extent(0), false};
+  int applications = 0;
   TestAffineProblem problem(
       iterate,
       TestAffineOperatorProvider::trusted_reentrant(
-          [](TestField& out, const TestField& in) {
+          [&applications](TestField& out, const TestField& in) {
+            ++applications;
             for (std::size_t local = 0; local < out.local_size(); ++local) {
               const auto output = out.fab(local).view();
               const auto input = in.fab(local).view();
@@ -1919,13 +1922,26 @@ TEST(test_krylov_workspace_reentrancy, gmres_infinity_stopping_keeps_euclidean_a
   TestKrylovWorkspace workspace(iterate, method, footprint, vectors);
   problem.prepare(snapshot);
   workspace.bind(problem);
+  const auto candidate_bits = [](const TestField& field) {
+    std::vector<RealBits> result;
+    for (std::size_t local = 0; local < field.local_size(); ++local) {
+      auto host = field.fab(local).create_host_mirror();
+      field.fab(local).copy_to_host(host);
+      for (std::size_t index = 0; index < host.size(); ++index)
+        result.push_back(std::bit_cast<RealBits>(host(index)));
+    }
+    return result;
+  };
   for (const auto norm : {KrylovPhysicalNorm::metric_l2, KrylovPhysicalNorm::component_linf}) {
     SCOPED_TRACE(static_cast<int>(norm));
     iterate.set_val(Real(0));
     TestKrylovControls controls{method, Real(0), Real(1e-11), 3};
     controls.physical_norm = norm;
+    applications = 0;
     const auto report =
         detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+    const int original_applications = applications;
+    const auto original_candidate = candidate_bits(iterate);
     EXPECT_TRUE(report.solved()) << report.reason;
     EXPECT_EQ(report.iters, 3);
     EXPECT_DOUBLE_EQ(report.reference_residual_norm,
@@ -1954,6 +1970,28 @@ TEST(test_krylov_workspace_reentrancy, gmres_infinity_stopping_keeps_euclidean_a
     EXPECT_LT(all_reduce_max(static_cast<double>(error)), 1e-10);
     EXPECT_LE(all_reduce_max(static_cast<double>(residual)), 1e-11);
     EXPECT_LE(report.residual_norm, Real(1e-11));
+
+    GmresDiagnosticTrace trace;
+    controls.diagnostic_trace = &trace;
+    iterate.set_val(Real(0));
+    applications = 0;
+    const auto observed =
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+    EXPECT_EQ(candidate_bits(iterate), original_candidate);
+    EXPECT_EQ(applications, original_applications);
+    EXPECT_EQ(observed.status, report.status);
+    EXPECT_EQ(observed.action, report.action);
+    EXPECT_EQ(observed.iters, report.iters);
+    EXPECT_EQ(observed.reason, report.reason);
+    EXPECT_DOUBLE_EQ(observed.residual_norm, report.residual_norm);
+    EXPECT_DOUBLE_EQ(observed.reference_residual_norm, report.reference_residual_norm);
+    EXPECT_DOUBLE_EQ(observed.rel_residual, report.rel_residual);
+    ASSERT_EQ(trace.size, 1u);
+    EXPECT_FALSE(trace.overflow);
+    EXPECT_EQ(trace.cycles[0].begin_iteration, 0);
+    EXPECT_EQ(trace.cycles[0].end_iteration, 3);
+    EXPECT_EQ(trace.cycles[0].dimension, 3);
+    EXPECT_DOUBLE_EQ(trace.cycles[0].final_residual, report.residual_norm);
   }
   // The first exact GMRES candidate has residual (-265,8,333)/157. Its infinity norm is
   // 2.121... and its Euclidean norm is 2.711.... At tau=2.25 only the explicitly requested
@@ -1975,6 +2013,40 @@ TEST(test_krylov_workspace_reentrancy, gmres_infinity_stopping_keeps_euclidean_a
       EXPECT_NEAR(report.residual_norm, std::sqrt(Real(181178)) / Real(157), Real(1e-13));
     }
   }
+  // The same exact first-column residual has Linf 333/157 > 2, whereas its
+  // Euclidean estimate meets the mapped threshold. The observer must preserve that refused
+  // estimate and the following true-residual restart without altering numerical authority.
+  GmresDiagnosticTrace trace;
+  TestKrylovControls controls{method, Real(0), Real(2), 512};
+  controls.physical_norm = KrylovPhysicalNorm::component_linf;
+  controls.diagnostic_trace = &trace;
+  iterate.set_val(Real(0));
+  const auto short_cycle =
+      detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+  EXPECT_TRUE(short_cycle.solved()) << short_cycle.reason;
+  ASSERT_GT(trace.size, 1u);
+  EXPECT_EQ(trace.cycles[0].dimension, 1);
+  EXPECT_NE(trace.cycles[0].end_flags & 1u, 0u);
+  EXPECT_GT(trace.cycles[0].final_residual, controls.abs_tol);
+
+  controls.max_iterations = 513;
+  applications = 0;
+  EXPECT_THROW((void)detail::solve_prepared_affine_in_place(
+                   problem, workspace, iterate, rhs, controls), std::invalid_argument);
+  EXPECT_EQ(applications, 0);
+  controls.max_iterations = 3;
+  controls.abs_tol = Real(1e-11);
+  if (n_ranks() > 1) {
+    controls.diagnostic_trace = my_rank() == 0 ? &trace : nullptr;
+    EXPECT_THROW((void)detail::solve_prepared_affine_in_place(
+                     problem, workspace, iterate, rhs, controls), std::logic_error);
+    EXPECT_EQ(applications, 0);
+  }
+  controls.diagnostic_trace = &trace;
+  iterate.set_val(Real(0));
+  EXPECT_TRUE(detail::solve_prepared_affine_in_place(
+                  problem, workspace, iterate, rhs, controls).solved());
+  EXPECT_EQ(trace.size, 1u);  // Reset, not append to the previous invocation.
 }
 
 TEST(test_krylov_workspace_reentrancy, gmres_infinity_relative_reference_is_independent_of_warm_start) {

@@ -362,4 +362,41 @@ TEST(test_composite_fac_tensor, periodic_tensor_fac_applies_mean_zero_gauge) {
   EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
   EXPECT_NEAR(solution_mean(solver->solution(0), geometries[0]), 0.0, 1.0e-7);
   EXPECT_NEAR(solution_mean(solver->solution(1), geometries[1]), 0.0, 1.0e-6);
+
+  // A composite gauge constrains active cells. Covered coarse values must then be regenerated
+  // from the shifted fine solution before they participate in coarse/fine boundary interpolation.
+  const auto& coarse = solver->solution(0).fab(0);
+  const auto& fine = solver->solution(1).fab(0);
+  auto coarse_host = coarse.create_host_mirror();
+  auto fine_host = fine.create_host_mirror();
+  coarse.copy_to_host(coarse_host);
+  fine.copy_to_host(fine_host);
+  const auto covered = fine.box().coarsen(2);
+  const long double coarse_volume = geometries[0].spacing(0) * geometries[0].spacing(1);
+  const long double fine_volume = geometries[1].spacing(0) * geometries[1].spacing(1);
+  long double composite_integral = 0;
+  long double composite_volume = 0;
+  double maximum_parent_error = 0;
+  for (int j = coarse.box().lo[1]; j <= coarse.box().hi[1]; ++j)
+    for (int i = coarse.box().lo[0]; i <= coarse.box().hi[0]; ++i) {
+      const Index<2> cell{i, j};
+      const double value = coarse_host(ordinal(coarse.grown_box(), cell));
+      if (covered.contains(cell)) {
+        double average = 0;
+        for (int dy = 0; dy < 2; ++dy)
+          for (int dx = 0; dx < 2; ++dx)
+            average += 0.25 * fine_host(ordinal(fine.grown_box(), Index<2>{2 * i + dx, 2 * j + dy}));
+        maximum_parent_error = std::max(maximum_parent_error, std::abs(value - average));
+      } else {
+        composite_integral += value * coarse_volume;
+        composite_volume += coarse_volume;
+      }
+    }
+  for (int j = fine.box().lo[1]; j <= fine.box().hi[1]; ++j)
+    for (int i = fine.box().lo[0]; i <= fine.box().hi[0]; ++i) {
+      composite_integral += fine_host(ordinal(fine.grown_box(), Index<2>{i, j})) * fine_volume;
+      composite_volume += fine_volume;
+    }
+  EXPECT_NEAR(static_cast<double>(composite_integral / composite_volume), 0.0, 1.0e-12);
+  EXPECT_LE(maximum_parent_error, 1.0e-12);
 }

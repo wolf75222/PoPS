@@ -493,6 +493,10 @@ inline long controls_failure(const KrylovControls<Dim>& controls) noexcept {
     return 19;
   if (!controls.failure_actions.valid())
     return 28;
+  if (controls.diagnostic_trace &&
+      (controls.method.identity() != "pops.krylov.gmres" || controls.max_iterations < 1 ||
+       static_cast<std::size_t>(controls.max_iterations) > GmresDiagnosticTrace::capacity))
+    return 28;
   return controls.method
                  .validate_controls(KrylovMethodControls{controls.rel_tol, controls.abs_tol,
                                                          controls.max_iterations,
@@ -546,6 +550,8 @@ inline void append_controls(KrylovCollectivePayload& payload,
   payload.append(static_cast<std::uint8_t>(controls.failure_actions.breakdown));
   payload.append(static_cast<std::uint8_t>(controls.failure_actions.iteration_limit));
   payload.append(static_cast<std::uint8_t>(controls.physical_norm));
+  payload.append(static_cast<std::uint64_t>(
+      controls.diagnostic_trace ? GmresDiagnosticTrace::capacity : 0));
 }
 
 template <int Dim>
@@ -1271,6 +1277,9 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
   SolveNormalization cycle_normalization = normalization;
   Real preconditioner_scale = Real(0);
   while (iterations < controls.max_iterations) {
+    GmresDiagnosticTrace::Cycle diagnostic;
+    diagnostic.begin_iteration = iterations;
+    diagnostic.initial_residual = measurement.physical;
     MultiFab<Dim>* initial_vector = &applied_or_residual;
     if (prepared_vector != nullptr) {
       const Real scale = apply_scaled_preconditioner(problem, *prepared_vector, applied_or_residual,
@@ -1308,6 +1317,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
     int dimension = 0;
     bool estimate_reached = false;
     bool invalid = false;
+    bool last_lucky_breakdown = false;
     for (int column = 0; column < restart && iterations < controls.max_iterations; ++column) {
       workspace_apply_linear(problem, workspace, applied_or_residual, basis(column),
                              cycle_normalization.scale);
@@ -1364,6 +1374,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
       if (finite(arnoldi_norm) &&
           (!finite_raw_square || (raw_square > Real(0) &&
                                   arnoldi_norm <= kReorthogonalizeRatio * std::sqrt(raw_square)))) {
+        ++diagnostic.second_passes;
         for (int row = 0; row <= column; ++row)
           reductions[row] = static_cast<double>(PreparedProblemAccess<Dim>::local_inner_product(
               problem, *arnoldi_vector, basis(row)));
@@ -1397,6 +1408,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
         break;
       }
       const bool lucky_breakdown = arnoldi_norm == Real(0);
+      last_lucky_breakdown = lucky_breakdown;
       if (!lucky_breakdown) {
         PreparedFieldAlgebra::copy(basis(column + 1), *arnoldi_vector);
         PreparedFieldAlgebra::divide(basis(column + 1), arnoldi_norm);
@@ -1470,6 +1482,20 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
 
     measurement = physical_true_residual_measurement(
         problem, workspace, applied_or_residual, rhs, iterate, controls.physical_norm);
+    if (controls.diagnostic_trace) {
+      diagnostic.end_iteration = iterations;
+      diagnostic.dimension = dimension;
+      diagnostic.final_residual = measurement.physical;
+      diagnostic.beta = beta;
+      diagnostic.equation_scale = cycle_normalization.scale;
+      diagnostic.preconditioner_scale = preconditioner_scale;
+      diagnostic.estimate =
+          KrylovWorkspaceAccess::scaled_rotated_rhs(workspace, dimension, restart);
+      diagnostic.estimate_threshold = estimate_threshold;
+      diagnostic.end_flags = (estimate_reached ? 1u : 0u) | (last_lucky_breakdown ? 2u : 0u) |
+          (iterations == controls.max_iterations ? 4u : 0u) | (dimension == restart ? 8u : 0u);
+      controls.diagnostic_trace->append(diagnostic);
+    }
     if (!finite(measurement.physical))
       return report_physical(normalization, measurement.physical, iterations,
                              SolveStatus::kInvalidEvaluation);
@@ -1730,6 +1756,8 @@ template <int Dim>
 inline SolveReport detail::PreparedKrylovInvocationAccess::execute(
     const PreparedAffineLinearProblem<Dim>& problem, KrylovWorkspace<Dim>& workspace,
     MultiFab<Dim>& iterate, const MultiFab<Dim>& rhs, const KrylovControls<Dim>& controls) {
+  if (controls.diagnostic_trace)
+    controls.diagnostic_trace->reset();
   MultiFab<Dim>& compatibility_rhs = detail::KrylovWorkspaceAccess::field(workspace, 0);
   const PreparedEquationReference equation =
       detail::PreparedProblemAccess<Dim>::prepare_compatibility_rhs(
