@@ -81,17 +81,22 @@ def test_native_analytic_metric_and_periodic_faces_match_conservative_update(
                 conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid(schedule=every(100, clock=program.clock)), transfer=transfer,
             execution=AMRExecution.synchronous())
-    # Pytest supplies a different isolated cache on each MPI rank. Publish one
-    # exact binary through the established collective helper before binding.
     from pops._native_selector import select_native_dimension
     select_native_dimension(2)
     from pops import _pops
-    from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
-    artifact = compile_resolved_plan_once(
-        _pops.mpi_world(), pops.resolve(pops.validate(case), layout=layout),
-        route="analytic-metric-" + layout_kind, compile_artifact=pops.compile)
+    from pops.codegen._native_mpi import native_mpi_communicator
+    from tests.python.support.native_execution_context import artifact_execution_context
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    if native_mpi_communicator(_pops) == "MPI_COMM_WORLD":
+        # MPI ranks own distinct pytest caches. Publish and authenticate one binary.
+        from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
+        artifact = compile_resolved_plan_once(
+            _pops.mpi_world(), resolved,
+            route="analytic-metric-" + layout_kind, compile_artifact=pops.compile)
+    else:
+        artifact = pops.compile(resolved)
     runtime = pops.bind(artifact,
-        resources={"execution_context": pops.ExecutionContext.mpi_world(artifact)})
+        resources={"execution_context": artifact_execution_context(artifact)})
     initial = np.asarray(runtime.block_level_state_global("tracer", 0)
         if layout_kind == "one_level_amr" else runtime.state_global("tracer")).reshape(nt, nr)
     radial = np.arange(nr) + .5
