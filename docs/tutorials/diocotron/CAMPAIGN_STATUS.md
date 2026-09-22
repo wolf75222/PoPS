@@ -35,7 +35,7 @@ functions or classes. The selected authors' benchmark remains unchanged:
 | FAC hierarchy | Synchronize covered parents after corrections and after the periodic gauge; conservative fine-interface flux support | Original FAC tolerances pass; covered-parent regression checks pass at `1e-12`; not a general high-resolution convergence guarantee |
 | MPI execution | Serialize public model artifact publication; synchronize AMR body failures before flux publication | Focused MPI/runtime witnesses; not all backend or multi-node coverage |
 | AMR continuation | Preserve accepted-attempt authority, histories and auxiliary images; rebuild generated resources after accepted history remap | Genuine expanded cold/restart comparisons on `65b0658` and freshly rebuilt `8b05af9`; the latter starts from the first actual expanded interior checkpoint and reaches `t=0.03` |
-| Shared history projection | Bind immutable shared samples to their physical archive, project parent flux densities into canonical child faces, and preserve complete source identities in the ledger | The 16² MPI fixture exposes the previous cross-level refusal; five focused native witnesses and the real shared restart paths still require execution after reconstruction. The existing single-block scientific runs do not exercise this capability |
+| Shared history projection | Bind immutable shared samples to their physical archive, project parent flux densities into canonical child faces, and preserve complete source identities in the ledger | The rebuilt `52b3e26` reaches transformation and rollback on the real 16² MPI fixture, then exposes an invalidated history reference during continuation. Six focused native witnesses and the complete shared restart paths require qualification with the lifetime correction. The existing single-block scientific runs do not exercise shared flux projection |
 | Native packaging | Authenticate relocated installed extension bytes | Official build/doctor and retained source/installed manifests |
 | Uniform checkpoint shape | Distinguish native reversed array shape from legacy field-free logical shape, preserving byte guards | Revision `8ae9097`: 36 focused Python checks; actual one-rank fresh-process rectangular restart; final Knudsen checkpoint |
 | Exact global gather | Replace arithmetic summation with byte assembly after exact ownership checks, preserving signed zero | Official Dim2/MPI rebuild at `4adfddf`; 36 Python checks, four genuine MPI1/MPI2 capture/restart worlds and six MPI1/2/4 gather CTests passed, including signed zero and refusal before mutation |
@@ -56,7 +56,14 @@ already fully refined, so its expected hierarchy change was impossible. At 16² 
 retains a real coarse interior and exposes a separate native refusal to transfer
 shared history across levels. The generic correction preserves parent-face flux
 integrals, source associations, duplicate refusal and rollback; it does not discard
-history or relax conservation checks. New source/native qualification is recorded
+history or relax conservation checks. The actual rebuilt `52b3e26` MPI2 run reaches
+the shared hierarchy transform, injected rollback and successful retry, then fails
+on the first continued step. The generated Program retains one history reference
+across a second history read; replacing the complete scratch map invalidated that
+reference. Deferred reads now preserve existing object addresses and publish only
+the prepared value after collective agreement. A dedicated regression covers two
+histories, rank-local preparation refusal, retry and repeated reads; it is included
+in the existing MPI test filter. New source/native qualification is recorded
 separately from these retained CI results.
 
 - Euler `65b0658`, ROMEO job `714111`: modes 3, 4 and 5 each reached `t=0.1`

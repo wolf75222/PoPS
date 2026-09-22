@@ -850,7 +850,7 @@ def test_regrid_on_restart_mpi_shared_interface_transaction() -> None:
                 for _name, slots in transformed_image["histories"]
                 for slot in slots
             ),
-            "both AB2 histories are conservatively rematerialized on the new hierarchy",
+            "both AB2 histories retain their names and finite slots on the new hierarchy",
         )
         counts_before = tuple(
             restarted._executor._s._interface_evaluation_count(interface_identity, level)
