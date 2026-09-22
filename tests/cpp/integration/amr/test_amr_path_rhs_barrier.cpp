@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "explicit_amr_program.hpp"
-#include <pops/numerics/moments/fan_li15_interface.hpp>
+#include "../../support/generated_fan_li15.hpp"
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 
@@ -41,7 +41,7 @@ Raw gaussian(Real density, Real ux, Real uy, Real variance = Real(1)) {
   return state;
 }
 
-struct Model {
+struct Model : test_fan_li15::Kernel {
   using State = Raw;
   using Primitive = Raw;
   struct Schema {
@@ -83,8 +83,8 @@ struct Model {
     Real raw[15];
     for (int component = 0; component < 15; ++component)
       raw[component] = state[component];
-    return pops::moments::fan_li15_admissibility(raw) ==
-           pops::moments::FanLi15PathStatus::Success;
+    return test_fan_li15::Kernel::admissibility(raw) ==
+           pops::PathStatus::Success;
   }
   POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
     return path_admissible(state) ? pops::nd::StateConversionStatus::Success
@@ -101,7 +101,7 @@ struct Model {
     Real raw[15];
     for (int component = 0; component < 15; ++component)
       raw[component] = state[component];
-    const auto result = pops::moments::fan_li15_grad_directional_flux(
+    const auto result = test_fan_li15::flux(
         raw, Axis == 0 ? Real(1) : Real(0), Axis == 1 ? Real(1) : Real(0));
     State flux{};
     for (int component = 0; component < 15; ++component)
@@ -113,7 +113,7 @@ struct Model {
     Real raw[15];
     for (int component = 0; component < 15; ++component)
       raw[component] = state[component];
-    const auto result = pops::moments::fan_li15_path_integral(
+    const auto result = test_fan_li15::path_integral(
         raw, raw, Axis == 0 ? Real(1) : Real(0), Axis == 1 ? Real(1) : Real(0));
     return result.succeeded() ? result.speed_bound : std::numeric_limits<Real>::quiet_NaN();
   }
@@ -205,13 +205,13 @@ void expect_cells(const Field& field, Expected expected, bool active_coarse_only
   }
 }
 
-pops::moments::FanLi15InterfaceResult tuple(const Raw& left, const Raw& right, int axis = 0) {
+pops::PathInterfaceResult<15> tuple(const Raw& left, const Raw& right, int axis = 0) {
   Real l[15], r[15];
   for (int component = 0; component < 15; ++component) {
     l[component] = left[component];
     r[component] = right[component];
   }
-  auto result = pops::moments::fan_li15_rusanov_interface(
+  auto result = test_fan_li15::interface(
       l, r, axis == 0 ? Real(1) : Real(0), axis == 1 ? Real(1) : Real(0));
   if (!result.succeeded())
     throw std::runtime_error("independent path test tuple failed its strict domain");

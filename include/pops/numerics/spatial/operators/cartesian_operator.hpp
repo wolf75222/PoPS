@@ -8,7 +8,7 @@
 #include <pops/mesh/geometry/prepared_metric_provider.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
-#include <pops/numerics/fv/fan_li15_path_flux.hpp>
+#include <pops/numerics/fv/path_flux.hpp>
 #include <pops/numerics/spatial/nd/finite_volume.hpp>
 #include <pops/numerics/spatial/nd/reconstruction.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
@@ -310,7 +310,7 @@ struct MaterializeResidual {
 };
 
 /// Status prefixes preserve whether a refusal came from metric/finite-volume
-/// checks (256), extra model conversion (512) or the exact Fan--Li policy (1024).
+/// checks (256), extra model conversion (512) or the declared physical path (1024).
 /// These small integers remain exactly representable in every supported Real.
 template <int Axis, int Dim, class Model, class Metric, class ProviderStorage>
 struct MaterializePathFace {
@@ -352,11 +352,12 @@ struct MaterializePathFace {
       return;
     }
     // FirstOrder: exactly the two adjacent conservative stored states. The
-    // path policy performs its own typed raw-SPD certificate on both traces.
+    // path policy performs its own declared physical admissibility checks on both traces.
     const auto left = load_state<Model>(state, left_cell),
                right = load_state<Model>(state, right_cell);
-    const auto evaluation = evaluate_fan_li15_path_at<Axis>(
-        FanLi15PathRusanovFlux{}, model, left, providers, left_cell, right, providers, right_cell);
+    const auto evaluation =
+        evaluate_path_at<Axis>(PathRusanovFlux<Model::n_vars>{}, model, left, providers, left_cell,
+                               right, providers, right_cell);
     if (!evaluation.succeeded()) {
       clear(face, Real(1024) + static_cast<Real>(evaluation.status));
       return;
@@ -369,8 +370,8 @@ struct MaterializePathFace {
                                                     : right_status));
       return;
     }
-    Real f[15], l[15], r[15];
-    for (int k = 0; k < 15; ++k) {
+    Real f[Model::n_vars], l[Model::n_vars], r[Model::n_vars];
+    for (int k = 0; k < Model::n_vars; ++k) {
       f[k] = context.face_measure * evaluation.conservative_flux.values[k];
       l[k] = context.face_measure * evaluation.left_ncp.values[k];
       r[k] = context.face_measure * evaluation.right_ncp.values[k];
@@ -383,7 +384,7 @@ struct MaterializePathFace {
       clear(face, Real(256) + static_cast<Real>(FiniteVolumeStatus::InvalidWaveSpeed));
       return;
     }
-    for (int k = 0; k < 15; ++k) {
+    for (int k = 0; k < Model::n_vars; ++k) {
       flux.template operator()<Axis>(face.coordinate, k) = f[k];
       left_ncp.template operator()<Axis>(face.coordinate, k) = l[k];
       right_ncp.template operator()<Axis>(face.coordinate, k) = r[k];
@@ -1016,18 +1017,17 @@ class PreparedCartesianOperator {
   void require_path_route_(const std::array<bool, 2 * Dim>& omitted_faces) const
     requires(path_conservative_model<Model>)
   {
-    static_assert(Dim == 2 && n_vars == 15,
-                  "this native path evaluator implements full-temperature D2/M4 Fan-Li15");
     if constexpr (!std::is_same_v<Reconstruction, NoSlope> ||
                   Variables != ReconstructionVariables::Conservative ||
-                  !std::is_same_v<NumericalFlux, FanLi15PathRusanovFlux> || DiffusiveModel<Model>)
+                  !std::is_same_v<NumericalFlux, PathRusanovFlux<Model::n_vars>> ||
+                  DiffusiveModel<Model>)
       throw std::invalid_argument(
-          "Fan-Li15 path transport requires first-order conservative "
-          "FanLi15PathRusanovFlux without diffusion");
+          "Path transport requires first-order conservative "
+          "PathRusanovFlux without diffusion");
     if (!std::isfinite(positivity_floor_) || positivity_floor_ != Real(0))
-      throw std::invalid_argument("Fan-Li15 path transport does not permit a positivity floor");
+      throw std::invalid_argument("Path transport does not permit a positivity floor");
     if (Model::path_operator_identity().empty())
-      throw std::invalid_argument("Fan-Li15 path transport requires its exact operator identity");
+      throw std::invalid_argument("Path transport requires its exact operator identity");
     constexpr auto zero_faces = Model::path_zero_measure_faces();
     for (int face = 0; face < 2 * Dim; ++face)
       if (omitted_faces[face] && !zero_faces[face])

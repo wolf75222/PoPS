@@ -97,6 +97,30 @@ Separate endpoint geometric directions do not satisfy this proof. The bound also
 
 Each actual transport stage checks `dt * sum_faces(area * a) / volume <= CFL` on active cells, after canonical fine-subface replacement. The native controller reduces a maximum over coordinate directions, so its separate D2 proposal hook returns four times the directional bound. This gives the conservative proposal `CFL*h_min/(4*a_max)` for two face pairs. It does not multiply Rusanov dissipation, replace the stage check, or prove a bound for a changed source/predictor state. A violated stage bound refuses the attempt.
 
+## Python physics and generic native execution
+
+The physical Fan–Li coefficients remain in `pops.moments.fan_li`. Its multi-index
+definition supplies both the symbolic nonconservative matrix and the generated
+C++ polynomial products. The Python lowering plan selects the fifteen moments,
+the five regularized rows, the `f5=0` closure and the spectral constant. HYQMOM15
+keeps its separate constitutive definition.
+
+The installed C++ SDK supplies `PathRusanovFlux<N>`, typed conservative and side
+results, and model hooks for the directional flux, path integral and common
+geometry. Cartesian and AMR consumers depend on those contracts rather than a
+named physical model or fifteen-component storage. The same Cartesian path
+consumer is tested on the one-dimensional two-component system
+`u_t + u_x = 0`, `v_t + u v_x = 0`, whose nonconservative product is nonzero.
+
+Numerical moment utilities remain native: interval certification of a raw 2D
+covariance, normalization, complete bivariate Hermite transforms through degree
+four, bounded polynomial arithmetic and analytic density/logarithm integration.
+Their dimension and supported orders describe mathematical algorithms, not a
+Fan–Li closure. The generated caller supplies the physical coefficients and
+whole-path speed theorem. The robust midpoint, compensated sums, fixed path
+orientation and strict floating-point refusals are retained. Generated Fan–Li
+C++ fixtures live under tests; no Fan–Li C++ model is installed in the SDK.
+
 ## Admissibility is not full moment realizability
 
 The Fan–Li hyperbolicity domain requires finite moments, `rho>0`, and `Theta` strictly positive definite. Equivalently, in exact arithmetic,

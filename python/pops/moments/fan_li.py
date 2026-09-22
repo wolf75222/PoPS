@@ -24,7 +24,45 @@ FAN_LI15_INDICES = tuple((p, q) for q in range(5) for p in range(5 - q))
 FAN_LI15_REGULARIZED_COMPONENTS = (4, 8, 11, 13, 14)
 _TOP = tuple(FAN_LI15_INDICES[k] for k in FAN_LI15_REGULARIZED_COMPONENTS)
 _HERMITE_EDGE = sqrt(5 + sqrt(10))
-_RAW_SECOND_BOUND = sqrt(6 + sqrt(10))
+_RAW_SECOND_BOUND_TERMS = (6, 10)
+_RAW_SECOND_BOUND = sqrt(_RAW_SECOND_BOUND_TERMS[0] + sqrt(_RAW_SECOND_BOUND_TERMS[1]))
+
+
+def _regularization_terms(p: int, q: int, direction: int) -> tuple:
+    """One authoritative multi-index product for both symbolic and native algebra.
+
+    Terms are (Hermite index, kinematic differential, integer divisor).
+    Kinematics are (u, v, theta_xx, theta_xy, theta_yy). The outer directional
+    factor and raw factorial are deliberately separate, preserving evaluation order.
+    """
+    if direction == 0:
+        indices = ((p, q), (p + 1, q - 1), (p - 1, q),
+                   (p, q - 1), (p + 1, q - 2))
+    else:
+        indices = ((p - 1, q + 1), (p, q), (p - 2, q + 1),
+                   (p - 1, q), (p, q - 1))
+    return tuple((index, derivative, divisor) for derivative, (index, divisor)
+                 in enumerate(zip(indices, (1, 1, 2, 1, 2), strict=True)))
+
+
+def fan_li15_native_plan() -> dict:
+    """Model-owned lowering data for the robust generic moment primitives.
+
+    The Fan--Li choice f5=0, five regularized rows and spectral constant live
+    here, never in the C++ SDK. Generic transforms retain normalization,
+    compensated sums and covariance certification in the generated calculation.
+    """
+    return {
+        "order": 4,
+        "closure_order": 4,
+        "indices": FAN_LI15_INDICES,
+        "bound_terms": _RAW_SECOND_BOUND_TERMS,
+        "regularization": tuple(
+            (slot, -factorial(p) * factorial(q),
+             tuple((p + 1 if axis == 0 else q + 1, _regularization_terms(p, q, axis))
+                   for axis in range(2)))
+            for slot, (p, q) in zip(FAN_LI15_REGULARIZED_COMPONENTS, _TOP, strict=True)),
+    }
 
 
 def _sqrt(value: Any) -> Any:
@@ -89,21 +127,14 @@ class FanLi15Expressions:
         dc = (delta[9] - 2 * v * delta[5] + (v * v - c) * dr) / rho
         h = self.hermite
         result = [0] * 15
+        derivatives = du, dv, da, db, dc
+        def directional(p, q, axis):
+            terms = tuple((h.get(index, 0) * derivatives[derivative] / divisor
+                           if divisor != 1 else h.get(index, 0) * derivatives[derivative])
+                          for index, derivative, divisor in _regularization_terms(p, q, axis))
+            return (p + 1 if axis == 0 else q + 1) * sum(terms[1:], terms[0])
         for slot, (p, q) in zip(FAN_LI15_REGULARIZED_COMPONENTS, _TOP, strict=True):
-            rx = (p + 1) * (
-                h.get((p, q), 0) * du
-                + h.get((p + 1, q - 1), 0) * dv
-                + h.get((p - 1, q), 0) * da / 2
-                + h.get((p, q - 1), 0) * db
-                + h.get((p + 1, q - 2), 0) * dc / 2
-            )
-            ry = (q + 1) * (
-                h.get((p - 1, q + 1), 0) * du
-                + h.get((p, q), 0) * dv
-                + h.get((p - 2, q + 1), 0) * da / 2
-                + h.get((p - 1, q), 0) * db
-                + h.get((p, q - 1), 0) * dc / 2
-            )
+            rx, ry = directional(p, q, 0), directional(p, q, 1)
             result[slot] = -factorial(p) * factorial(q) * (gx * rx + gy * ry)
         return tuple(result)
 

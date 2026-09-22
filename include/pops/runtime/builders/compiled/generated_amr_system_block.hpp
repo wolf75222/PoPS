@@ -7,7 +7,7 @@
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
-#include <pops/numerics/fv/fan_li15_path_flux.hpp>
+#include <pops/numerics/fv/path_flux.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/spatial/embedded_boundary/cut_geometry.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
@@ -1828,12 +1828,12 @@ PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction recon
                   Variables == nd::ReconstructionVariables::Conservative) {
       if (parse_riemann_route(request.routes.riemann, "generated AMR path block") ==
           RiemannRouteId::kRusanov)
-        return materialize_system<Dim, Model, Reconstruction, FanLi15PathRusanovFlux,
+        return materialize_system<Dim, Model, Reconstruction, PathRusanovFlux<Model::n_vars>,
                                   Variables>(std::move(request), reconstruction,
-                                             FanLi15PathRusanovFlux{});
+                                             PathRusanovFlux<Model::n_vars>{});
     }
     throw std::invalid_argument(
-        "Fan-Li15 path transport requires first-order conservative Rusanov");
+        "Path transport requires first-order conservative Rusanov");
   } else {
   switch (parse_riemann_route(request.routes.riemann, "generated AMR block")) {
     case RiemannRouteId::kRusanov:

@@ -12,7 +12,9 @@ def emit_path_members(model, *, cse, aux_locals):
         raise ValueError("native Fan–Li path requires dimension two and fifteen raw moments")
     if model._stab_speed is not None:
         raise ValueError("the Fan–Li path owns its incident-face CFL proposal speed")
-    lines = [
+    from .moment_path_kernel import emit_fan_li15_kernel
+    lines = ["  " + line for line in emit_fan_li15_kernel()]
+    lines += [
         "  static constexpr bool path_conservative = true;",
         "  static constexpr std::string_view path_operator_identity() noexcept {",
         "    return %s;" % json.dumps(path["identity"]),
@@ -34,11 +36,16 @@ def emit_path_members(model, *, cse, aux_locals):
     lines += [
         "  }",
         "  POPS_HD bool path_admissible(const State& U) const {",
-        "    pops::Real raw[15]{};",
-        "    for (int component = 0; component < 15; ++component) raw[component] = U[component];",
-        "    return pops::moments::fan_li15_admissibility(raw) ==",
-        "        pops::moments::FanLi15PathStatus::Success;",
+        "    return PathKernel::admissibility(U) == pops::PathStatus::Success;",
         "  }", "",
+        "  POPS_HD pops::PathIntegralResult<n_vars> path_integral(const State& left, const State& right,",
+        "                              const std::array<pops::Real, 2>& direction) const {",
+        "    return PathKernel{}.path_integral(left, right, direction);",
+        "  }",
+        "  POPS_HD pops::PathFluxResult<n_vars> path_directional_flux(const State& state,",
+        "                                      const std::array<pops::Real, 2>& direction) const {",
+        "    return PathKernel{}.path_directional_flux(state, direction);",
+        "  }",
         "  template <int Axis, class Providers>",
         "  POPS_HD pops::Real stability_speed(const State& U, const Providers& a) const {",
         "    // step_cfl reduces max(axis speed)/h_min; each of two axes has two faces.",
@@ -54,9 +61,7 @@ def emit_path_proposal_speed():
     # actual source-transformed/predictor common-face and canonical subface speeds.
     return [
         "    const auto g = path_covector<Axis>(a);",
-        "    pops::Real raw[15]{};",
-        "    for (int component = 0; component < 15; ++component) raw[component] = U[component];",
-        "    const auto result = pops::moments::fan_li15_path_integral(raw, raw, g[0], g[1]);",
+        "    const auto result = path_integral(U, U, g);",
         "    return result.succeeded() ? result.speed_bound : std::numeric_limits<pops::Real>::quiet_NaN();",
         "  }", "",
     ]

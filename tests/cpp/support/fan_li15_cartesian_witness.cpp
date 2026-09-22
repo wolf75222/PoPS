@@ -1,3 +1,4 @@
+#include "generated_fan_li15.hpp"
 // Standalone Kokkos witness for the prepared face/residual seam. This does not
 // load the generated runtime or qualify an AMR/time-integration campaign.
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
@@ -37,7 +38,7 @@ Raw gaussian(Real ux, Real uy = 0) {
 }
 
 template <bool Providers = false, bool ZeroLower = false>
-struct PathModel {
+struct PathModel : test_fan_li15::Kernel {
   using State = Raw;
   using Primitive = Raw;
   using Prim = Raw;
@@ -66,7 +67,7 @@ struct PathModel {
     Real raw[15];
     for (int k = 0; k < 15; ++k)
       raw[k] = state[k];
-    return moments::fan_li15_admissibility(raw) == moments::FanLi15PathStatus::Success;
+    return test_fan_li15::Kernel::admissibility(raw) == pops::PathStatus::Success;
   }
   POPS_HD StateConversionStatus admissibility(const Raw& state) const {
     return path_admissible(state) ? StateConversionStatus::Success
@@ -82,7 +83,7 @@ struct PathModel {
     Real raw[15];
     for (int k = 0; k < 15; ++k)
       raw[k] = state[k];
-    const auto value = moments::fan_li15_grad_directional_flux(raw, g[0], g[1]);
+    const auto value = test_fan_li15::flux(raw, g[0], g[1]);
     Raw result{};
     for (int k = 0; k < 15; ++k)
       result[k] = value.flux.values[k];
@@ -94,7 +95,7 @@ struct PathModel {
     Real raw[15];
     for (int k = 0; k < 15; ++k)
       raw[k] = state[k];
-    const auto result = moments::fan_li15_path_integral(raw, raw, g[0], g[1]);
+    const auto result = test_fan_li15::path_integral(raw, raw, g[0], g[1]);
     return result.succeeded() ? result.speed_bound : std::numeric_limits<Real>::quiet_NaN();
   }
 };
@@ -192,6 +193,127 @@ void record(const char* name) {
   passed.emplace_back(name);
 }
 
+// A different physical system: u_t + u_x = 0, v_t + u v_x = 0.
+// Its straight path has P=(0, mean(u_L,u_R)*(v_R-v_L)), with full-path
+// speed max(1,|u_L|,|u_R|). No moment closure or density domain is involved.
+struct TriangularPathModel {
+  using State = StateVec<2>;
+  using Primitive = State;
+  struct Schema {
+    using Conservative = State;
+    using Primitive = State;
+  };
+  static constexpr int dimension = 1, n_vars = 2, n_providers = 0;
+  static constexpr bool path_conservative = true;
+  static constexpr std::string_view path_operator_identity() { return "triangular-2x1-raw-path@1"; }
+  POPS_HD static constexpr std::array<bool, 2> path_zero_measure_faces() { return {}; }
+  template <int Axis, class Providers>
+  POPS_HD std::array<Real, 1> path_covector(const Providers&) const {
+    static_assert(Axis == 0);
+    return {Real(1)};
+  }
+  POPS_HD StateConversionStatus admissibility(const State& state) const {
+    return std::isfinite(state[0]) && std::isfinite(state[1])
+               ? StateConversionStatus::Success
+               : StateConversionStatus::NonFiniteState;
+  }
+  POPS_HD StateConversion<State> recover(const State& state) const {
+    return {state, admissibility(state)};
+  }
+  POPS_HD StateConversion<State> make_conservative(const State& state) const {
+    return recover(state);
+  }
+  template <int Axis, class Providers>
+  POPS_HD State flux(const State& state, const Providers&) const {
+    State result{};
+    result[0] = state[0];
+    return result;
+  }
+  template <int Axis, class Providers>
+  POPS_HD Real max_wave_speed(const State& state, const Providers&) const {
+    return std::abs(state[0]) > Real(1) ? std::abs(state[0]) : Real(1);
+  }
+  POPS_HD PathFluxResult<2> path_directional_flux(const State& state,
+                                                  const std::array<Real, 1>& g) const {
+    PathFluxResult<2> result;
+    result.status = PathStatus::Success;
+    result.flux.values[0] = g[0] * state[0];
+    return result;
+  }
+  POPS_HD PathIntegralResult<2> path_integral(const State& left, const State& right,
+                                              const std::array<Real, 1>& g) const {
+    PathIntegralResult<2> result;
+    result.status = PathStatus::Success;
+    result.integral[1] = g[0] * (Real(0.5) * (left[0] + right[0])) * (right[1] - left[1]);
+    result.speed_bound =
+        std::abs(g[0]) * std::max(Real(1), std::max(std::abs(left[0]), std::abs(right[0])));
+    return result;
+  }
+};
+
+void distinct_nonconservative_rank_control() {
+  const auto box = Box<1>::from_extents(Extent<1>{2});
+  const auto geometry = Geometry<1>::from_bounds(box, RealVector<1>{0}, RealVector<1>{2});
+  const auto op = prepare_cartesian_operator<1>(geometry, TriangularPathModel{}, NoSlope{},
+                                                PathRusanovFlux<2>{});
+  Fab<1> state(box, 2, Extent<1>{1}), residual(box, 2), candidate(box, 2), statuses(box, 1);
+  auto input = state.create_host_mirror();
+  const auto grown = state.grown_box();
+  for (int i = grown.lo[0]; i <= grown.hi[0]; ++i) {
+    input(i - grown.lo[0]) = Real(2);
+    input(grown.numPts() + i - grown.lo[0]) = Real(i);
+  }
+  state.copy_from_host(input);
+  FaceField<1> flux(box, 2), left(box, 2), right(box, 2), speed(box, 1);
+  PreparedCartesianPathFaceScratch<1> scratch(box, 2);
+  op.materialize_path_face_contributions(state, flux, left, right, speed, scratch);
+  op.assemble_residual_from_path_faces(flux, left, right, residual, candidate, statuses);
+  auto output = residual.create_host_mirror();
+  residual.copy_to_host(output);
+  for (int i = 0; i < 2; ++i) {
+    near(output(i), 0, "N2/Dim1 conservative row");
+    near(output(2 + i), -2, "N2/Dim1 nonconservative transport");
+  }
+  auto ncp = left.field<0>().create_host_mirror();
+  left.field<0>().copy_to_host(ncp);
+  for (int i = 0; i < 3; ++i)
+    near(ncp(3 + i), -1, "N2/Dim1 independent nonzero side term");
+  record("distinct_N2_Dim1_nonzero_nonconservative_system");
+}
+
+struct MixedSignSpeedLaw {
+  POPS_HD PathStatus recover(const Real (&raw)[6], moments::NormalizedRawMoments<2>& state) const {
+    return moments::recover_raw_moments<2>(raw, state);
+  }
+  POPS_HD Real speed_bound(const moments::NormalizedRawMoments<2>& state,
+                           const std::array<Real, 2>&) const {
+    return state.density == Real(1) ? Real(-1) : Real(2);
+  }
+  POPS_HD void path_polynomials(const moments::NormalizedRawMoments<2>&,
+                                const moments::NormalizedRawMoments<2>&, const std::array<Real, 2>&,
+                                moments::Polynomial<2> (&)[6], Real (&)[6]) const {}
+};
+
+void moment_primitive_order_control() {
+  const Real raw[6] = {1, 0, 1, 0, 0, 2}, other[6] = {2, 0, 2, 0, 0, 4};
+  moments::NormalizedRawMoments<2> state;
+  check(moments::recover_raw_moments<2>(raw, state) == PathStatus::Success,
+        "degree-two generic moment recovery");
+  Real h[6], temperature[3], third[4];
+  moments::normalized_hermite(state, h, temperature);
+  near(h[0], 1, "normalized Hermite density");
+  for (int k = 1; k < 6; ++k)
+    near(h[k], 0, "normalized first and second Hermite coefficients");
+  moments::hermite_raw_edge<2, 3>(state, h, temperature, third);
+  for (Real value : third)
+    near(value, 0, "centered Gaussian degree-three edge");
+  const auto refusal = moments::integrate_normalized_moment_path<2>(
+      raw, other, std::array<Real, 2>{1, 0}, MixedSignSpeedLaw{});
+  check(refusal.status == PathStatus::NonFiniteResult,
+        "negative endpoint speed must not be hidden by a positive endpoint");
+  record("generic_degree2_moment_primitives_and_endpoint_speed_refusal");
+}
+
 template <int Dim>
 void ordinary_rank_control() {
   Extent<Dim> extent;
@@ -219,18 +341,17 @@ void run() {
              large = std::numeric_limits<Real>::max();
   for (Real a : {small, -small, Real(0), Real(1), large, -large})
     for (Real b : {small, -small, Real(0), Real(1), large, -large}) {
-      check(fan_li15_face_detail::common_covector_component(a, b) == std::midpoint(a, b),
+      check(common_covector_component(a, b) == std::midpoint(a, b),
             "common covector midpoint differs from independent standard implementation");
-      check(fan_li15_face_detail::common_covector_component(a, b) ==
-                fan_li15_face_detail::common_covector_component(b, a),
+      check(common_covector_component(a, b) == common_covector_component(b, a),
             "common covector is not symmetric");
     }
   record("common_covector_subnormal_overflow_midpoint");
   const auto box = Box<2>::from_extents(Extent<2>{2, 1});
   // dx=2, dy=3: x-face area=3, cell volume=6.
   const auto geometry = Geometry<2>::from_bounds(box, RealVector<2>{0, 0}, RealVector<2>{4, 3});
-  const auto op = prepare_cartesian_operator<2>(geometry, Composite{}, NoSlope{},
-                                                FanLi15PathRusanovFlux{});
+  const auto op =
+      prepare_cartesian_operator<2>(geometry, Composite{}, NoSlope{}, PathRusanovFlux<15>{});
   Fab<2> state(box, 15, Extent<2>{1, 1}), providers(box, 2, Extent<2>{1, 1});
   fill(state, [](int i, int, int c) { return gaussian(i <= 0 ? 0 : 1)[c]; });
   fill(providers, [](int i, int, int c) { return c == 0 ? (i <= 0 ? 1. : 3.) : 1.; });
@@ -349,8 +470,8 @@ void run() {
   const auto default_carrier = prepare_cartesian_operator<2>(geometry, Composite{});
   refuses(
       [&] {
-        default_carrier.materialize_path_face_contributions(
-            state, providers, tuple.f, tuple.l, tuple.r, tuple.speed, tuple.scratch);
+        default_carrier.materialize_path_face_contributions(state, providers, tuple.f, tuple.l,
+                                                            tuple.r, tuple.speed, tuple.scratch);
       },
       "default ordinary Rusanov carrier accepted dedicated path preparation");
   tuple.unchanged();
@@ -358,8 +479,8 @@ void run() {
       prepare_cartesian_operator<2>(geometry, Composite{}, NoSlope{}, RusanovFlux{});
   refuses(
       [&] {
-        ordinary_carrier.materialize_path_face_contributions(
-            state, providers, tuple.f, tuple.l, tuple.r, tuple.speed, tuple.scratch);
+        ordinary_carrier.materialize_path_face_contributions(state, providers, tuple.f, tuple.l,
+                                                             tuple.r, tuple.speed, tuple.scratch);
       },
       "explicit ordinary Rusanov carrier accepted dedicated path preparation");
   tuple.unchanged();
@@ -383,7 +504,7 @@ void run() {
   record("ordinary_noflux_omission_refused");
 
   const auto zero_op = prepare_cartesian_operator<2>(geometry, PathModel<true, true>{}, NoSlope{},
-                                                     FanLi15PathRusanovFlux{});
+                                                     PathRusanovFlux<15>{});
   fill(state, [](int i, int, int c) { return i < 0 ? 0. : gaussian(0)[c]; });
   fill(providers,
        [](int i, int, int) { return i < 0 ? std::numeric_limits<Real>::quiet_NaN() : 1.; });
@@ -397,14 +518,14 @@ void run() {
   near(get(tuple.speed.field<0>(), {0, 0}), 0, "zero-measure speed");
   record("authored_zero_face_skips_invalid_state_and_provider_ghosts");
   const auto free_op = prepare_cartesian_operator<2>(geometry, PathModel<false, true>{}, NoSlope{},
-                                                     FanLi15PathRusanovFlux{});
+                                                     PathRusanovFlux<15>{});
   free_op.materialize_path_face_contributions(state, tuple.f, tuple.l, tuple.r, tuple.speed,
                                               tuple.scratch);
   record("provider_free_path_route");
   refuses(
       [&] {
         const auto wrong = prepare_cartesian_operator<2>(geometry, PathModel<false, true>{},
-                                                         Minmod{}, FanLi15PathRusanovFlux{});
+                                                         Minmod{}, PathRusanovFlux<15>{});
         wrong.materialize_path_face_contributions(state, tuple.f, tuple.l, tuple.r, tuple.speed,
                                                   tuple.scratch);
       },
@@ -414,7 +535,7 @@ void run() {
     refuses(
         [&] {
           const auto wrong = prepare_cartesian_operator<2>(geometry, PathModel<false, true>{},
-                                                           NoSlope{}, FanLi15PathRusanovFlux{}, floor);
+                                                           NoSlope{}, PathRusanovFlux<15>{}, floor);
           wrong.materialize_path_face_contributions(state, tuple.f, tuple.l, tuple.r, tuple.speed,
                                                     tuple.scratch);
         },
@@ -437,6 +558,8 @@ void run() {
   ordinary_rank_control<1>();
   ordinary_rank_control<3>();
   record("ordinary_rank1_rank3_compilation_and_constant_state");
+  distinct_nonconservative_rank_control();
+  moment_primitive_order_control();
   std::cout << std::setprecision(17)
             << "{\"scope\":\"isolated Cartesian Kokkos witness; no generated runtime, AMR, MPI or "
                "time stepping\",\"speed\":"

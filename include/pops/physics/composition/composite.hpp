@@ -265,11 +265,24 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
     return Hyperbolic::path_zero_measure_faces();
   }
   template <int Axis, class Providers>
-  POPS_HD std::array<Real, 2> path_covector(const Providers& providers) const
+  POPS_HD auto path_covector(const Providers& providers) const
     requires(path_conservative)
   {
     static_assert(Axis >= 0 && Axis < dimension);
     return hyp.template path_covector<Axis>(providers);
+  }
+  template <class Direction>
+  POPS_HD auto path_integral(const State& left, const State& right,
+                             const Direction& direction) const
+    requires(path_conservative)
+  {
+    return hyp.path_integral(left, right, direction);
+  }
+  template <class Direction>
+  POPS_HD auto path_directional_flux(const State& state, const Direction& direction) const
+    requires(path_conservative)
+  {
+    return hyp.path_directional_flux(state, direction);
   }
   POPS_HD bool path_admissible(const State& state) const
     requires(path_conservative)

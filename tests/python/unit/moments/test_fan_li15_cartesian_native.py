@@ -49,13 +49,17 @@ def test_prepared_cartesian_path_transactions_and_exact_gaussian_balances(tmp_pa
     directory.mkdir(parents=True, exist_ok=False)
     sources = [
         "tests/cpp/support/fan_li15_cartesian_witness.cpp",
-        "include/pops/numerics/fv/fan_li15_path_flux.hpp",
+        "include/pops/numerics/fv/path_flux.hpp",
+        "include/pops/numerics/fv/path_result.hpp",
         "include/pops/numerics/fv/flux_interfaces.hpp",
         "include/pops/numerics/fv/numerical_flux.hpp",
         "include/pops/numerics/spatial/operators/cartesian_operator.hpp",
         "include/pops/physics/composition/composite.hpp",
-        "include/pops/numerics/moments/fan_li15_path.hpp",
-        "include/pops/numerics/moments/fan_li15_interface.hpp",
+        "include/pops/numerics/moments/normalized_moment_path.hpp",
+        "include/pops/numerics/moments/raw_moment_recovery.hpp",
+        "include/pops/numerics/moments/density_path_arithmetic.hpp",
+        "include/pops/numerics/moments/normalized_hermite.hpp",
+        "tests/cpp/support/generated_fan_li15.hpp",
     ]
     hashes = {name: _hash(REPO_ROOT / name) for name in sources}
     for name in sources:
@@ -109,7 +113,9 @@ endif()
         (directory / f"omp{workers}.stderr").write_text(result.stderr)
         assert result.returncode == 0, result.stdout + result.stderr
         report = json.loads(result.stdout.strip().splitlines()[-1])
-        assert len(report["tests"]) == 21
+        assert len(report["tests"]) == 23
+        assert "distinct_N2_Dim1_nonzero_nonconservative_system" in report["tests"]
+        assert "generic_degree2_moment_primitives_and_endpoint_speed_refusal" in report["tests"]
         assert report["repeat_evaluation_kokkos_allocations"] == 0
         if report["execution_space"] == "OpenMP":
             assert report["concurrency"] == workers

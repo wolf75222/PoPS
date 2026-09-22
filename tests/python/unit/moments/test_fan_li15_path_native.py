@@ -1,6 +1,7 @@
-"""Header-only formula witnesses, not PoPS native/runtime qualification.
+"""Generated-model formula witnesses, not PoPS native/runtime qualification.
 
-The retained bridge compiles this header without the official native library.
+The retained bridge compiles the Python-generated model against generic headers,
+without the official native library.
 Expected integrals use high-precision quadrature of an independent generating
 function / primary multi-index formula, never the production I_k recurrence.
 """
@@ -19,7 +20,7 @@ from tests.python.support.fan_li15_oracle import TOP, gaussian_mixture, quadratu
 
 
 SOURCE = r"""
-#include <pops/numerics/moments/fan_li15_interface.hpp>
+#include "generated_fan_li15.hpp"
 #include <cstdlib>
 #include <cfenv>
 #include <cstring>
@@ -28,8 +29,8 @@ SOURCE = r"""
 #include <string>
 #include <type_traits>
 using pops::Real;
-static_assert(!std::is_same_v<pops::moments::FanLi15ConservativeFlux,
-                             pops::moments::FanLi15NcpResidual>);
+static_assert(!std::is_same_v<pops::PathConservativeFlux<15>,
+                             pops::PathNcpResidual<15>>);
 static Real value() {
   std::string text; std::cin >> text;
   char* end = nullptr;
@@ -49,13 +50,13 @@ int main() {
     }
     if (command == "admissibility") {
       Real raw[15]; for (Real& x : raw) x=value();
-      std::cout << static_cast<int>(pops::moments::fan_li15_admissibility(raw)) << '\n';
+      std::cout << static_cast<int>(test_fan_li15::Kernel::admissibility(raw)) << '\n';
       continue;
     }
     if (command == "weights") {
       const Real high=value(), low=value();
       Real weights[5]{}, scale=0;
-      const bool valid=pops::moments::fan_li15_detail::density_integrals(high,low,weights,scale);
+      const bool valid=pops::moments::density_path_weights(high,low,weights,scale);
       std::cout << valid << ' ' << scale;
       for (Real x : weights) std::cout << ' ' << x;
       std::cout << '\n';
@@ -64,7 +65,7 @@ int main() {
     if (command == "flux") {
       Real raw[15]; for (Real& x : raw) x=value();
       const Real gx=value(), gy=value();
-      const auto result=pops::moments::fan_li15_grad_directional_flux(raw,gx,gy);
+      const auto result=test_fan_li15::flux(raw,gx,gy);
       std::cout << static_cast<int>(result.status);
       for (Real x : result.flux.values) std::cout << ' ' << x;
       std::cout << '\n';
@@ -77,7 +78,7 @@ int main() {
     const Real gx=value(), gy=value();
     std::memcpy(left_copy,left,sizeof left); std::memcpy(right_copy,right,sizeof right);
     if (command == "interface") {
-      const auto result=pops::moments::fan_li15_rusanov_interface(left,right,gx,gy);
+      const auto result=test_fan_li15::interface(left,right,gx,gy);
       std::cout << static_cast<int>(result.status) << ' ' << result.input_side << ' ' << result.speed_bound;
       for (Real x : result.conservative_flux.values) std::cout << ' ' << x;
       for (Real x : result.left_ncp.values) std::cout << ' ' << x;
@@ -86,7 +87,7 @@ int main() {
       if (std::memcmp(left_copy,left,sizeof left) || std::memcmp(right_copy,right,sizeof right)) return 4;
       continue;
     }
-    const auto result=pops::moments::fan_li15_path_integral(left,right,gx,gy);
+    const auto result=test_fan_li15::path_integral(left,right,gx,gy);
     const bool unchanged=std::memcmp(left_copy,left,sizeof left)==0
         && std::memcmp(right_copy,right,sizeof right)==0;
     std::cout << static_cast<int>(result.status) << ' ' << result.input_side << ' '
@@ -105,8 +106,13 @@ def path_bridge(tmp_path_factory, native_cxx):
     source, executable = directory / "fan_li15_bridge.cpp", directory / "fan_li15_bridge"
     source.write_text(SOURCE)
     header_inputs = [
-        root / "include/pops/numerics/moments/fan_li15_interface.hpp",
-        root / "include/pops/numerics/moments/fan_li15_path.hpp",
+        root / "tests/cpp/support/generated_fan_li15.hpp",
+        root / "include/pops/numerics/moments/normalized_hermite.hpp",
+        root / "include/pops/numerics/moments/raw_moment_recovery.hpp",
+        root / "include/pops/numerics/moments/density_path_arithmetic.hpp",
+        root / "include/pops/numerics/fv/path_flux.hpp",
+        root / "include/pops/numerics/fv/path_result.hpp",
+        root / "include/pops/numerics/moments/normalized_moment_path.hpp",
         root / "include/pops/numerics/moments/affine_velocity.hpp",
         root / "include/pops/core/foundation/types.hpp",
     ]
@@ -116,11 +122,13 @@ def path_bridge(tmp_path_factory, native_cxx):
     command = [
         native_cxx,
         "-std=c++20",
+        "-DPOPS_NATIVE_DIM=2",
         "-O2",
         "-fno-fast-math",
         "-ffp-contract=off",
         "-I",
         str(root / "include"),
+        "-I", str(root / "tests/cpp/support"),
         str(source),
         "-o",
         str(executable),
@@ -135,8 +143,13 @@ def path_bridge(tmp_path_factory, native_cxx):
     files = [
         source,
         executable,
-        root / "include/pops/numerics/moments/fan_li15_interface.hpp",
-        root / "include/pops/numerics/moments/fan_li15_path.hpp",
+        root / "tests/cpp/support/generated_fan_li15.hpp",
+        root / "include/pops/numerics/moments/normalized_hermite.hpp",
+        root / "include/pops/numerics/moments/raw_moment_recovery.hpp",
+        root / "include/pops/numerics/moments/density_path_arithmetic.hpp",
+        root / "include/pops/numerics/fv/path_flux.hpp",
+        root / "include/pops/numerics/fv/path_result.hpp",
+        root / "include/pops/numerics/moments/normalized_moment_path.hpp",
         root / "include/pops/numerics/moments/affine_velocity.hpp",
         root / "include/pops/core/foundation/types.hpp",
     ]
@@ -248,6 +261,24 @@ def test_header_integral_matches_independent_high_precision_quadrature(path_brid
     assert normalized_error < 3e-13
     assert all(actual["integral"][k] == 0 for k in range(15) if k not in TOP)
     print(f"density_ratio={density_ratio:.17g} normalized_integral_error={normalized_error:.17g}")
+
+
+@pytest.mark.compiler
+def test_generated_cold_full_covariance_path_retains_physical_scales(path_bridge):
+    temperature = Q(1, 10**24)
+    left = gaussian_mixture(((Q(1), (Q(0), Q(0)),
+                              (temperature, temperature / 4, 2 * temperature)),))
+    right = gaussian_mixture(((Q(2), (Q(1, 10**12), Q(-1, 2 * 10**12)),
+                               (2 * temperature, -temperature / 3, temperature)),))
+    left, right = tuple(map(float, left)), tuple(map(float, right))
+    direction = 0.6, -0.8
+    actual = path_bridge(left, right, direction)
+    reference = np.asarray(list(map(float, quadrature_path(left, right, direction))))
+    assert actual["status"] == 0
+    assert 0 < actual["bound"] < 1e-10
+    scale = np.max(np.abs(reference))
+    assert scale > 0
+    assert np.max(np.abs(actual["integral"] - reference)) / scale < 3e-13
 
 
 @pytest.mark.compiler

@@ -96,5 +96,5 @@ def test_fast_math_compilation_is_explicitly_refused(path_bridge, tmp_path):
     compiled = subprocess.run(command, capture_output=True, text=True)
     assert compiled.returncode != 0
     assert (
-        "FanLi15 interval certification requires strict floating-point semantics" in compiled.stderr
+        "Raw moment interval certification requires strict floating-point semantics" in compiled.stderr
     )

@@ -46,8 +46,10 @@ def test_public_ssprk2_path_retains_both_native_hierarchy_barriers():
     assert source.count("ctx.capture_rhs_input_trace(") == 2
     assert "ctx.rhs_into(" not in source
     assert "path_conservative = true" in brick
-    assert "fan_li15_admissibility" in brick
-    assert "fan_li15_path_integral(raw, raw" in brick
+    assert "PathKernel::admissibility(U)" in brick
+    assert "path_integral(U, U, g)" in brick
+    assert "integrate_normalized_moment_path<4>" in brick
+    assert "fan_li15_path.hpp" not in brick
     assert "stability_speed(const State& U, const Providers& a)" in brick
     assert "pops::Real(4) * max_wave_speed<Axis>(U, a)" in brick
     assert "real_eig_minmax" not in brick
@@ -55,6 +57,25 @@ def test_public_ssprk2_path_retains_both_native_hierarchy_barriers():
         "pops.fan-li15.path-operator.v1:sha256:")
     with pytest.raises(NotImplementedError, match="synchronous AMR"):
         emit_cpp_program(resolved.time, model=emitter, target="system")
+
+
+def test_cpp_model_fixture_is_generated_from_the_python_constitutive_plan():
+    from pathlib import Path
+    from pops.codegen.moment_path_kernel import emit_fan_li15_test_header
+    root = Path(__file__).resolve().parents[4]
+    assert (root / "tests/cpp/support/generated_fan_li15.hpp").read_text() == emit_fan_li15_test_header()
+    for directory in ("include/pops/numerics", "include/pops/runtime"):
+        for header in (root / directory).rglob("*.hpp"):
+            assert "fan_li15" not in header.read_text(), header
+
+
+def test_moment_kernel_plan_cannot_reinterpret_permuted_raw_storage():
+    from pops.codegen.moment_path_kernel import emit_moment_path_kernel
+    from pops.moments.fan_li import fan_li15_native_plan
+    plan = fan_li15_native_plan()
+    plan["indices"] = tuple(reversed(plan["indices"]))
+    with pytest.raises(ValueError, match="exact q-outer raw moment ordering"):
+        emit_moment_path_kernel(plan, "InvalidKernel")
 
 
 def test_typed_zero_measure_faces_cross_only_an_immutable_snapshot():
