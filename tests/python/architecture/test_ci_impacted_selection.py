@@ -343,6 +343,8 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_amr_hierarchy_field_scratch": (2,),
         "test_amr_synchronized_continuation": (2,),
         "test_amr_multiblock_substeps": (2,),
+        "test_amr_path_rhs_barrier": (2,),
+        "test_amr_scalar_output_history": (2,),
         "test_collective_step_rejection": (2,),
         "test_amr_program_positivity_floor": (2,),
         "test_amr_program_diffusion": (2,),
@@ -357,12 +359,17 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_generated_stability_speed": (2,),
         "test_geometric_mg": (2,),
         "test_krylov_workspace_reentrancy": (2,),
+        "test_mapped_disk_tensor_fac": (2,),
         "test_prepared_embedded_boundary_nd": (2,),
         "test_prepared_hyperbolic_boundary": (2,),
+        "test_prepared_polar_poisson_inverse": (2,),
         "test_program_context_contract": (2,),
         "test_program_runtime": (2,),
         "test_pure_field_algebra_extreme_dot": (2,),
         "test_system_interface_core_session": (2,),
+        "test_tensor_coarse_gmres": (2,),
+        "test_tensor_fac_conservative_interface": (2,),
+        "test_tensor_fac_partial_hierarchy": (2,),
         "test_world_communicator": (1, 2),
     }
     serial_targets = {
@@ -379,7 +386,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 114
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 121
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -952,7 +959,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 40" in cpp_shards_block
     assert "timeout-minutes: 30" in cpp_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.cpp_matrix) }}" in cpp_shards_block
-    assert "--shard-total 11" in cpp_shards_block
+    assert "--shard-total 12" in cpp_shards_block
     assert "needs: [changes, set-mode, gate-cpp-prewarm]" in cpp_shards_block
     assert "actions/download-artifact@v8" in cpp_shards_block
     assert "test \"${#cache_archives[@]}\" -eq 3" in cpp_shards_block
@@ -1136,13 +1143,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert cpp_job_minutes == 70
     assert "needs: [set-mode, gate-openmp-prewarm]" in openmp_block
     assert "fail-fast: false" in openmp_block
-    assert openmp_block.count("- lane: cpp-") == 11
-    for shard in range(11):
+    assert openmp_block.count("- lane: cpp-") == 12
+    for shard in range(12):
         assert (
             f"- lane: cpp-{shard}\n"
             "            kind: cpp\n"
             f"            shard: {shard}\n"
-            "            shard_total: 11\n"
+            "            shard_total: 12\n"
             "            ccache_maxsize: 2G"
         ) in openmp_block
     assert (

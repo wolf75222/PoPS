@@ -511,7 +511,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_tensor_fac_partial_hierarchy
   test_tensor_fac_conservative_interface
   test_prepared_polar_poisson_inverse
-  test_mapped_disk_tensor
   test_mapped_disk_tensor_fac
   test_composite_general_field
   test_amr_composite_poisson
@@ -577,6 +576,10 @@ set(POPS_CPP_STANDARD_TESTS
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
   pops_add_test(${_test})
 endforeach()
+
+# Its standalone diagnostic branch replaces the GoogleTest declarations.
+pops_test_source(_src test_mapped_disk_tensor)
+pops_add_gtest_suite(NAME test_mapped_disk_tensor SOURCES "${_src}" RUNTIME_DISCOVERY)
 
 # Header-only binary32 Poisson residual. Must not link double-compiled runtime objects.
 pops_test_source(_src test_float32_poisson_residual)
@@ -669,7 +672,7 @@ pops_test_source(_src test_amr_system_contract)
 pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_scalar_output_history)
-pops_add_gtest_suite(NAME test_amr_scalar_output_history SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_add_gtest_suite(NAME test_amr_scalar_output_history SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr RUNTIME_DISCOVERY)
 
 pops_test_source(_src test_amr_system_twoblock)
 pops_add_gtest_suite(NAME test_amr_system_twoblock SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -686,7 +689,7 @@ pops_test_source(_src test_amr_hierarchy_barrier_continuation)
 pops_add_gtest_suite(NAME test_amr_hierarchy_barrier_continuation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_path_rhs_barrier)
-pops_add_gtest_suite(NAME test_amr_path_rhs_barrier SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_add_gtest_suite(NAME test_amr_path_rhs_barrier SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr RUNTIME_DISCOVERY)
 
 pops_test_source(_src test_amr_hierarchy_field_scratch)
 pops_add_gtest_suite(NAME test_amr_hierarchy_field_scratch SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})

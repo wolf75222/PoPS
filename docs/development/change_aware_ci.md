@@ -102,7 +102,7 @@ files or C++ targets and route flags; they do not say that any test ran or that 
 ## Shards, prewarming, and the dedicated cache check
 
 The planner keeps fixed partition identities and publishes only nonempty matrix entries. C++
-targets are packed into the fixed eleven-way partition, and Python files into the fixed thirty
+targets are packed into the fixed twelve-way partition, and Python files into the fixed thirty
 seven-way partition, using deterministic duration-weighted bin packing. Empty bins are omitted from
 the GitHub matrix, but a nonempty bin keeps its original index; indices are never renumbered to
 fit one PR. Python's verification step reconstructs the same partition and fails unless every
