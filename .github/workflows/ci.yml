@@ -1743,20 +1743,30 @@ jobs:
           }
           # Match direct Python script imports and argv after selecting the native dimension.
           native_script_bootstrap="from pops._native_selector import select_native_dimension; select_native_dimension(2); import os, runpy, sys; sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name='__main__')"
-          while IFS=$'\t' read -r mpi_ranks mpi_test; do
+          # MPI launchers forward stdin and must never consume the remaining manifest rows.
+          # Keep each plan on fd 3 and close both input channels for every child process.
+          python_mpi_count=0
+          while IFS=$'\t' read -r mpi_ranks mpi_test <&3; do
             test -n "$mpi_ranks" && test -f "$mpi_test"
             echo "Running Python MPI contract: ${mpi_test} (np=${mpi_ranks})"
             run_mpi "Python MPI contract ${mpi_test}" \
-              -n "$mpi_ranks" /usr/bin/python3 -u -c "$native_script_bootstrap" "$mpi_test"
-          done < build-mpi/python-mpi-plan.tsv
+              -n "$mpi_ranks" /usr/bin/python3 -u -c "$native_script_bootstrap" "$mpi_test" </dev/null 3<&-
+            python_mpi_count=$((python_mpi_count + 1))
+          done 3< build-mpi/python-mpi-plan.tsv
+          test "$python_mpi_count" -eq "${{ steps.mpi-test-plan.outputs.python_mpi_entrypoint_count }}"
+          echo "::notice::Python MPI entrypoints completed=${python_mpi_count}"
           # This pytest process stays outside MPI: each manifest-owned orchestrator creates and
           # tears down its own independent rank worlds (for example np=2 capture, then np=1 restart).
-          while IFS= read -r mpi_orchestrator; do
+          python_mpi_orchestrator_count=0
+          while IFS= read -r mpi_orchestrator <&3; do
             test -n "$mpi_orchestrator" && test -f "$mpi_orchestrator"
             echo "Running serial Python MPI orchestrator: ${mpi_orchestrator}"
             timeout --signal=TERM --kill-after=30s 25m \
-              /usr/bin/python3 -m pytest -q -ra --maxfail=1 "$mpi_orchestrator"
-          done < build-mpi/python-mpi-orchestrators.txt
+              /usr/bin/python3 -m pytest -q -ra --maxfail=1 "$mpi_orchestrator" </dev/null 3<&-
+            python_mpi_orchestrator_count=$((python_mpi_orchestrator_count + 1))
+          done 3< build-mpi/python-mpi-orchestrators.txt
+          test "$python_mpi_orchestrator_count" -eq "${{ steps.mpi-test-plan.outputs.python_mpi_orchestrator_count }}"
+          echo "::notice::Python MPI orchestrators completed=${python_mpi_orchestrator_count}"
 
       - name: M4 complete native runtime and scientific I/O gate
         timeout-minutes: 45

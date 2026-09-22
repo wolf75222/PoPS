@@ -24,6 +24,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 from types import SimpleNamespace
 
@@ -935,6 +936,94 @@ def test_python_mpi_orchestrator_contract_is_fail_closed():
 
 
 @pytest.mark.parametrize(
+    ("scenario", "status"),
+    (
+        ("complete", 0),
+        ("missing_entrypoint", 1),
+        ("missing_orchestrator", 1),
+        ("entrypoint_failure", 7),
+        ("entrypoint_timeout", 124),
+        ("orchestrator_failure", 7),
+    ),
+)
+def test_python_mpi_workflow_executes_every_plan_row_with_stdin_reading_child(
+    tmp_path, scenario, status,
+):
+    """A child draining stdin must neither skip a manifest row nor hide a failure."""
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    entries = sel.manifest_python_mpi_entrypoints(manifest)
+    orchestrators = sel.manifest_python_mpi_orchestrators(manifest)
+    assert len(entries) > 1 and orchestrators
+    entry_paths = [entry["path"] for entry in entries]
+    orchestrator_paths = [entry["path"] for entry in orchestrators]
+    for relative in entry_paths + orchestrator_paths:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    plan_dir = tmp_path / "build-mpi"
+    plan_dir.mkdir()
+    plan_entries = entries[:-1] if scenario == "missing_entrypoint" else entries
+    plan_orchestrators = [] if scenario == "missing_orchestrator" else orchestrators
+    (plan_dir / "python-mpi-plan.tsv").write_text(
+        "".join(f"{entry['nproc']}\t{entry['path']}\n" for entry in plan_entries)
+    )
+    (plan_dir / "python-mpi-orchestrators.txt").write_text(
+        "".join(f"{entry['path']}\n" for entry in plan_orchestrators)
+    )
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
+    step = workflow.split("- name: Test Python MPI contracts + native lifecycle", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+    shell = textwrap.dedent(step[step.index("          run_mpi() {"):])
+    for output, count in (
+        ("python_mpi_entrypoint_count", len(entries)),
+        ("python_mpi_orchestrator_count", len(orchestrators)),
+    ):
+        shell = shell.replace("${{ steps.mpi-test-plan.outputs." + output + " }}", str(count))
+    assert "${{" not in shell
+    # Execute the real workflow loop and run_mpi status handling, but no Python/MPI code.
+    # The replacement child models a launcher forwarding/reading its inherited stdin.
+    prefix = r'''set -eo pipefail
+mpi_failfast_args=()
+timeout() {
+  local child_path="${@: -1}"
+  printf '%s\n' "$child_path" >> launched.txt
+  cat >/dev/null
+  if [ "$child_path" = "$FAIL_PATH" ]; then
+    return "$FAIL_STATUS"
+  fi
+  return 0
+}
+'''
+    fail_path = ""
+    if scenario.startswith("entrypoint_"):
+        fail_path = entry_paths[0]
+    elif scenario == "orchestrator_failure":
+        fail_path = orchestrator_paths[0]
+    result = subprocess.run(
+        ["bash", "-c", prefix + shell], cwd=tmp_path, text=True, capture_output=True,
+        env={**os.environ, "FAIL_PATH": fail_path, "FAIL_STATUS": str(status)}, timeout=10,
+    )
+    assert result.returncode == status, result.stdout + result.stderr
+    launched = (tmp_path / "launched.txt").read_text().splitlines()
+    if scenario == "missing_entrypoint":
+        expected = entry_paths[:-1]
+    elif scenario == "missing_orchestrator":
+        expected = entry_paths
+    elif scenario.startswith("entrypoint_"):
+        expected = entry_paths[:1]
+    elif scenario == "orchestrator_failure":
+        expected = entry_paths + orchestrator_paths[:1]
+    else:
+        expected = entry_paths + orchestrator_paths
+    assert launched == expected
+    if scenario == "complete":
+        assert f"Python MPI entrypoints completed={len(entries)}" in result.stdout
+        assert f"Python MPI orchestrators completed={len(orchestrators)}" in result.stdout
+
+
+@pytest.mark.parametrize(
     ("result", "required", "accepted"),
     (
         ("success", "true", True),
@@ -1144,7 +1233,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout --signal=TERM --kill-after=30s 4m" not in mpi_block
     assert "read -r processors expected regex <&3" in mpi_block
     assert "done 3< build-mpi/mpi-ctest-groups.tsv" in mpi_block
-    assert mpi_block.count("</dev/null") == 2
+    assert mpi_block.count("</dev/null") == 4
+    assert "read -r mpi_ranks mpi_test <&3" in mpi_block
+    assert "read -r mpi_orchestrator <&3" in mpi_block
+    assert mpi_block.count("</dev/null 3<&-") == 2
+    assert "steps.mpi-test-plan.outputs.python_mpi_entrypoint_count" in mpi_block
+    assert "steps.mpi-test-plan.outputs.python_mpi_orchestrator_count" in mpi_block
     assert "MPI CTest processor group ${processors} failed" in mpi_block
     assert "selected_count=$(python3 -c" in mpi_block
     assert "selected ${selected_count}/${expected} launches" in mpi_block
