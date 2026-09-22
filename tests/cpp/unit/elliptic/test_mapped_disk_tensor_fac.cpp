@@ -1,14 +1,31 @@
 #include <gtest/gtest.h>
 #include "mapped_disk_fac_witness.hpp"
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
+#include <string>
 
 TEST(MappedDiskTensorFAC, RejectsBoundaryMasksThatDisagreeWithNativeTopology) {
   const auto lane = pops::ExecutionLane::duplicate_world_collectively("tests.mapped-disk-fac-boundary");
   using Options = pops::elliptic::nd::CartesianTensorStencilOptions;
   for (const auto options : {Options{16u, 2u, true}, Options{1u, 1u, true},
-                            Options{4u, 2u, true}, Options{2u, 1u, true}})
-    EXPECT_THROW((void)pops::test::mapped_disk_fac_witness(8, 0, false, lane, options),
-                 std::invalid_argument);
+                            Options{4u, 2u, true}, Options{2u, 1u, true}}) {
+    if (lane.size() == 1) {
+      EXPECT_THROW((void)pops::test::mapped_disk_fac_witness(8, 0, false, lane, options),
+                   std::invalid_argument);
+    } else {
+      std::string message;
+      EXPECT_THROW(
+          {
+            try {
+              (void)pops::test::mapped_disk_fac_witness(8, 0, false, lane, options);
+            } catch (const std::runtime_error& error) {
+              message = error.what();
+              throw;
+            }
+          },
+          std::runtime_error);
+      EXPECT_EQ(message, "dimension-generic tensor FAC preparation failed collectively");
+    }
+  }
 }
 
 TEST(MappedDiskTensorFAC, RejectsInvalidAuthoredDampingInNativeWireContract) {
