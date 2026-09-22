@@ -340,7 +340,10 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
     assert "all(allgather_value(_COMM, caught))" in restart_mpi_source
     assert "_restart_accepted_contract_identity" in restart_mpi_source
     assert 'receipt["history_consensus_identity_before"]' in restart_mpi_source
-    assert "both AB2 histories are conservatively rematerialized" in restart_mpi_source
+    assert (
+        "both AB2 histories retain their names and finite slots on the new hierarchy"
+        in restart_mpi_source
+    )
     program_runtime = (ROOT / "include/pops/runtime/program/program_runtime_state.hpp").read_text(
         encoding="utf-8"
     )

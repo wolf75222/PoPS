@@ -191,11 +191,16 @@ PATH_INPUT_FRAGMENT_BUDGET = (
     + PROGRAM_RESPONSIBILITY_BUDGETS["path_rhs"]
 )
 TENSOR_INPUT_HISTORY_PORT_BUDGET = 16 + 80 + 64 + 24
+# Parent-projected shared consumers retain captured source associations and stable deferred
+# history references: 104 net lines across six counted fragments, with a bounded allowance.
+# Existing per-file, responsibility and scaffolding caps remain unchanged.
+SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET = 112
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
     + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
+    + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -217,6 +222,7 @@ PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
     + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
+    + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET
 )
 SEMANTIC_AUTHORITIES = frozenset(
     {
@@ -547,7 +553,8 @@ def test_composite_temporal_workspace_has_one_bounded_authority() -> None:
 # Program context. Their bodies retain explicit bounds instead of exempting context fragments.
 HISTORY_FLUX_UTILITY_BUDGETS = {
     "pops/runtime/program/amr_history_flux_snapshot.hpp": 400,
-    "pops/runtime/program/amr_history_flux_snapshot_codec.hpp": 550,
+    # Exact projection lineage and captured source association add 77 stateless lines.
+    "pops/runtime/program/amr_history_flux_snapshot_codec.hpp": 550 + 80,
     "pops/runtime/program/amr_history_flux_snapshot_execution.hpp": 350,
 }
 

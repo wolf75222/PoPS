@@ -35,7 +35,7 @@ functions or classes. The selected authors' benchmark remains unchanged:
 | FAC hierarchy | Synchronize covered parents after corrections and after the periodic gauge; conservative fine-interface flux support | Original FAC tolerances pass; covered-parent regression checks pass at `1e-12`; not a general high-resolution convergence guarantee |
 | MPI execution | Serialize public model artifact publication; synchronize AMR body failures before flux publication | Focused MPI/runtime witnesses; not all backend or multi-node coverage |
 | AMR continuation | Preserve accepted-attempt authority, histories and auxiliary images; rebuild generated resources after accepted history remap | Genuine expanded cold/restart comparisons on `65b0658` and freshly rebuilt `8b05af9`; the latter starts from the first actual expanded interior checkpoint and reaches `t=0.03` |
-| Shared history projection | Bind immutable shared samples to their physical archive, project parent flux densities into canonical child faces, and preserve complete source identities in the ledger | The rebuilt `52b3e26` reaches transformation and rollback on the real 16² MPI fixture, then exposes an invalidated history reference during continuation. Six focused native witnesses and the complete shared restart paths require qualification with the lifetime correction. The existing single-block scientific runs do not exercise shared flux projection |
+| Shared history projection | Bind immutable shared samples to their physical archive, project parent flux densities into canonical child faces, and preserve complete source identities in the ledger | After rebuilding `e7e9d7e`, the actual 16² MPI2 shared-interface scenario passes transformation, injected rollback, retry and continued AB2 evolution with the unchanged conservation check and zero failures on both ranks. The separate single-block scientific runs do not exercise shared flux projection |
 | Native packaging | Authenticate relocated installed extension bytes | Official build/doctor and retained source/installed manifests |
 | Uniform checkpoint shape | Distinguish native reversed array shape from legacy field-free logical shape, preserving byte guards | Revision `8ae9097`: 36 focused Python checks; actual one-rank fresh-process rectangular restart; final Knudsen checkpoint |
 | Exact global gather | Replace arithmetic summation with byte assembly after exact ownership checks, preserving signed zero | Official Dim2/MPI rebuild at `4adfddf`; 36 Python checks, four genuine MPI1/MPI2 capture/restart worlds and six MPI1/2/4 gather CTests passed, including signed zero and refusal before mutation |
@@ -49,6 +49,22 @@ functions or classes. The selected authors' benchmark remains unchanged:
 
 These are retained run results on the stated revisions, not a claim that the final
 PR revision has passed GitHub CI.
+
+On rebuilt `e7e9d7e`, the actual Euler mode5 `32x128`/L3 MPI4/OpenMP2
+simulation reaches `t=0.01` in 631.060 seconds, including binding: 11 accepted
+steps, zero rejections and an authenticated final checkpoint. The mass differs
+from the analytic reference by approximately `7e-15` relatively. Composite
+inspection puts every cell exceeding the refinement threshold on L2, which
+covers `5<=r<=9`; the annulus has 16 fine radial cells. This establishes actual
+coverage at this time, not convergence of future filaments. The rebuilt MPI2
+shared-interface restart also passes all 18 checks in 78.671 seconds, with final
+rank failure counts `[0,0]` and closed processes.
+
+The `e7e9d7e` CI exposes a setup-order error in the added native regression and
+stale source-contract expectations. The following test/documentation correction
+installs both routes before either compiled package and updates the exact label
+and bounded line budgets. Calculation code and numerical controls are unchanged.
+The complete final-SHA CI verdict remains outstanding.
 
 The exact `8b05af9` run `35727344990` finished with 90 successful jobs, the MPI
 failure and its derived aggregate failure. The old 8² shared-interface fixture was
@@ -185,12 +201,12 @@ projection or modified closure has been used to manufacture a trajectory.
    integrated and has passed on/off parity, exact replay and collective refusal
    checks at MPI1/2/4. Longer restart cycles and persistent compensated updates
    were tested on the exact captured input and did not solve the defect.
-3. Run the relevant local tests and current-revision ROMEO low/restart/larger-grid checks. Do not carry
-   acceptance across an unverified source or native-artifact change.
-   For the shared-history correction, rebuild both the native runtime and generated
-   Program libraries, then check projection, archive association, ledger identities,
-   strict restart and distributed rollback. Preserve the four actual `8b05af9`
-   gate records and review unaffected paths explicitly instead of relabelling them.
+3. Continue with current-revision ROMEO low/restart/larger-grid simulations.
+   The affected shared restart has passed on the rebuilt runtime and fresh
+   generated libraries; an additional broad local test batch is not required.
+   Preserve the four actual `8b05af9` gate records and their reviewed path scope,
+   without relabelling their execution provenance. Authenticate the exact final
+   source/runtime and inspect complete required CI independently.
 4. Complete the separate Linux Fan-Li check, then approximately two hours of
    measured validation and time/storage estimation. **Zero designated two-hour
    validation allocations and zero of the two high-resolution allocations have

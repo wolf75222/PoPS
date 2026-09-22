@@ -3226,7 +3226,11 @@ TEST(GeneratedAmrSystemBlock, DeferredHistoryReadsPreservePublishedReferences) {
   initial[center] = 1.0;
   for (const auto& block : blocks) {
     system.install_block_state_route(block, "state/" + block);
+  }
+  for (const auto& block : blocks) {
     pops::add_compiled_model<Dim>(system, block, advection_model<Dim>());
+  }
+  for (const auto& block : blocks) {
     system.set_conservative_state(block, initial);
   }
   pops::test::install_prepared_refine_coarsen_threshold(
