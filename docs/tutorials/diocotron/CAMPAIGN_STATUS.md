@@ -34,20 +34,30 @@ functions or classes. The selected authors' benchmark remains unchanged:
 | Mapped field coupling | Full tensor coarse GMRES, polar Poisson preconditioning, original physical infinity residual checks | Local operator/manufactured tests, the low ROMEO runs and the rebuilt local `97279de` L3 pilot through `t=0.01` passed; current-source Linux and longer trajectories remain pending |
 | FAC hierarchy | Synchronize covered parents after corrections and after the periodic gauge; conservative fine-interface flux support | Original FAC tolerances pass; covered-parent regression checks pass at `1e-12`; not a general high-resolution convergence guarantee |
 | MPI execution | Serialize public model artifact publication; synchronize AMR body failures before flux publication | Focused MPI/runtime witnesses; not all backend or multi-node coverage |
-| AMR continuation | Preserve accepted-attempt authority, histories and auxiliary images; rebuild generated resources after accepted history remap | Genuine expanded cold/restart comparisons on revision `65b0658` |
+| AMR continuation | Preserve accepted-attempt authority, histories and auxiliary images; rebuild generated resources after accepted history remap | Genuine expanded cold/restart comparisons on `65b0658` and freshly rebuilt `8b05af9`; the latter starts from the first actual expanded interior checkpoint and reaches `t=0.03` |
+| Shared history projection | Bind immutable shared samples to their physical archive, project parent flux densities into canonical child faces, and preserve complete source identities in the ledger | The 16² MPI fixture exposes the previous cross-level refusal; five focused native witnesses and the real shared restart paths still require execution after reconstruction. The existing single-block scientific runs do not exercise this capability |
 | Native packaging | Authenticate relocated installed extension bytes | Official build/doctor and retained source/installed manifests |
 | Uniform checkpoint shape | Distinguish native reversed array shape from legacy field-free logical shape, preserving byte guards | Revision `8ae9097`: 36 focused Python checks; actual one-rank fresh-process rectangular restart; final Knudsen checkpoint |
 | Exact global gather | Replace arithmetic summation with byte assembly after exact ownership checks, preserving signed zero | Official Dim2/MPI rebuild at `4adfddf`; 36 Python checks, four genuine MPI1/MPI2 capture/restart worlds and six MPI1/2/4 gather CTests passed, including signed zero and refusal before mutation |
 | Generic C++ core | Generate Fan-Li physics in Python over variable-count/dimension-generic path-flux and moment primitives; remove the three model-specific C++ headers | 49 affected tests, OpenMP1/2 witnesses and generated Cartesian/composite syntax checks passed; arbitrary public Python path-model admission is not claimed |
 | Generated-model contracts | Extract `ConservationLaw`, `StateConversion` and `NoSource` from headers containing built-in physics, preserving their bodies and legacy APIs | 38 affected source tests and seven syntax checks passed; actual Euler, Fan-Li15 and source/auxiliary/RHS emissions contain none of the five targeted built-in Euler/force definitions |
 | CI inventory and scheduling | Account for every native/Python test, prebuild the six loader fixtures, split the complete MPI build into two bounded phases | 199 native targets, 13 C++ shards, 38 Python shards and all 121 MPI launches retained; revision `7d701d2` passes 120 MPI launches, with the remaining collective-exception test expectation repaired and locally checked at MPI1/2; final GitHub CI remains unverified |
-| MPI Python inventory execution | Read both plans on a separate descriptor, close child input, and require completed counts to match the manifest | The apparently successful `19b2bb5` MPI job ran all 121 CTests and M4 but only one of nine planned Python MPI entrypoints. Six shell witnesses cover stdin consumption, truncated plans, failure and timeout propagation. The repaired nine-entrypoint/one-orchestrator execution still requires fresh remote CI |
-| Roe test process budget | Give the coherent two-model compilation/trajectory witness an explicit 450-second limit instead of the default 300 seconds | Actual CI stopped at 300.02 seconds after both models compiled; the scheduling estimate is 380 seconds, explicitly derived from that lower bound. All 24 checks pass locally with identical trajectories; shard/workflow limits and scientific controls are unchanged, and the new Linux CI budget remains unqualified |
+| MPI Python inventory execution | Read both plans on a separate descriptor, close child input, and require completed counts to match the manifest | The apparently successful `19b2bb5` MPI job ran all 121 CTests and M4 but only one of nine Python entrypoints. On `8b05af9`, all 121 native launches and the first four Python scripts pass; the fifth correctly fails the job. All nine entrypoints and the final required aggregate still need to pass on the final SHA |
+| Roe test process budget | Give the coherent two-model compilation/trajectory witness an explicit 450-second limit instead of the default 300 seconds | The unchanged 24 checks pass locally; the actual `8b05af9` Linux CI witness passes in 282.32 seconds. The 380-second scheduling weight remains an estimate, and shard/workflow limits and scientific controls are unchanged |
 
 ## Actual results
 
 These are retained run results on the stated revisions, not a claim that the final
 PR revision has passed GitHub CI.
+
+The exact `8b05af9` run `35727344990` finished with 90 successful jobs, the MPI
+failure and its derived aggregate failure. The old 8² shared-interface fixture was
+already fully refined, so its expected hierarchy change was impossible. At 16² it
+retains a real coarse interior and exposes a separate native refusal to transfer
+shared history across levels. The generic correction preserves parent-face flux
+integrals, source associations, duplicate refusal and rollback; it does not discard
+history or relax conservation checks. New source/native qualification is recorded
+separately from these retained CI results.
 
 - Euler `65b0658`, ROMEO job `714111`: modes 3, 4 and 5 each reached `t=0.1`
   on base `16x64`, two AMR levels, MPI2/OpenMP2, with 110 accepted steps,
@@ -123,6 +133,21 @@ PR revision has passed GitHub CI.
   genuine expanded restart reached `t=0.03`, 33 accepted steps, zero rejections.
   The fine level grew from 2048 to 2560 cells; full stored state/history endpoint
   parity passed. Linux Fan-Li validation and the long trajectory remain pending.
+- Four fresh local continuation gates on `8b05af9` are accepted: 38 native cases
+  in 74 MPI1/2 worlds, separate short Euler and full Fan-Li15 cold/interior restart
+  chains, and an expanded Fan-Li15 continuation. The expanded cold trajectory
+  reaches `t=0.03` in 33 accepted steps with no rejection. The actual first
+  expanded interior checkpoint is C10 at `t=0.00900000001`, with fine coverage
+  increased from 2048 to 2560 cells. Its genuine restart takes 23 accepted steps
+  to C33 with no rejection. Immediate restoration matches all 65 carriers; C11,
+  C22 and C33 each retain 63 byte-identical carriers with only two separately
+  authenticated execution-lineage fields differing. All three output snapshots
+  and the continued calendar agree. The cold/resumed archives pass respectively
+  41,472 and 28,672 stored H1 checks. The original relocated-auditor import failure
+  is retained; a reviewed dependency-only repair reruns the audit, not the physics.
+  These physical cases use one `plasma` block and no shared-interface history.
+  Their actual source remains `8b05af9`; no later binary or metadata equivalence
+  is implied by reusing their results after an affected-path review.
 - Homogeneous HYQMOM15/BGK `65b0658`: actual Knudsen values `0.01`, `0.1`, `1`;
   the `Kn=0.1` temporal study measured orders `2.028` and `2.014` against the
   relaxation solution. Only initial/final states were saved for those runs.
@@ -155,6 +180,10 @@ projection or modified closure has been used to manufacture a trajectory.
    were tested on the exact captured input and did not solve the defect.
 3. Run the relevant local tests and current-revision ROMEO low/restart/larger-grid checks. Do not carry
    acceptance across an unverified source or native-artifact change.
+   For the shared-history correction, rebuild both the native runtime and generated
+   Program libraries, then check projection, archive association, ledger identities,
+   strict restart and distributed rollback. Preserve the four actual `8b05af9`
+   gate records and review unaffected paths explicitly instead of relabelling them.
 4. Complete the separate Linux Fan-Li check, then approximately two hours of
    measured validation and time/storage estimation. **Zero designated two-hour
    validation allocations and zero of the two high-resolution allocations have
