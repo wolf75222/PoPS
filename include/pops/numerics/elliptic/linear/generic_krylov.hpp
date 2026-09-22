@@ -1283,10 +1283,12 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
   int iterations = 0;
   SolveNormalization cycle_normalization = normalization;
   Real preconditioner_scale = Real(0);
+  bool damp_next_single_column = false;
   while (iterations < controls.max_iterations) {
+    const Real initial_physical_residual = measurement.physical;
     GmresDiagnosticTrace::Cycle diagnostic;
     diagnostic.begin_iteration = iterations;
-    diagnostic.initial_residual = measurement.physical;
+    diagnostic.initial_residual = initial_physical_residual;
     MultiFab<Dim>* initial_vector = &applied_or_residual;
     if (prepared_vector != nullptr) {
       const Real scale = apply_scaled_preconditioner(problem, *prepared_vector, applied_or_residual,
@@ -1486,9 +1488,19 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
       // One Arnoldi column is one complete correction. Recover a rounded-away update only
       // where the previous true physical residual exceeded tau. Multi-column sums retain their
       // established path; rounding individual terms towards adjacent values could introduce drift.
-      ScaledFieldAlgebra::axpy_adjacent_if_stagnant(
-          iterate, KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, 0, restart),
-          basis(0), unconverged_components);
+      const ScaledScalar coefficient =
+          KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, 0,
+                                                             restart);
+      // A rejected non-decreasing true residual can signal a cycle between
+      // adjacent values. Shorten the next complete correction while retaining
+      // recovery of masked lost updates. This proposes another candidate; the
+      // same true-residual guard alone can accept it.
+      const ScaledScalar step =
+          damp_next_single_column
+              ? scaled_product(ScaledScalar::from(Real(0.5)), coefficient)
+              : coefficient;
+      ScaledFieldAlgebra::axpy_adjacent_if_stagnant(iterate, step, basis(0),
+                                                    unconverged_components);
     } else {
       for (int column = 0; column < dimension; ++column)
         ScaledFieldAlgebra::axpy(
@@ -1526,6 +1538,8 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
     if (iterations == controls.max_iterations)
       return report_physical(normalization, measurement.physical, iterations,
                              SolveStatus::kIterationLimit);
+    damp_next_single_column = recover_stagnation && dimension == 1 &&
+                              measurement.physical >= initial_physical_residual;
     if (recover_stagnation) {
       // Capture the raw scientific residual before normalization can round a component near tau.
       // This mask proposes candidates only; the unchanged global true-residual check is authority.

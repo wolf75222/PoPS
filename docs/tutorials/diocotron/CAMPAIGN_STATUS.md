@@ -64,8 +64,18 @@ PR revision has passed GitHub CI.
   now reaches this accepted residual in three iterations on the MPI4 capture.
   Eight relevant tests pass at MPI1/2/4, including a coupled counterexample
   that correctly refuses convergence, unchanged iteration caps, extreme
-  preconditioner scaling, and workspace reuse. A rebuilt full trajectory is
-  still pending.
+  preconditioner scaling, and workspace reuse. The actual rebuilt `7d701d2`
+  pilot passes that input but fails later at FAC outer ordinal 5, before step 1:
+  true residual `3.1455104848800301e-13`, required `2.6428759556514764e-13`.
+  Its one-column corrections alternate between adjacent candidates. A generic
+  follow-up halves the next complete single-column correction after a rejected
+  non-decreasing true infinity residual. Both exact MPI4 captures then pass in
+  three and six iterations; nine relevant tests pass at MPI1/2/4. The new
+  model-independent two-equation regression fails with the previous headers.
+  The change preserves the true-residual acceptance check, iteration caps,
+  workspace size and L2/multicolumn paths. It does not guarantee convergence
+  for every coupled rounding cycle. The full rebuilt L3 trajectory remains
+  unqualified until the actual tutorial passes.
 - Fan-Li15 `65b0658`, local MPI2/OpenMP2, `16x64`, two AMR levels: cold and
   genuine expanded restart reached `t=0.03`, 33 accepted steps, zero rejections.
   The fine level grew from 2048 to 2560 cells; full stored state/history endpoint
