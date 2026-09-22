@@ -436,7 +436,7 @@ public:
   mutable std::map<std::tuple<std::size_t, int, FluxBasisProvider>, std::string>
       declared_flux_temporal_families_;
   mutable std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
-  mutable std::map<std::string, field_type> deferred_history_lag_scratches_;
+  mutable DeferredHistoryLagScratches deferred_history_lag_scratches_;
   mutable std::vector<std::size_t> active_flux_basis_counts_;
   mutable std::uint64_t next_active_flux_basis_identity_ = 0;
   mutable std::vector<std::size_t> prepared_rhs_basis_bounds_;

@@ -1,3 +1,6 @@
+// Transparent string ordering is non-throwing.  Deferred-read publication can therefore move a
+// preallocated node into this map without allocating or invoking a throwing comparison.
+using DeferredHistoryLagScratches = std::map<std::string, field_type, std::less<>>;
 
 class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
  public:
@@ -120,7 +123,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   std::map<std::string, int> history_levels_;
   std::map<std::string, std::vector<FluxExpression>> history_flux_expressions_;
   std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
-  std::map<std::string, field_type> deferred_history_lag_scratches_;
+  DeferredHistoryLagScratches deferred_history_lag_scratches_;
   CellTemporalPartitionAcceptedState accepted_temporal_partition_;
   std::optional<CellTemporalConfiguration> cell_temporal_configuration_;
   std::string accepted_flux_budget_contract_;

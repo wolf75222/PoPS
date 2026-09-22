@@ -19,11 +19,13 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -114,6 +116,61 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
   static const auto& active_expression(const context_type& context,
                                        const typename context_type::field_type& field) {
     return context.active_flux_expressions_.at(&field);
+  }
+
+  struct DeferredReadImage {
+    using field_type = typename context_type::field_type;
+    using Term = std::tuple<std::uint64_t, const void*, typename context_type::ExactPolynomial>;
+    std::map<std::string, const field_type*> scratches;
+    std::map<const field_type*, std::vector<Term>> expressions;
+    std::uint64_t next_identity = 0;
+
+    bool operator==(const DeferredReadImage&) const = default;
+  };
+
+  static DeferredReadImage deferred_read_image(const context_type& context) {
+    DeferredReadImage result;
+    for (const auto& [key, scratch] : context.deferred_history_lag_scratches_)
+      result.scratches.emplace(key, &scratch);
+    for (const auto& [field, expression] : context.active_flux_expressions_) {
+      auto& terms = result.expressions[field];
+      for (const auto& [identity, term] : expression)
+        terms.emplace_back(identity, term.basis.get(), term.coefficient);
+    }
+    result.next_identity = context.next_active_flux_basis_identity_;
+    return result;
+  }
+
+  static const typename context_type::field_type* deferred_scratch(const context_type& context,
+                                                                   std::string_view name,
+                                                                   int level) {
+    return &context.deferred_history_lag_scratches_.at(
+        context.history_key_(std::string(name), level));
+  }
+
+  static bool any_rank(const context_type& context, bool predicate) {
+    return all_reduce_max(predicate ? 1L : 0L, context.prepared_execution_lane()) != 0;
+  }
+
+  template <class Operation>
+  static void without_current_history_provenance_on_rank_zero(context_type& context,
+                                                              std::string_view name,
+                                                              Operation&& operation) {
+    const auto key = context.history_key_(std::string(name), context.active_level_);
+    auto& current = context.history_flux_expressions_.at(key).front();
+    typename context_type::FluxExpression saved;
+    const bool inject = context.prepared_execution_lane().rank() == 0;
+    if (inject)
+      current.swap(saved);
+    try {
+      std::forward<Operation>(operation)();
+    } catch (...) {
+      if (inject)
+        current.swap(saved);
+      throw;
+    }
+    if (inject)
+      current.swap(saved);
   }
 
   static const typename context_type::field_type& history_slot(const context_type& context,
@@ -3144,6 +3201,146 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     exercise_deferred_ratio(1, cold_start);
     exercise_deferred_ratio(2, cold_start);
   }
+}
+
+TEST(GeneratedAmrSystemBlock, DeferredHistoryReadsPreservePublishedReferences) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>;
+  pops::AmrSystemConfig<Dim> config;
+  std::size_t center = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 32;
+    config.transition_buffers.front()[axis] = 0;
+    config.transition_lookaheads.front()[axis] = 0;
+    center += 16 * stride;
+    stride *= 32;
+  }
+  config.regrid_every = 0;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/deferred-reference");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  const std::array<std::string, 2> blocks{"tracer", "peer"};
+  const std::array<std::string, 2> histories{"tracer.rate", "peer.rate"};
+  std::vector<double> initial(cell_count(config.shape), 0.25);
+  initial[center] = 1.0;
+  for (const auto& block : blocks) {
+    system.install_block_state_route(block, "state/" + block);
+    pops::add_compiled_model<Dim>(system, block, advection_model<Dim>());
+    system.set_conservative_state(block, initial);
+  }
+  pops::test::install_prepared_refine_coarsen_threshold(
+      system, {"tracer", "u", 0.5, pops::test::PreparedThresholdRelation::Above},
+      {"tracer", "u", 0.5, pops::test::PreparedThresholdRelation::Below},
+      "tests.generated-amr/deferred-reference-tagging@1");
+  ASSERT_NE(system.engine(), nullptr);
+  ASSERT_EQ(system.engine()->hierarchy().num_levels(), 2u);
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.macro");
+  context->declare_clock_relation("clock.macro", "clock.level.1", 2);
+  context->install([context](double dt) { context->advance_hierarchy(dt, [](double) {}); },
+                   context);
+  system.set_program_block_map({0, 1});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.generated-amr/deferred-reference@1", std::vector<FluxBudget>(2, FluxBudget{2, 1}), 0,
+      0);
+  context->for_each_program_resource_level([&](int) {
+    for (int block = 0; block < 2; ++block)
+      context->register_history(histories[block], 1, 1, block, blocks[block] + ".U",
+                                "cell.conservative", "clock.macro", "dense.linear");
+  });
+  for (const double dt : {0.125, 0.25})
+    context->advance_hierarchy(dt, [&](double) {
+      for (int block = 0; block < 2; ++block) {
+        auto& state = context->state(block);
+        auto sample = context->rhs_scratch_like(state);
+        context->rhs_into(block, state, sample, block);
+        context->store_history(histories[block], sample, block);
+      }
+      context->rotate_histories("clock.macro");
+    });
+
+  const auto prior_boxes = system.patch_boxes();
+  stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    initial[center - stride] = 1.0;
+    initial[center + stride] = 1.0;
+    stride *= 32;
+  }
+  for (const auto& block : blocks)
+    system.set_conservative_state(block, initial);
+  system.execute_prepared_tagging(0);
+  typename Access::Observation remap;
+  Access::install_one_shot_observer(*context, remap);
+  ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+  ASSERT_NE(system.patch_boxes(), prior_boxes);
+  ASSERT_TRUE(remap.seen);
+  ASSERT_EQ(remap.descriptor.history_plan.size(), 2u);
+  for (const auto& entry : remap.descriptor.history_plan)
+    ASSERT_EQ(entry.source, pops::runtime::program::AmrProgramHistoryRemapSource::ParentDeferred);
+  const auto accepted = system.program_accepted_state();
+  int deferred_reads = 0;
+  context->advance_hierarchy(0.375, [&](double local_dt) {
+    std::array<pops::MultiFab<Dim>, 2> samples{context->rhs_scratch_like(context->state(0)),
+                                               context->rhs_scratch_like(context->state(1))};
+    for (int block = 0; block < 2; ++block)
+      context->rhs_into(block, context->state(block), samples[block], block);
+    context->store_history(histories[0], samples[0], 0);
+    if (Access::active_level(*context) == 1 &&
+        Access::has_pending_history(*context, histories[0], 1)) {
+      ++deferred_reads;
+      // This is the generated two-history order: keep the first reference alive while the
+      // second history is stored, prepared (including a rank-local refusal), and published.
+      const auto& first = context->history(histories[0], 1, 0);
+      const auto* first_address = &first;
+      const auto first_copy = first;
+      context->store_history(histories[1], samples[1], 1);
+      const auto before_failure = Access::deferred_read_image(*context);
+      ASSERT_FALSE(before_failure.expressions.at(first_address).empty());
+      Access::without_current_history_provenance_on_rank_zero(*context, histories[1], [&] {
+        EXPECT_THROW((void)context->history(histories[1], 1, 1), std::exception);
+      });
+      EXPECT_EQ(Access::deferred_read_image(*context), before_failure);
+      ASSERT_EQ(Access::deferred_scratch(*context, histories[0], 1), first_address);
+      EXPECT_EQ(pops::difference_sum_sq_all_local(first, first_copy), pops::Real(0));
+      EXPECT_EQ(system.program_accepted_state(), accepted);
+
+      const auto& second = context->history(histories[1], 1, 1);
+      const auto* second_address = &second;
+      // Authenticate the still-live object before dereferencing the saved reference.  On the
+      // old copy/swap implementation this fails deterministically, without reading freed data.
+      ASSERT_FALSE(Access::any_rank(
+          *context, Access::deferred_scratch(*context, histories[0], 1) != first_address));
+      EXPECT_EQ(pops::difference_sum_sq_all_local(first, first_copy), pops::Real(0));
+      EXPECT_EQ(Access::deferred_read_image(*context).expressions.at(first_address),
+                before_failure.expressions.at(first_address));
+      const auto second_copy = second;
+      const auto& repeated = context->history(histories[0], 1, 0);
+      ASSERT_FALSE(Access::any_rank(
+          *context, &repeated != first_address ||
+                        Access::deferred_scratch(*context, histories[1], 1) != second_address));
+      EXPECT_EQ(pops::difference_sum_sq_all_local(first, first_copy), pops::Real(0));
+      EXPECT_EQ(pops::difference_sum_sq_all_local(second, second_copy), pops::Real(0));
+      const std::array<const pops::MultiFab<Dim>*, 2> sources{&first, &second};
+      std::array<pops::MultiFab<Dim>, 2> outputs{context->rhs_scratch_like(first),
+                                                 context->rhs_scratch_like(second)};
+      for (std::size_t block = 0; block < sources.size(); ++block) {
+        const auto* source = sources[block];
+        auto& output = outputs[block];
+        output.set_val(pops::Real(0));
+        context->axpy(output, static_cast<pops::Real>(local_dt), *source,
+                      static_cast<pops::Real>(local_dt), {{1, 1, 1}});
+        auto expected = *source;
+        pops::lincomb(expected, static_cast<pops::Real>(local_dt), *source, pops::Real(0), *source);
+        EXPECT_EQ(pops::difference_sum_sq_all_local(output, expected), pops::Real(0));
+      }
+    } else {
+      context->store_history(histories[1], samples[1], 1);
+    }
+    context->rotate_histories("clock.macro");
+  });
+  EXPECT_EQ(deferred_reads, 1);
 }
 
 TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
