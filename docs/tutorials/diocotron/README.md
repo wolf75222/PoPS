@@ -108,7 +108,12 @@ selecting this option; the recorded native and scientific qualification is requi
 Every matrix application retains the complete finite-Omega tensor and the conducting-disk
 boundary law. GMRES uses Euclidean Arnoldi products and an explicitly authenticated
 physical infinity norm for stopping. Its reference, initial and final residual checks
-use that cellwise norm with the unchanged coarse tolerance. FAC independently checks
+use that cellwise norm. The Euler tutorial explicitly sets the inner coarse relative
+tolerance to `1e-11`, one decade tighter than its unchanged outer `1e-10` target:
+the default `1e-12` stopped real L5 modes 3 and 4 after 512 iterations with
+true inner residuals only 1.19 and 1.38 times their requested thresholds. A
+local MPI4 L5 simulation reached `t=.001`/C3 with this policy and no rejected
+steps; ROMEO and long-time qualification remain separate. FAC independently checks
 the original tensor residual, and the outer solve keeps its original composite residual
 tolerances, fine smoothing and correction damping. This
 is a solver change; it does not replace the equation by its drift limit. The first real
@@ -134,8 +139,10 @@ three fixed growth-fit windows; later output uses `POPS_OUTPUT_INTERVAL` and the
 exact paper times. Include this early sampling cadence when estimating storage.
 
 `POPS_RUN_OUTPUT`, `POPS_RUN_CHECKPOINT`, `POPS_RUN_RESTART`, and
-`POPS_RUN_WALLTIME_SECONDS` support bounded scheduler segments. A checkpoint is
-published only after an accepted native step. The calling launcher must reserve
+`POPS_RUN_WALLTIME_SECONDS` support bounded scheduler segments. The first accepted
+step, a positive `POPS_CHECKPOINT_WALL_INTERVAL` (default 300 seconds), and the
+terminal accepted state produce restart checkpoints; each diagnostic snapshot
+does not also create a full-state checkpoint. The calling launcher must reserve
 time for compilation, checkpoint archival, and MPI shutdown. On ROMEO, native
 transactions run on node-local storage and their completed immutable bytes are
 archived to GPFS with checksum verification.

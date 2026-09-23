@@ -65,6 +65,7 @@ OPTIONAL_SIGNATURE_KEYS = ("coarse_max_grid", "cluster_max_grid", "distribute_co
                            "potential_history_slot", "potential_history_contract",
                            "potential_history_transfer", "field_initial_guess", "time_calendar",
                            "field_coarse_method", "field_coarse_restart", "field_coarse_iteration_cap",
+                           "field_coarse_rel_tol",
                            "field_coarse_preconditioner",
                            "field_interface_coupling", "source_rotation", "transport_path",
                            "transport_conserved_components", "transport_regularized_indices",

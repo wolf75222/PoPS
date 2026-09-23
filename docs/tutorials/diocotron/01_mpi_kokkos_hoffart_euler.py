@@ -69,6 +69,7 @@ OUTPUT_INTERVAL = float(os.environ.get("POPS_OUTPUT_INTERVAL", "0.05"))
 GROWTH_OUTPUT_INTERVAL = min(OUTPUT_INTERVAL, 0.01)
 GROWTH_OUTPUT_END = 1.5
 WALL_SECONDS = float(os.environ.get("POPS_RUN_WALLTIME_SECONDS", "inf"))
+CHECKPOINT_WALL_INTERVAL = float(os.environ.get("POPS_CHECKPOINT_WALL_INTERVAL", "300"))
 OUTPUT = Path(os.environ.get("POPS_RUN_OUTPUT", "hoffart-euler-mode%d" % MODE)).resolve()
 CHECKPOINT = Path(os.environ.get("POPS_RUN_CHECKPOINT", str(OUTPUT / "checkpoint.npz"))).resolve()
 RESTART = os.environ.get("POPS_RUN_RESTART", "")
@@ -81,6 +82,8 @@ if (not all(math.isfinite(value) for value in (CFL, MAX_DT, T_END, OUTPUT_INTERV
     raise ValueError("time intervals must be positive and CFL must lie in (0,0.5]")
 if math.isnan(WALL_SECONDS) or WALL_SECONDS <= 0:
     raise ValueError("wall budget must be positive (infinity means unbounded)")
+if not math.isfinite(CHECKPOINT_WALL_INTERVAL) or CHECKPOINT_WALL_INTERVAL <= 0:
+    raise ValueError("checkpoint wall interval must be finite and positive")
 WORLD = MPI.COMM_WORLD
 RANK = WORLD.Get_rank()
 if RANK == 0:
@@ -194,13 +197,17 @@ rhs = program.condensed_rhs(program.scalar_field("Schur rhs"), state=q.n,
     linear_operator=rotation, subset=(1, 2), th_dt=s, g=s,
     gradient_map=gradient_map, base_tensor=base_tensor, charge_component=0)
 # The zero initial guess avoids interpreting diagnostic history as AB2 lagged data
-# when regridding creates new fine cells. The Schur equation and tolerance are unchanged.
+# when regridding creates new fine cells. The Schur equation and outer tolerances are unchanged.
 elliptic = program.matrix_free_operator("disk Schur operator", scope=scope)
 program.set_apply(elliptic, lambda builder, _out, value:
     -builder.apply_laplacian_coeff(builder.scalar_field("Schur action"), value, coefficients))
 potential = program.solve(LinearProblem(elliptic, rhs,
     scope=scope, nullspace=None),
     solver=CompositeTensorFAC(max_iter=300, rel_tol=1e-10, abs_tol=1e-12,
+        # Inner correction need only be one decade tighter than the strict outer
+        # relative target. L5's tiny coarse RHS otherwise hits the 512 cap at
+        # a true residual 1.19–1.38 times its default 1e-12 relative threshold.
+        coarse_rel_tol=1e-11,
         correction_damping=0.5, fine_sweeps=64, coarse_cycles=512,
         coarse_method="gmres", coarse_restart=64, coarse_preconditioner="polar_poisson",
         interface_coupling="fine_flux",
@@ -299,11 +306,13 @@ parameters = dict(model="Euler", mode=MODE, radius=R, ring=(R0, R1), alpha=ALPHA
     potential_history_slot=1, potential_history_contract="scalar-output-field-v1",
     potential_history_transfer="authenticated-1to1-retain-overlap-v1", field_initial_guess="zero",
     field_coarse_method="gmres", field_coarse_restart=64, field_coarse_iteration_cap=512,
+    field_coarse_rel_tol=1e-11,
     field_coarse_preconditioner="polar_poisson",
     field_interface_coupling="fine_flux",
     time_calendar="absolute cap-safe subdivisions of exact decimal output intervals",
     output_interval=OUTPUT_INTERVAL, growth_output_interval=GROWTH_OUTPUT_INTERVAL,
     growth_output_end=GROWTH_OUTPUT_END,
+    checkpoint_wall_interval_seconds=CHECKPOINT_WALL_INTERVAL,
     max_dt=MAX_DT, t_end=T_END, split="source-first Lie", source="CN Schur, full Gauss restart",
     spatial="mapped MUSCL Minmod Rusanov, SSPRK2", mpi_ranks=WORLD.Get_size(),
     kokkos_threads=int(os.environ.get("POPS_THREADS", "1")),
@@ -382,7 +391,7 @@ for target_index, target in enumerate(targets):
             with (OUTPUT / "chunks.jsonl").open("a") as stream:
                 stream.write(json.dumps(progress) + "\n")
         checkpoint_elapsed = WORLD.allreduce(time.monotonic() - last_checkpoint_wall, op=MPI.MAX)
-        if checkpoint_elapsed >= 300.0:
+        if checkpoint_elapsed >= CHECKPOINT_WALL_INTERVAL:
             simulation.checkpoint(CHECKPOINT.parent / ("step-%012d.npz" % simulation.macro_step()))
             last_checkpoint_wall = time.monotonic()
             last_checkpoint_step = simulation.macro_step()
@@ -416,7 +425,9 @@ for target_index, target in enumerate(targets):
         with (OUTPUT / "diagnostics.jsonl").open("a") as stream:
             stream.write(json.dumps(row) + "\n")
         print(json.dumps(row), flush=True)
-    if simulation.macro_step() > 0 and last_checkpoint_step != simulation.macro_step():
+    # Keep one early restart point; later output snapshots do not each need a
+    # second, full-state checkpoint. Periodic and terminal checkpoints remain.
+    if simulation.macro_step() > 0 and last_checkpoint_step < 0:
         simulation.checkpoint(CHECKPOINT.parent / ("step-%012d.npz" % simulation.macro_step()))
         last_checkpoint_wall = time.monotonic()
         last_checkpoint_step = simulation.macro_step()

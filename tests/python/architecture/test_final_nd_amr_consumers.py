@@ -138,6 +138,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
         }
     ),
 }
+# The generic multilevel history remap now carries each retained flux source's
+# provenance through the same transaction as its numerical image (70 net lines).
+RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET = 80
 PROGRAM_RESPONSIBILITY_BUDGETS = {
     # Immutable same-SSA parent inputs and synchronized conservative/NCP face publication
     # are new, separate responsibilities; both remain in the counted semantic closure.
@@ -154,8 +157,8 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "spatial_context": 350 + 16,
     "spatial_operations": 900 + 80,
     "field_runtime": 1_800,
-    # Regrids retain accepted diagnostic/auxiliary images and attempt authority.
-    "history_checkpoint": 1_800 + 64,
+    # Regrids retain accepted images, attempt authority, and flux provenance.
+    "history_checkpoint": 1_800 + 64 + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET,
     "flux_expression": 1_200,
     "shared_flux": 400,
     "flux_family": 128,
@@ -200,7 +203,7 @@ PROGRAM_FRAGMENT_BUDGET = (
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
     + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
-    + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET
+    + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -222,7 +225,7 @@ PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
     + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
-    + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET
+    + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
 )
 SEMANTIC_AUTHORITIES = frozenset(
     {
