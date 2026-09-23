@@ -64,6 +64,9 @@ COARSE_MAX_GRID = int(os.environ.get("POPS_COARSE_MAX_GRID", "8" if NR == 16 els
 CLUSTER_MAX_GRID = int(os.environ.get("POPS_CLUSTER_MAX_GRID", "16" if NR == 16 else "32"))
 CFL = float(os.environ.get("POPS_CFL", "0.3"))
 MAX_DT = float(os.environ.get("POPS_MAX_DT", "0.001"))
+# External output chunks stay below the physical cap so a slightly tighter native
+# CFL bound does not repeatedly create tiny accepted remainder steps.
+CALENDAR_HEADROOM = 0.95
 T_END = float(os.environ.get("POPS_T_END", "10.0"))
 OUTPUT_INTERVAL = float(os.environ.get("POPS_OUTPUT_INTERVAL", "0.05"))
 GROWTH_OUTPUT_INTERVAL = min(OUTPUT_INTERVAL, 0.01)
@@ -309,7 +312,8 @@ parameters = dict(model="Euler", mode=MODE, radius=R, ring=(R0, R1), alpha=ALPHA
     field_coarse_rel_tol=1e-11,
     field_coarse_preconditioner="polar_poisson",
     field_interface_coupling="fine_flux",
-    time_calendar="absolute cap-safe subdivisions of exact decimal output intervals",
+    time_calendar="absolute 0.95-headroom cap-safe subdivisions of exact decimal output intervals",
+    calendar_chunk_headroom=CALENDAR_HEADROOM,
     output_interval=OUTPUT_INTERVAL, growth_output_interval=GROWTH_OUTPUT_INTERVAL,
     growth_output_end=GROWTH_OUTPUT_END,
     checkpoint_wall_interval_seconds=CHECKPOINT_WALL_INTERVAL,
@@ -349,7 +353,7 @@ for target_index, target in enumerate(targets):
     # Always anchor subdivisions at the global scheduled interval, including after
     # restart. Regenerating the remaining interval would change accepted dt values.
     interval_start = targets[max(0, target_index - 1)]
-    chunk_count = max(1, math.ceil((target - interval_start) / MAX_DT))
+    chunk_count = max(1, math.ceil((target - interval_start) / (MAX_DT * CALENDAR_HEADROOM)))
     chunk_ends = np.array([target])
     if target > interval_start:
         while True:

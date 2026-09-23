@@ -127,9 +127,10 @@ cells before factor-two refinement. The latter is not a bound in child-cell unit
 
 Output targets are formed from exact decimal cadences, then converted once to
 native binary64. Each global output interval is divided into comparable absolute
-subintervals whose represented widths do not exceed `POPS_MAX_DT`; an extra
-subinterval is used when floating-point rounding requires it. This avoids the
-microscopic cap-limited remainder steps produced by repeated `time + max_dt`.
+subintervals whose represented widths do not exceed `0.95 × POPS_MAX_DT`; an
+extra subinterval is used when floating-point rounding requires it. The 5%
+scheduling headroom avoids repeated tiny remainder steps when the native CFL
+bound is slightly below `POPS_MAX_DT`, without changing that physical cap.
 The same global endpoints are regenerated after restart. AdaptiveCFL may still
 select smaller physical steps. `chunks.jsonl` records the actual returned time,
 step count, latest accepted dt and cost of every public invocation.
