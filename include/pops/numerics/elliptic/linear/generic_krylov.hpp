@@ -1287,6 +1287,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
   // Local to this solve: a rounded update alone does not authorize a success or a tolerance change.
   bool coordinate_recovery = false;
   bool local_promotion_observed = false;
+  bool quantization_search_attempted = false;
   while (iterations < controls.max_iterations) {
     const Real initial_physical_residual = measurement.physical;
     GmresDiagnosticTrace::Cycle diagnostic;
@@ -1542,6 +1543,115 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
     if (iterations == controls.max_iterations)
       return report_physical(normalization, measurement.physical, iterations,
                              SolveStatus::kIterationLimit);
+    // A few components can remain above a strict physical tolerance because the GMRES
+    // correction rounds to the same representable iterate. Search only a small, exactly
+    // identified set of adjacent binary values, and confirm every proposal with the same
+    // physical residual. A successful proposal reports its work within the caller's
+    // unchanged iteration cap; one unsuccessful neighborhood costs at most one restart.
+    // The search is independent of the operator, mesh and model; it is skipped for a
+    // declared nullspace, short restart or a larger unresolved set.
+    if (recover_stagnation && estimate_reached && !problem.has_nullspace() && restart >= 3 &&
+        !quantization_search_attempted) {
+      const Real threshold = normalization.physical_threshold;
+      const auto& lane = KrylovWorkspaceAccess::execution_lane(workspace);
+      Real local_count = Real(0);
+      for (std::size_t local = 0; local < applied_or_residual.local_size(); ++local) {
+        const auto residual = std::as_const(applied_or_residual.fab(local)).view();
+        const int components = applied_or_residual.ncomp();
+        local_count += for_each_cell_reduce_sum(
+            applied_or_residual.box(local), [=] POPS_HD(const Index<Dim>& index) {
+              Real count = Real(0);
+              for (int component = 0; component < components; ++component)
+                count += Kokkos::abs(residual(index, component)) > threshold ? Real(1) : Real(0);
+              return count;
+            });
+      }
+      const Real global_count = all_reduce_sum(local_count, lane);
+      constexpr int maximum_quantized_components = 6;
+      if (global_count >= Real(1) &&
+          global_count <= Real(maximum_quantized_components)) {
+        PreparedFieldAlgebra::zero(unconverged_components);
+        int labels = 0;
+        for (; labels < static_cast<int>(global_count); ++labels) {
+          Real local_peak = Real(0);
+          for (std::size_t local = 0; local < applied_or_residual.local_size(); ++local) {
+            const auto residual = std::as_const(applied_or_residual.fab(local)).view();
+            const auto marked = std::as_const(unconverged_components.fab(local)).view();
+            const int components = applied_or_residual.ncomp();
+            local_peak = std::max(local_peak, for_each_cell_reduce_max(
+                applied_or_residual.box(local), [=] POPS_HD(const Index<Dim>& index) {
+                  Real peak = Real(0);
+                  for (int component = 0; component < components; ++component) {
+                    const Real magnitude = Kokkos::abs(residual(index, component));
+                    if (marked(index, component) == Real(0) && magnitude > threshold)
+                      peak = Kokkos::max(peak, magnitude);
+                  }
+                  return peak;
+                }));
+          }
+          const Real peak = all_reduce_max(local_peak, lane);
+          if (!(peak > threshold))
+            break;
+          const Real label = Real(labels + 1);
+          for (std::size_t local = 0; local < applied_or_residual.local_size(); ++local) {
+            const auto residual = std::as_const(applied_or_residual.fab(local)).view();
+            const auto marked = unconverged_components.fab(local).view();
+            const int components = applied_or_residual.ncomp();
+            for_each_cell(applied_or_residual.box(local), [=] POPS_HD(const Index<Dim>& index) {
+              for (int component = 0; component < components; ++component)
+                if (marked(index, component) == Real(0) &&
+                    Kokkos::abs(residual(index, component)) == peak)
+                  marked(index, component) = residual(index, component) > Real(0) ? label : -label;
+            });
+          }
+        }
+        const int proposals = (1 << labels) - 1;
+        if (labels > 0 && proposals <= restart &&
+            iterations <= controls.max_iterations - proposals) {
+          quantization_search_attempted = true;
+          const ResidualMeasurement saved_measurement = measurement;
+          PreparedFieldAlgebra::copy(basis(0), iterate);
+          PreparedFieldAlgebra::copy(basis(1), applied_or_residual);
+          for (int selection = 1; selection <= proposals; ++selection) {
+            PreparedFieldAlgebra::copy(iterate, basis(0));
+            for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+              const auto values = iterate.fab(local).view();
+              const auto marked = std::as_const(unconverged_components.fab(local)).view();
+              const int components = iterate.ncomp();
+              for_each_cell(iterate.box(local), [=] POPS_HD(const Index<Dim>& index) {
+                for (int component = 0; component < components; ++component) {
+                  const Real label = marked(index, component);
+                  const int bit = static_cast<int>(Kokkos::abs(label)) - 1;
+                  if (bit < 0 || (selection & (1 << bit)) == 0)
+                    continue;
+                  const Real toward = label > Real(0)
+                                          ? std::numeric_limits<Real>::infinity()
+                                          : -std::numeric_limits<Real>::infinity();
+#if defined(KOKKOS_ENABLE_SYCL)
+                  const Real adjacent = sycl::nextafter(values(index, component), toward);
+#else
+                  const Real adjacent = std::nextafter(values(index, component), toward);
+#endif
+                  if (scaled_scalar_math::isfinite(adjacent))
+                    values(index, component) = adjacent;
+                }
+              });
+            }
+            measurement = physical_true_residual_measurement(
+                problem, workspace, applied_or_residual, rhs, iterate, controls.physical_norm);
+            if (!finite(measurement.physical))
+              return report_physical(normalization, measurement.physical, iterations + selection,
+                                     SolveStatus::kInvalidEvaluation);
+            if (measurement.physical <= threshold)
+              return report_physical(normalization, measurement.physical, iterations + selection,
+                                     SolveStatus::kSolved);
+          }
+          PreparedFieldAlgebra::copy(iterate, basis(0));
+          PreparedFieldAlgebra::copy(applied_or_residual, basis(1));
+          measurement = saved_measurement;
+        }
+      }
+    }
     // Remember actual promotions throughout this episode of rejected one-column candidates.
     // A promoted cycle can descend before the next ordinary update increases the true residual;
     // requiring both events in the same cycle would miss that representable rounding cycle.
