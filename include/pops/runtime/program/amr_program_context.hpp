@@ -433,6 +433,14 @@ public:
   // Bases are immutable samples; a lag read clones and rebases them into the current attempt
   // rather than retaining a pointer to a prior attempt's live registry.
   mutable std::map<std::string, std::vector<FluxExpression>> history_flux_expressions_;
+  // Frozen at the first accepted remap of a native coarse-to-fine sequence.  The numeric
+  // transfer retains its pre-sequence child images even while an earlier parent replacement
+  // removes deeper live rings; their flux provenance must follow the same source generation.
+  mutable std::map<std::string, std::vector<FluxExpression>> history_flux_regrid_sources_;
+  mutable std::uint64_t history_flux_regrid_source_epoch_ =
+      std::numeric_limits<std::uint64_t>::max();
+  mutable std::uint64_t history_flux_regrid_source_generation_ =
+      std::numeric_limits<std::uint64_t>::max();
   mutable std::map<std::tuple<std::size_t, int, FluxBasisProvider>, std::string>
       declared_flux_temporal_families_;
   mutable std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;

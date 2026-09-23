@@ -95,6 +95,12 @@ struct AmrProgramHistoryRemapDescriptor {
   int parent_level = -1;
   int child_level = -1;
   bool child_published = false;
+  // The numeric hierarchy captures all source rings before a coarse-to-fine regrid sequence.
+  // Provenance must use that same accepted source generation when a parent replacement
+  // temporarily removes deeper levels before they are published again.
+  std::uint64_t source_topology_epoch = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t source_materialization_generation =
+      std::numeric_limits<std::uint64_t>::max();
   /// Geometry/ratio changed independently of a distribution-only ownership rebalance.  The
   /// accepted callback uses this exact engine-prepared fact to choose the same source for both
   /// numeric history slots and their FluxExpression provenance.
@@ -971,6 +977,12 @@ struct ProgramRuntimeState {
     if (!history_remap_accepted_)
       throw std::logic_error(runtime + " artifact lacks its accepted history-remap hook");
     if (descriptor.parent_level < 0 || descriptor.child_level != descriptor.parent_level + 1 ||
+        descriptor.source_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
+        descriptor.source_materialization_generation ==
+            std::numeric_limits<std::uint64_t>::max() ||
+        descriptor.source_topology_epoch > descriptor.prior_topology_epoch ||
+        descriptor.source_materialization_generation >
+            descriptor.prior_materialization_generation ||
         descriptor.prior_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
         descriptor.prior_materialization_generation == std::numeric_limits<std::uint64_t>::max() ||
         descriptor.published_topology_epoch != descriptor.prior_topology_epoch + 1 ||

@@ -736,6 +736,8 @@ struct PreparedSparseFieldGather {
 
 template <int Dim>
 struct PreparedHistoryHierarchyImages {
+  std::uint64_t source_topology_epoch = 0;
+  std::uint64_t source_materialization_generation = 0;
   struct Ring {
     std::string key;
     int level = 0;
@@ -8805,12 +8807,15 @@ struct AmrSystem<Dim>::Impl {
     std::exception_ptr local_error;
     try {
       prepared = std::make_shared<PreparedHistoryHierarchyImages<Dim>>();
+      prepared->source_topology_epoch = engine->topology_epoch();
+      prepared->source_materialization_generation = engine->materialization_generation();
       prepared->rings.reserve(program.hist_.histories.size());
       ExactContractBuilder exact;
       exact.text("pops.amr-program.history-hierarchy-image")
           .scalar(std::uint32_t{1})
           .scalar(std::int32_t{Dim})
-          .scalar(engine->topology_epoch())
+          .scalar(prepared->source_topology_epoch)
+          .scalar(prepared->source_materialization_generation)
           .scalar(static_cast<std::uint64_t>(program.hist_.histories.size()));
       for (const auto& [key, ring] : program.hist_.histories) {
         const auto decoded = decode_exact_amr_history_key(key);
@@ -9914,6 +9919,9 @@ struct AmrSystem<Dim>::Impl {
       descriptor.child_level = parent_level + 1;
       descriptor.child_published = !prepared->removes_fine_level();
       descriptor.child_physical_layout_changed = child_physical_layout_changed;
+      descriptor.source_topology_epoch = history_sources->source_topology_epoch;
+      descriptor.source_materialization_generation =
+          history_sources->source_materialization_generation;
       descriptor.history_plan = history_remap_plan;
       descriptor.prior_topology_epoch = engine->topology_epoch();
       descriptor.prior_materialization_generation = engine->materialization_generation();
