@@ -131,7 +131,7 @@ class BalanceOccurrence:
             raise TypeError("balance occurrence requires a local_rate Handle")
         if isinstance(self.ordinal, bool) or not isinstance(self.ordinal, int) or self.ordinal < 0:
             raise ValueError("balance occurrence ordinal must be a nonnegative integer")
-        if self.kind not in ("flux", "diffusion", "drift", "source", "projection"):
+        if self.kind not in ("flux", "diffusion", "drift", "source", "projection", "nonconservative"):
             raise ValueError("unknown physical balance term kind %r" % self.kind)
         if not isinstance(self.target, Handle) or self.target.kind != "state":
             raise TypeError("balance occurrence target must be a state Handle")
@@ -269,6 +269,8 @@ class BalanceView:
         return BalanceView(self.balance, tuple(index for index in self.ordinals if index in selected))
 
     def legacy_incompatibility(self) -> str | None:
+        if any(item.kind == "nonconservative" for item in self.occurrences):
+            return "nonconservative products require an explicit path-conservative realization"
         if any(item.kind == "projection" for item in self.occurrences):
             return "joint rate application projections require a native interaction realization (M4)"
         if not self.accumulation.is_identity:

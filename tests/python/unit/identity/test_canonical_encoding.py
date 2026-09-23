@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 
 import pytest
 
@@ -102,3 +103,38 @@ def test_canonical_sha256_hashes_the_exact_canonical_bytes():
     expected = hashlib.sha256(canonical_bytes(value)).hexdigest()
     assert canonical_sha256(value) == expected
     assert len(expected) == 64
+
+
+def test_deep_expression_shapes_do_not_change_the_process_recursion_limit():
+    limit = sys.getrecursionlimit()
+    value = None
+    expected = b"\xf6"
+    for depth in range(2 * limit):
+        if depth % 2:
+            value = {"x": value}
+            expected = b"\xa1\x61x" + expected
+        else:
+            value = [value]
+            expected = b"\x81" + expected
+    assert canonical_bytes(value) == expected
+    assert sys.getrecursionlimit() == limit
+
+
+def test_shared_subtrees_are_repeated_and_deep_cycles_remain_refused():
+    shared = {"b": (1, None), "a": frozenset(("long", "x"))}
+    assert canonical_bytes([shared, shared]) == b"\x82" + 2 * canonical_bytes(shared)
+    root = []
+    leaf = root
+    for _ in range(2 * sys.getrecursionlimit()):
+        child = []
+        leaf.append(child)
+        leaf = child
+    leaf.append(root)
+    with pytest.raises(ValueError, match="reference cycle"):
+        canonical_bytes(root)
+
+
+def test_nested_set_members_sort_by_their_complete_canonical_bytes():
+    value = frozenset((("aa", 2), ("b", 1), frozenset((3, 1))))
+    members = sorted((canonical_bytes(item) for item in value), key=lambda item: (len(item), item))
+    assert canonical_bytes(value) == b"\xd9\x01\x02\x83" + b"".join(members)

@@ -266,12 +266,24 @@ def _emit_contiguous_rhs_group(
             if target == "amr_system" else ""
         )
         from pops.codegen.program_models import model_for_node
+        from pops.codegen.program_emit_kernels import prepare_default_rhs_providers
+        lines += prepare_default_rhs_providers(
+            model_for_node(model, value), value, index, var[state.id],
+            var.get(("program_provider_plans",)), target=target,
+            flux=True, source=default_source)
         from pops.codegen.program_transport_quadrature import declare_transport_faces
         faces = declare_transport_faces(value, model_for_node(model, value), var, lines)
         capture = "" if faces is None else ", &"+faces
-        requests.append("{%d, &%s, &%s, %d, %d%s%s}" % (
+        from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
+        input_trace = emit_rhs_input_trace(value, index, var[state.id], lines, target)
+        trace = ""
+        if input_trace is not None:
+            if not capture:
+                capture = ", nullptr"
+            trace = ", " + input_trace
+        requests.append("{%d, &%s, &%s, %d, %d%s%s%s}" % (
             index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
-            family, capture))
+            family, capture, trace))
     lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
     from pops.codegen.program_models import model_for_node
     from pops.codegen.program_partition_stability import emit_transport_frequency
@@ -379,9 +391,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         state_ref = getattr(program, "_history_state_refs", {}).get(name)
         state_identity = (state_ref.qualified_id if state_ref is not None
                           else "scalar-history:" + name)
-        space = getattr(program, "_history_spaces", {}).get(name)
-        space_identity = (json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
-                          if space is not None else "scalar-field")
+        from pops.codegen.program_history_identity import history_space_identity
+        space_identity = history_space_identity(program, name)
         row = history_manifest[name]
         interpolation = json.dumps(
             row["interpolation"], sort_keys=True, separators=(",", ":"))
@@ -404,10 +415,16 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     )
     values = list(program._values)
     from pops.codegen.program_emit_hierarchy_regions import (
-        hierarchy_region_solves, open_hierarchy_continuation,
+        hierarchy_region_solves, hierarchy_path_rhs, open_hierarchy_continuation,
     )
     hierarchy_solves = (hierarchy_region_solves(program) if target == "amr_system" else ())
     hierarchy_solve_ids = {value.id for value in hierarchy_solves}
+    path_ids = {value.id for value in hierarchy_path_rhs(program)} if target == "amr_system" else set()
+    hierarchy_enabled = bool(hierarchy_solves or path_ids)
+    legacy_path_prefix = bool(path_ids and any(
+        "hierarchy_field_identity" not in value.attrs for value in hierarchy_solves))
+    if legacy_path_prefix:
+        lines.append("ctx.with_synchronized_field_gather([&]() {")
     index = 0
     mapping_continuations = 0
     # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are
@@ -437,7 +454,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         hierarchy_solve = v.id in hierarchy_solve_ids
         if hierarchy_solve:
             var[("direct_hierarchy_solve", v.id)] = True
-        if hierarchy_solves and v.op == "field_publication":
+        if hierarchy_enabled and v.op == "field_publication":
             # Levels enter the same qualified barrier in order. Reset before its first gather,
             # including a retry after a prior attempt failed between two level callbacks.
             lines.append("if (ctx.level() == 0) ctx.begin_staged_field_publications();")
@@ -450,13 +467,20 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         if hierarchy_solve:
             if v.attrs.get("has_guess"):
                 lines.append("ctx.stage_hierarchy_field_initial_guess(%d, %s);" %
-                             (v.id, var[v.inputs[2].id]))
+                             (v.id, var[v.inputs[2].id]) if "hierarchy_field_identity" in v.attrs
+                             else "ctx.stage_linear_initial_guess(%s);" % var[v.inputs[2].id])
             else:
-                lines.append("ctx.stage_hierarchy_field_initial_guess(%d);" % v.id)
+                lines.append("ctx.stage_hierarchy_field_initial_guess(%d);" % v.id
+                             if "hierarchy_field_identity" in v.attrs
+                             else "ctx.stage_linear_initial_guess();")
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
                                         emitted, kind="linear_solve")
             mapping_continuations += 1
-        elif hierarchy_solves and v.op == "field_publication":
+        elif v.id in path_ids:
+            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
+                                        ["ctx.publish_staged_path_rhs(%d);" % v.id], kind="spatial_rhs")
+            mapping_continuations += 1
+        elif hierarchy_enabled and v.op == "field_publication":
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
                                         ["ctx.publish_staged_field_components();"],
                                         kind="field_publication")
@@ -484,6 +508,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         lines.append("ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
     from pops.codegen.program_emit_mapping_regions import close_map_continuations
     close_map_continuations(mapping_continuations, lines)
+    if legacy_path_prefix:
+        lines.append("});")
     post_sync_lines = _emit_post_synchronization_phase(
         program,
         model,
@@ -566,13 +592,13 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     """
     from pops.codegen.program_emit_ops import _emit_op
     from pops.codegen.program_lowerability import all_ops
-    from pops.codegen.program_emit_hierarchy_regions import hierarchy_region_solves
+    from pops.codegen.program_emit_hierarchy_regions import has_hierarchy_continuations
 
     if type(has_shared_interface_implicit_jacvec) is not bool:
         raise TypeError(
             "AMR hierarchy lowering requires exact shared-interface JVP evidence"
         )
-    if hierarchy_region_solves(program):
+    if has_hierarchy_continuations(program):
         # Invocation-owned field resources cross each actual solve/publication barrier through
         # the same continuation scheduler as physical maps. No singleton phase split is needed.
         return None
@@ -671,9 +697,8 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             state_ref = program._history_state_refs.get(name)
             state_identity = (state_ref.qualified_id if state_ref is not None
                               else "scalar-history:" + name)
-            space = program._history_spaces.get(name)
-            space_identity = (json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
-                              if space is not None else "scalar-field")
+            from pops.codegen.program_history_identity import history_space_identity
+            space_identity = history_space_identity(program, name)
             row = manifests[name]
             interpolation = json.dumps(
                 row["interpolation"], sort_keys=True, separators=(",", ":"))

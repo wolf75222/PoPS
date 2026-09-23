@@ -440,8 +440,12 @@ def validate_amr_authorities(plan: Any) -> None:
     # identity and refuse a lower-order or shallower coarse/fine provider before artifact creation;
     # otherwise a WENO/MUSCL block could silently execute with a first-order interface injection.
     coarse_fine_capabilities = {}
+    physical_routes = {}
     for entry in plan.amr_transfer.entries:
         native = _validated_native_materialization(entry)
+        if native.materialization is NativeAMRMaterializationKind.PHYSICAL:
+            for requirement in entry.requirements:
+                physical_routes[(requirement.subject.qualified_id, entry.key.operation)] = native
         if entry.key.operation != COARSE_FINE_FILL \
                 or native.materialization is not NativeAMRMaterializationKind.PHYSICAL:
             continue
@@ -464,6 +468,11 @@ def validate_amr_authorities(plan: Any) -> None:
                 )
             coarse_fine_capabilities[subject] = selected
     for block in plan.blocks:
+        from pops.numerics.nonconservative import PathConservativeFiniteVolume
+        path_transport = any(type(row.method) is PathConservativeFiniteVolume
+                             for row in getattr(block.numerics, "rates", ()))
+        if path_transport and execution.mode != "synchronous":
+            raise NotImplementedError("path-conservative AMR requires synchronous hierarchy execution")
         formal_order = getattr(block.spatial, "formal_order", None)
         ghost_depth = getattr(block.spatial, "ghost_depth", None)
         if isinstance(formal_order, bool) or not isinstance(formal_order, int) \
@@ -476,6 +485,17 @@ def validate_amr_authorities(plan: Any) -> None:
             if selected is None:
                 raise ValueError(
                     "AMR state %s has no resolved coarse/fine transfer authority" % subject)
+            if path_transport:
+                # A reconstructed coarse trace would require a within-cell path
+                # treatment absent from the authenticated first-order method.
+                for operation in (PROLONGATION, COARSE_FINE_FILL):
+                    native = physical_routes.get((subject, operation))
+                    caps = None if native is None else native.capabilities.transfer
+                    if (native is None or native.native_route != "conservative_injection"
+                            or caps is None or caps.order != 1 or not caps.conservative):
+                        raise NotImplementedError(
+                            "first-order path-conservative AMR requires exact conservative "
+                            "injection for prolongation and coarse/fine traces")
             capabilities, dimension = selected
             available_ghost = _ranked_ghost_depth(
                 capabilities.ghost_depth,

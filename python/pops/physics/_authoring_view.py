@@ -28,7 +28,7 @@ class _OperatorViewMixin(_HyperbolicModel):
 
     def _aux_name_set(self) -> Any:
         """Names that denote an explicitly declared auxiliary field."""
-        return set(self._provider_components)
+        return set(self._provider_components) | set(self._auxiliary_spaces)
 
     def _aux_requirements(self, exprs: Any) -> Any:
         """{'aux': [...]} of the aux fields the expressions read, or {} if none."""

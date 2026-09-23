@@ -24,6 +24,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 from types import SimpleNamespace
 
@@ -343,6 +344,8 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_amr_hierarchy_field_scratch": (2,),
         "test_amr_synchronized_continuation": (2,),
         "test_amr_multiblock_substeps": (2,),
+        "test_amr_path_rhs_barrier": (2,),
+        "test_amr_scalar_output_history": (2,),
         "test_collective_step_rejection": (2,),
         "test_amr_program_positivity_floor": (2,),
         "test_amr_program_diffusion": (2,),
@@ -357,12 +360,17 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_generated_stability_speed": (2,),
         "test_geometric_mg": (2,),
         "test_krylov_workspace_reentrancy": (2,),
+        "test_mapped_disk_tensor_fac": (2,),
         "test_prepared_embedded_boundary_nd": (2,),
         "test_prepared_hyperbolic_boundary": (2,),
+        "test_prepared_polar_poisson_inverse": (2,),
         "test_program_context_contract": (2,),
         "test_program_runtime": (2,),
         "test_pure_field_algebra_extreme_dot": (2,),
         "test_system_interface_core_session": (2,),
+        "test_tensor_coarse_gmres": (2,),
+        "test_tensor_fac_conservative_interface": (2,),
+        "test_tensor_fac_partial_hierarchy": (2,),
         "test_world_communicator": (1, 2),
     }
     serial_targets = {
@@ -379,7 +387,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 114
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 121
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -476,6 +484,80 @@ def test_cpp_mpi_processor_groups_are_an_exact_disjoint_cover():
     assert len(flattened) == len(set(flattened))
     for group in groups:
         assert all(plan[name] == group["processors"] for name in group["names"])
+
+
+@pytest.mark.parametrize("launch_contract", ["mpi_nproc", "mpi_variants"])
+def test_cpp_mpi_build_groups_cover_new_manifest_targets(launch_contract):
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    added = "test_new_mpi_build_contract"
+    manifest["cpp"]["suite"].append(
+        {
+            "name": added,
+            "sources": ["tests/cpp/new_mpi_build_contract.cpp"],
+            "labels": ["mpi"] if launch_contract == "mpi_nproc" else [],
+            launch_contract: [2],
+        }
+    )
+    groups = sel.cpp_mpi_build_groups(manifest)
+    assert [group["name"] for group in groups] == ["isolated", "remaining"]
+    assert len(groups[0]["targets"]) == 4
+    assert "test_program_runtime" in groups[0]["targets"]
+    assert "test_amr_synthetic_program_loader_transaction" in groups[0]["targets"]
+    assert added in groups[1]["targets"]
+    flattened = [target for group in groups for target in group["targets"]]
+    assert sorted(flattened) == sel.cpp_targets_with_label(manifest, "mpi")
+    assert len(flattened) == len(set(flattened))
+
+
+def test_cpp_mpi_build_groups_reject_a_missing_anchor():
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    manifest["cpp"]["suite"] = [
+        suite for suite in manifest["cpp"]["suite"]
+        if suite["name"] != "test_program_runtime"
+    ]
+    with pytest.raises(SystemExit, match="anchors missing.*test_program_runtime"):
+        sel.cpp_mpi_build_groups(manifest)
+
+
+def test_cpp_mpi_build_groups_reject_duplicate_manifest_targets():
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    duplicate = next(
+        suite for suite in manifest["cpp"]["suite"]
+        if suite["name"] == "test_mpi_system_layout_transfer"
+    )
+    manifest["cpp"]["suite"].append(duplicate)
+    with pytest.raises(SystemExit, match="exact nonempty disjoint target cover"):
+        sel.cpp_mpi_build_groups(manifest)
+
+
+def test_cpp_mpi_label_plan_publishes_both_complete_build_phases(tmp_path):
+    sel = _load("ci_select_tests")
+    output = tmp_path / "github-output"
+    explain = tmp_path / "mpi-test-plan.json"
+    assert sel.plan_cpp_label(
+        SimpleNamespace(
+            label="mpi",
+            ctest_groups_file=str(tmp_path / "mpi-ctest-groups.tsv"),
+            github_output=str(output),
+            explain_file=str(explain),
+        )
+    ) == 0
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert fields["cpp_label_build_phase_count"] == "2"
+    isolated = fields["cpp_label_build_isolated_targets"].split()
+    remaining = fields["cpp_label_build_remaining_targets"].split()
+    assert isolated and remaining
+    assert sorted(isolated + remaining) == fields["cpp_label_targets"].split()
+    assert len(set(isolated + remaining)) == int(fields["cpp_label_count"])
+    payload = json.loads(explain.read_text())
+    assert payload["build_groups"] == [
+        {"name": "isolated", "targets": isolated},
+        {"name": "remaining", "targets": remaining},
+    ]
+    assert payload["ctest_count"] == len(sel.cpp_mpi_ctest_plan(sel.load_manifest()))
 
 
 def test_cpp_mpi_ctest_fence_rejects_missing_per_test_timeout(tmp_path):
@@ -854,6 +936,94 @@ def test_python_mpi_orchestrator_contract_is_fail_closed():
 
 
 @pytest.mark.parametrize(
+    ("scenario", "status"),
+    (
+        ("complete", 0),
+        ("missing_entrypoint", 1),
+        ("missing_orchestrator", 1),
+        ("entrypoint_failure", 7),
+        ("entrypoint_timeout", 124),
+        ("orchestrator_failure", 7),
+    ),
+)
+def test_python_mpi_workflow_executes_every_plan_row_with_stdin_reading_child(
+    tmp_path, scenario, status,
+):
+    """A child draining stdin must neither skip a manifest row nor hide a failure."""
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    entries = sel.manifest_python_mpi_entrypoints(manifest)
+    orchestrators = sel.manifest_python_mpi_orchestrators(manifest)
+    assert len(entries) > 1 and orchestrators
+    entry_paths = [entry["path"] for entry in entries]
+    orchestrator_paths = [entry["path"] for entry in orchestrators]
+    for relative in entry_paths + orchestrator_paths:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    plan_dir = tmp_path / "build-mpi"
+    plan_dir.mkdir()
+    plan_entries = entries[:-1] if scenario == "missing_entrypoint" else entries
+    plan_orchestrators = [] if scenario == "missing_orchestrator" else orchestrators
+    (plan_dir / "python-mpi-plan.tsv").write_text(
+        "".join(f"{entry['nproc']}\t{entry['path']}\n" for entry in plan_entries)
+    )
+    (plan_dir / "python-mpi-orchestrators.txt").write_text(
+        "".join(f"{entry['path']}\n" for entry in plan_orchestrators)
+    )
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
+    step = workflow.split("- name: Test Python MPI contracts + native lifecycle", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+    shell = textwrap.dedent(step[step.index("          run_mpi() {"):])
+    for output, count in (
+        ("python_mpi_entrypoint_count", len(entries)),
+        ("python_mpi_orchestrator_count", len(orchestrators)),
+    ):
+        shell = shell.replace("${{ steps.mpi-test-plan.outputs." + output + " }}", str(count))
+    assert "${{" not in shell
+    # Execute the real workflow loop and run_mpi status handling, but no Python/MPI code.
+    # The replacement child models a launcher forwarding/reading its inherited stdin.
+    prefix = r'''set -eo pipefail
+mpi_failfast_args=()
+timeout() {
+  local child_path="${@: -1}"
+  printf '%s\n' "$child_path" >> launched.txt
+  cat >/dev/null
+  if [ "$child_path" = "$FAIL_PATH" ]; then
+    return "$FAIL_STATUS"
+  fi
+  return 0
+}
+'''
+    fail_path = ""
+    if scenario.startswith("entrypoint_"):
+        fail_path = entry_paths[0]
+    elif scenario == "orchestrator_failure":
+        fail_path = orchestrator_paths[0]
+    result = subprocess.run(
+        ["bash", "-c", prefix + shell], cwd=tmp_path, text=True, capture_output=True,
+        env={**os.environ, "FAIL_PATH": fail_path, "FAIL_STATUS": str(status)}, timeout=10,
+    )
+    assert result.returncode == status, result.stdout + result.stderr
+    launched = (tmp_path / "launched.txt").read_text().splitlines()
+    if scenario == "missing_entrypoint":
+        expected = entry_paths[:-1]
+    elif scenario == "missing_orchestrator":
+        expected = entry_paths
+    elif scenario.startswith("entrypoint_"):
+        expected = entry_paths[:1]
+    elif scenario == "orchestrator_failure":
+        expected = entry_paths + orchestrator_paths[:1]
+    else:
+        expected = entry_paths + orchestrator_paths
+    assert launched == expected
+    if scenario == "complete":
+        assert f"Python MPI entrypoints completed={len(entries)}" in result.stdout
+        assert f"Python MPI orchestrators completed={len(orchestrators)}" in result.stdout
+
+
+@pytest.mark.parametrize(
     ("result", "required", "accepted"),
     (
         ("success", "true", True),
@@ -952,7 +1122,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 40" in cpp_shards_block
     assert "timeout-minutes: 30" in cpp_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.cpp_matrix) }}" in cpp_shards_block
-    assert "--shard-total 11" in cpp_shards_block
+    assert "--shard-total 13" in cpp_shards_block
     assert "needs: [changes, set-mode, gate-cpp-prewarm]" in cpp_shards_block
     assert "actions/download-artifact@v8" in cpp_shards_block
     assert "test \"${#cache_archives[@]}\" -eq 3" in cpp_shards_block
@@ -1013,7 +1183,9 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "test \"${#compile_contracts[@]}\" -eq 3" in mpi_block
     assert "--verify-contracts" in mpi_block
     assert 'run_with_heartbeat "MPI Python module link" 14m' in mpi_block
-    assert 'run_with_heartbeat "MPI native test build" 28m' in mpi_block
+    assert 'run_with_heartbeat "MPI isolated native test build" 28m' in mpi_block
+    assert 'run_with_heartbeat "MPI remaining native test build" 28m' in mpi_block
+    assert 'run_with_heartbeat "M4 native test build" 10m' in mpi_block
     assert "source scripts/ci_heartbeat.sh" in mpi_block
     assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
     assert "scripts/ci_select_tests.py cpp-label" in mpi_block
@@ -1023,7 +1195,20 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "build-mpi/python-mpi-plan.tsv" in mpi_block
     assert "--orchestrator-plan-file build-mpi/python-mpi-orchestrators.txt" in mpi_block
     assert "--parallel 1 --target _pops" in mpi_block
-    assert '--parallel 4 --target "${mpi_targets[@]}"' in mpi_block
+    assert '--parallel 1 --target "${isolated_targets[@]}"' in mpi_block
+    assert '--parallel 4 --target "${remaining_targets[@]}"' in mpi_block
+    assert 'test "${{ steps.mpi-test-plan.outputs.cpp_label_build_phase_count }}" -eq 2' in mpi_block
+    assert "steps.mpi-test-plan.outputs.cpp_label_build_isolated_targets" in mpi_block
+    assert "steps.mpi-test-plan.outputs.cpp_label_build_remaining_targets" in mpi_block
+    assert 'test "${#isolated_targets[@]}" -gt 0' in mpi_block
+    assert 'test "${#remaining_targets[@]}" -gt 0' in mpi_block
+    assert '${#isolated_targets[@]} + ${#remaining_targets[@]}' in mpi_block
+    native_build_step = mpi_block.split(
+        "- name: Build complete native MPI inventory in two phases\n", 1
+    )[1].split("\n      - name: Build M4 native tests\n", 1)[0]
+    assert "timeout-minutes: 60" in native_build_step
+    assert native_build_step.count('28m \\') == 2
+    assert "POPS_HEAVY_TEST_TU_POOL" not in native_build_step
     assert "scripts/ci_select_tests.py verify-cpp-mpi-ctests" in mpi_block
     assert "ctest --preset ci-mpi -N --show-only=json-v1" in mpi_block
     assert "steps.mpi-test-plan.outputs.cpp_label_ctest_count" in mpi_block
@@ -1048,7 +1233,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout --signal=TERM --kill-after=30s 4m" not in mpi_block
     assert "read -r processors expected regex <&3" in mpi_block
     assert "done 3< build-mpi/mpi-ctest-groups.tsv" in mpi_block
-    assert mpi_block.count("</dev/null") == 2
+    assert mpi_block.count("</dev/null") == 4
+    assert "read -r mpi_ranks mpi_test <&3" in mpi_block
+    assert "read -r mpi_orchestrator <&3" in mpi_block
+    assert mpi_block.count("</dev/null 3<&-") == 2
+    assert "steps.mpi-test-plan.outputs.python_mpi_entrypoint_count" in mpi_block
+    assert "steps.mpi-test-plan.outputs.python_mpi_orchestrator_count" in mpi_block
     assert "MPI CTest processor group ${processors} failed" in mpi_block
     assert "selected_count=$(python3 -c" in mpi_block
     assert "selected ${selected_count}/${expected} launches" in mpi_block
@@ -1136,13 +1326,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert cpp_job_minutes == 70
     assert "needs: [set-mode, gate-openmp-prewarm]" in openmp_block
     assert "fail-fast: false" in openmp_block
-    assert openmp_block.count("- lane: cpp-") == 11
-    for shard in range(11):
+    assert openmp_block.count("- lane: cpp-") == 13
+    for shard in range(13):
         assert (
             f"- lane: cpp-{shard}\n"
             "            kind: cpp\n"
             f"            shard: {shard}\n"
-            "            shard_total: 11\n"
+            "            shard_total: 13\n"
             "            ccache_maxsize: 2G"
         ) in openmp_block
     assert (
@@ -1409,7 +1599,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}" in python_shards_block
-    assert 'SHARD_TOTAL: "37"' in python_shards_block
+    assert 'SHARD_TOTAL: "38"' in python_shards_block
     assert "strategy.job-total" not in python_shards_block
     for family, block in (("cpp", cpp_shards_block), ("python", python_shards_block)):
         assert "name: ci-plan" in block

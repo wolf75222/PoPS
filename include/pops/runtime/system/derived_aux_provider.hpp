@@ -9,6 +9,7 @@
 /// merely authenticates that launch and gives it an immutable, exact evaluation point.
 
 #include <pops/core/identity/prepared_provider.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/index/index.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
@@ -477,6 +478,8 @@ template <int Dim>
 struct AuxiliaryCarrierStorage {
   const AuxiliaryStorageGroups<Dim>* accepted = nullptr;
   AuxiliaryStorageGroups<Dim>* candidate = nullptr;
+  /// Exact geometry of this publication level; required by analytic producers.
+  const Geometry<Dim>* geometry = nullptr;
 
   void validate() const {
     if (accepted == nullptr || candidate == nullptr)

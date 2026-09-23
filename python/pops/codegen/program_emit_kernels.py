@@ -41,6 +41,7 @@ _MODEL_OPS = (
     "diffusive_rhs", "input_fields", "source",
     "apply",
     "local_transform",
+    "affine_moment_update",
     "solve_local_linear",
     "solve_local_nonlinear",
     "solve_spatial_nonlinear",
@@ -69,6 +70,7 @@ _ALLOWED_OPS = frozenset(
         "subcycle",
         "branch",
         "post_synchronization",
+        "affine_moment_update",
         "synchronize",
         "acceptance_guard",
         "matrix_free_operator",
@@ -407,6 +409,8 @@ def _block_inverse_include(program: Any) -> str:
     result = _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
     if any(v.op == "solve_spatial_nonlinear" for v in program._values):
         result += "#include <pops/runtime/program/prepared_spatial_residual.hpp>\n"
+    if any(v.op == "affine_moment_update" for v in program._values):
+        result += "#include <pops/numerics/moments/affine_velocity.hpp>\n"
     return result
 
 
@@ -655,11 +659,45 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
 
 
 def _prepare_provider_values(binding: Any, program_block: Any, state_var: Any) -> list[str]:
-    """Publish Uniform consumer prerequisites once, before any rank-local Fab loop."""
-    if binding is None or not binding["count"] or binding["target"] != "system":
+    """Publish flat consumer prerequisites before any rank-local Fab loop.
+
+    The AMR context restricts this seam to a live one-level hierarchy. Refined
+    execution keeps its existing hierarchy-qualified publication authority.
+    """
+    if binding is None or not binding["count"] or binding["target"] not in {"system", "amr_system"}:
         return []
     return ["ctx.prepare_provider_values(%s, %d, %s, %d);" % (
         json.dumps(binding["qid"]), program_block, state_var, binding["evaluation_id"])]
+
+
+def prepare_default_rhs_providers(
+    model: Any, value: Any, block: int, state: str, provider_plans: Any,
+    *, target: str, flux: bool, source: bool,
+) -> list[str]:
+    """Prepare exactly the installed flat flux/source closures used by this RHS.
+
+    Native closure callbacks do not pass through ``_kernel_open``. Their provider
+    prerequisites therefore need an explicit publication at the same SSA state
+    and stage as the residual, including grouped and source-only residuals.
+    Named Program kernels keep their separate first-use expression plans.
+    """
+    if target not in {"system", "amr_system"} or model is None or not (flux or source):
+        return []
+    impl = _model_impl(model)
+    required = []
+    if flux:
+        required.extend(impl._component_flux_provider_pack)
+    if source and impl._source is not None:
+        required.extend(impl._component_operator_provider_packs["source_default"])
+    from pops.model.provider_pack import compact_auxiliary_provider_pack
+    pack = compact_auxiliary_provider_pack(impl._component_provider_pack.select(required))
+    if not len(pack):
+        return []
+    if provider_plans is None:
+        raise ValueError("Program RHS requires its exact provider-plan collector")
+    binding = provider_plans.bind_pack(
+        pack, program_provider_consumer_qid(model, value.id, value.block) + "/default_rhs")
+    return _prepare_provider_values(binding, block, state)
 
 
 def _kernel_open(

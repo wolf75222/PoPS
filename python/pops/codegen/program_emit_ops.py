@@ -405,13 +405,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # branches. Evaluation context and kernels remain in the guarded body.
     output_setup_end = None
     evaluation_prelude = []
-    if v.op in {"source", "implicit_source", "local_transform", "apply",
+    if v.op in {"source", "implicit_source", "local_transform", "affine_moment_update", "apply",
                 "solve_local_linear", "solve_local_nonlinear", "solve_implicit_source"}:
         from pops.time._evaluation_point import evaluation_stage_fraction
         # Unqualified sources use explicit ARK coordinates; an authored partition takes precedence.
         # Solves use implicit coordinates. Generic apply/transform require unambiguous intent.
         ark_partition = ("explicit" if v.op == "source" else
-                         None if v.op in {"apply", "local_transform"} else "implicit")
+                         None if v.op in {"apply", "local_transform", "affine_moment_update"} else "implicit")
         stage = evaluation_stage_fraction(v, ark_partition=ark_partition)
         evaluation_prelude.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     if v.op == "post_synchronization":
@@ -737,10 +737,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if step_projection is not None:
             lines.append("ctx.note_step_projection(%s);" % json.dumps(step_projection))
         var[v.id] = var[state_in.id]
-    elif v.op == "local_transform":
+    elif v.op in {"local_transform", "affine_moment_update"}:
+        bidx = _required_block_index(block_idx, v.block, "emit op %r" % v.name)
         if prelude is None:
             raise NotImplementedError(
-                "local_transform requires an install-time resource scope")
+                "%s requires an install-time resource scope" % v.op)
         state_in = v.inputs[0]
         var[v.id] = "u%d" % v.id
         status = "transform_status_field_%d" % v.id
@@ -750,18 +751,23 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.codegen._resolution import _spatial_coordinate_transforms
 
         spatial_map = target == "amr_system" and id(v) in _spatial_coordinate_transforms(program)
-        if not spatial_map:
+        # A source-first affine result becomes the prototype for transport RHS
+        # scratch. It therefore needs the same authenticated level/block owner
+        # as a composite coordinate-map result, including after rollback.
+        owned_amr_result = target == "amr_system" and (
+            spatial_map or v.op == "affine_moment_update")
+        if not owned_amr_result:
             prelude.append(
                 "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(ctx.state(%d)));"
                 % (state_resource, bidx))
         if target == "amr_system":
             # Rollback retires context scratches without necessarily replacing level closures.
             # Reacquire the exact node/level/block resources before each invocation.
-            if spatial_map:
+            if owned_amr_result:
                 lines.append("pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % state_resource)
             lines.append("pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % status_resource)
             lines.append("ctx.prepare_spatial_collectively([&] {")
-            if spatial_map:
+            if owned_amr_result:
                 lines.append("  %s = &ctx.scratch_state(%d, 0, ctx.state(%d));"
                              % (state_resource, int(v.id), bidx))
             lines.append("  %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
@@ -777,12 +783,19 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append(
             "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
             % (active_mask, bidx, var[v.id]))
-        lines += _emit_local_transform_kernel(
-            node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
-            active_mask, bidx,
-            provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
-        )
+        if v.op == "affine_moment_update":
+            from pops.codegen.program_emit_affine_moments import emit_affine_moment_kernel
+            lines += emit_affine_moment_kernel(
+                node_model, v.attrs, var[state_in.id], var[v.inputs[1].id], var[v.id],
+                status, active_mask, bidx, provider_plans=provider_plans,
+                consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
+        else:
+            lines += _emit_local_transform_kernel(
+                node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
+                active_mask, bidx,
+                provider_plans=provider_plans,
+                consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+            )
         reduced = "transform_failed_%d" % v.id
         # AMR transforms (including after-synchronization and composite Q maps) are
         # produced and checked collectively one level at a time. Sibling statuses
@@ -798,9 +811,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("if (%s != pops::Real(0)) {" % reduced)
         lines.append(
             "  throw pops::runtime::program::StepAttemptRejected("
-            "pops::SolveStatus::kInvalidEvaluation, \"local_transform\", %s);"
-            % json.dumps("transform '%s' rejected a non-finite or out-of-domain state"
-                         % v.attrs["transform"]))
+            "pops::SolveStatus::kInvalidEvaluation, %s, %s);"
+            % (json.dumps(v.op), json.dumps(
+                "transform '%s' rejected a non-finite or out-of-domain state"
+                % v.attrs.get("transform", v.op))))
         lines.append("}")
     elif v.op == "cell_compare":
         # A PER-CELL threshold (spec op 17, ADC-418): mask(i,j,0) = field(i,j,0) <cmp> value ? 1 : 0,
@@ -869,7 +883,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if defer_bound:
             key = ("partition_stability_deferred",)
             var[key] = var.get(key, frozenset()) | frozenset((v.id,))
+    elif v.op == "rhs" and v.attrs.get("path_conservative", False):
+        from pops.codegen.program_emit_path import emit_path_rhs
+        emit_path_rhs(v, var, lines, node_model, provider_plans, bidx, target)
     elif v.op == "rhs":
+        bidx = _required_block_index(block_idx, v.block, "emit op %r" % v.name)
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
         named_fluxes = _named_fluxes(v)
@@ -894,6 +912,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.time._evaluation_point import evaluation_stage_fraction
         stage = evaluation_stage_fraction(v, ark_partition="explicit")
         lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        from pops.codegen.program_emit_kernels import prepare_default_rhs_providers
+        lines += prepare_default_rhs_providers(
+            node_model, v, bidx, var[state_in.id], provider_plans, target=target,
+            flux=want_flux and named_fluxes is None, source=want_default_source)
+        from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
+        input_trace = (emit_rhs_input_trace(v, bidx, var[state_in.id], lines, target)
+                       if want_flux else None)
+        trace_suffix = ", " + input_trace if input_trace is not None else ""
         if not want_flux:
             # SOURCE-ONLY (ADC-430): flux=False -- NO -div F base (the rhs_scratch starts at zero).
             # The default/composite source is added iff requested (the same want_default_source
@@ -914,27 +940,30 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             faces = declare_transport_faces(v, node_model, var, lines)
             if faces is not None:
                 lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s);"
-                             % (bidx, var[state_in.id], var[v.id], int(v.id), faces, family_suffix))
+                             % (bidx, var[state_in.id], var[v.id], int(v.id), faces,
+                                family_suffix + trace_suffix))
                 if want_default_source:
                     source = "transport_source_%d" % v.id
                     lines.append("auto& %s = ctx.rhs_scratch(%d, 2, %s);"
                                  % (source, int(v.id), var[state_in.id]))
-                    lines.append("ctx.source_default_into(%d, %s, %s);"
-                                 % (bidx, var[state_in.id], source))
+                    lines.append("ctx.source_default_into(%d, %s, %s%s);"
+                                 % (bidx, var[state_in.id], source, trace_suffix))
                     lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);"
                                  % (var[v.id], source))
             elif want_default_source:
                 # R <- -div F + default/composite source (ctx.rhs_into) for THIS op's block (ADC-426
                 # bidx), the historical path: sources is None (legacy) or "default" is requested.
                 lines.append("ctx.rhs_into(%d, %s, %s, %d%s);"
-                             % (bidx, var[state_in.id], var[v.id], int(v.id), family_suffix))
+                             % (bidx, var[state_in.id], var[v.id], int(v.id),
+                                family_suffix + trace_suffix))
             else:
                 # FLUX-ONLY (ADC-425): "default" is NOT among the requested sources (the empty list
                 # [] or a named-only list) -> R <- -div F(U) WITHOUT the model's default source
                 # (ctx.neg_div_flux_default_into), for THIS op's block (bidx). The named source_terms
                 # below are then axpy'd on top -- sources=[] is flux only, ["a","b"] is flux + a + b.
                 lines.append("ctx.neg_div_flux_default_into(%d, %s, %s, %d%s);"
-                             % (bidx, var[state_in.id], var[v.id], int(v.id), family_suffix))
+                             % (bidx, var[state_in.id], var[v.id], int(v.id),
+                                family_suffix + trace_suffix))
         else:
             # NAMED fluxes (ADC-419): R <- -div(sum of selected named fluxes). Evaluate the SUM of
             # the flux expressions into one exact-ranked scratch field per authored x[/y[/z] axis.
@@ -943,8 +972,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             impl = _model_impl(node_model)
             axes = tuple(impl._flux_terms[named_fluxes[0]])
             flux_vars = {axis: "%s_f%s" % (var[v.id], axis) for axis in axes}
-            lines.append("ctx.prepare_generated_state(%d, %s, %d);"
-                         % (bidx, var[state_in.id], int(v.id)))
+            lines.append("ctx.prepare_generated_state(%d, %s, %d%s);"
+                         % (bidx, var[state_in.id], int(v.id), trace_suffix))
             for axis_index, axis in enumerate(axes):
                 lines.append(
                     "pops::MultiFab<pops::kNativeDimension>& %s = "

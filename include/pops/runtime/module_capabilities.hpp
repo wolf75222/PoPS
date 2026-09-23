@@ -394,9 +394,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "single-file strict accepted-state checkpoint", "uniform", "runtime",
                        "host|mpi", mpi, gpu),
       capability_route(
-          "checkpoint:amr_accepted_state_v7", "available",
-          "strict accepted-state checkpoint includes the runtime-owned AMR tagging "
-          "payload and accepted shared-interface flux audit; MPI_COMM_WORLD uses one rank-0 "
+          "checkpoint:amr_accepted_state_v8", "available",
+          "strict accepted-state checkpoint includes committed attempt authority, runtime-owned "
+          "AMR tagging payload and accepted shared-interface flux audit; legacy accepted-state "
+          "v4-v7 images are inspection-only; MPI_COMM_WORLD uses one rank-0 "
           "publication with collective capture and consensus",
           "amr", "runtime", "host|mpi", mpi, gpu),
       capability_route("checkpoint:parallel_hdf5", "unavailable",

@@ -457,6 +457,86 @@ void fill_boundary(field_type& field, const ExecutionLane& lane) const {
     Kokkos::fence();
 }
 
+/// Source assembly is allowed on one exact active level of the prepared hierarchy. This is
+/// distinct from an independent sparse-level Krylov solve: parent ghosts have already been
+/// supplied by prepare_condensed_prior or the provider's composite solution.
+std::shared_ptr<tensor_boundary_session_type> prepare_condensed_boundary_session(
+    int program_block, field_type& prototype) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  const field_type* owner = nullptr;
+  const HierarchyTensorLevelBoundary* boundary = nullptr;
+  const int runtime_block = sys_block(program_block);
+  const auto point = boundary_evaluation_point(0);
+  prepare_spatial_collectively([&] {
+    if (!hierarchy_tensor_selection_ || !hierarchy_tensor_solver_ ||
+        hierarchy_tensor_selection_->program_block != program_block ||
+        hierarchy_tensor_selection_->components != 1 ||
+        hierarchy_tensor_topology_epoch_ != runtime_->topology_epoch() ||
+        hierarchy_tensor_materialization_generation_ != runtime_->materialization_generation() ||
+        hierarchy_tensor_boundaries_.size() != static_cast<std::size_t>(nlev()) ||
+        active_level_ < 0 || active_level_ >= nlev())
+      throw std::logic_error("condensed source requires the live tensor hierarchy boundary");
+    require_current_boundary_point_exact_(point, "AMR condensed source boundary");
+    owner = &facade_->prepared_amr_block_state(runtime_block, active_level_);
+    require_same_layout_(prototype, *owner, "AMR condensed source boundary owner");
+    if (prototype.ncomp() != 1)
+      throw std::invalid_argument("AMR condensed potential must have one component");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (prototype.ghosts()[axis] != 1)
+        throw std::invalid_argument("AMR condensed potential requires exactly one ghost cell");
+    if (facade_->prepared_amr_block_level_active_mask(runtime_block, active_level_) != nullptr)
+      throw std::logic_error("Cartesian condensed source has no embedded cut-face authority");
+    boundary = &hierarchy_tensor_boundaries_[static_cast<std::size_t>(active_level_)];
+    if (boundary->geometry != geometry())
+      throw std::logic_error("AMR condensed source boundary geometry is stale");
+  });
+  return tensor_boundary_session_type::prepare(
+      boundary->geometry, boundary->conditions, prototype, lane, next_boundary_generation_(),
+      PreparedTensorBoundaryAuthority{
+          this, runtime_, reinterpret_cast<std::uintptr_t>(owner), std::string(lane.identity()),
+          program_block, runtime_block, active_level_, runtime_->topology_epoch(),
+          runtime_->materialization_generation()},
+      point, active_level_ == 0 ? HaloLayoutCoverage::full_domain : HaloLayoutCoverage::sparse_level);
+}
+
+elliptic::nd::CartesianTensorStencilOptions condensed_stencil_options(int program_block) const {
+  if (!hierarchy_tensor_selection_ || hierarchy_tensor_selection_->program_block != program_block)
+    throw std::logic_error("condensed stencil has no owner-qualified tensor provider");
+  if (hierarchy_tensor_selection_->options.schema_identity != tensor_elliptic_detail::kCompositeTensorOptionSchema)
+    return {};
+  return tensor_elliptic_detail::decode_controls(hierarchy_tensor_selection_->options).stencil_options;
+}
+
+void fill_condensed_potential(int program_block, field_type& field) const {
+  prepare_condensed_boundary_session(program_block, field)->fill(field);
+}
+
+void condensed_tensor_laplacian(int program_block, field_type& output, field_type& input,
+                                const field_type& tensor) const {
+  const auto boundary = prepare_condensed_boundary_session(program_block, input);
+  prepare_spatial_collectively([&] {
+    require_scalar_stencil_(output, input, 1, "AMR condensed tensor divergence");
+    require_same_layout_(input, tensor, "AMR condensed tensor coefficients");
+    if (tensor.ncomp() != Dim * Dim || tensor.ghosts() != input.ghosts())
+      throw std::invalid_argument("AMR condensed metric requires one row-major tensor with one ghost");
+  });
+  boundary->fill(input);
+  const auto options = condensed_stencil_options(program_block);
+  const Geometry<Dim> geom = geometry();
+  for (std::size_t local = 0; local < output.local_size(); ++local) {
+    const FieldView<Real, Dim> result = output.fab(local).view();
+    const auto tensor_operator = elliptic::nd::make_cartesian_tensor_operator<
+        elliptic::nd::CartesianTensorDivergenceSign::positive_divergence>(
+        std::as_const(input.fab(local)).view(),
+        elliptic::nd::packed_cartesian_tensor_coefficients<Dim>(std::as_const(tensor.fab(local)).view()),
+        geom, options);
+    for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+      result(cell, 0) = tensor_operator.image(cell);
+    });
+  }
+  count_kernel_();
+}
+
 template <int Count>
 void prepare_condensed_sampling(int program_block, int evaluation, field_type& state_field,
                                 const field_type& output, std::string_view consumer) const {
@@ -739,7 +819,7 @@ void tensor_laplacian(field_type& output, field_type& input, const field_type& t
         std::as_const(input.fab(local)).view(),
         elliptic::nd::packed_cartesian_tensor_coefficients<Dim>(
             std::as_const(tensor.fab(local)).view()),
-        geom);
+        geom, condensed_stencil_options(hierarchy_tensor_selection_->program_block));
     for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
       result(cell, 0) = tensor_operator.image(cell);
     });

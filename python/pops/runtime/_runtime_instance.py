@@ -871,6 +871,20 @@ class RuntimeInstance:
     def history_ncomp(self, name: str) -> int:
         return int(self._executor.history_ncomp(name))
 
+    def history_slot_dt(self, name: str, level_or_slot: int, slot: int | None = None) -> float:
+        """Return the accepted interval associated with a stored history sample.
+
+        This is the same native clock authority persisted by checkpoint/restart;
+        diagnostic timestamps must not infer an adaptive interval from a requested maximum.
+        """
+        if callable(getattr(self._executor, "history_levels", None)):
+            if slot is None:
+                raise TypeError("AMR history_slot_dt requires (name, level, slot)")
+            return float(self._executor.history_slot_dt(name, level_or_slot, slot))
+        if slot is not None and level_or_slot != 0:
+            raise IndexError("Uniform history has only implicit level zero")
+        return float(self._executor.history_slot_dt(name, level_or_slot if slot is None else slot))
+
     def history_levels(self, name: str) -> tuple[int, ...]:
         provider = getattr(self._executor, "history_levels", None)
         if not callable(provider):

@@ -45,6 +45,8 @@ def test_runtime_inputs_resolve_and_emit_an_actual_collective_publication():
     assert ".apply(" in code
     assert "ctx.solve_fields" not in code
     assert fields.field_context.stage_sources == ((value.n.block, value.n.id),)
+    with pytest.raises(NotImplementedError, match="nonempty input_fields"):
+        emit_cpp_program(resolved.time, model=lower_and_validate(model)[0], target="amr_system")
 
 
 def test_input_observation_refuses_foreign_operator_and_stale_stage():

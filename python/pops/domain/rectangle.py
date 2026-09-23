@@ -130,6 +130,8 @@ class DomainBoundary:
     boundary-condition policy.  Resolution can qualify it later without changing its geometry.
     """
 
+    __pops_ir_immutable__ = True
+
     domain_geometry_id: str
     name: str
     axis: CartesianAxis

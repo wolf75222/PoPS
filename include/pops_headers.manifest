@@ -124,10 +124,18 @@ sdk-support pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp
 sdk-support pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp
 api pops/numerics/elliptic/poisson/poisson_fft_solver.hpp
 api pops/numerics/elliptic/poisson/poisson_operator.hpp
+sdk-root pops/numerics/moments/affine_velocity.hpp
+api pops/numerics/moments/raw_moment_recovery.hpp
+api pops/numerics/moments/density_path_arithmetic.hpp
+api pops/numerics/moments/normalized_hermite.hpp
+api pops/numerics/moments/normalized_moment_path.hpp
 api pops/numerics/elliptic/polar/polar_geometry.hpp
 api pops/numerics/elliptic/polar/polar_poisson_solver.hpp
 sdk-support pops/numerics/elliptic/polar/polar_tensor_operator.hpp
+sdk-support pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp
 api pops/numerics/fv/flux_interfaces.hpp
+api pops/numerics/fv/path_flux.hpp
+api pops/numerics/fv/path_result.hpp
 api pops/numerics/fv/flux_failure.hpp
 api pops/numerics/fv/numerical_flux.hpp
 api pops/numerics/fv/reconstruction.hpp
@@ -141,10 +149,12 @@ api pops/numerics/nonlinear/prepared_variable_recovery.hpp
 sdk-support pops/numerics/spatial/embedded_boundary/characteristic.hpp
 sdk-support pops/numerics/spatial/embedded_boundary/cut_geometry.hpp
 sdk-support pops/numerics/spatial/embedded_boundary/operator.hpp
+api pops/numerics/spatial/nd/conservation_law.hpp
 api pops/numerics/spatial/nd/conservation_laws.hpp
 api pops/numerics/spatial/nd/face_field.hpp
 api pops/numerics/spatial/nd/finite_volume.hpp
 api pops/numerics/spatial/nd/reconstruction.hpp
+api pops/numerics/spatial/nd/state_conversion.hpp
 api pops/numerics/spatial/nd/state_schema.hpp
 api pops/numerics/spatial/operators/cartesian_operator.hpp
 sdk-support pops/numerics/spatial/operators/masked_operator.hpp
@@ -191,6 +201,7 @@ api pops/physics/bricks/hyperbolic.hpp
 api pops/physics/bricks/source.hpp
 api pops/physics/composition/composite.hpp
 api pops/physics/composition/exact_brick_contract.hpp
+api pops/physics/composition/no_source.hpp
 api pops/physics/fluids/euler.hpp
 api pops/physics/inversion/inversion.hpp
 api pops/physics/inversion/variable_inversion.hpp
@@ -200,6 +211,7 @@ sdk-support pops/runtime/amr/amr_layout_transfer_bridge.hpp
 sdk-support pops/runtime/amr/amr_runtime.hpp
 sdk-support pops/runtime/amr/amr_tensor_elliptic.hpp
 sdk-support pops/runtime/amr/tensor_composite_fac.hpp
+sdk-support pops/runtime/amr/tensor_coarse_gmres.hpp
 api pops/runtime/amr/hierarchy_tensor_solver_provider.hpp
 api pops/runtime/amr/hierarchy_policy_authority.hpp
 sdk-support pops/runtime/amr/bootstrap_transfer_builtins.hpp
@@ -297,6 +309,8 @@ sdk-support pops/runtime/program/amr_program_context_history_checkpoint_runtime.
 sdk-support pops/runtime/program/amr_program_context_history_checkpoint_services.inc
 sdk-root pops/runtime/program/amr_program_context.hpp
 sdk-support pops/runtime/program/amr_program_context_spatial.inc
+sdk-support pops/runtime/program/amr_program_context_rhs_input_trace.inc
+sdk-support pops/runtime/program/amr_program_context_path_rhs.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations_services.inc
 sdk-support pops/runtime/program/amr_program_context_hierarchy_barriers.inc

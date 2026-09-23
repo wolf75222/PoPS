@@ -19,11 +19,13 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -99,9 +101,76 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
     return context.pending_history_remaps_.contains(context.history_key_(std::string(name), level));
   }
 
+  static std::string shared_stage(const runtime::multiblock::InterfaceFluxSample& sample,
+                                  ::pops::amr::Rational weight, bool projected) {
+    return context_type::shared_flux_stage_(
+        sample, weight, context_type::shared_flux_source_identity_(sample), projected);
+  }
+
+  static std::string shared_binding(std::size_t block,
+                                    const runtime::multiblock::InterfaceFluxSample& sample) {
+    return context_type::shared_flux_source_binding_(
+        block, {std::make_shared<const runtime::multiblock::InterfaceFluxSample>(sample)});
+  }
+
   static const auto& active_expression(const context_type& context,
                                        const typename context_type::field_type& field) {
     return context.active_flux_expressions_.at(&field);
+  }
+
+  struct DeferredReadImage {
+    using field_type = typename context_type::field_type;
+    using Term = std::tuple<std::uint64_t, const void*, typename context_type::ExactPolynomial>;
+    std::map<std::string, const field_type*> scratches;
+    std::map<const field_type*, std::vector<Term>> expressions;
+    std::uint64_t next_identity = 0;
+
+    bool operator==(const DeferredReadImage&) const = default;
+  };
+
+  static DeferredReadImage deferred_read_image(const context_type& context) {
+    DeferredReadImage result;
+    for (const auto& [key, scratch] : context.deferred_history_lag_scratches_)
+      result.scratches.emplace(key, &scratch);
+    for (const auto& [field, expression] : context.active_flux_expressions_) {
+      auto& terms = result.expressions[field];
+      for (const auto& [identity, term] : expression)
+        terms.emplace_back(identity, term.basis.get(), term.coefficient);
+    }
+    result.next_identity = context.next_active_flux_basis_identity_;
+    return result;
+  }
+
+  static const typename context_type::field_type* deferred_scratch(const context_type& context,
+                                                                   std::string_view name,
+                                                                   int level) {
+    return &context.deferred_history_lag_scratches_.at(
+        context.history_key_(std::string(name), level));
+  }
+
+  static bool any_rank(const context_type& context, bool predicate) {
+    return all_reduce_max(predicate ? 1L : 0L, context.prepared_execution_lane()) != 0;
+  }
+
+  template <class Operation>
+  static void without_current_history_provenance_on_rank_zero(context_type& context,
+                                                              std::string_view name,
+                                                              Operation&& operation) {
+    const auto key = context.history_key_(std::string(name), context.active_level_);
+    auto& current = context.history_flux_expressions_.at(key).front();
+    typename context_type::FluxExpression saved;
+    const bool inject = context.prepared_execution_lane().rank() == 0;
+    if (inject)
+      current.swap(saved);
+    try {
+      std::forward<Operation>(operation)();
+    } catch (...) {
+      if (inject)
+        current.swap(saved);
+      throw;
+    }
+    if (inject)
+      current.swap(saved);
   }
 
   static const typename context_type::field_type& history_slot(const context_type& context,
@@ -2148,8 +2217,9 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesUnsynchronizedHierarchyBefore
   EXPECT_THROW(
       context->advance_hierarchy(0.01, [&](double) { context->state(0).set_val(pops::Real(9)); }),
       std::runtime_error);
-  EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(0)), pops::Real(1));
-  EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(1)), pops::Real(1));
+  // Fine patches can leave a rank empty; reduce on the installed execution lane.
+  EXPECT_EQ(context->max_component(system.engine()->hierarchy().state(0), 0), pops::Real(1));
+  EXPECT_EQ(context->max_component(system.engine()->hierarchy().state(1), 0), pops::Real(1));
 }
 
 TEST(GeneratedAmrSystemBlock, SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes) {
@@ -2628,6 +2698,153 @@ TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomica
   EXPECT_EQ(system.checkpoint_program_exchanges(), mailbox_bytes);
 }
 
+TEST(GeneratedAmrSystemBlock, ProjectedSharedSourcesKeepDistinctLedgerIdentities) {
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<
+      pops::kNativeDimension>;
+  using Sample = pops::runtime::multiblock::InterfaceFluxSample;
+  using Ledger = pops::amr::TransactionalInterfaceFluxLedger<std::vector<pops::Real>>;
+  using Rational = pops::amr::Rational;
+  Sample source;
+  source.interface_identity = "test.shared-interface";
+  source.route_contract = std::string(64, 'a');
+  source.source_topology_epoch = 7;
+  source.source_point = {"macro", 7, 0, 0, 0, Rational(0, 1), 0.25, 0.0};
+  source.source_point.graph_identity = "test.program";
+  source.source_point.rate_identity = "shared-rhs/0";
+  source.source_point.application_identity = "program-rhs-group";
+  const Rational weight(-1, 2);
+  const auto entry = [&](const Sample& sample, Rational coefficient, bool projected = true) {
+    pops::amr::InterfaceFluxFragmentKey key{
+        source.interface_identity,
+        9,
+        1,
+        2,
+        {2, 7, Rational(0, 1), 0.0},
+        Access::shared_stage(sample, coefficient, projected),
+        "test.program",
+        "shared-rhs/0",
+        "program-rhs-group",
+        {{2, 7, Rational(0, 1), 0.0}, {2, 7, Rational(1, 1), 0.25}},
+        pops::amr::InterfaceFluxOrientation::FineOutward,
+        0,
+        1};
+    return Ledger::Entry{std::move(key), {coefficient, 0.25, 0.25, true}, {pops::Real(1)}};
+  };
+  const auto a = entry(source, weight);
+  auto another_level = source;
+  another_level.level = another_level.source_point.level = 1;
+  const auto b = entry(another_level, weight);
+  auto another_epoch = source;
+  another_epoch.source_topology_epoch = 8;
+  const auto c = entry(another_epoch, weight);
+  auto another_fraction = source;
+  another_fraction.source_point.stage_fraction = Rational(1, 2);
+  another_fraction.source_point.physical_time = 0.125;
+  const auto d = entry(another_fraction, weight);
+  const auto e = entry(source, Rational(3, 2));
+  const auto historical = entry(source, weight, false);
+  EXPECT_EQ(historical.key.stage_identity, "shared-source/7/0/0/weight/-1/2");
+  EXPECT_EQ(a.key.stage_identity.size(),
+            historical.key.stage_identity.size() + std::string_view("/source/").size() + 64);
+  Ledger ledger(9, {8, 8, 1, "test.projected-history-identities"});
+  ledger.begin();
+  auto prepared = ledger.prepare_accumulation({a, b, c, d, e, historical});
+  ledger.publish_prepared_accumulation(prepared);
+  EXPECT_EQ(ledger.pending_size(), 6u);
+  EXPECT_THROW(ledger.prepare_accumulation({entry(source, weight)}), std::runtime_error);
+  EXPECT_EQ(ledger.pending_size(), 6u);
+  ledger.rollback();
+  EXPECT_TRUE(ledger.empty());
+}
+
+TEST(GeneratedAmrSystemBlock, ProjectedSharedSourcesRequireCapturedAssociation) {
+  namespace hf = pops::runtime::program::history_flux;
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<
+      pops::kNativeDimension>;
+  using Sample = pops::runtime::multiblock::InterfaceFluxSample;
+  Sample sample;
+  sample.left_block = 0;
+  sample.right_block = 1;
+  sample.route_contract = std::string(64, 'a');
+  sample.source_topology_epoch = 2;
+  sample.source_point = {"macro", 4, 0, 0, 0, {0, 1}, 0.25, 1.0};
+  sample.source_point.graph_identity = "test.program";
+  sample.source_point.rate_identity = "shared-rhs/0";
+  sample.source_point.application_identity = "program-rhs-group";
+  const auto archive = [&](const Sample& physical, std::size_t endpoint, bool bound) {
+    auto raw = std::make_shared<hf::Snapshot<1>>();
+    raw->level = 0;
+    raw->components = 1;
+    raw->domain = {pops::Index<1>(0), pops::Index<1>(1)};
+    raw->cell_size = {0.5};
+    raw->patches = {raw->domain};
+    raw->owners = {0};
+    hf::OwnedPatch<1> patch;
+    patch.global_patch = 0;
+    patch.density[0] = {1, 2, 3};
+    raw->owned = {patch};
+    raw->source_identity = hf::source_point_identity(endpoint, 1, physical.source_point, 0,
+                                                     hf::BasisProvider::PreparedResidual,
+                                                     physical.source_topology_epoch, 1);
+    if (bound)
+      raw->source_identity = hf::bind_shared_source_identity(
+          raw->source_identity, Access::shared_binding(endpoint, physical));
+    raw->identity = hf::content_identity(*raw, {hf::patch_digest(patch)});
+    return raw;
+  };
+  const auto first = archive(sample, 0, true);
+  auto later = sample;
+  ++later.source_point.tick;
+  later.source_point.physical_time += 0.25;
+  const auto second = archive(later, 0, true);
+  const auto other_endpoint = archive(sample, 1, true);
+  const auto legacy = archive(sample, 0, false);
+  hf::SnapshotMap<1> originals{{first->identity, first},
+                               {second->identity, second},
+                               {other_endpoint->identity, other_endpoint},
+                               {legacy->identity, legacy}};
+  const auto bytes = hf::encode_shard<1>(originals, 2);
+  const auto restored = hf::decode_shards<1>({bytes}, 1, 1, 0, 2, bytes.size());
+  EXPECT_EQ(hf::encode_shard<1>(restored, 2), bytes);
+  EXPECT_THROW(hf::decode_shards<1>({bytes}, 1, 1, 0, 2, bytes.size() - 1), std::invalid_argument);
+  const auto project = [&](const std::string& token) {
+    auto view = std::make_shared<hf::Snapshot<1>>();
+    view->parent = restored.at(token);
+    view->source_identity = view->parent->source_identity;
+    view->level = 1;
+    view->components = 1;
+    view->ratio = {2};
+    view->domain = {pops::Index<1>(0), pops::Index<1>(3)};
+    view->cell_size = {0.25};
+    view->patches = {view->domain};
+    view->owners = {0};
+    view->identity = hf::projection_identity(*view);
+    hf::validate_snapshot(*view, 2);
+    return view;
+  };
+  const auto require = [&](std::shared_ptr<const hf::Snapshot<1>> view, std::size_t endpoint,
+                           const Sample& physical) {
+    hf::require_shared_source_binding(view->source_identity,
+                                      Access::shared_binding(endpoint, physical));
+    return hf::require_projection_lineage<1>(view, 0, 1, 1, 2, [](int level) {
+      return pops::Geometry<1>::from_bounds({pops::Index<1>(0), pops::Index<1>(level == 0 ? 1 : 3)},
+                                            pops::RealVector<1>{0}, pops::RealVector<1>{1});
+    });
+  };
+  EXPECT_FALSE(require(project(first->identity), 0, sample).empty());
+  EXPECT_FALSE(require(project(second->identity), 0, later).empty());
+  EXPECT_FALSE(require(project(other_endpoint->identity), 1, sample).empty());
+  // Every archive and projection is otherwise valid, at the same level/domain/components.
+  EXPECT_THROW(require(project(second->identity), 0, sample), std::invalid_argument);
+  EXPECT_THROW(require(project(first->identity), 1, sample), std::invalid_argument);
+  EXPECT_THROW(require(project(other_endpoint->identity), 0, sample), std::invalid_argument);
+  // Old earned archives still round-trip exactly. They have no newly earned cross-level binding.
+  EXPECT_TRUE(hf::valid_source_identity(restored.at(legacy->identity)->source_identity));
+  EXPECT_THROW(require(project(legacy->identity), 0, sample), std::invalid_argument);
+  EXPECT_EQ(first->source_identity.size(), hf::maximum_source_identity_characters);
+  EXPECT_FALSE(hf::valid_source_identity(first->source_identity + ":extra"));
+}
+
 TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
   const auto exercise_deferred_ratio = [](std::int64_t temporal_numerator, bool cold_start) {
     constexpr int Dim = pops::kNativeDimension;
@@ -2788,16 +3005,16 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       }
     EXPECT_THROW(pops::runtime::program::serialize_amr_program_accepted_state(unearned_lag),
                  std::invalid_argument);
-    // Cursor-walk the authenticated AND7 layout to its pending section. The history key also
+    // Cursor-walk the authenticated AND8 layout to its pending section. The history key also
     // occurs in earlier slot payloads, so raw searching could mutate the wrong record.
     const std::string& pending_key = pending_after_regrid.pending_history_remaps.front().key;
-    constexpr std::array<std::uint8_t, 8> expected_magic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '7'};
+    constexpr std::array<std::uint8_t, 8> expected_magic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '8'};
     ASSERT_GE(pending_bytes.size(), expected_magic.size());
     ASSERT_TRUE(std::equal(expected_magic.begin(), expected_magic.end(), pending_bytes.begin()));
     const auto advance = [&](std::size_t& position, std::uint64_t count, std::size_t width = 1) {
       if (position > pending_bytes.size() || width == 0 ||
           count > (pending_bytes.size() - position) / width)
-        throw std::out_of_range("AND7 test cursor exceeds the checkpoint payload");
+        throw std::out_of_range("AND8 test cursor exceeds the checkpoint payload");
       position += static_cast<std::size_t>(count) * width;
     };
     const auto read_word = [&](std::size_t& position) {
@@ -2816,13 +3033,13 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       const auto count = read_word(position);
       if (minimum_record_bytes == 0 ||
           count > (pending_bytes.size() - position) / minimum_record_bytes)
-        throw std::out_of_range("AND7 test record count exceeds the checkpoint payload");
+        throw std::out_of_range("AND8 test record count exceeds the checkpoint payload");
       return count;
     };
     std::size_t cursor = expected_magic.size();
     ASSERT_EQ(read_word(cursor), static_cast<std::uint64_t>(Dim));
     skip_string(cursor);  // spatial contract
-    advance(cursor, 16);  // topology, materialization generation
+    advance(cursor, 24);  // topology, materialization generation, committed attempt
     const auto level_count = read_count(cursor, 40);
     advance(cursor, level_count, 40);
     for (auto count = read_count(cursor, 16); count > 0; --count) {
@@ -2862,7 +3079,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       SCOPED_TRACE(label);
       try {
         system.restore_checkpoint_accepted_state(corrupt);
-        ADD_FAILURE() << "corrupt POPSAND7 accepted state was accepted";
+        ADD_FAILURE() << "corrupt POPSAND8 accepted state was accepted";
       } catch (const std::exception& exception) {
         EXPECT_NE(std::string_view(exception.what()).find(diagnostic_class), std::string_view::npos)
             << exception.what();
@@ -2984,6 +3201,150 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     exercise_deferred_ratio(1, cold_start);
     exercise_deferred_ratio(2, cold_start);
   }
+}
+
+TEST(GeneratedAmrSystemBlock, DeferredHistoryReadsPreservePublishedReferences) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>;
+  pops::AmrSystemConfig<Dim> config;
+  std::size_t center = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 32;
+    config.transition_buffers.front()[axis] = 0;
+    config.transition_lookaheads.front()[axis] = 0;
+    center += 16 * stride;
+    stride *= 32;
+  }
+  config.regrid_every = 0;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/deferred-reference");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  const std::array<std::string, 2> blocks{"tracer", "peer"};
+  const std::array<std::string, 2> histories{"tracer.rate", "peer.rate"};
+  std::vector<double> initial(cell_count(config.shape), 0.25);
+  initial[center] = 1.0;
+  for (const auto& block : blocks) {
+    system.install_block_state_route(block, "state/" + block);
+  }
+  for (const auto& block : blocks) {
+    pops::add_compiled_model<Dim>(system, block, advection_model<Dim>());
+  }
+  for (const auto& block : blocks) {
+    system.set_conservative_state(block, initial);
+  }
+  pops::test::install_prepared_refine_coarsen_threshold(
+      system, {"tracer", "u", 0.5, pops::test::PreparedThresholdRelation::Above},
+      {"tracer", "u", 0.5, pops::test::PreparedThresholdRelation::Below},
+      "tests.generated-amr/deferred-reference-tagging@1");
+  ASSERT_NE(system.engine(), nullptr);
+  ASSERT_EQ(system.engine()->hierarchy().num_levels(), 2u);
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.macro");
+  context->declare_clock_relation("clock.macro", "clock.level.1", 2);
+  context->install([context](double dt) { context->advance_hierarchy(dt, [](double) {}); },
+                   context);
+  system.set_program_block_map({0, 1});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.generated-amr/deferred-reference@1", std::vector<FluxBudget>(2, FluxBudget{2, 1}), 0,
+      0);
+  context->for_each_program_resource_level([&](int) {
+    for (int block = 0; block < 2; ++block)
+      context->register_history(histories[block], 1, 1, block, blocks[block] + ".U",
+                                "cell.conservative", "clock.macro", "dense.linear");
+  });
+  for (const double dt : {0.125, 0.25})
+    context->advance_hierarchy(dt, [&](double) {
+      for (int block = 0; block < 2; ++block) {
+        auto& state = context->state(block);
+        auto sample = context->rhs_scratch_like(state);
+        context->rhs_into(block, state, sample, block);
+        context->store_history(histories[block], sample, block);
+      }
+      context->rotate_histories("clock.macro");
+    });
+
+  const auto prior_boxes = system.patch_boxes();
+  stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    initial[center - stride] = 1.0;
+    initial[center + stride] = 1.0;
+    stride *= 32;
+  }
+  for (const auto& block : blocks)
+    system.set_conservative_state(block, initial);
+  system.execute_prepared_tagging(0);
+  typename Access::Observation remap;
+  Access::install_one_shot_observer(*context, remap);
+  ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+  ASSERT_NE(system.patch_boxes(), prior_boxes);
+  ASSERT_TRUE(remap.seen);
+  ASSERT_EQ(remap.descriptor.history_plan.size(), 2u);
+  for (const auto& entry : remap.descriptor.history_plan)
+    ASSERT_EQ(entry.source, pops::runtime::program::AmrProgramHistoryRemapSource::ParentDeferred);
+  const auto accepted = system.program_accepted_state();
+  int deferred_reads = 0;
+  context->advance_hierarchy(0.375, [&](double local_dt) {
+    std::array<pops::MultiFab<Dim>, 2> samples{context->rhs_scratch_like(context->state(0)),
+                                               context->rhs_scratch_like(context->state(1))};
+    for (int block = 0; block < 2; ++block)
+      context->rhs_into(block, context->state(block), samples[block], block);
+    context->store_history(histories[0], samples[0], 0);
+    if (Access::active_level(*context) == 1 &&
+        Access::has_pending_history(*context, histories[0], 1)) {
+      ++deferred_reads;
+      // This is the generated two-history order: keep the first reference alive while the
+      // second history is stored, prepared (including a rank-local refusal), and published.
+      const auto& first = context->history(histories[0], 1, 0);
+      const auto* first_address = &first;
+      const auto first_copy = first;
+      context->store_history(histories[1], samples[1], 1);
+      const auto before_failure = Access::deferred_read_image(*context);
+      ASSERT_FALSE(before_failure.expressions.at(first_address).empty());
+      Access::without_current_history_provenance_on_rank_zero(*context, histories[1], [&] {
+        EXPECT_THROW((void)context->history(histories[1], 1, 1), std::exception);
+      });
+      EXPECT_EQ(Access::deferred_read_image(*context), before_failure);
+      ASSERT_EQ(Access::deferred_scratch(*context, histories[0], 1), first_address);
+      EXPECT_EQ(pops::difference_sum_sq_all_local(first, first_copy), pops::Real(0));
+      EXPECT_EQ(system.program_accepted_state(), accepted);
+
+      const auto& second = context->history(histories[1], 1, 1);
+      const auto* second_address = &second;
+      // Authenticate the still-live object before dereferencing the saved reference.  On the
+      // old copy/swap implementation this fails deterministically, without reading freed data.
+      ASSERT_FALSE(Access::any_rank(
+          *context, Access::deferred_scratch(*context, histories[0], 1) != first_address));
+      EXPECT_EQ(pops::difference_sum_sq_all_local(first, first_copy), pops::Real(0));
+      EXPECT_EQ(Access::deferred_read_image(*context).expressions.at(first_address),
+                before_failure.expressions.at(first_address));
+      const auto second_copy = second;
+      const auto& repeated = context->history(histories[0], 1, 0);
+      ASSERT_FALSE(Access::any_rank(
+          *context, &repeated != first_address ||
+                        Access::deferred_scratch(*context, histories[1], 1) != second_address));
+      EXPECT_EQ(pops::difference_sum_sq_all_local(first, first_copy), pops::Real(0));
+      EXPECT_EQ(pops::difference_sum_sq_all_local(second, second_copy), pops::Real(0));
+      const std::array<const pops::MultiFab<Dim>*, 2> sources{&first, &second};
+      std::array<pops::MultiFab<Dim>, 2> outputs{context->rhs_scratch_like(first),
+                                                 context->rhs_scratch_like(second)};
+      for (std::size_t block = 0; block < sources.size(); ++block) {
+        const auto* source = sources[block];
+        auto& output = outputs[block];
+        output.set_val(pops::Real(0));
+        context->axpy(output, static_cast<pops::Real>(local_dt), *source,
+                      static_cast<pops::Real>(local_dt), {{1, 1, 1}});
+        auto expected = *source;
+        pops::lincomb(expected, static_cast<pops::Real>(local_dt), *source, pops::Real(0), *source);
+        EXPECT_EQ(pops::difference_sum_sq_all_local(output, expected), pops::Real(0));
+      }
+    } else {
+      context->store_history(histories[1], samples[1], 1);
+    }
+    context->rotate_histories("clock.macro");
+  });
+  EXPECT_EQ(deferred_reads, 1);
 }
 
 TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {

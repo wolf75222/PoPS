@@ -53,7 +53,8 @@ class PreparedTensorBoundarySession {
   static std::shared_ptr<PreparedTensorBoundarySession> prepare(
       const Geometry<Dim>& geometry, PhysicalBoundaryConditions<Dim> conditions,
       const field_type& prototype, const ExecutionLane& lane, std::uint64_t generation,
-      PreparedTensorBoundaryAuthority authority, const point_type& point) {
+      PreparedTensorBoundaryAuthority authority, const point_type& point,
+      HaloLayoutCoverage coverage = HaloLayoutCoverage::full_domain) {
     std::shared_ptr<PreparedTensorBoundarySession> session;
     std::exception_ptr local_error;
     try {
@@ -68,7 +69,7 @@ class PreparedTensorBoundarySession {
         std::rethrow_exception(local_error);
       throw std::runtime_error("Program tensor boundary allocation failed collectively");
     }
-    session->initialize_(prototype);
+    session->initialize_(prototype, coverage);
     return session;
   }
 
@@ -154,7 +155,7 @@ class PreparedTensorBoundarySession {
         lane_borrow_(lane.borrow_immutably()),
         generation_(generation) {}
 
-  void initialize_(const field_type& prototype) {
+  void initialize_(const field_type& prototype, HaloLayoutCoverage coverage) {
     std::exception_ptr local_error;
     std::string local_contract;
     try {
@@ -174,7 +175,7 @@ class PreparedTensorBoundarySession {
         throw std::invalid_argument(
             "Program tensor boundary lane differs from the prototype rank space");
       schedule_.emplace(prepare_halo_schedule(
-          prototype, geometry_.domain(), conditions_.topology(),
+          prototype, geometry_.domain(), conditions_.topology(), coverage,
           scalar_boundary_detail::halo_budget(prototype, geometry_, conditions_.topology())));
       physical_.emplace(prepare_physical_boundary(
           geometry_.domain(), prototype.ghosts(), conditions_,
@@ -190,6 +191,7 @@ class PreparedTensorBoundarySession {
           .scalar(authority_.topology_epoch)
           .scalar(authority_.materialization_generation)
           .scalar(generation_)
+          .scalar(coverage)
           .text(lane_->identity())
           .text(authority_.runtime_lane_identity);
       append_point_contract_(contract, point_);

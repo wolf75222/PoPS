@@ -54,6 +54,7 @@ def _aux_expr_hash_data(expression: Any) -> Any:
 
 
 def _aux_producer_hash_data(producer: Any) -> Any:
+    from pops.fields.aux import AnalyticAux
     result = {
         "type": type(producer).__name__,
         "target": {"kind": producer.target.kind, "local_id": producer.target.local_id},
@@ -62,7 +63,11 @@ def _aux_producer_hash_data(producer: Any) -> Any:
     }
     expression = getattr(producer, "expression", None)
     if expression is not None:
-        result["expression"] = _aux_expr_hash_data(expression)
+        if isinstance(producer, AnalyticAux):
+            result["expression"] = expression.to_data()
+            result["frame"] = producer.frame.to_dict()
+        else:
+            result["expression"] = _aux_expr_hash_data(expression)
     return result
 
 

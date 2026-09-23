@@ -139,6 +139,8 @@ template <int Dim>
 struct PreparedInterfaceFluxSpec;
 struct BoundaryEvaluationPoint;
 struct InterfaceFluxSample;
+template <int Dim>
+struct InterfaceFluxSampleProjection;
 }  // namespace multiblock
 }  // namespace runtime
 
@@ -417,6 +419,9 @@ class AmrSystem {
                                           std::span<MultiFab<Dim>* const> program_rhs);
   POPS_EXPORT std::string authenticate_prepared_amr_interface_sample(
       const runtime::multiblock::InterfaceFluxSample& sample) const;
+  POPS_EXPORT runtime::multiblock::InterfaceFluxSampleProjection<Dim>
+  prepare_prepared_amr_interface_sample_projection(
+      const runtime::multiblock::InterfaceFluxSample& sample, int target_level) const;
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);
 
@@ -850,6 +855,12 @@ class AmrSystem {
   POPS_EXPORT void stage_auxiliary_input(const runtime::system::AuxiliaryComponentKey& key,
                                          const std::vector<double>& values);
   POPS_EXPORT void refresh_auxiliary(const runtime::system::AuxiliaryEvaluationPoint& point);
+  /// Publish one exact generated consumer on a hierarchy containing only the root level.
+  /// The SSA state authenticates ownership; auxiliary launchers read only their declared
+  /// auxiliary dependencies. This does not infer stage states for other hierarchy levels.
+  POPS_EXPORT void prepare_single_level_program_auxiliary_consumer(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+      int block, const MultiFab<Dim>& stage_state, int evaluation_sequence);
   [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryStorageAddress<Dim> auxiliary_address(
       const runtime::system::AuxiliaryComponentKey& key) const;
   [[nodiscard]] POPS_EXPORT std::vector<double> auxiliary_component(
@@ -1487,6 +1498,14 @@ class AmrSystem {
   POPS_EXPORT const PreparedLevelEvaluation& prepare_prepared_amr_block_level_flux_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  /// The path operator can only be evaluated through its synchronized Program stage pack.
+  /// The returned workspace remains detached until the complete hierarchy batch is published.
+  POPS_EXPORT PreparedLevelEvaluation& prepare_prepared_amr_block_level_path_rhs_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  POPS_EXPORT std::string prepared_amr_block_path_operator_identity_(int runtime_block,
+                                                                    int level) const;
+  POPS_EXPORT double active_program_step_courant_() const;
   /// The validation phase is collective and must complete before any caller publishes another
   /// transaction member.  The companion publication only performs proven-noexcept swaps/stores.
   POPS_EXPORT void validate_prepared_amr_block_level_batch(
@@ -1525,7 +1544,8 @@ class AmrSystem {
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides);
   POPS_EXPORT void refresh_auxiliary_on_prepared_lane(
-      const runtime::system::AuxiliaryEvaluationPoint& point);
+      const runtime::system::AuxiliaryEvaluationPoint& point,
+      const std::vector<std::string>& consumer_qids = {});
   void install_prepared_amr_block_candidate_(PreparedBlock block, bool native_package_candidate);
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_on_prepared_lane(
       const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state,

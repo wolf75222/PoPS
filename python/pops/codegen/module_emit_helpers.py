@@ -116,6 +116,9 @@ def _exact_brick_contract(
         ]
     else:
         lines.append("    contract.scalar(std::int32_t{0});")
+    path = getattr(model, "_path_conservative", None)
+    if family == "hyperbolic" and path is not None:
+        lines.append("    contract.text(%s);" % json.dumps(path["identity"]))
     lines += ["  }", ""]
     return lines
 

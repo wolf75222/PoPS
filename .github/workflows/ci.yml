@@ -247,9 +247,9 @@ jobs:
     runs-on: ubuntu-latest
     # Runtime objects are prewarmed in parallel above. Keep an 18-minute bounded final build for
     # contract verification, ccache hits, shard-owned test executables and links, then seven minutes
-    # for tests. A cold common runtime can no longer consume this watchdog independently eleven times.
-    # Eleven shards keep the DSO rollback fixture catalog at 900.3 modeled seconds versus
-    # 910.3325 with ten, preserving the 906-second budget. These are scheduling estimates.
+    # for tests. A cold common runtime can no longer consume this watchdog independently thirteen times.
+    # Thirteen shards keep the complete PR #680 catalog at 900.175 modeled seconds versus
+    # 910.3325 with twelve, preserving the 906-second budget. These are scheduling estimates.
     timeout-minutes: 40
     needs: [changes, set-mode, gate-cpp-prewarm]
     strategy:
@@ -306,7 +306,7 @@ jobs:
             --explain-file "$RUNNER_TEMP/cpp-test-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
             --shard-index "${{ matrix.shard }}" \
-            --shard-total 11 \
+            --shard-total 13 \
             "${force_args[@]}"
           cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           cpp_shard_summary=$(grep '^cpp_shard_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
@@ -907,7 +907,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep original duration-bin identities even when the plan omits empty bins.
-        # Watchdogs and native-dimension routing continue to use the fixed 37-bin partition.
+        # Watchdogs and native-dimension routing continue to use the fixed 38-bin partition.
         shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}
 
     env:
@@ -920,7 +920,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "37"
+      SHARD_TOTAL: "38"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
@@ -1040,7 +1040,8 @@ jobs:
         run: |
           # The full gate exercises the serial HDF5 writer used by the final examples. h5py remains
           # an optional user dependency; CI installs that capability explicitly instead of skipping.
-          pip install --upgrade pip numpy pytest h5py
+          # mpmath supplies the independent precision oracle in the Fan–Li native witnesses.
+          pip install --upgrade pip numpy pytest h5py 'mpmath>=1.3.0'
           # PoPS est Kokkos-only : les tests DSL qui compilent un loader/.so production ou son ABI
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser
           # via Kokkos_ROOT / POPS_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _pops.
@@ -1113,7 +1114,12 @@ jobs:
 
       - name: ccache stats (Python module)
         if: always() && steps.test-plan.outputs.python_shard_count != '0'
-        run: ccache -s
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            ccache -s
+          else
+            echo "ccache was not installed because this job stopped before dependency setup"
+          fi
 
   # GATE PYTHON COMPILE-CACHE (ADC-623). The final-lifecycle cache proof performs four deliberate
   # cold native package compilations plus exact semantic hits/misses (POPS_PROCESS_TIMEOUT = 900).
@@ -1413,6 +1419,11 @@ jobs:
       PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
       OMPI_ALLOW_RUN_AS_ROOT: "1"
       OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
+      # Ubuntu 24.04 OpenMPI 4 OMPIO selects sharedfp/lockedfile during
+      # HDF5 MPI_File_open and aborts inside its fortified sprintf path.
+      # ROMIO is the packaged OpenMPI MPI-IO component and exercises the
+      # same collective HDF5 contract without that implementation defect.
+      OMPI_MCA_io: "^ompio"
 
     steps:
       - uses: actions/checkout@v7
@@ -1509,11 +1520,8 @@ jobs:
           test -s build-mpi/python-mpi-orchestrators.txt
           test -s build-mpi/mpi-ctest-groups.tsv
 
-      - name: Configure + build (MPI + Kokkos Serial)
-        # Three sequential watchdogs: Python module link, native tests, M4 tests.
-        # Native test compile on a cold runner includes test_program_runtime (~6 min) plus
-        # remaining heavy AMR TUs; 14m stopped the graph at 98/119 on 0a18620d2.
-        timeout-minutes: 60
+      - name: Configure + link Python module (MPI + Kokkos Serial)
+        timeout-minutes: 20
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
         # $KOKKOS_PREFIX (env du job, install en cache). ccache auto-detecte.
         run: |
@@ -1538,19 +1546,45 @@ jobs:
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-mpi \
             --verify-contracts "${compile_contracts[@]}"
-          read -r -a mpi_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_targets }}"
-          mapfile -t m4_targets < <(
-            /usr/bin/python3 scripts/run_m4_gate.py --list-ctest-targets
-          )
-          test "${#m4_targets[@]}" -gt 0
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           # The monolithic Python module link is memory-heavy. Keep it isolated
           # from test compilation/linking so a small hosted runner cannot evict
           # its own worker under peak memory pressure.
           run_with_heartbeat "MPI Python module link" 14m \
             cmake --build --preset ci-mpi --parallel 1 --target _pops
-          run_with_heartbeat "MPI native test build" 28m \
-            cmake --build --preset ci-mpi --parallel 4 --target "${mpi_targets[@]}"
+
+      - name: Build complete native MPI inventory in two phases
+        # The former single 28m watchdog reached only 164/173 build tasks on 4adfddf.
+        # Keep that watchdog per phase; native phases share 60m and the job stays at 180m.
+        # Both phases form an exact disjoint manifest projection; new targets enter
+        # the remaining phase. Cost estimates are documented, not cold-build proof.
+        timeout-minutes: 60
+        run: |
+          source scripts/ci_heartbeat.sh
+          test "${{ steps.mpi-test-plan.outputs.cpp_label_build_phase_count }}" -eq 2
+          read -r -a isolated_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_build_isolated_targets }}"
+          read -r -a remaining_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_build_remaining_targets }}"
+          test "${#isolated_targets[@]}" -gt 0
+          test "${#remaining_targets[@]}" -gt 0
+          test "$(( ${#isolated_targets[@]} + ${#remaining_targets[@]} ))" \
+            -eq "${{ steps.mpi-test-plan.outputs.cpp_label_count }}"
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          # The program runtime TU approached the runner's memory limit. Its phase
+          # also prepares all six loader DSOs, with no competing compile or link.
+          run_with_heartbeat "MPI isolated native test build" 28m \
+            cmake --build --preset ci-mpi --parallel 1 --target "${isolated_targets[@]}"
+          run_with_heartbeat "MPI remaining native test build" 28m \
+            cmake --build --preset ci-mpi --parallel 4 --target "${remaining_targets[@]}"
+
+      - name: Build M4 native tests
+        timeout-minutes: 12
+        run: |
+          source scripts/ci_heartbeat.sh
+          mapfile -t m4_targets < <(
+            /usr/bin/python3 scripts/run_m4_gate.py --list-ctest-targets
+          )
+          test "${#m4_targets[@]}" -gt 0
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           run_with_heartbeat "M4 native test build" 10m \
             cmake --build --preset ci-mpi --parallel 4 --target "${m4_targets[@]}"
 
@@ -1714,20 +1748,30 @@ jobs:
           }
           # Match direct Python script imports and argv after selecting the native dimension.
           native_script_bootstrap="from pops._native_selector import select_native_dimension; select_native_dimension(2); import os, runpy, sys; sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name='__main__')"
-          while IFS=$'\t' read -r mpi_ranks mpi_test; do
+          # MPI launchers forward stdin and must never consume the remaining manifest rows.
+          # Keep each plan on fd 3 and close both input channels for every child process.
+          python_mpi_count=0
+          while IFS=$'\t' read -r mpi_ranks mpi_test <&3; do
             test -n "$mpi_ranks" && test -f "$mpi_test"
             echo "Running Python MPI contract: ${mpi_test} (np=${mpi_ranks})"
             run_mpi "Python MPI contract ${mpi_test}" \
-              -n "$mpi_ranks" /usr/bin/python3 -u -c "$native_script_bootstrap" "$mpi_test"
-          done < build-mpi/python-mpi-plan.tsv
+              -n "$mpi_ranks" /usr/bin/python3 -u -c "$native_script_bootstrap" "$mpi_test" </dev/null 3<&-
+            python_mpi_count=$((python_mpi_count + 1))
+          done 3< build-mpi/python-mpi-plan.tsv
+          test "$python_mpi_count" -eq "${{ steps.mpi-test-plan.outputs.python_mpi_entrypoint_count }}"
+          echo "::notice::Python MPI entrypoints completed=${python_mpi_count}"
           # This pytest process stays outside MPI: each manifest-owned orchestrator creates and
           # tears down its own independent rank worlds (for example np=2 capture, then np=1 restart).
-          while IFS= read -r mpi_orchestrator; do
+          python_mpi_orchestrator_count=0
+          while IFS= read -r mpi_orchestrator <&3; do
             test -n "$mpi_orchestrator" && test -f "$mpi_orchestrator"
             echo "Running serial Python MPI orchestrator: ${mpi_orchestrator}"
             timeout --signal=TERM --kill-after=30s 25m \
-              /usr/bin/python3 -m pytest -q -ra --maxfail=1 "$mpi_orchestrator"
-          done < build-mpi/python-mpi-orchestrators.txt
+              /usr/bin/python3 -m pytest -q -ra --maxfail=1 "$mpi_orchestrator" </dev/null 3<&-
+            python_mpi_orchestrator_count=$((python_mpi_orchestrator_count + 1))
+          done 3< build-mpi/python-mpi-orchestrators.txt
+          test "$python_mpi_orchestrator_count" -eq "${{ steps.mpi-test-plan.outputs.python_mpi_orchestrator_count }}"
+          echo "::notice::Python MPI orchestrators completed=${python_mpi_orchestrator_count}"
 
       - name: M4 complete native runtime and scientific I/O gate
         timeout-minutes: 45
@@ -1741,11 +1785,6 @@ jobs:
           POPS_KEEP_GENERATED: "1"
           POPS_REQUIRE_MPI_TESTS: "1"
           POPS_REQUIRE_NATIVE_TESTS: "1"
-          # Ubuntu 24.04 OpenMPI 4 OMPIO selects sharedfp/lockedfile during
-          # HDF5 MPI_File_open and aborts inside its fortified sprintf path.
-          # ROMIO is the packaged OpenMPI MPI-IO component and exercises the
-          # same collective HDF5 contract without that implementation defect.
-          OMPI_MCA_io: "^ompio"
         run: |
           # These readers are mandatory capabilities of this lane. Imports happen before the gate
           # so a missing apt module cannot masquerade as a scientific skip.
@@ -1913,7 +1952,7 @@ jobs:
           retention-days: 1
 
   kokkos-openmp:
-    # The OpenMP C++ proof is the same exact eleven-way target partition as the Serial gate:
+    # The OpenMP C++ proof is the same exact thirteen-way target partition as the Serial gate:
     # every non-MPI target belongs to exactly one shard and every built target must expose
     # an authenticated CTest label before its cases can run.  The independent Python/native-ABI
     # proof stays in its own lane because it builds one module rather than the C++ test graph.
@@ -1932,57 +1971,67 @@ jobs:
           - lane: cpp-0
             kind: cpp
             shard: 0
-            shard_total: 11
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-1
             kind: cpp
             shard: 1
-            shard_total: 11
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-2
             kind: cpp
             shard: 2
-            shard_total: 11
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-3
             kind: cpp
             shard: 3
-            shard_total: 11
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-4
             kind: cpp
             shard: 4
-            shard_total: 11
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-5
             kind: cpp
             shard: 5
-            shard_total: 11
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-6
             kind: cpp
             shard: 6
-            shard_total: 11
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-7
             kind: cpp
             shard: 7
-            shard_total: 11
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-8
             kind: cpp
             shard: 8
-            shard_total: 11
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-9
             kind: cpp
             shard: 9
-            shard_total: 11
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: cpp-10
             kind: cpp
             shard: 10
-            shard_total: 11
+            shard_total: 13
+            ccache_maxsize: 2G
+          - lane: cpp-11
+            kind: cpp
+            shard: 11
+            shard_total: 13
+            ccache_maxsize: 2G
+          - lane: cpp-12
+            kind: cpp
+            shard: 12
+            shard_total: 13
             ccache_maxsize: 2G
           - lane: python
             kind: python

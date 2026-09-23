@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <map>
 #include <optional>
@@ -123,6 +124,10 @@ struct AmrProgramAcceptedState {
   std::uint64_t topology_epoch = 0;
   std::uint64_t materialization_generation = 0;
   std::vector<::pops::amr::ClockStamp> level_clocks;
+  /// Actual committed engine attempt, including accepted steps with no face ledger. Zero is
+  /// the explicitly fresh authority; legacy wire images decode to nullopt and are inspectable
+  /// but cannot be installed or rewritten as an authoritative continuation.
+  std::optional<std::uint64_t> accepted_attempt = std::uint64_t{0};
   std::map<std::string, std::int64_t> logical_clock_ticks;
   std::vector<AmrProgramHistoryDescriptor> histories;
   std::vector<AmrProgramHistorySlotProvenance> history_slots;
@@ -240,7 +245,8 @@ HistoryMetadata history_metadata(const Manager& manager, const BlockMap& block_m
   return result;
 }
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '7'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '8'};
+inline constexpr std::array<std::uint8_t, 8> kLegacyMagic7{'P', 'O', 'P', 'S', 'A', 'N', 'D', '7'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic6{'P', 'O', 'P', 'S', 'A', 'N', 'D', '6'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic5{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic4{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
@@ -848,6 +854,10 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
           throw std::invalid_argument("exact AMR Program checkpoint stores a " +
                                       std::string(family) + " face under another axis");
         amr_reflux::validate_face_flux_fragment(fragment.key, fragment.measure);
+        if (state.accepted_attempt &&
+            (fragment.key.attempt == 0 || fragment.key.attempt > *state.accepted_attempt))
+          throw std::invalid_argument(
+              "exact AMR Program face fragment has invalid committed attempt authority");
         if (static_cast<std::size_t>(fragment.key.levels.fine) >=
             state.face_evidence_provenance->level_count)
           throw std::invalid_argument(
@@ -895,11 +905,15 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
 
 template <int Dim, class Output>
 void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
+  if (!state.accepted_attempt)
+    throw std::invalid_argument(
+        "legacy AMR Program checkpoint lacks committed attempt authority for continuation");
   out.raw(kMagic);
   out.i32(Dim);
   out.string(state.spatial_contract);
   out.u64(state.topology_epoch);
   out.u64(state.materialization_generation);
+  out.u64(*state.accepted_attempt);
   out.size(state.level_clocks.size());
   for (const auto& clock : state.level_clocks)
     write_clock(out, clock);
@@ -987,7 +1001,8 @@ AmrProgramAcceptedState<Dim> accepted_amr_program_state(
     std::string spatial_contract, std::uint64_t topology_epoch,
     std::uint64_t materialization_generation, std::vector<::pops::amr::ClockStamp> level_clocks,
     CellTemporalPartitionAcceptedState temporal_partition,
-    const amr_reflux::TransactionalFaceFluxLedger<Dim, AmrProgramFacePayload>& ledger) {
+    const amr_reflux::TransactionalFaceFluxLedger<Dim, AmrProgramFacePayload>& ledger,
+    std::uint64_t accepted_attempt) {
   if (ledger.in_transaction())
     throw std::logic_error(
         "exact AMR Program checkpoint cannot observe an active face-flux transaction");
@@ -995,6 +1010,7 @@ AmrProgramAcceptedState<Dim> accepted_amr_program_state(
   state.spatial_contract = std::move(spatial_contract);
   state.topology_epoch = topology_epoch;
   state.materialization_generation = materialization_generation;
+  state.accepted_attempt = accepted_attempt;
   state.level_clocks = std::move(level_clocks);
   state.temporal_partition = std::move(temporal_partition);
   for (int axis = 0; axis < Dim; ++axis) {
@@ -1029,7 +1045,7 @@ std::size_t serialized_amr_program_accepted_state_size(const AmrProgramAcceptedS
   return out.count();
 }
 
-/// Artifact-derived maximum POPSAND6 shape.  It carries character and term counts only: computing a
+/// Artifact-derived maximum POPSAND8 shape. It carries character and term counts only: computing a
 /// resource ceiling must never first allocate the potentially large scientific vectors it is meant
 /// to bound.
 template <int Dim>
@@ -1074,6 +1090,7 @@ std::size_t serialized_amr_program_accepted_state_capacity(
   out.string_size(capacity.spatial_contract_characters);
   out.u64(0);
   out.u64(0);
+  out.u64(0);  // Committed attempt authority; the live allocation high-water mark is not accepted.
   out.size(capacity.level_count);
   out.repeated_bytes(capacity.level_count, checkpoint_detail::kEncodedClockBytes);
   out.size(capacity.logical_clock_identities.size());
@@ -1194,9 +1211,11 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
   const bool legacy4 = has_magic(checkpoint_detail::kLegacyMagic4);
   const bool legacy5 = has_magic(checkpoint_detail::kLegacyMagic5);
   const bool legacy6 = has_magic(checkpoint_detail::kLegacyMagic6);
+  const bool legacy7 = has_magic(checkpoint_detail::kLegacyMagic7);
   in.expect_raw(legacy4   ? checkpoint_detail::kLegacyMagic4
                 : legacy5 ? checkpoint_detail::kLegacyMagic5
                 : legacy6 ? checkpoint_detail::kLegacyMagic6
+                : legacy7 ? checkpoint_detail::kLegacyMagic7
                           : checkpoint_detail::kMagic);
   if (in.i32() != Dim)
     throw std::runtime_error(
@@ -1205,6 +1224,9 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
   state.spatial_contract = in.string();
   state.topology_epoch = in.u64();
   state.materialization_generation = in.u64();
+  state.accepted_attempt = legacy4 || legacy5 || legacy6 || legacy7
+                               ? std::nullopt
+                               : std::optional<std::uint64_t>{in.u64()};
   state.level_clocks.resize(in.size(checkpoint_detail::kEncodedClockBytes));
   for (auto& clock : state.level_clocks)
     clock = checkpoint_detail::read_clock(in);
@@ -1332,6 +1354,9 @@ template <int Dim>
 amr_reflux::TransactionalFaceFluxLedger<Dim, AmrProgramFacePayload>
 restore_amr_program_face_flux_ledger(const AmrProgramAcceptedState<Dim>& state,
                                      amr_reflux::FaceFluxLedgerBudget budget) {
+  if (!state.accepted_attempt)
+    throw std::invalid_argument(
+        "legacy AMR Program checkpoint lacks committed attempt authority for continuation");
   checkpoint_detail::validate_state(state);
   using Fragment = amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload>;
   std::map<std::uint64_t, std::vector<Fragment>> attempts;
@@ -1359,6 +1384,9 @@ template <int Dim>
 ::pops::amr::TransactionalInterfaceFluxLedger<AmrProgramFacePayload>
 restore_amr_program_interface_flux_ledger(const AmrProgramAcceptedState<Dim>& state,
                                           ::pops::amr::InterfaceFluxLedgerBudget budget) {
+  if (!state.accepted_attempt)
+    throw std::invalid_argument(
+        "legacy AMR Program checkpoint lacks committed attempt authority for continuation");
   checkpoint_detail::validate_state(state);
   ::pops::amr::TransactionalInterfaceFluxLedger<AmrProgramFacePayload> ledger(state.topology_epoch,
                                                                               std::move(budget));
@@ -1381,6 +1409,9 @@ template <int Dim, class MemorySpace>
 void require_live_amr_program_checkpoint(
     const AmrProgramAcceptedState<Dim>& state,
     const ::pops::runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime) {
+  if (!state.accepted_attempt)
+    throw std::invalid_argument(
+        "legacy AMR Program checkpoint lacks committed attempt authority for continuation");
   checkpoint_detail::validate_state(state);
   if (state.spatial_contract != runtime.spatial_contract() ||
       state.topology_epoch != runtime.topology_epoch() ||
@@ -1394,7 +1425,18 @@ void require_live_amr_program_checkpoint(
 template <int Dim>
 void require_collective_amr_program_checkpoint_consensus(
     const AmrProgramAcceptedState<Dim>& state, const ExecutionLane& lane = ExecutionLane::world()) {
-  const std::vector<std::uint8_t> bytes = serialize_amr_program_accepted_state(state);
+  std::vector<std::uint8_t> bytes;
+  std::exception_ptr error;
+  try {
+    bytes = serialize_amr_program_accepted_state(state);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("AMR Program checkpoint authority preparation failed collectively");
+  }
   const std::string_view payload(reinterpret_cast<const char*>(bytes.data()), bytes.size());
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("pops.amr-program-checkpoint"), payload}}, lane))

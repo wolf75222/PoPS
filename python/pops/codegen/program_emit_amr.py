@@ -373,12 +373,8 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
         state_identity = (
             state_ref.qualified_id if state_ref is not None else "scalar-history:" + name
         )
-        space = getattr(program, "_history_spaces", {}).get(name)
-        space_identity = (
-            json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
-            if space is not None
-            else "scalar-field"
-        )
+        from pops.codegen.program_history_identity import history_space_identity
+        space_identity = history_space_identity(program, name)
         row = history_manifest[name]
         interpolation = json.dumps(row["interpolation"], sort_keys=True, separators=(",", ":"))
         component = getattr(program, "_histories_ncomp", {}).get(name)
@@ -696,8 +692,8 @@ def _emit_amr_install(
         transform_refresh_guard = "    _require_local_transform_level_contract();\n"
     has_maps = any(value.op in ("layout_map_export", "layout_map_import")
                    for value in program._values)
-    from pops.codegen.program_emit_hierarchy_regions import hierarchy_region_solves
-    has_hierarchy_regions = bool(hierarchy_region_solves(program))
+    from pops.codegen.program_emit_hierarchy_regions import has_hierarchy_continuations
+    has_hierarchy_regions = has_hierarchy_continuations(program)
     has_continuations = has_maps or has_hierarchy_regions
     if has_maps and hierarchy_bodies is not None:
         raise NotImplementedError("AMR mapping and field barriers require one combined region schedule")

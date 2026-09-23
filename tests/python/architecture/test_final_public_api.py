@@ -292,6 +292,7 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
         "history_levels",
         "history_names",
         "history_ncomp",
+        "history_slot_dt",
         "inspect",
         "integral",
         "installed_program_hash",

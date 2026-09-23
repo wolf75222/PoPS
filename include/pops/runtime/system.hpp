@@ -1437,8 +1437,8 @@ class System {
   /// box 0 on rank 0). The accessors above (density / get_state / potential) read fab(0):
   /// VALID on the owner rank (mono-rank OR rank 0 under MPI), but fab(0) is OUT OF BOUNDS on
   /// a rank without a box (local_size()==0). The _global variants fill a GLOBAL buffer from the
-  /// LOCAL fabs (in GLOBAL indices; nothing on an empty rank) then all_reduce_sum_inplace -> EACH
-  /// rank holds the complete field (AMR reflux pattern, comm.hpp). They are COLLECTIVE: all the
+  /// LOCAL fabs (in GLOBAL indices; nothing on an empty rank), then assemble their exact bytes
+  /// under the domain/ownership contract. EACH rank holds the complete field. They are COLLECTIVE: all the
   /// ranks MUST call them. On mono-rank they return EXACTLY the same array as the non-global
   /// accessors (all_reduce = identity, box = complete domain) -> bit-identical output.
   /// RuntimeInstance uses them for accepted-state checkpoint capture, then seals and publishes

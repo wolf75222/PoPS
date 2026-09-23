@@ -34,6 +34,13 @@ from .projection import RealizabilityProjection, RealizableSet
 from .relaxation import HyQMOM15Relaxation
 from .space import VelocitySpace, MomentState
 from .transport import MomentTransport
+from .fan_li import (
+    FAN_LI15_INDICES,
+    FAN_LI15_REGULARIZED_COMPONENTS,
+    FanLi15Expressions,
+    fan_li15_expressions,
+    fan_li15_from_hermite,
+)
 
 __all__ = [
     # public generator surface
@@ -47,6 +54,11 @@ __all__ = [
     "bgk_source",
     "build_moment_model",
     "moment_flux_expressions",
+    "FAN_LI15_INDICES",
+    "FAN_LI15_REGULARIZED_COMPONENTS",
+    "FanLi15Expressions",
+    "fan_li15_expressions",
+    "fan_li15_from_hermite",
     # facade API
     "CartesianVelocityMoments",
     "CompositeMean",

@@ -39,14 +39,35 @@ void require_history_free_for_topology_change_(std::string_view operation) const
 /// Provider-owned physical law used by both the authenticated build request and the generated
 /// flat Krylov boundary session. Keep one retained instance per prepared level; consumers never
 /// reconstruct this law from topology alone.
-PhysicalBoundaryConditions<Dim> hierarchy_tensor_boundary_(const Geometry<Dim>& geometry) const {
+PhysicalBoundaryConditions<Dim> hierarchy_tensor_boundary_(
+    const Geometry<Dim>& geometry, const PreparedProviderOptions& options) const {
   const BoundaryTopology<Dim> topology = facade_->prepared_amr_boundary_topology();
+  tensor_elliptic_detail::TensorFacControls controls;
+  if (options.schema_identity == tensor_elliptic_detail::kCompositeTensorOptionSchema)
+    controls = tensor_elliptic_detail::decode_controls(options);
+  else
+    for (const auto& [key, unused] : options.values)
+      if (key.starts_with("boundary.") || key.starts_with("operator."))
+        throw std::invalid_argument("external tensor provider has no authored face-law option contract");
+  if (controls.boundary_count != 0 && controls.boundary_count != 2 * Dim)
+    throw std::invalid_argument("authored tensor boundary rank differs from native topology");
   std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
   RealVector<Dim> spacing{};
   for (int axis = 0; axis < Dim; ++axis) {
     spacing[axis] = geometry.spacing(axis);
     for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
       const Face<Dim> face{axis, side};
+      const int ordinal = face.ordinal();
+      if (controls.boundary_count != 0) {
+        const int law = controls.boundary_kinds[static_cast<std::size_t>(ordinal)];
+        if ((law == 0) != topology.is_periodic(face))
+          throw std::invalid_argument("authored tensor boundary contradicts periodic mesh topology");
+        if (law != 0)
+          faces[static_cast<std::size_t>(ordinal)] = {
+              law == 1 ? PhysicalBoundaryKind::dirichlet : PhysicalBoundaryKind::neumann,
+              Real(0), law == 1 ? Real(1) : Real(0), law == 1 ? Real(0) : Real(1)};
+        continue;
+      }
       if (topology.is_physical(face))
         faces[static_cast<std::size_t>(face.ordinal())] = {PhysicalBoundaryKind::dirichlet, Real(0),
                                                            Real(1), Real(0)};
@@ -80,7 +101,7 @@ PreparedHierarchyTensorState prepare_hierarchy_tensor_solver_(
       const field_type& level_state = runtime_->hierarchy().state(level);
       const Geometry<Dim> level_geometry =
           facade_->prepared_amr_level_geometry(static_cast<int>(level));
-      const PhysicalBoundaryConditions<Dim> boundary = hierarchy_tensor_boundary_(level_geometry);
+      const PhysicalBoundaryConditions<Dim> boundary = hierarchy_tensor_boundary_(level_geometry, selection.options);
       request.levels.push_back({level_geometry, boundary, level_state.layout(),
                                 level_state.distribution(), level_state.local_rank()});
       boundaries.push_back({level_geometry, boundary});
@@ -276,6 +297,7 @@ void refresh_resources_() const {
     history_flux_expressions_.swap(provisional_flux);
   }
   scratches_.clear();
+  rhs_input_traces_.clear();
   std::exception_ptr synchronization_error;
   try {
     synchronize_resource_generation_();

@@ -62,8 +62,10 @@ void advance_mapping_hierarchy(double dt, Body&& body, std::shared_ptr<AmrProgra
         {0, static_cast<std::int64_t>(facade_->macro_step()), {0, 1}, facade_->time()},
         {0, static_cast<std::int64_t>(facade_->macro_step()), {1, 1}, facade_->time() + dt}};
     multiblock_subcycling_->begin_synchronized(root);
+    retain_subcycling_attempt_authority_();
     resume_mapping_hierarchy_(std::move(owner));
   } catch (...) {
+    retain_subcycling_attempt_authority_();
     cancel_mapping_hierarchy_();
     throw;
   }
@@ -93,6 +95,8 @@ struct MappingContinuation {
 mutable std::unique_ptr<MappingContinuation> mapping_continuation_;
 
 void cancel_mapping_hierarchy_() const noexcept {
+  staged_path_rhs_.clear();
+  rhs_input_traces_.clear();
   if (multiblock_subcycling_)
     multiblock_subcycling_->abort_synchronized();
   if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
@@ -145,8 +149,8 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
         agree_continuation_ports_();
         const auto kind = frame.ports.front().kind;
         suspended = kind == MappingPortKind::map;
-        internal =
-            kind == MappingPortKind::linear_solve || kind == MappingPortKind::field_publication;
+        internal = kind == MappingPortKind::linear_solve ||
+                   kind == MappingPortKind::field_publication || kind == MappingPortKind::spatial_rhs;
         if (internal) {
           runtime::program::collective_step_rejection_phase(
               prepared_execution_lane().communicator(),
@@ -184,6 +188,10 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
             multiblock_subcycling_->synchronized_attempt());
         return;
       }
+      prepare_spatial_collectively([&] {
+        if (!staged_path_rhs_.empty())
+          throw std::logic_error("AMR hierarchy completed with an unpublished path RHS stage");
+      });
       multiblock_subcycling_->finish_synchronized(
           [&](multiblock_reflux_context_type& reflux) { reconcile_multiblock_reflux_(reflux); },
           [&](std::size_t block, std::size_t level, const field_type& candidate) {
@@ -194,7 +202,9 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
             stage_prepared_publication_candidates_(level, pack);
           });
       commit_interface_flux_attempt_();
+      accepted_subcycling_attempt_ = multiblock_subcycling_->last_accepted_attempt();
       multiblock_subcycling_has_accepted_step_ = true;
+      rhs_input_traces_.clear();
       synchronized_level_envelopes_.clear();
       clear_active_multiblock_group_();
       swap_level_attempt_envelope_(frame.prior);

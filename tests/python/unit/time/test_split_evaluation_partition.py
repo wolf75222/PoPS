@@ -141,6 +141,103 @@ def test_ark_local_provider_consumers_establish_their_exact_stage(target):
             assert body.index(stage) < body.index(preparation) < body.index(binding)
 
 
+@pytest.mark.parametrize("use_preset", (False, True), ids=("manual", "preset"))
+def test_final_subcycled_imex_example_uses_stage_parents_without_source_prefix_trace(use_preset):
+    from examples.final.EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR import build_final_case
+    from pops.codegen._orchestration_compile import build_program_model_graph
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_rhs_input_trace import requires_rhs_input_trace
+
+    case = build_final_case(use_preset=use_preset)
+    resolved = pops.resolve(pops.validate(case.authoring.case), layout=case.layout)
+    program = detach_compiled_program(resolved.time)
+    rates = [value for value in program._values if value.op == "rhs"]
+    assert len(rates) == 2
+    assert any(value.op == "solve_local_linear" for value in program._values)
+    assert not any(requires_rhs_input_trace(value) for value in rates)
+    source = emit_cpp_program(program, model_graph=build_program_model_graph(resolved),
+                              field_plans={**resolved.field_plans, **resolved.program_field_plans},
+                              target="amr_system")
+    assert "ctx.capture_rhs_input_trace(" not in source
+    for rate in rates:
+        assert "ctx.set_stage_time(" in _emitted_node_body(source, rate.id)
+
+
+def _local_solve_then_transport(*, point_kind, transformed=False, scope="top"):
+    from pops.physics._facade import Model
+    from pops.solvers import DenseLU
+    from pops.time import FailRun, LocalLinear, every
+    from tests.python.unit.time.typed_program_support import typed_state
+
+    model = Model("source_then_transport")
+    q, = model.conservative_vars("q")
+    model.primitive_vars(q)
+    model.conservative_from([q])
+    model.flux(x=[q], y=[q])
+    model.eigenvalues(x=[1 + 0 * q], y=[1 + 0 * q])
+    model.linear_source("relaxation", [[-1]])
+    transform = model.local_transform("shift", (q + 1,)) if transformed else None
+    program = Program("source_then_transport")
+    current = typed_state(program, "material", model=model)
+    endpoint = typed_state(program, "material", state_name="U", model=model).next
+    time = TimePoint(program.clock, Fraction(1, 2))
+    partitions = {
+        "additive": {"explicit": time, "implicit": time},
+        "extra": {"explicit": time, "implicit": time, "other": time},
+        "split": {"first": time, "second": time},
+    }
+    point = time if point_kind == "time" else StagePoint("arbitrary name", partitions[point_kind])
+    guess = program.value("guess", current, at=point)
+    if transform is not None:
+        guess = program.transform(guess, transform=transform)
+    operator = program.linear_source(model.module.operator_handle("relaxation"))
+    stage = program.solve(
+        LocalLinear(operator=program.I - program.dt * operator, rhs=guess),
+        solver=DenseLU(), name="solved").consume(action=FailRun())
+    rates = []
+
+    def transport(builder, state):
+        rate = builder.rhs(state=state, terms=[Flux()])
+        if scope == "schedule":
+            rate = builder._replace_value(rate, attrs={
+                **rate.attrs, "schedule": every(1, clock=builder.clock)})
+        rates.append(rate)
+        return builder.value("transported", state + builder.dt * rate, at=state.point)
+
+    candidate = program.range(stage, 1, transport) if scope == "region" else transport(program, stage)
+    program.commit(endpoint, program.value("next", candidate, at=endpoint.point))
+    return model, program, rates[0]
+
+
+@pytest.mark.parametrize("point_kind, transformed, requires_trace", (
+    ("time", False, True), ("split", False, True), ("extra", False, True),
+    ("additive", False, False), ("additive", True, True),
+))
+def test_source_prefix_trace_follows_semantics_and_all_stage_ancestors(
+        point_kind, transformed, requires_trace):
+    from pops.codegen.module_lowering import lower_and_validate
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_rhs_input_trace import requires_rhs_input_trace
+
+    model, program, rate = _local_solve_then_transport(
+        point_kind=point_kind, transformed=transformed)
+    assert requires_rhs_input_trace(rate) is requires_trace
+    source = emit_cpp_program(program, model=lower_and_validate(model)[0], target="amr_system")
+    assert source.count("ctx.capture_rhs_input_trace(") == int(requires_trace)
+    if requires_trace:
+        assert "&rhs_input_trace_%d" % rate.id in source
+
+
+@pytest.mark.parametrize("scope", ("region", "schedule"))
+def test_source_prefix_trace_still_refuses_unqualified_rhs_scope(scope):
+    from pops.codegen.program_rhs_input_trace import requires_rhs_input_trace
+
+    _, _, rate = _local_solve_then_transport(
+        point_kind="additive", transformed=True, scope=scope)
+    with pytest.raises(ValueError, match="unscheduled top-level SSA evaluation"):
+        requires_rhs_input_trace(rate)
+
+
 def test_generic_apply_refuses_distinct_ark_times_without_a_partition():
     from pops.codegen.program_graph_lowering import emit_program_graph
     from pops.codegen.program_models import ProgramModelGraph

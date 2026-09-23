@@ -15,11 +15,14 @@ from pathlib import Path
 import time
 
 ORDINARY_BUDGET_SECONDS = 35 * 60
-SHARD_TOTAL = 37
+SHARD_TOTAL = 38
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
     """Leave ten minutes beyond the model; only indivisible long files get more."""
+    missing = sorted(set(paths) - durations.keys())
+    if missing:
+        raise ValueError("Python duration catalog is missing selected files: " + ", ".join(missing))
     weights = [durations[path] for path in paths]
     if any(not math.isfinite(value) or value <= 0 for value in weights):
         raise ValueError("selected Python duration weights must be finite and positive")

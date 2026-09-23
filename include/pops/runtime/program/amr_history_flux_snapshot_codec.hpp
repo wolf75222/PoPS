@@ -11,6 +11,45 @@ struct InterfaceFluxSample;
 
 namespace pops::runtime::program::history_flux {
 
+inline constexpr std::string_view source_point_prefix =
+    "pops.amr.history-face-source-point.v1:sha256:";
+inline constexpr std::string_view shared_source_prefix =
+    "pops.amr.history-face-shared-source.v1:sha256:";
+inline constexpr std::size_t maximum_source_identity_characters =
+    shared_source_prefix.size() + 64 + 1 + 64;
+
+inline bool canonical_digest(std::string_view digest) {
+  return digest.size() == 64 && std::all_of(digest.begin(), digest.end(), [](char value) {
+           return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+         });
+}
+
+inline bool valid_source_identity(std::string_view source) {
+  if (source.starts_with(source_point_prefix))
+    return canonical_digest(source.substr(source_point_prefix.size()));
+  return source.starts_with(shared_source_prefix) &&
+         source.size() == maximum_source_identity_characters &&
+         source[shared_source_prefix.size() + 64] == ':' &&
+         canonical_digest(source.substr(shared_source_prefix.size(), 64)) &&
+         canonical_digest(source.substr(shared_source_prefix.size() + 65));
+}
+
+inline std::string bind_shared_source_identity(std::string_view source, std::string_view binding) {
+  if (!source.starts_with(source_point_prefix) || !valid_source_identity(source) || binding.empty())
+    throw std::invalid_argument("shared history capture lacks its canonical source binding");
+  return std::string(shared_source_prefix) +
+         std::string(source.substr(source_point_prefix.size())) + ":" +
+         identity::sha256_hex(std::vector<std::uint8_t>(binding.begin(), binding.end()));
+}
+
+inline void require_shared_source_binding(std::string_view source, const std::string& binding) {
+  if (!source.starts_with(shared_source_prefix) || !valid_source_identity(source) ||
+      binding.empty() ||
+      source.substr(shared_source_prefix.size() + 65) !=
+          identity::sha256_hex(std::vector<std::uint8_t>(binding.begin(), binding.end())))
+    throw std::invalid_argument("shared history projection lacks its captured source association");
+}
+
 template <int Dim>
 struct BasisFace {
   ::pops::amr::reflux::FaceLedgerRole role = ::pops::amr::reflux::FaceLedgerRole::Coarse;
@@ -153,6 +192,44 @@ std::string projection_identity(const Snapshot<Dim>& snapshot) {
     out.i32(ratio);
   return "pops.amr.history-face-projection.v1:sha256:" +
          identity::sha256_hex(std::move(out).take());
+}
+
+// A shared boundary source may use this already-earned projection only when the complete
+// immutable lineage names the same raw level/source and the current physical level domains.
+// Raw payload authentication occurred at capture/import; never re-evaluate its physical flux.
+template <int Dim, class GeometryAt>
+std::string require_projection_lineage(const std::shared_ptr<const Snapshot<Dim>>& snapshot,
+                                       int source_level, int target_level, int components,
+                                       int max_levels, GeometryAt&& geometry_at) {
+  if (!snapshot || source_level < 0 || target_level <= source_level || target_level >= max_levels ||
+      snapshot->level != target_level || snapshot->source_identity.empty())
+    throw std::invalid_argument("shared history flux lacks its earned parent projection");
+  checkpoint_detail::Writer contract;
+  contract.string("pops.amr.shared-history-projection-lineage.v1");
+  const auto source_identity = snapshot->source_identity;
+  int expected_level = target_level, remaining = max_levels;
+  for (auto node = snapshot; node; node = node->parent) {
+    if (--remaining < 0 || node->level != expected_level-- ||
+        node->source_identity != source_identity || node->components != components)
+      throw std::invalid_argument("shared history flux projection has foreign source lineage");
+    detail::metadata(*node);
+    const auto geometry = geometry_at(node->level);
+    if (node->domain != geometry.domain())
+      throw std::invalid_argument("shared history flux projection has a foreign level domain");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (node->cell_size[axis] != static_cast<double>(geometry.spacing(axis)))
+        throw std::invalid_argument("shared history flux projection has a foreign level metric");
+    contract.string(node->identity);
+    contract.string(node->source_identity);
+    if (node->parent) {
+      if (projection_identity(*node) != node->identity)
+        throw std::invalid_argument("shared history flux projection lost its lineage digest");
+    } else if (node->level != source_level) {
+      throw std::invalid_argument("shared history flux projection names a different raw level");
+    }
+  }
+  const auto bytes = std::move(contract).take();
+  return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 
 template <int Dim>

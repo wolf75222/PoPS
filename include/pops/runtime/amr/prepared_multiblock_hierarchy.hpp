@@ -723,6 +723,13 @@ class PreparedMultiBlockAmrHierarchy {
     return interface_scheduler_->authenticate_sample(sample);
   }
 
+  runtime::multiblock::InterfaceFluxSampleProjection<Dim> prepare_interface_sample_projection(
+      const runtime::multiblock::InterfaceFluxSample& sample, int target_level) const {
+    if (!interface_scheduler_)
+      throw std::invalid_argument("shared flux projection has no live interface provider");
+    return interface_scheduler_->prepare_sample_projection(sample, target_level);
+  }
+
   /// Canonical-order convenience used by a provider that already owns the Program map.
   std::size_t apply_coupling_operators_at_level(std::size_t level, Real dt,
                                                 std::span<field_type* const> candidates) {

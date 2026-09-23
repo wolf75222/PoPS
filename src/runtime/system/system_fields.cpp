@@ -906,7 +906,7 @@ void System<Dim>::stage_field_publication_candidate() {
     };
     refresh_candidate_ghosts();
     p_->active_field_auxiliary_publication_->launch_ready_native(
-        {&*p_->provider_carrier_, &*p_->active_field_provider_candidate_},
+        {&*p_->provider_carrier_, &*p_->active_field_provider_candidate_, &p_->geom},
         [&](const auto&, std::exception_ptr local_error) {
           runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
               local_error, &lane,

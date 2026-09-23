@@ -14,6 +14,7 @@
 #include <pops/runtime/program/amr_program_context.hpp>
 
 #include <array>
+#include <cstdio>
 #include <cstddef>
 #include <memory>
 #include <span>
@@ -133,15 +134,20 @@ int run_collective_refusal() {
   const ExecutionLane& lane = context->prepared_execution_lane();
 
   bool refused = false;
+  std::string refusal_reason;
   try {
     const std::array route{runtime::program::SameLevelCellTemporalForwardEulerRoute{0, -1, 0}};
     context->prepare_same_level_cell_temporal_execution("test.clock.cell-local-mpi-refusal", 100, 0,
                                                         route);
   } catch (const std::runtime_error& error) {
+    refusal_reason = error.what();
     refused = std::string(error.what()) == "cell-local AMR route preparation failed collectively";
   }
   const long refusing_ranks = all_reduce_sum(refused ? 1L : 0L, lane);
   const bool unchanged = system.program_accepted_state().empty();
+  if (refusing_ranks != lane.size() || !unchanged)
+    std::fprintf(stderr, "rank %d route refusal: reason=%s refused=%d unchanged=%d\n", my_rank(),
+                 refusal_reason.c_str(), refused, unchanged);
   return refusing_ranks == lane.size() && unchanged ? 0 : 1;
 }
 
@@ -260,11 +266,16 @@ int run_collective_history_remap_refusal() {
       Dim>::install_rank_zero_candidate_metadata_corruption(*context, "tracer.rate", 0,
                                                             remap_observation);
   bool refused = false;
+  std::string refusal_reason;
   try {
     (void)system.regrid_from_prepared_tagging(0);
   } catch (const std::runtime_error& error) {
-    refused =
-        std::string(error.what()) == "AMR Program hierarchy-state publication failed collectively";
+    refusal_reason = error.what();
+    refused = refusal_reason.rfind(
+                  "AMR Program hierarchy-state publication failed collectively; rank 0:", 0) ==
+                  0 &&
+              refusal_reason.find("AMR Program accepted history remap has invalid ring metadata") !=
+                  std::string::npos;
   }
   const auto* restored_engine = system.engine();
   bool unchanged = restored_engine != nullptr &&
@@ -292,6 +303,10 @@ int run_collective_history_remap_refusal() {
   const long observed = all_reduce_sum(saw_parent_deferred ? 1L : 0L, lane);
   const long refusals = all_reduce_sum(refused ? 1L : 0L, lane);
   const long unchanged_ranks = all_reduce_sum(unchanged ? 1L : 0L, lane);
+  if (observed != lane.size() || refusals != lane.size() || unchanged_ranks != lane.size())
+    std::fprintf(stderr,
+                 "rank %d history remap: reason=%s observed=%ld refusals=%ld unchanged=%ld\n",
+                 my_rank(), refusal_reason.c_str(), observed, refusals, unchanged_ranks);
   return observed == lane.size() && refusals == lane.size() && unchanged_ranks == lane.size() ? 0
                                                                                               : 1;
 }

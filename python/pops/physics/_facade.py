@@ -605,6 +605,8 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
             value_shape=fs.value_shape,
             domain=fs.domain,
         )
+        for auxiliary in self._m._auxiliary_spaces.values():
+            mod._declare_descriptor(mod._aux, mod._aux_handles, auxiliary, "aux field", "aux")
         # ``module`` is a typed view of this exact model definition, not another
         # declaration owner. Share the one registry so handles never acquire a
         # parallel authority with merely equal-looking IDs.

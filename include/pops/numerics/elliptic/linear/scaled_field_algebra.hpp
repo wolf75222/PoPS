@@ -12,6 +12,8 @@
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/linear/scaled_scalar.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace pops {
@@ -29,6 +31,53 @@ struct ScaledAxpyKernel {
     (void)ScaledScalar::try_sum_products(ScaledScalar::from(Real(1)), destination(index, component),
                                          coefficient, source(index, component), value);
     destination(index, component) = value;
+  }
+};
+
+/// Propose one adjacent finite value when a nonzero update is entirely lost to rounding.
+/// The caller supplies a mask from an authoritative residual and must re-evaluate that residual
+/// afterwards: the mask does not promise descent for a coupled operator.
+template <int Dim>
+struct MaskedStagnationAxpyKernel {
+  FieldView<Real, Dim> destination;
+  FieldView<const Real, Dim> source;
+  FieldView<const Real, Dim> mask;
+  ScaledScalar coefficient;
+  Real ordinary_coefficient;
+  bool ordinary;
+  int component;
+  bool restrict_to_mask = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (restrict_to_mask && mask(index, component) == Real(0))
+      return Real(0);
+    Real promoted = Real(0);
+    const Real previous = destination(index, component);
+    const Real input = source(index, component);
+    Real next = std::numeric_limits<Real>::quiet_NaN();
+    if (ordinary)
+      next = previous + ordinary_coefficient * input;
+    else
+      (void)ScaledScalar::try_sum_products(ScaledScalar::from(Real(1)), previous, coefficient,
+                                           input, next);
+    if (mask(index, component) != Real(0) && next == previous && input != Real(0) &&
+        scaled_scalar_math::isfinite(previous) && scaled_scalar_math::isfinite(input) &&
+        coefficient.is_finite() && !coefficient.is_zero()) {
+      const bool negative = (coefficient.mantissa() < Real(0)) != (input < Real(0));
+      const Real toward =
+          negative ? -std::numeric_limits<Real>::infinity() : std::numeric_limits<Real>::infinity();
+#if defined(KOKKOS_ENABLE_SYCL)
+      const Real adjacent = sycl::nextafter(previous, toward);
+#else
+      const Real adjacent = std::nextafter(previous, toward);
+#endif
+      if (scaled_scalar_math::isfinite(adjacent)) {
+        next = adjacent;
+        promoted = Real(1);
+      }
+    }
+    destination(index, component) = next;
+    return promoted;
   }
 };
 
@@ -90,6 +139,33 @@ struct ScaledFieldAlgebra {
       for (int component = 0; component < destination.ncomp(); ++component)
         for_each_cell(valid, detail::ScaledAxpyKernel<Dim>{output, input, coefficient, component});
     }
+  }
+
+  /// This recovery applies one complete update, never individual terms of a cancelling sum.
+  /// Ordinary and extended-exponent products retain the same axpy paths as above.
+  /// Returns whether this rank used an adjacent value. This is a local Kokkos reduction,
+  /// not a collective; a distributed caller must combine the flag before branching.
+  /// If restrict_to_mask is true, unselected components retain their previous values.
+  template <int Dim>
+  static bool axpy_adjacent_if_stagnant(MultiFab<Dim>& destination, const ScaledScalar& coefficient,
+                                        const MultiFab<Dim>& source,
+                                        const MultiFab<Dim>& unconverged_component_mask,
+                                        bool restrict_to_mask = false) {
+    Real materialized = Real(0);
+    Real promoted = Real(0);
+    const bool ordinary = coefficient.try_materialize(materialized);
+    for (std::size_t local = 0; local < destination.local_size(); ++local) {
+      const auto output = destination.fab(local).view();
+      const auto input = std::as_const(source.fab(local)).view();
+      const auto mask = std::as_const(unconverged_component_mask.fab(local)).view();
+      for (int component = 0; component < destination.ncomp(); ++component)
+        promoted = std::max(
+            promoted, for_each_cell_reduce_max(destination.box(local),
+                                               detail::MaskedStagnationAxpyKernel<Dim>{
+                                                   output, input, mask, coefficient, materialized,
+                                                   ordinary, component, restrict_to_mask}));
+    }
+    return promoted != Real(0);
   }
 
   template <int Dim>

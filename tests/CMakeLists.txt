@@ -507,6 +507,11 @@ set(POPS_CPP_STANDARD_TESTS
   test_composite_fac_variable_eps
   test_composite_fac_variable_k
   test_composite_fac_tensor
+  test_tensor_coarse_gmres
+  test_tensor_fac_partial_hierarchy
+  test_tensor_fac_conservative_interface
+  test_prepared_polar_poisson_inverse
+  test_mapped_disk_tensor_fac
   test_composite_general_field
   test_amr_composite_poisson
   test_polar_poisson_mms
@@ -571,6 +576,10 @@ set(POPS_CPP_STANDARD_TESTS
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
   pops_add_test(${_test})
 endforeach()
+
+# Its standalone diagnostic branch replaces the GoogleTest declarations.
+pops_test_source(_src test_mapped_disk_tensor)
+pops_add_gtest_suite(NAME test_mapped_disk_tensor SOURCES "${_src}" RUNTIME_DISCOVERY)
 
 # Header-only binary32 Poisson residual. Must not link double-compiled runtime objects.
 pops_test_source(_src test_float32_poisson_residual)
@@ -659,8 +668,44 @@ pops_test_source(_src test_amr_synthetic_program_loader_transaction)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_amr_synthetic_program_loader_transaction SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
+# CTest starts a fresh process for every case. Build the six exact source variants once,
+# rather than repeating eleven expensive compiler invocations inside the test watchdog.
+# Reuse native_dso_compiler so compiler, -O2, header ABI, Kokkos and MPI flags stay identical.
+add_executable(pops_build_synthetic_loader_fixture EXCLUDE_FROM_ALL
+  cpp/support/build_synthetic_loader_fixture.cpp)
+target_link_libraries(pops_build_synthetic_loader_fixture PRIVATE pops::pops)
+target_compile_features(pops_build_synthetic_loader_fixture PRIVATE cxx_std_${POPS_CXX_STD})
+target_compile_definitions(pops_build_synthetic_loader_fixture PRIVATE ${_native_defs})
+set(_synthetic_fixture_dir "${CMAKE_CURRENT_BINARY_DIR}/synthetic-loader-fixtures")
+file(MAKE_DIRECTORY "${_synthetic_fixture_dir}")
+set(_synthetic_fixture_headers ${POPS_ALL_CLASSIFIED_HEADERS})
+list(TRANSFORM _synthetic_fixture_headers PREPEND "${POPS_HEADER_ROOT}/")
+# Recompute the authenticated SDK signature before rebuilding any fixture after header edits.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers})
+set(_synthetic_fixture_outputs "")
+foreach(_variant 4 8 9 10 12 28)
+  set(_stem "${_synthetic_fixture_dir}/${_variant}")
+  add_custom_command(OUTPUT "${_stem}.so" "${_stem}.cpp"
+    COMMAND $<TARGET_FILE:pops_build_synthetic_loader_fixture>
+      "${_variant}" "${_stem}.cpp" "${_stem}.so"
+    DEPENDS pops_build_synthetic_loader_fixture
+      cpp/support/synthetic_loader_fixture.hpp cpp/support/native_dso_compiler.hpp
+      "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
+    JOB_POOL pops_heavy_test_tu
+    VERBATIM)
+  list(APPEND _synthetic_fixture_outputs "${_stem}.so" "${_stem}.cpp")
+endforeach()
+add_custom_target(pops_synthetic_loader_fixtures DEPENDS ${_synthetic_fixture_outputs})
+add_dependencies(test_amr_synthetic_program_loader_transaction pops_synthetic_loader_fixtures)
+target_compile_definitions(test_amr_synthetic_program_loader_transaction PRIVATE
+  POPS_TEST_SYNTHETIC_LOADER_FIXTURES="${_synthetic_fixture_dir}")
+
 pops_test_source(_src test_amr_system_contract)
 pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+pops_test_source(_src test_amr_scalar_output_history)
+pops_add_gtest_suite(NAME test_amr_scalar_output_history SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr RUNTIME_DISCOVERY)
 
 pops_test_source(_src test_amr_system_twoblock)
 pops_add_gtest_suite(NAME test_amr_system_twoblock SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -675,6 +720,9 @@ pops_add_gtest_suite(NAME test_amr_multiblock_compiled SOURCES "${_src}" EXTRA_L
 
 pops_test_source(_src test_amr_hierarchy_barrier_continuation)
 pops_add_gtest_suite(NAME test_amr_hierarchy_barrier_continuation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+pops_test_source(_src test_amr_path_rhs_barrier)
+pops_add_gtest_suite(NAME test_amr_path_rhs_barrier SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr RUNTIME_DISCOVERY)
 
 pops_test_source(_src test_amr_hierarchy_field_scratch)
 pops_add_gtest_suite(NAME test_amr_hierarchy_field_scratch SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
@@ -878,6 +926,11 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_krylov_workspace_reentrancy 2)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
+  set(POPS_MPI_RANKS_test_tensor_coarse_gmres 2)
+  set(POPS_MPI_RANKS_test_tensor_fac_partial_hierarchy 2)
+  set(POPS_MPI_RANKS_test_tensor_fac_conservative_interface 2)
+  set(POPS_MPI_RANKS_test_prepared_polar_poisson_inverse 2)
+  set(POPS_MPI_RANKS_test_mapped_disk_tensor_fac 2)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
   set(POPS_MPI_RANKS_test_composite_general_field 2)
   set(POPS_MPI_RANKS_test_prepared_resource_cache 2)
@@ -885,6 +938,8 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_amr_layout_transfer 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_implicit_transaction 2)
   set(POPS_MPI_RANKS_test_amr_hierarchy_barrier_continuation 2)
+  set(POPS_MPI_RANKS_test_amr_path_rhs_barrier 2)
+  set(POPS_MPI_RANKS_test_amr_scalar_output_history 2)
   set(POPS_MPI_RANKS_test_amr_hierarchy_field_scratch 2)
   set(POPS_MPI_RANKS_test_amr_synchronized_continuation 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_substeps 2)
@@ -1056,6 +1111,12 @@ if(POPS_HAS_MPI)
     test_krylov_workspace_reentrancy
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
+    # These existing tensor/polar witnesses include distributed and empty-owner contracts.
+    test_tensor_coarse_gmres
+    test_tensor_fac_partial_hierarchy
+    test_tensor_fac_conservative_interface
+    test_prepared_polar_poisson_inverse
+    test_mapped_disk_tensor_fac
     test_coupled_fieldsolve
     # Two real patches per level are partitioned over ranks 0/1, including
     # coarse/fine flux replacement and collective incompatible-RHS refusal.
@@ -1070,6 +1131,9 @@ if(POPS_HAS_MPI)
     test_amr_multiblock_implicit_transaction
     # Rank-local barrier mismatch/callback failure must reject collectively, then retry.
     test_amr_hierarchy_barrier_continuation
+    # Canonical fine subfaces and signed NCP terms publish before any level update.
+    test_amr_path_rhs_barrier
+    test_amr_scalar_output_history
     # Rank-local field shape and solve-identity refusals must remain collective.
     test_amr_hierarchy_field_scratch
     test_amr_synchronized_continuation
@@ -1165,7 +1229,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh:test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack")
+            "test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh:test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack:test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication:test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage:test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes:test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart:test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority")
       elseif(_test STREQUAL "test_program_runtime")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
@@ -1180,7 +1244,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords:GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically:GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry:GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry:GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts")
+            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords:GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically:GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences:GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry:GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry:GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()

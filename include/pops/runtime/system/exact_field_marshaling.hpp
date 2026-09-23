@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -177,11 +178,18 @@ std::vector<double> gather_global(const MultiFab<Dim, MemorySpace>& field, const
   if (cells != 0 &&
       static_cast<std::size_t>(components) > std::numeric_limits<std::size_t>::max() / cells)
     throw std::overflow_error("exact global gather size exceeds size_t");
+  const std::size_t values = static_cast<std::size_t>(components) * cells;
+  if (values > std::numeric_limits<std::size_t>::max() / sizeof(double))
+    throw std::overflow_error("exact global gather byte count exceeds size_t");
+  const std::size_t bytes = values * sizeof(double);
 
   std::vector<double> result;
   long local_failure = 0;
   try {
-    result.assign(static_cast<std::size_t>(components) * cells, 0.0);
+    result.assign(values, 0.0);
+    // Noncontributors supply the bytewise OR identity, independent of a floating zero encoding.
+    if (bytes != 0)
+      std::memset(result.data(), 0, bytes);
     if (contributes_collective_payload(field))
       for (std::size_t local = 0; local < field.local_size(); ++local) {
         const Fab<Dim, MemorySpace>& fab = field.fab(local);
@@ -199,7 +207,9 @@ std::vector<double> gather_global(const MultiFab<Dim, MemorySpace>& field, const
   }
   if (all_reduce_max(local_failure) != 0)
     throw std::runtime_error("exact global field gather failed on at least one MPI rank");
-  all_reduce_sum_inplace(result.data(), result.size());
+  // Exact tiling and the canonical replicated contributor prove one source for every byte.
+  // Arithmetic SUM can discard a negative zero; gathering object bytes performs no arithmetic.
+  all_reduce_or_inplace(reinterpret_cast<char*>(result.data()), bytes);
   return result;
 }
 

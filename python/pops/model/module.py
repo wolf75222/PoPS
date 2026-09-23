@@ -190,12 +190,16 @@ class Module(ModuleFreezable):
         handle, never a name or a slot; ProviderPack later resolves the exact
         owner-qualified component and native storage address.
         """
-        from pops.fields.aux import DerivedAux, InputAux
+        from pops.fields.aux import AnalyticAux, DerivedAux, InputAux
 
-        if not isinstance(producer, (InputAux, DerivedAux)):
-            raise TypeError("Module.aux_provider requires InputAux or DerivedAux")
+        if not isinstance(producer, (InputAux, DerivedAux, AnalyticAux)):
+            raise TypeError("Module.aux_provider requires InputAux, DerivedAux or AnalyticAux")
         self._guard_mutable("register an auxiliary provider")
         target = self.aux_handle(producer.target)
+        if isinstance(producer, AnalyticAux):
+            declared_frame = self._aux[target.local_id].frame
+            if declared_frame != producer.frame.canonical_id:
+                raise ValueError("AnalyticAux frame differs from its target auxiliary space")
         if target != producer.target:
             raise ValueError(
                 "auxiliary producer target %s is not the registry-issued Module handle"
@@ -494,11 +498,14 @@ class Module(ModuleFreezable):
             contract = self._rate_contracts[rate]
         except KeyError:
             raise ValueError("rate handle is not registered by this Module") from None
-        return {
+        result = {
             "state": contract["state"],
             "flux": contract["flux"],
             "sources": tuple(contract["sources"]),
         }
+        if contract.get("nonconservative_products"):
+            result["nonconservative_products"] = tuple(contract["nonconservative_products"])
+        return result
 
     def eigenvalues(self, **directions: Any) -> Any:
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of

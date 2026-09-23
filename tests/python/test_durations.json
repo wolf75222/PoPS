@@ -121,7 +121,7 @@
   "tests/python/unit/codegen/test_coupled_implicit_codegen.py": 2.0,
   "tests/python/unit/codegen/test_coupled_rate_codegen.py": 5,
   "tests/python/unit/codegen/test_dsl.py": 0.5,
-  "tests/python/unit/codegen/test_dsl_autodiff_roe.py": 375.0,
+  "tests/python/unit/codegen/test_dsl_autodiff_roe.py": 380.0,
   "tests/python/unit/codegen/test_dsl_aux_naux.py": 0.8,
   "tests/python/unit/codegen/test_dsl_brick.py": 5,
   "tests/python/unit/codegen/test_dsl_codegen.py": 5,
@@ -535,6 +535,41 @@
   "tests/python/unit/time/test_implicit_stage_request.py": 10,
   "tests/python/integration/runtime/test_interstage_physical_maps.py": 600.0,
   "tests/python/unit/codegen/test_program_mapping_regions.py": 5.0,
+  "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py": 175,
+  "tests/python/integration/runtime/test_amr_physical_maps.py": 1050.0,
+  "tests/python/integration/runtime/test_amr_field_map_continuations.py": 1800.0,
+  "tests/python/integration/runtime/test_tensor_transport_composition.py": 1200.0,
+  "tests/python/unit/codegen/test_partition_stability.py": 5.0,
+  "tests/python/unit/codegen/test_tensor_transport_composition.py": 30.0,
+  "tests/python/unit/codegen/test_transport_quadrature.py": 5.0,
+  "tests/python/unit/runtime/test_amr_accepted_state_inspector.py": 0.5,
+  "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py": 3600.0,
+  "tests/python/unit/runtime/test_dt_bounds_compiled.py": 600.0,
+  "tests/python/integration/native_loader/test_dsl_production_amr_poisson.py": 220.0,
+  "tests/python/integration/native_loader/test_dsl_production_amr_roe.py": 180.0,
+  "tests/python/integration/native_loader/test_dsl_production_amr_guards.py": 300.0,
+  "tests/python/integration/runtime/test_isothermal_vacuum_floor_inactive.py": 450.0,
+  "tests/python/integration/runtime/test_isothermal_vacuum_boundary_rollback.py": 250.0,
+  "tests/python/integration/runtime/test_affine_moment_update_runtime.py": 900,
+  "tests/python/integration/runtime/test_analytic_aux_transport.py": 600,
+  "tests/python/integration/runtime/test_mapped_condensed_disk_runtime.py": 1500,
+  "tests/python/unit/codegen/test_analytic_aux.py": 5,
+  "tests/python/unit/codegen/test_facade_compile_cache.py": 15,
+  "tests/python/unit/codegen/test_fan_li15_path_program.py": 30,
+  "tests/python/unit/codegen/test_mapped_condensed.py": 15,
+  "tests/python/unit/codegen/test_scalar_output_history_identity.py": 5,
+  "tests/python/unit/moments/test_affine_velocity_exponential_native.py": 30,
+  "tests/python/unit/moments/test_affine_velocity_native.py": 30,
+  "tests/python/unit/moments/test_fan_li15_admissibility_native.py": 60,
+  "tests/python/unit/moments/test_fan_li15_cartesian_native.py": 300,
+  "tests/python/unit/moments/test_fan_li15_constitutive.py": 30,
+  "tests/python/unit/moments/test_fan_li15_interface_native.py": 60,
+  "tests/python/unit/moments/test_fan_li15_path_native.py": 120,
+  "tests/python/unit/numerics/test_fan_li15_path_contract.py": 15,
+  "tests/python/unit/physics/test_nonconservative_product_contract.py": 5,
+  "tests/python/unit/runtime/test_uniform_checkpoint_layout.py": 5,
+  "tests/python/unit/time/test_affine_moment_exponential_policy.py": 15,
+  "tests/python/unit/time/test_affine_moment_update.py": 15,
   "_meta": {
     "adc": "ADC-623",
     "ci_20260913_additions": {
@@ -547,7 +582,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 486,
+    "estimated_count": 506,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -614,6 +649,7 @@
       "tests/python/integration/native_loader/test_prepared_preconditioner_component.py",
       "tests/python/integration/native_loader/test_ssprk3_production.py",
       "tests/python/integration/native_loader/test_uniform_restart_missing_history.py",
+      "tests/python/integration/runtime/test_affine_moment_update_runtime.py",
       "tests/python/integration/runtime/test_amr_field_map_continuations.py",
       "tests/python/integration/runtime/test_amr_implicit_diffusion.py",
       "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py",
@@ -622,6 +658,7 @@
       "tests/python/integration/runtime/test_amr_tensor_diffusion.py",
       "tests/python/integration/runtime/test_amr_transport_diffusion.py",
       "tests/python/integration/runtime/test_amr_transport_diffusion_qualification.py",
+      "tests/python/integration/runtime/test_analytic_aux_transport.py",
       "tests/python/integration/runtime/test_axial_slip_wall_pipeline.py",
       "tests/python/integration/runtime/test_combined_diffusion_exchange_ledger.py",
       "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py",
@@ -641,6 +678,7 @@
       "tests/python/integration/runtime/test_isothermal_vacuum_floor_inactive.py",
       "tests/python/integration/runtime/test_isothermal_vacuum_floor_system.py",
       "tests/python/integration/runtime/test_local_transform_runtime.py",
+      "tests/python/integration/runtime/test_mapped_condensed_disk_runtime.py",
       "tests/python/integration/runtime/test_multi_layout_runtime.py",
       "tests/python/integration/runtime/test_multiblock_implicit_phase.py",
       "tests/python/integration/runtime/test_multicomponent_diffusion_exchange_ledger.py",
@@ -673,6 +711,7 @@
       "tests/python/unit/codegen/test_amr_implicit_diffusion_codegen.py",
       "tests/python/unit/codegen/test_amr_route_introspection.py",
       "tests/python/unit/codegen/test_amr_tensor_diffusion_codegen.py",
+      "tests/python/unit/codegen/test_analytic_aux.py",
       "tests/python/unit/codegen/test_artifact_migration.py",
       "tests/python/unit/codegen/test_artifact_model_metadata_protocol.py",
       "tests/python/unit/codegen/test_auxiliary_consumer_identity.py",
@@ -726,7 +765,9 @@
       "tests/python/unit/codegen/test_emitter_provider_pack_bind.py",
       "tests/python/unit/codegen/test_exact_ranked_emitters.py",
       "tests/python/unit/codegen/test_exact_scalar_literals.py",
+      "tests/python/unit/codegen/test_facade_compile_cache.py",
       "tests/python/unit/codegen/test_fail_closed_reports.py",
+      "tests/python/unit/codegen/test_fan_li15_path_program.py",
       "tests/python/unit/codegen/test_fd_eps_cache_key.py",
       "tests/python/unit/codegen/test_field_cadence_coverage.py",
       "tests/python/unit/codegen/test_field_install_plan.py",
@@ -746,6 +787,7 @@
       "tests/python/unit/codegen/test_layout_plan_pipeline.py",
       "tests/python/unit/codegen/test_local_auxiliary_outcome.py",
       "tests/python/unit/codegen/test_lowering_coverage_report.py",
+      "tests/python/unit/codegen/test_mapped_condensed.py",
       "tests/python/unit/codegen/test_matrix_free_dt_capture.py",
       "tests/python/unit/codegen/test_migration_public_workflows.py",
       "tests/python/unit/codegen/test_module_codegen.py",
@@ -800,6 +842,7 @@
       "tests/python/unit/codegen/test_resolved_operations.py",
       "tests/python/unit/codegen/test_rhs_jacvec_boundary_emit.py",
       "tests/python/unit/codegen/test_scalar_commit_publication.py",
+      "tests/python/unit/codegen/test_scalar_output_history_identity.py",
       "tests/python/unit/codegen/test_scharfetter_gummel_program.py",
       "tests/python/unit/codegen/test_schedule_extension_protocol.py",
       "tests/python/unit/codegen/test_scheduler_codegen.py",
@@ -856,12 +899,20 @@
       "tests/python/unit/mesh/test_interface_face_execution.py",
       "tests/python/unit/mesh/test_layout_plan.py",
       "tests/python/unit/mesh/test_shared_interface_claims.py",
+      "tests/python/unit/moments/test_affine_velocity_exponential_native.py",
+      "tests/python/unit/moments/test_affine_velocity_native.py",
+      "tests/python/unit/moments/test_fan_li15_admissibility_native.py",
+      "tests/python/unit/moments/test_fan_li15_cartesian_native.py",
+      "tests/python/unit/moments/test_fan_li15_constitutive.py",
+      "tests/python/unit/moments/test_fan_li15_interface_native.py",
+      "tests/python/unit/moments/test_fan_li15_path_native.py",
       "tests/python/unit/moments/test_hyqmom15_final_contract.py",
       "tests/python/unit/moments/test_hyqmom15_relaxation.py",
       "tests/python/unit/numerics/test_balance_partition_coverage.py",
       "tests/python/unit/numerics/test_diffusion_stability.py",
       "tests/python/unit/numerics/test_discretization_plan.py",
       "tests/python/unit/numerics/test_external_reconstruction_contract.py",
+      "tests/python/unit/numerics/test_fan_li15_path_contract.py",
       "tests/python/unit/numerics/test_finite_volume_composite.py",
       "tests/python/unit/numerics/test_indicator_stencils.py",
       "tests/python/unit/numerics/test_state_storage.py",
@@ -884,6 +935,7 @@
       "tests/python/unit/physics/test_hll_isothermal.py",
       "tests/python/unit/physics/test_joint_rate_projection_balance.py",
       "tests/python/unit/physics/test_named_state_binding.py",
+      "tests/python/unit/physics/test_nonconservative_product_contract.py",
       "tests/python/unit/physics/test_physics_freeze_protocol.py",
       "tests/python/unit/physics/test_primitive_state.py",
       "tests/python/unit/physics/test_ranked_field_outputs.py",
@@ -972,11 +1024,14 @@
       "tests/python/unit/runtime/test_step_transaction_runtime.py",
       "tests/python/unit/runtime/test_temporal_restart_state.py",
       "tests/python/unit/runtime/test_typed_bind_phase.py",
+      "tests/python/unit/runtime/test_uniform_checkpoint_layout.py",
       "tests/python/unit/runtime/test_uniform_continuation_preflight.py",
       "tests/python/unit/runtime/test_v3_features.py",
       "tests/python/unit/solvers/test_amr_composite_facade.py",
       "tests/python/unit/solvers/test_cartesian_cg_descriptor.py",
       "tests/python/unit/solvers/test_poisson_screened.py",
+      "tests/python/unit/time/test_affine_moment_exponential_policy.py",
+      "tests/python/unit/time/test_affine_moment_update.py",
       "tests/python/unit/time/test_clock_propagation.py",
       "tests/python/unit/time/test_compiled_program_detach.py",
       "tests/python/unit/time/test_dirk_expansion.py",
@@ -1134,7 +1189,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 551,
+    "total_files": 571,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -1476,21 +1531,108 @@
         "tests/python/integration/runtime/test_isothermal_vacuum_floor_inactive.py": 450.0,
         "tests/python/integration/runtime/test_isothermal_vacuum_boundary_rollback.py": 250.0
       }
+    },
+    "pr680_20260922_additions": {
+      "basis": "Explicit conservative scheduling estimates, not measured CI per-file wall times. The 4adfddf Python jobs failed during budgeting before these files ran. Allowances follow each file's actual compilation shape; standalone/header witnesses are separate from full generated native AMR artifacts. No tests are omitted and no cross-file compiler-cache reuse is assumed.",
+      "files": {
+        "tests/python/integration/runtime/test_affine_moment_update_runtime.py": {
+          "estimated_seconds": 900,
+          "basis": "Three native AMR compilation/execution variants; 300 s allowance per variant."
+        },
+        "tests/python/integration/runtime/test_analytic_aux_transport.py": {
+          "estimated_seconds": 600,
+          "basis": "Two independent native uniform/AMR compilation/execution variants; 300 s allowance each."
+        },
+        "tests/python/integration/runtime/test_mapped_condensed_disk_runtime.py": {
+          "estimated_seconds": 1500,
+          "basis": "Up to five native mapped AMR compilation/execution calls; 300 s allowance each without assuming cache hits."
+        },
+        "tests/python/unit/codegen/test_analytic_aux.py": {
+          "estimated_seconds": 5,
+          "basis": "Source-only analytic auxiliary contracts."
+        },
+        "tests/python/unit/codegen/test_facade_compile_cache.py": {
+          "estimated_seconds": 15,
+          "basis": "Mocked compile/cache publication and concurrent-call contracts; no real native compilation."
+        },
+        "tests/python/unit/codegen/test_fan_li15_path_program.py": {
+          "estimated_seconds": 30,
+          "basis": "Symbolic fifteen-moment path lowering and generated-source contracts."
+        },
+        "tests/python/unit/codegen/test_mapped_condensed.py": {
+          "estimated_seconds": 15,
+          "basis": "Symbolic mapped-field lowering and boundary contracts."
+        },
+        "tests/python/unit/codegen/test_scalar_output_history_identity.py": {
+          "estimated_seconds": 5,
+          "basis": "Source-only output-history identity and dependency contracts."
+        },
+        "tests/python/unit/moments/test_affine_velocity_exponential_native.py": {
+          "estimated_seconds": 30,
+          "basis": "One standalone header-only native compile and exponential-map witnesses."
+        },
+        "tests/python/unit/moments/test_affine_velocity_native.py": {
+          "estimated_seconds": 30,
+          "basis": "One standalone header-only native compile and affine-map witnesses."
+        },
+        "tests/python/unit/moments/test_fan_li15_admissibility_native.py": {
+          "estimated_seconds": 60,
+          "basis": "Header bridge plus strict-FP refusal compile; independent file may rebuild the shared fixture."
+        },
+        "tests/python/unit/moments/test_fan_li15_cartesian_native.py": {
+          "estimated_seconds": 300,
+          "basis": "Standalone Kokkos witness build and one/two-worker executions; no native PoPS package rebuild."
+        },
+        "tests/python/unit/moments/test_fan_li15_constitutive.py": {
+          "estimated_seconds": 30,
+          "basis": "Symbolic/rational closure, matrix spectrum, and covariance contracts."
+        },
+        "tests/python/unit/moments/test_fan_li15_interface_native.py": {
+          "estimated_seconds": 60,
+          "basis": "Standalone header bridge compile and interface witnesses; no cross-file fixture reuse assumed."
+        },
+        "tests/python/unit/moments/test_fan_li15_path_native.py": {
+          "estimated_seconds": 120,
+          "basis": "Standalone header bridge compile and high-precision path quadrature witnesses."
+        },
+        "tests/python/unit/numerics/test_fan_li15_path_contract.py": {
+          "estimated_seconds": 15,
+          "basis": "Symbolic path, flux, regularization, and operator identity contracts."
+        },
+        "tests/python/unit/physics/test_nonconservative_product_contract.py": {
+          "estimated_seconds": 5,
+          "basis": "Source-only authored nonconservative-product contracts."
+        },
+        "tests/python/unit/runtime/test_uniform_checkpoint_layout.py": {
+          "estimated_seconds": 5,
+          "basis": "In-memory array layout/checkpoint contracts; no native compilation."
+        },
+        "tests/python/unit/time/test_affine_moment_exponential_policy.py": {
+          "estimated_seconds": 15,
+          "basis": "Symbolic policy/identity and generated-source contracts."
+        },
+        "tests/python/unit/time/test_affine_moment_update.py": {
+          "estimated_seconds": 15,
+          "basis": "Symbolic affine-update and generated-source contracts."
+        }
+      },
+      "refresh": "Replace each estimate from a complete CI gate-python per-file phase receipt plus an explicit collection/cache/scheduler allowance; do not label local qualification totals as CI file measurements."
+    },
+    "pr680_20260922_roe_process_budget": {
+      "file": "tests/python/unit/codegen/test_dsl_autodiff_roe.py",
+      "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4",
+      "run_id": 35717678423,
+      "job_id": 106714408765,
+      "job_url": "https://github.com/wolf75222/PoPS/actions/runs/35717678423/job/106714408765",
+      "observed_timeout_seconds": 300.02,
+      "previous_observed_lower_bound_seconds": 298.82,
+      "previous_observation_run_id": 34760671991,
+      "previous_process_timeout_seconds": 300,
+      "process_timeout_seconds": 450,
+      "previous_estimated_seconds": 375,
+      "estimated_seconds": 380,
+      "basis": "The coherent witness compiles two production models and one shared Euler Program bridge before comparing eight steps. The 300.02-second CI call was interrupted, so it is a lower bound, not a completed duration. Apply the existing 25 percent headroom rule to that bound and round up to 5 seconds for a 380-second scheduling estimate. Declare the existing per-file process-budget mechanism at 450 seconds (50 percent above the old 300-second limit); shard and workflow watchdogs are unchanged.",
+      "refresh": "Replace the scheduling estimate from a complete CI per-file receipt. A local native pass does not qualify the revised Linux CI budget."
     }
-  },
-  "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py": 175,
-  "tests/python/integration/runtime/test_amr_physical_maps.py": 1050.0,
-  "tests/python/integration/runtime/test_amr_field_map_continuations.py": 1800.0,
-  "tests/python/integration/runtime/test_tensor_transport_composition.py": 1200.0,
-  "tests/python/unit/codegen/test_partition_stability.py": 5.0,
-  "tests/python/unit/codegen/test_tensor_transport_composition.py": 30.0,
-  "tests/python/unit/codegen/test_transport_quadrature.py": 5.0,
-  "tests/python/unit/runtime/test_amr_accepted_state_inspector.py": 0.5,
-  "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py": 3600.0,
-  "tests/python/unit/runtime/test_dt_bounds_compiled.py": 600.0,
-  "tests/python/integration/native_loader/test_dsl_production_amr_poisson.py": 220.0,
-  "tests/python/integration/native_loader/test_dsl_production_amr_roe.py": 180.0,
-  "tests/python/integration/native_loader/test_dsl_production_amr_guards.py": 300.0,
-  "tests/python/integration/runtime/test_isothermal_vacuum_floor_inactive.py": 450.0,
-  "tests/python/integration/runtime/test_isothermal_vacuum_boundary_rollback.py": 250.0
+  }
 }

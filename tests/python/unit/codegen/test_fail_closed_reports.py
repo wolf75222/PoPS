@@ -97,8 +97,12 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert "PrecisionPolicy is representable" in routes["precision:single_or_mixed"].limitation
     assert routes["checkpoint:uniform_accepted_state_v5"].status == "available"
     assert routes["checkpoint:uniform_accepted_state_v5"].layout == "uniform"
-    assert routes["checkpoint:amr_accepted_state_v7"].status == "available"
-    assert routes["checkpoint:amr_accepted_state_v7"].layout == "amr"
+    amr_checkpoint = routes["checkpoint:amr_accepted_state_v8"]
+    assert amr_checkpoint.status == "available"
+    assert amr_checkpoint.layout == "amr"
+    assert "committed attempt authority" in amr_checkpoint.limitation
+    assert "v4-v7 images are inspection-only" in amr_checkpoint.limitation
+    assert not any("checkpoint:amr_accepted_state_v%d" % version in routes for version in range(4, 8))
     assert routes["checkpoint:amr_dynamic_regrid"].status == "available"
     assert "checkpoint:system_v1" not in routes
     weno = routes["reconstruction:weno5"]

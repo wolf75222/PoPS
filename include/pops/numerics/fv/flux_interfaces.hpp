@@ -143,7 +143,17 @@ enum class RiemannFailureCause : std::uint32_t {
   kRoeInvalidStability = UINT32_C(0x53544204),
   kRoeNonFiniteDissipation = UINT32_C(0x524f4501),
   kRoeNonFiniteFlux = UINT32_C(0x524f4502),
+  kNonconservativePathRequired = UINT32_C(0x50415401),
 };
+
+/// Physical Grad evaluation remains meaningful for a path model; a shared
+/// conservative numerical flux alone is not its complete transport operator.
+template <class Model>
+inline constexpr bool path_conservative_model = [] {
+  if constexpr (requires { Model::path_conservative; })
+    return static_cast<bool>(Model::path_conservative);
+  return false;
+}();
 
 POPS_HD constexpr std::uint32_t riemann_reason_code(RiemannFailureCause cause) {
   return static_cast<std::uint32_t>(cause);
@@ -771,6 +781,7 @@ struct PhysicalFluxView {
   using Trace = FaceTrace<State, ProviderPack>;
   static constexpr int dimension = physical_model_dimension<Model>;
   static constexpr int n_vars = Model::n_vars;
+  static constexpr bool path_conservative = path_conservative_model<Model>;
   static_assert(detail::flux_all_axes<Model>(),
                 "physical model must provide flux and wave speed on every ranked axis");
 
@@ -855,9 +866,15 @@ concept PhysicalFlux =
       { flux.stability(trace, face) } -> std::same_as<StabilityBound>;
     };
 
+/// Ordinary face policies may not erase the separate residual contributions of
+/// a path model. Its physical Grad formula still satisfies PhysicalFlux and can
+/// be inspected independently through evaluate().
+template <class T>
+concept OrdinaryPhysicalFlux = PhysicalFlux<T> && !path_conservative_model<T>;
+
 template <class T, class Physical>
 concept NumericalFlux =
-    PhysicalFlux<Physical> &&
+    OrdinaryPhysicalFlux<Physical> &&
     requires(const T& numerical, const Physical& physical, const typename Physical::Trace& left,
              const typename Physical::Trace& right, const FaceContext& face) {
       {
@@ -881,20 +898,25 @@ POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux(
     const Numerical& numerical, const Model& model, const typename Model::State& left_state,
     const BoundFluxProviders<Model>& left_providers, const typename Model::State& right_state,
     const BoundFluxProviders<Model>& right_providers, const FaceContext& face) {
-  const PhysicalFluxView<Model> physical{model};
-  const auto left = make_face_trace<Model>(left_state, left_providers);
-  const auto right = make_face_trace<Model>(right_state, right_providers);
-  static_assert(NumericalFlux<Numerical, PhysicalFluxView<Model>>,
-                "numerical flux does not satisfy the typed two-trace contract");
-  auto result = numerical(physical, left, right, face);
-  if (result.requested_solver != RiemannSolverId::kUnspecified)
-    return result;
-  constexpr RiemannSolverId solver = [] {
-    if constexpr (requires { Numerical::solver_id; })
-      return static_cast<RiemannSolverId>(Numerical::solver_id);
-    return RiemannSolverId::kExternal;
-  }();
-  return result.with_single_solver(solver);
+  if constexpr (path_conservative_model<Model>) {
+    return FluxEvaluation<typename Model::State>::reject(
+        RiemannFailureCause::kNonconservativePathRequired);
+  } else {
+    const PhysicalFluxView<Model> physical{model};
+    const auto left = make_face_trace<Model>(left_state, left_providers);
+    const auto right = make_face_trace<Model>(right_state, right_providers);
+    static_assert(NumericalFlux<Numerical, PhysicalFluxView<Model>>,
+                  "numerical flux does not satisfy the typed two-trace contract");
+    auto result = numerical(physical, left, right, face);
+    if (result.requested_solver != RiemannSolverId::kUnspecified)
+      return result;
+    constexpr RiemannSolverId solver = [] {
+      if constexpr (requires { Numerical::solver_id; })
+        return static_cast<RiemannSolverId>(Numerical::solver_id);
+      return RiemannSolverId::kExternal;
+    }();
+    return result.with_single_solver(solver);
+  }
 }
 
 template <class Numerical, class Model, int Dim, class LeftStorage, class RightStorage>
@@ -903,9 +925,16 @@ POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux_at(
     const LeftStorage& left_providers, const Index<Dim>& left_index,
     const typename Model::State& right_state, const RightStorage& right_providers,
     const Index<Dim>& right_index, const FaceContext& face) {
-  return evaluate_numerical_flux(
-      numerical, model, left_state, bind_flux_providers_at<Model>(left_providers, left_index),
-      right_state, bind_flux_providers_at<Model>(right_providers, right_index), face);
+  if constexpr (path_conservative_model<Model>) {
+    // Refusal precedes provider binding: the ordinary route has no authority
+    // to read a path model's boundary traces, even when they would be valid.
+    return FluxEvaluation<typename Model::State>::reject(
+        RiemannFailureCause::kNonconservativePathRequired);
+  } else {
+    return evaluate_numerical_flux(
+        numerical, model, left_state, bind_flux_providers_at<Model>(left_providers, left_index),
+        right_state, bind_flux_providers_at<Model>(right_providers, right_index), face);
+  }
 }
 
 }  // namespace pops

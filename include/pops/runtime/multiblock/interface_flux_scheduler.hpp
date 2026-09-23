@@ -165,6 +165,64 @@ struct InterfaceFluxSample {
   std::vector<Real> flux_density;
 };
 
+/// A consumer face view of an immutable physical sample. The source point/certificate remain
+/// on InterfaceFluxSample; this plan only refines its canonical left tangential enumeration.
+/// Constant tangential injection preserves each parent-face integral, including signed weights.
+template <int Dim>
+struct InterfaceFluxSampleProjection {
+  static_assert(Dim >= 1 && Dim <= 3);
+  int source_level = 0;
+  int level = 0;
+  std::string source_route_contract;
+  std::string exact_contract;
+  std::array<std::size_t, Dim - 1> source_extents{};
+  std::array<std::size_t, Dim - 1> target_extents{};
+  std::size_t source_faces = 0;
+  std::size_t face_count = 0;
+  int component_count = 0;
+  double face_measure = 0;
+
+  std::vector<Real> apply(const InterfaceFluxSample& source) const {
+    if (source.level != source_level || source.route_contract != source_route_contract ||
+        source.face_count != source_faces || source.component_count != component_count ||
+        component_count <= 0 || source_faces == 0 || face_count == 0 ||
+        source_faces >
+            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(component_count) ||
+        face_count >
+            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(component_count) ||
+        face_count * static_cast<std::size_t>(component_count) >
+            std::numeric_limits<std::size_t>::max() / sizeof(Real) ||
+        source.flux_density.size() != source_faces * static_cast<std::size_t>(component_count))
+      throw std::invalid_argument("shared flux projection has a foreign or oversized payload");
+    std::size_t expected_source = 1, expected_target = 1;
+    for (int tangent = 0; tangent < Dim - 1; ++tangent) {
+      const auto coarse = source_extents[tangent], fine = target_extents[tangent];
+      if (coarse == 0 || fine < coarse || fine % coarse != 0 ||
+          coarse > std::numeric_limits<std::size_t>::max() / expected_source ||
+          fine > std::numeric_limits<std::size_t>::max() / expected_target)
+        throw std::invalid_argument("shared flux projection has invalid tangential extents");
+      expected_source *= coarse;
+      expected_target *= fine;
+    }
+    if (expected_source != source_faces || expected_target != face_count)
+      throw std::invalid_argument("shared flux projection face counts differ from its extents");
+    std::vector<Real> result(face_count * static_cast<std::size_t>(component_count));
+    for (std::size_t face = 0; face < face_count; ++face) {
+      std::size_t remainder = face, parent = 0, stride = 1;
+      for (int tangent = 0; tangent < Dim - 1; ++tangent) {
+        const auto fine = target_extents[tangent], coarse = source_extents[tangent];
+        parent += (remainder % fine) / (fine / coarse) * stride;
+        remainder /= fine;
+        stride *= coarse;
+      }
+      for (int component = 0; component < component_count; ++component)
+        result[face * static_cast<std::size_t>(component_count) + component] =
+            source.flux_density[parent * static_cast<std::size_t>(component_count) + component];
+    }
+    return result;
+  }
+};
+
 struct InterfaceFluxProductionBudget {
   struct Level {
     std::size_t fragment_count_per_application = 0;
@@ -347,10 +405,12 @@ class InterfaceFluxScheduler {
       interfaces_.reserve(interfaces_.size() + 1);
       prepared.route = std::move(route);
       prepared.left_layout = left_state.layout();
+      prepared.left_geometry = left_geometry;
       prepared.left_distribution = left_state.distribution();
       prepared.left_rank = left_state.local_rank();
       prepared.left_ghosts = left_state.ghosts();
       prepared.right_layout = right_state.layout();
+      prepared.right_geometry = right_geometry;
       prepared.right_distribution = right_state.distribution();
       prepared.right_rank = right_state.local_rank();
       prepared.right_ghosts = right_state.ghosts();
@@ -542,6 +602,73 @@ class InterfaceFluxScheduler {
                      [](Real value) { return std::isfinite(static_cast<double>(value)); }))
       throw std::invalid_argument("retained shared flux sample has invalid source provenance");
     return found->collective_identity;
+  }
+
+  InterfaceFluxSampleProjection<Dim> prepare_sample_projection(const InterfaceFluxSample& sample,
+                                                               int target_level) const {
+    (void)authenticate_sample(sample);
+    if (target_level < sample.level)
+      throw std::invalid_argument("shared history flux cannot project to a coarser level");
+    const auto route_at = [&](int level) -> const PreparedInterface& {
+      const auto found =
+          std::find_if(interfaces_.begin(), interfaces_.end(), [&](const auto& route) {
+            return route.route.identity == sample.interface_identity && route.route.level == level;
+          });
+      if (found == interfaces_.end() || found->route_certificate.empty() || !found->left_geometry ||
+          !found->right_geometry)
+        throw std::invalid_argument("shared flux projection lacks an authenticated level route");
+      return *found;
+    };
+    const auto& source = route_at(sample.level);
+    if (!(source.face_measure > Real(0)) || !std::isfinite(source.face_measure))
+      throw std::invalid_argument("shared flux projection has an invalid source face measure");
+    const PreparedInterface* target = &source;
+    ExactContractBuilder contract;
+    contract.text("pops.multiblock.shared-history-face-projection.v1")
+        .bytes(source.collective_identity)
+        .scalar(sample.level)
+        .scalar(target_level);
+    for (int level = sample.level; level < target_level; ++level) {
+      const auto& next = route_at(level + 1);
+      if (!same_route_across_levels_(target->route, next.route) ||
+          target->component_count != next.component_count)
+        throw std::invalid_argument("shared flux projection has different endpoint providers");
+      if (!(next.face_measure > Real(0)) || !std::isfinite(next.face_measure))
+        throw std::invalid_argument("shared flux projection has an invalid target face measure");
+      const auto left_ratio =
+          require_projection_geometry_(*target->left_geometry, *next.left_geometry);
+      const auto right_ratio =
+          require_projection_geometry_(*target->right_geometry, *next.right_geometry);
+      const auto left_tangents = tangential_axes_(next.route.left_axis);
+      const auto right_tangents = tangential_axes_(next.route.right_axis);
+      for (int tangent = 0; tangent < tangent_dimension; ++tangent)
+        if (left_ratio[left_tangents[tangent]] !=
+            right_ratio
+                [right_tangents[next.route.tangential_transform.right_tangent_for_left[tangent]]])
+          throw std::invalid_argument(
+              "shared flux projection has incompatible endpoint refinement");
+      contract.bytes(next.collective_identity);
+      target = &next;
+    }
+    InterfaceFluxSampleProjection<Dim> projection;
+    projection.source_level = sample.level;
+    projection.level = target_level;
+    projection.source_route_contract = sample.route_contract;
+    projection.source_faces = source.face_count;
+    projection.face_count = target->face_count;
+    projection.component_count = source.component_count;
+    projection.face_measure = target->face_measure;
+    const auto tangents = tangential_axes_(source.route.left_axis);
+    for (int tangent = 0; tangent < tangent_dimension; ++tangent) {
+      projection.source_extents[tangent] =
+          static_cast<std::size_t>(source.left_geometry->domain().length(tangents[tangent]));
+      projection.target_extents[tangent] =
+          static_cast<std::size_t>(target->left_geometry->domain().length(tangents[tangent]));
+      contract.scalar(static_cast<std::uint64_t>(projection.source_extents[tangent]))
+          .scalar(static_cast<std::uint64_t>(projection.target_extents[tangent]));
+    }
+    projection.exact_contract = std::move(contract).release();
+    return projection;
   }
 
   std::size_t size() const noexcept { return interfaces_.size(); }
@@ -948,10 +1075,12 @@ class InterfaceFluxScheduler {
   struct PreparedInterface {
     route_type route;
     layout_type left_layout;
+    std::optional<geometry_type> left_geometry;
     distribution_type left_distribution;
     rank_type left_rank{};
     ghost_type left_ghosts{};
     layout_type right_layout;
+    std::optional<geometry_type> right_geometry;
     distribution_type right_distribution;
     rank_type right_rank{};
     ghost_type right_ghosts{};
@@ -1175,6 +1304,29 @@ class InterfaceFluxScheduler {
       if (axis != normal_axis)
         result[static_cast<std::size_t>(tangent++)] = axis;
     return result;
+  }
+
+  static std::array<std::int64_t, Dim> require_projection_geometry_(const geometry_type& source,
+                                                                    const geometry_type& target) {
+    std::array<std::int64_t, Dim> ratio{};
+    bool refined = false;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto coarse = source.domain().length(axis), fine = target.domain().length(axis);
+      if (source.lower()[axis] != target.lower()[axis] ||
+          source.upper()[axis] != target.upper()[axis] || coarse <= 0 || fine < coarse ||
+          fine % coarse != 0)
+        throw std::invalid_argument("shared flux projection has incompatible physical domains");
+      ratio[axis] = fine / coarse;
+      refined = refined || ratio[axis] > 1;
+      const Real expected = source.spacing(axis) / static_cast<Real>(ratio[axis]);
+      if (!std::isfinite(expected) || !(expected > Real(0)) ||
+          std::abs(target.spacing(axis) - expected) >
+              Real(32) * std::numeric_limits<Real>::epsilon() * expected)
+        throw std::invalid_argument("shared flux projection has incompatible cell metrics");
+    }
+    if (!refined)
+      throw std::invalid_argument("shared flux projection level does not refine its parent");
+    return ratio;
   }
 
   static std::size_t face_count_(const box_type& domain,
@@ -1418,10 +1570,12 @@ class InterfaceFluxScheduler {
                                    right_tangents);
     PreparedInterface replacement = prepared;
     replacement.left_layout = left_state.layout();
+    replacement.left_geometry = left_geometry;
     replacement.left_distribution = left_state.distribution();
     replacement.left_rank = left_state.local_rank();
     replacement.left_ghosts = left_state.ghosts();
     replacement.right_layout = right_state.layout();
+    replacement.right_geometry = right_geometry;
     replacement.right_distribution = right_state.distribution();
     replacement.right_rank = right_state.local_rank();
     replacement.right_ghosts = right_state.ghosts();

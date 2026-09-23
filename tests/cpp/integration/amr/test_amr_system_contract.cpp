@@ -30,6 +30,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -499,6 +500,142 @@ void verify_exact_rebuild_distribution_modes() {
   system.rebuild_hierarchy({replicated_patch}, {0});
   EXPECT_EQ(system.level_distribution_mode(1), "partitioned");
   EXPECT_EQ(system.level_owner_ranks(1), std::vector<int>({0}));
+}
+
+template <int Dim>
+void verify_restart_auxiliary_layout_replacement() {
+  using namespace pops::runtime::system;
+  auto config = magnetic_config<Dim>();
+  config.periodicity[0] = false;
+  pops::Index<Dim> lower{}, initial_upper{}, expanded_upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    lower[axis] = 2;
+    initial_upper[axis] = 5;
+    expanded_upper[axis] = 9;
+  }
+  const pops::AmrPatch<Dim> initial_patch{1, {lower, initial_upper}};
+  const pops::AmrPatch<Dim> expanded_patch{1, {lower, expanded_upper}};
+  const auto initialize = [&](pops::AmrSystem<Dim>& system, const pops::AmrPatch<Dim>& patch,
+                              double value) {
+    pops::test::install_amr_runtime_authority(
+        system, "test.amr-system-contract.restart-auxiliary-runtime");
+    const auto keys = install_magnetic_provider(system, {});
+    constexpr const char* state_route = "tests.amr.system-contract/restart-auxiliary/state";
+    system.install_block_state_route("tracer", state_route);
+    std::vector<std::string> face_types;
+    std::vector<std::string> face_identities;
+    for (int axis = 0; axis < Dim; ++axis) {
+      for (int side = 0; side < 2; ++side) {
+        face_types.push_back(config.periodicity[axis] ? "periodic" : "foextrap");
+        face_identities.push_back("tests.amr.system-contract/restart-auxiliary/face-" +
+                                  std::to_string(2 * axis + side));
+      }
+    }
+    system.install_hyperbolic_boundary(
+        "tracer", "tests.amr.system-contract/restart-auxiliary/boundary@1", 1, face_types,
+        std::vector<double>(static_cast<std::size_t>(2 * Dim), 0.0), face_identities, {"Scalar"},
+        state_route);
+    install_direct_tracer(system, "tracer", "tests.amr.system-contract/restart-auxiliary/flux");
+    const std::size_t cells = cell_count(config.shape);
+    for (std::size_t component = 0; component < keys.size(); ++component)
+      system.stage_auxiliary_input(keys[component],
+                                   std::vector<double>(cells, value + component));
+    system.set_conservative_state("tracer", std::vector<double>(cells, value));
+    system.rebuild_hierarchy({patch}, {0});
+    auto fine = system.block_level_state_global("tracer", 1);
+    std::fill(fine.begin(), fine.end(), value + 4.0);
+    system.set_block_level_state("tracer", 1, fine);
+    system.refresh_auxiliary({"tests.amr.system-contract/restart-auxiliary-clock", 0, 0, 0, 0, 0,
+                              0, AuxiliaryEvaluationEvent::initialization});
+  };
+
+  pops::AmrSystem<Dim> source(config);
+  initialize(source, expanded_patch, 7.0);
+  const auto incoming_auxiliary = source.capture_auxiliary_checkpoint_accepted_state();
+  const auto auxiliary_manifest = [](const pops::AmrSystem<Dim>& system) {
+    std::vector<std::vector<std::string>> result;
+    for (const auto& row : system.checkpoint_rank_local_carrier_manifest())
+      if (row.size() > 1 && row[1].starts_with("auxiliary"))
+        result.push_back(row);
+    return result;
+  };
+  const auto incoming_auxiliary_manifest = auxiliary_manifest(source);
+  ASSERT_EQ(incoming_auxiliary.size(), 2U);
+  ASSERT_FALSE(incoming_auxiliary.back().groups.empty());
+  ASSERT_FALSE(incoming_auxiliary.back().components.empty());
+  std::vector<std::vector<std::uint8_t>> incoming_bytes;
+  for (const auto& level : incoming_auxiliary)
+    incoming_bytes.push_back(serialize_auxiliary_checkpoint_state(level));
+
+  pops::AmrSystem<Dim> system(config);
+  initialize(system, initial_patch, 2.0);
+  const auto initial_manifest = system.checkpoint_rank_local_carrier_manifest();
+  const auto initial_auxiliary = system.capture_auxiliary_checkpoint_accepted_state();
+  const auto initial_boxes = system.patch_boxes();
+  const auto initial_epoch = system.engine()->topology_epoch();
+  const auto require_rollback = [&]() {
+    EXPECT_EQ(system.patch_boxes(), initial_boxes);
+    EXPECT_EQ(system.level_owner_ranks(1), std::vector<int>({0}));
+    EXPECT_EQ(system.engine()->topology_epoch(), initial_epoch);
+    EXPECT_EQ(system.checkpoint_rank_local_carrier_manifest(), initial_manifest);
+    EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), initial_auxiliary);
+  };
+
+  // Ordinary refresh still refuses a different live auxiliary layout.
+  EXPECT_THROW(system.rebuild_hierarchy({expanded_patch}, {0}), std::exception);
+  require_rollback();
+
+  // Missing, malformed, non-finite and wrong-owner images cannot commit, partially publish, or
+  // destroy the exact original accepted carriers retained by the enclosing restart transaction.
+  for (int corruption = 0; corruption != 4; ++corruption) {
+    system.begin_restart_transaction();
+    ASSERT_NO_THROW(system.rebuild_hierarchy({expanded_patch}, {0}));
+    EXPECT_THROW(system.commit_restart_transaction(), std::logic_error);
+    EXPECT_THROW(system.preflight_regrid_on_restart(), std::logic_error);
+    EXPECT_THROW(system.regrid_on_restart(), std::logic_error);
+    EXPECT_THROW((void)system.capture_auxiliary_checkpoint_accepted_state(), std::exception);
+    const auto provisional_manifest = system.checkpoint_rank_local_carrier_manifest();
+    auto malformed = incoming_auxiliary;
+    if (corruption == 0)
+      malformed.pop_back();
+    else if (corruption == 1)
+      malformed.back().groups.front().payload.pop_back();
+    else if (corruption == 2)
+      malformed.front().groups.front().payload.front() = std::numeric_limits<double>::quiet_NaN();
+    else
+      malformed.back().components.front().provider_identity += "/wrong-owner";
+    EXPECT_THROW(system.restore_auxiliary_checkpoint_accepted_state(malformed), std::exception);
+    EXPECT_EQ(system.checkpoint_rank_local_carrier_manifest(), provisional_manifest);
+    EXPECT_THROW(system.commit_restart_transaction(), std::logic_error);
+    system.finalize_restart_transaction();
+    ASSERT_NO_THROW(system.rollback_restart_transaction());
+    require_rollback();
+  }
+
+  system.begin_restart_transaction();
+  ASSERT_NO_THROW(system.rebuild_hierarchy({expanded_patch}, {0}));
+  system.restore_checkpoint_counters(3, source.engine()->topology_epoch());
+  for (int level = 0; level < source.n_levels(); ++level)
+    system.set_block_level_state("tracer", level, source.block_level_state_global("tracer", level));
+  ASSERT_NO_THROW(system.restore_restart_auxiliary_checkpoint_accepted_state_bytes(
+      [&]() { return incoming_bytes.size(); },
+      [&](std::size_t level) -> std::span<const std::uint8_t> { return incoming_bytes.at(level); }));
+  EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), incoming_auxiliary);
+  EXPECT_EQ(auxiliary_manifest(system), incoming_auxiliary_manifest);
+  // Program accepted-state restoration may requalify the graph after the auxiliary image is
+  // installed. A same-layout graph replacement must retain its complete accepted grown storage.
+  ASSERT_NO_THROW(system.restore_checkpoint_counters(3, source.engine()->topology_epoch() + 1));
+  EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), incoming_auxiliary);
+  EXPECT_EQ(auxiliary_manifest(system), incoming_auxiliary_manifest);
+  ASSERT_NO_THROW(system.commit_restart_transaction());
+  EXPECT_THROW(system.restore_auxiliary_checkpoint_accepted_state(incoming_auxiliary),
+               std::invalid_argument);
+  system.finalize_restart_transaction();
+  EXPECT_EQ(system.patch_boxes(), source.patch_boxes());
+  EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), incoming_auxiliary);
+  for (int level = 0; level < source.n_levels(); ++level)
+    EXPECT_EQ(system.block_level_state_global("tracer", level),
+               source.block_level_state_global("tracer", level));
 }
 
 template <int Dim>
@@ -1130,6 +1267,13 @@ TEST(test_amr_system_contract, RebuildDistributionModesPreserveReplicaAndPartiti
   Kokkos::ScopeGuard guard;
 #endif
   verify_exact_rebuild_distribution_modes<pops::kNativeDimension>();
+}
+
+TEST(test_amr_system_contract, RestartAuxiliaryReplacementRequiresExactCompleteImage) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  verify_restart_auxiliary_layout_replacement<pops::kNativeDimension>();
 }
 
 TEST(test_amr_system_contract, InitialCoarseTilingConsumesCapsAndPreservesExplicitBoxes) {

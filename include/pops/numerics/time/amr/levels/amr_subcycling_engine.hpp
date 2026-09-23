@@ -174,6 +174,37 @@ class PreparedMultiBlockAmrSubcyclingEngine {
 
   std::string_view exact_contract() const noexcept { return exact_contract_; }
   std::uint64_t last_accepted_attempt() const noexcept { return last_accepted_attempt_; }
+  std::uint64_t last_allocated_attempt() const noexcept { return next_attempt_; }
+
+  /// Seed a newly prepared engine from its owner's live allocation and committed authorities.
+  /// Failed attempts burn identities, so the live high-water mark can exceed the accepted cursor.
+  /// This is dynamic collective authority, separate from the immutable numerical contract.
+  void restore_attempt_authority(std::uint64_t allocated, std::uint64_t accepted) {
+    require_no_callback_reentry_();
+    require_live_();
+    std::string bytes;
+    invoke_collectively_(
+        [&] {
+          if (has_attempt_candidates() || attempt_authority_restored_ || next_attempt_ != 0 ||
+              last_accepted_attempt_ != 0)
+            throw std::logic_error("AMR attempt authority requires a fresh inactive engine");
+          if (accepted > allocated)
+            throw std::invalid_argument("AMR accepted attempt exceeds its allocation authority");
+          ExactContractBuilder contract;
+          contract.text("pops.amr.attempt-authority.v1")
+              .bytes(exact_contract_)
+              .scalar(allocated)
+              .scalar(accepted);
+          bytes = std::move(contract).release();
+        },
+        "AMR attempt authority preparation failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{"amr-attempt-authority", bytes}},
+                                                  hierarchy_->lane()))
+      throw std::invalid_argument("AMR attempt authority differs between ranks");
+    next_attempt_ = allocated;
+    last_accepted_attempt_ = accepted;
+    attempt_authority_restored_ = true;
+  }
 
   const std::optional<::pops::amr::ClockStamp>& accepted_clock(std::size_t block,
                                                                std::size_t level) const {
@@ -821,6 +852,7 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   LedgerMatrix accepted_ledgers_;
   std::uint64_t next_attempt_ = 0;
   std::uint64_t last_accepted_attempt_ = 0;
+  bool attempt_authority_restored_ = false;
   std::vector<std::vector<field_type>>* attempt_candidates_ = nullptr;
   std::unique_ptr<AttemptStorage> synchronized_attempt_;
 };

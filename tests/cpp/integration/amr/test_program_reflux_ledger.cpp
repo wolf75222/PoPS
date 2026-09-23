@@ -224,20 +224,46 @@ void prove_ranked_reflux_and_checkpoint() {
   program::CellTemporalPartitionAcceptedState temporal;
   auto accepted = program::accepted_amr_program_state<Dim>(
       std::string(runtime.spatial_contract()), runtime.topology_epoch(),
-      runtime.materialization_generation(), std::move(clocks), temporal, ledger);
+      runtime.materialization_generation(), std::move(clocks), temporal, ledger,
+      7 + static_cast<std::uint64_t>(Dim - 1));
   accepted.logical_clock_ticks.emplace("clock.macro", 3);
   accepted.tagging_hysteresis_state = {1, 0, 1};
   const std::vector<std::uint8_t> bytes = program::serialize_amr_program_accepted_state(accepted);
   const auto decoded = program::deserialize_amr_program_accepted_state<Dim>(bytes);
   EXPECT_EQ(program::serialize_amr_program_accepted_state(decoded), bytes);
+  EXPECT_EQ(decoded.accepted_attempt, 7 + static_cast<std::uint64_t>(Dim - 1));
   ASSERT_TRUE(decoded.face_evidence_provenance);
   EXPECT_EQ(decoded.face_evidence_provenance->spatial_contract, runtime.spatial_contract());
   EXPECT_EQ(decoded.face_evidence_provenance->level_count, 2u);
   EXPECT_NO_THROW(program::require_live_amr_program_checkpoint(decoded, runtime));
 
-  // POPSAND5 had no typed temporal-family string. Remove exactly those framed strings to obtain
-  // the frozen legacy layout, then prove an AND6 rewrite retains the empty legacy family.
-  std::vector<std::uint8_t> legacy5 = bytes;
+  // AND7 and older are inspectable, but contain no committed attempt authority. Remove exactly
+  // the new header word; never infer its value from the retained fragments or macro clock.
+  std::vector<std::uint8_t> legacy7 = bytes;
+  const std::size_t attempt_offset = 5 * sizeof(std::uint64_t) + accepted.spatial_contract.size();
+  legacy7.erase(legacy7.begin() + attempt_offset, legacy7.begin() + attempt_offset + 8);
+  legacy7[7] = '7';
+  const auto decoded7 = program::deserialize_amr_program_accepted_state<Dim>(legacy7);
+  EXPECT_FALSE(decoded7.accepted_attempt);
+  EXPECT_EQ(decoded7.accepted_face_flux[0].size(), decoded.accepted_face_flux[0].size());
+  EXPECT_THROW(program::require_live_amr_program_checkpoint(decoded7, runtime),
+               std::invalid_argument);
+  EXPECT_THROW((void)program::serialize_amr_program_accepted_state(decoded7),
+               std::invalid_argument);
+  EXPECT_THROW((void)program::restore_amr_program_face_flux_ledger(decoded7, kLedgerBudget),
+               std::invalid_argument);
+  auto future_fragment = bytes;
+  std::fill(future_fragment.begin() + attempt_offset,
+            future_fragment.begin() + attempt_offset + 8, std::uint8_t{0});
+  EXPECT_THROW((void)program::deserialize_amr_program_accepted_state<Dim>(future_fragment),
+               std::invalid_argument);
+  auto zero_fragment = decoded;
+  zero_fragment.accepted_face_flux[0].front().key.attempt = 0;
+  EXPECT_THROW((void)program::serialize_amr_program_accepted_state(zero_fragment),
+               std::invalid_argument);
+
+  // POPSAND5 also lacked typed temporal-family strings. Preserve inspection of the exact layout.
+  std::vector<std::uint8_t> legacy5 = legacy7;
   const std::string family = decoded.accepted_face_flux[0].front().key.temporal_family;
   for (;;) {
     const auto found = std::search(legacy5.begin(), legacy5.end(), family.begin(), family.end());
@@ -256,12 +282,9 @@ void prove_ranked_reflux_and_checkpoint() {
   for (const auto& axis : decoded5.accepted_face_flux)
     for (const auto& entry : axis)
       EXPECT_TRUE(entry.key.temporal_family.empty());
-  const auto rewritten5 = program::serialize_amr_program_accepted_state(decoded5);
-  const auto roundtrip5 = program::deserialize_amr_program_accepted_state<Dim>(rewritten5);
-  EXPECT_EQ(program::serialize_amr_program_accepted_state(roundtrip5), rewritten5);
-  for (const auto& axis : roundtrip5.accepted_face_flux)
-    for (const auto& entry : axis)
-      EXPECT_TRUE(entry.key.temporal_family.empty());
+  EXPECT_FALSE(decoded5.accepted_attempt);
+  EXPECT_THROW((void)program::serialize_amr_program_accepted_state(decoded5),
+               std::invalid_argument);
 
   // V4 ends immediately before the optional V5 origin suffix. Its evidence belonged to the
   // envelope geometry, so upgrade that exact old image without changing the accepted payload.
@@ -270,6 +293,9 @@ void prove_ranked_reflux_and_checkpoint() {
                                  decoded.face_evidence_provenance->spatial_contract.size()));
   legacy[7] = '4';
   const auto upgraded = program::deserialize_amr_program_accepted_state<Dim>(legacy);
+  EXPECT_FALSE(upgraded.accepted_attempt);
+  EXPECT_THROW(program::require_live_amr_program_checkpoint(upgraded, runtime),
+               std::invalid_argument);
   EXPECT_EQ(upgraded.face_evidence_provenance, decoded.face_evidence_provenance);
   for (const auto& axis : upgraded.accepted_face_flux)
     for (const auto& entry : axis)
@@ -326,7 +352,7 @@ void prove_checkpoint_rejections() {
                    std::string(runtime.spatial_contract()), runtime.topology_epoch(),
                    runtime.materialization_generation(),
                    {{0, 0, pops::amr::Rational(0, 1), 0.0}, {1, 0, pops::amr::Rational(0, 1), 0.0}},
-                   {}, ledger),
+                   {}, ledger, 0),
                std::logic_error);
   ledger.rollback();
 
@@ -449,6 +475,8 @@ TEST(test_program_reflux_ledger, HistoryPublicationIdentityUsesPhysicalWindowsAn
   EXPECT_EQ(restored.history_slots, state.history_slots);
   // Freeze an actual AND6 history layout by removing only the new per-slot 32-byte records.
   auto legacy = current;
+  const std::size_t attempt_offset = 5 * sizeof(std::uint64_t) + state.spatial_contract.size();
+  legacy.erase(legacy.begin() + attempt_offset, legacy.begin() + attempt_offset + 8);
   const auto framed =
       program::encode_history_sample_identity("prior", 0, std::span(&publication, 1));
   const std::vector<std::uint8_t> record(framed.end() - 32, framed.end());
@@ -465,10 +493,8 @@ TEST(test_program_reflux_ledger, HistoryPublicationIdentityUsesPhysicalWindowsAn
   const auto old = program::deserialize_amr_program_accepted_state<2>(legacy);
   for (const auto& slot : old.history_slots)
     EXPECT_EQ(slot.sample, Sample{});
-  EXPECT_EQ(program::deserialize_amr_program_accepted_state<2>(
-                program::serialize_amr_program_accepted_state(old))
-                .history_slots,
-            old.history_slots);
+  EXPECT_FALSE(old.accepted_attempt);
+  EXPECT_THROW((void)program::serialize_amr_program_accepted_state(old), std::invalid_argument);
   state.history_slots[0].sample = Sample::zero_start();
   EXPECT_THROW((void)program::serialize_amr_program_accepted_state(state), std::invalid_argument);
 }
@@ -476,6 +502,55 @@ TEST(test_program_reflux_ledger, HistoryPublicationIdentityUsesPhysicalWindowsAn
 TEST(test_program_reflux_ledger, InvalidCheckpointAndDuplicateFacesRejectBeforeMutation) {
   require_kokkos_runtime();
   prove_checkpoint_rejections();
+}
+
+TEST(test_program_reflux_ledger, CommittedAttemptWireAndCapacityIncludeEmptyLedgerAuthority) {
+  program::AmrProgramAcceptedState<2> state;
+  state.spatial_contract = "test.attempt-wire";
+  state.level_clocks = {{0, 0, {0, 1}, 0.0}};
+  state.logical_clock_ticks = {{"clock.macro", 0}};
+  state.flux_budget_contract = "test.empty-flux-budget";
+  state.coupling_contract = "test.no-coupling";
+  program::AmrProgramAcceptedStateCapacity<2> capacity;
+  capacity.spatial_contract_characters = state.spatial_contract.size();
+  capacity.level_count = 1;
+  capacity.logical_clock_identities = {"clock.macro"};
+  capacity.temporal_provider_identity = state.temporal_partition.provider_identity;
+  capacity.flux_budget_contract_characters = state.flux_budget_contract.size();
+  capacity.coupling_contract_characters = state.coupling_contract.size();
+  for (const std::uint64_t cursor : {std::uint64_t{0}, std::uint64_t{42},
+                                     std::numeric_limits<std::uint64_t>::max()}) {
+    state.accepted_attempt = cursor;
+    const auto bytes = program::serialize_amr_program_accepted_state(state);
+    // Independent fixed wire count: one clock/tick, no histories, faces or events.
+    EXPECT_EQ(bytes.size(), 264u + state.spatial_contract.size() + std::string("clock.macro").size() +
+                                state.temporal_partition.provider_identity.size() +
+                                state.flux_budget_contract.size() + state.coupling_contract.size());
+    EXPECT_EQ(program::serialized_amr_program_accepted_state_size(state), bytes.size());
+    EXPECT_EQ(program::serialized_amr_program_accepted_state_capacity(capacity),
+              bytes.size() + 32u + state.spatial_contract.size());  // Reserved geometry provenance.
+    const auto decoded = program::deserialize_amr_program_accepted_state<2>(bytes);
+    EXPECT_EQ(decoded.accepted_attempt, cursor);
+    EXPECT_TRUE(decoded.accepted_face_flux[0].empty());
+    EXPECT_TRUE(decoded.accepted_face_flux[1].empty());
+    EXPECT_EQ(program::serialize_amr_program_accepted_state(decoded), bytes);
+  }
+  state.accepted_attempt = 9;
+  if (pops::n_ranks() > 1) {
+    auto asymmetric = state;
+    if (pops::my_rank() == 0)
+      asymmetric.accepted_attempt = 10;
+    EXPECT_THROW(program::require_collective_amr_program_checkpoint_consensus(asymmetric),
+                 std::runtime_error);
+    if (pops::my_rank() == 0)
+      asymmetric.accepted_attempt.reset();
+    EXPECT_THROW(program::require_collective_amr_program_checkpoint_consensus(asymmetric),
+                 std::runtime_error);
+  }
+  EXPECT_NO_THROW(program::require_collective_amr_program_checkpoint_consensus(state));
+  state.accepted_attempt.reset();
+  EXPECT_THROW((void)program::serialized_amr_program_accepted_state_size(state),
+               std::invalid_argument);
 }
 
 }  // namespace

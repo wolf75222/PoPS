@@ -16,6 +16,7 @@
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/numerics/time/amr/levels/amr_subcycling.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
+#include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
@@ -43,6 +44,7 @@
 #include <exception>
 #include <functional>
 #include <initializer_list>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <memory>
@@ -50,6 +52,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -172,18 +175,39 @@ class AmrProgramContext {
     const field_type* state = nullptr;
   };
 
+private:
+  struct RhsInputTraceRecord;
+
+public:
+  /// Invocation-owned input authority for a generated synchronous RHS evaluation.
+  class RhsInputTrace {
+  public:
+    RhsInputTrace(const RhsInputTrace&) = default;
+    RhsInputTrace(RhsInputTrace&&) = default;
+
+  private:
+    friend class AmrProgramContext;
+    RhsInputTrace() = default;
+    const AmrProgramContext* owner_ = nullptr;
+    const field_type* input_ = nullptr;
+    std::shared_ptr<const RhsInputTraceRecord> current_;
+    std::shared_ptr<const RhsInputTraceRecord> parent_;
+  };
+
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, field_type* state_value, field_type* rhs_value,
                     int rate_id_value, int flux_only_value,
                     std::string_view temporal_family_value = {},
-                    std::vector<nd::FaceField<Dim>>* retained_faces_value = nullptr)
+                    std::vector<nd::FaceField<Dim>>* retained_faces_value = nullptr,
+                    const RhsInputTrace* input_trace_value = nullptr)
         : block(block_value),
           state(state_value),
           rhs(rhs_value),
           rate_id(rate_id_value),
           flux_only(flux_only_value),
           temporal_family(temporal_family_value),
-          retained_faces(retained_faces_value) {}
+          retained_faces(retained_faces_value),
+          input_trace(input_trace_value) {}
 
     int block = -1;
     field_type* state = nullptr;
@@ -192,6 +216,7 @@ class AmrProgramContext {
     int flux_only = 0;
     std::string_view temporal_family;
     std::vector<nd::FaceField<Dim>>* retained_faces = nullptr;
+    const RhsInputTrace* input_trace = nullptr;
   };
 
   struct CouplingStateOverride {
@@ -311,6 +336,7 @@ class AmrProgramContext {
   // Class-scope responsibility fragments preserve the public nested-type identities and member
   // layout of AmrProgramContext while making each semantic authority independently auditable.
 #include <pops/runtime/program/amr_program_context_spatial.inc>
+#include <pops/runtime/program/amr_program_context_rhs_input_trace.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_public.inc>
 #include <pops/runtime/program/amr_program_context_diffusion.inc>
 #include <pops/runtime/program/amr_program_context_spatial_implicit.inc>
@@ -336,6 +362,7 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_flux_basis.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_runtime.inc>
 #include <pops/runtime/program/amr_program_context_shared_flux.inc>
+#include <pops/runtime/program/amr_program_context_path_rhs.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_services.inc>
 #include <pops/runtime/program/amr_program_context_general_field_services.inc>
@@ -364,6 +391,7 @@ class AmrProgramContext {
   mutable std::uint64_t history_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t history_generation_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t operator_snapshot_revision_ = 0;
+  mutable int auxiliary_evaluation_sequence_ = 0;
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable std::map<std::string, int> history_levels_;
   mutable std::map<ScratchKey, field_type> scratches_;
@@ -405,10 +433,18 @@ class AmrProgramContext {
   // Bases are immutable samples; a lag read clones and rebases them into the current attempt
   // rather than retaining a pointer to a prior attempt's live registry.
   mutable std::map<std::string, std::vector<FluxExpression>> history_flux_expressions_;
+  // Frozen at the first accepted remap of a native coarse-to-fine sequence.  The numeric
+  // transfer retains its pre-sequence child images even while an earlier parent replacement
+  // removes deeper live rings; their flux provenance must follow the same source generation.
+  mutable std::map<std::string, std::vector<FluxExpression>> history_flux_regrid_sources_;
+  mutable std::uint64_t history_flux_regrid_source_epoch_ =
+      std::numeric_limits<std::uint64_t>::max();
+  mutable std::uint64_t history_flux_regrid_source_generation_ =
+      std::numeric_limits<std::uint64_t>::max();
   mutable std::map<std::tuple<std::size_t, int, FluxBasisProvider>, std::string>
       declared_flux_temporal_families_;
   mutable std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
-  mutable std::map<std::string, field_type> deferred_history_lag_scratches_;
+  mutable DeferredHistoryLagScratches deferred_history_lag_scratches_;
   mutable std::vector<std::size_t> active_flux_basis_counts_;
   mutable std::uint64_t next_active_flux_basis_identity_ = 0;
   mutable std::vector<std::size_t> prepared_rhs_basis_bounds_;
@@ -416,6 +452,10 @@ class AmrProgramContext {
   mutable ::pops::amr::ClockWindow active_subcycling_window_{};
   mutable std::uint64_t active_subcycling_attempt_ = 0;
   mutable std::unique_ptr<multiblock_subcycling_type> multiblock_subcycling_;
+  // Only the committed cursor is accepted/checkpointed. Rejected allocations remain burned in
+  // this live context, including across engine reconstruction and accepted-snapshot rollback.
+  mutable std::uint64_t allocated_subcycling_attempt_ = 0;
+  mutable std::uint64_t accepted_subcycling_attempt_ = 0;
   mutable bool multiblock_subcycling_has_accepted_step_ = false;
   mutable std::uint64_t multiblock_subcycling_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t multiblock_subcycling_generation_ =

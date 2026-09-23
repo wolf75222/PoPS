@@ -149,16 +149,19 @@ lag through `matching_authenticated_sample`.
 
 ## Legacy readers and composite ancestors
 
-The POPSAND7 reader accepts the older v4, v5, and v6 slot layouts. Those
-layouts contain no identity words, so the reader leaves each sample at its
-default `UnknownLegacy`; it never infers a publication from the outgoing
-interval or field values. Current POPSAND7 slots carry kind, start bits,
-interval bits, and ordinal. See the [reader](../../include/pops/runtime/program/amr_program_checkpoint.hpp#L1183-L1250).
+The POPSAND8 reader accepts older v4 through v7 archives for inspection.
+Versions4–6 contain no sample identity words, so the reader leaves each sample
+at its default `UnknownLegacy`; it never infers a publication from the outgoing
+interval or field values. Versions7–8 carry kind, start bits, interval bits,
+and ordinal. See the [checkpoint reader](../../include/pops/runtime/program/amr_program_checkpoint.hpp).
 
-Older archives remain readable through the empty-identity compatibility seam,
-and their stored anchors can follow the existing replay protocol when the
-current storage policy and accepted-state checks allow it. This compatibility
-preserves old data access; it does not authenticate an old publication.
+Only version8 also carries the actual last committed engine attempt. The
+live allocator retains a separate high-water mark across rejected attempts,
+rollback and engine replacement; a fresh process starts that mark from the
+checkpoint's committed attempt. Versions4–7 lack this authority and cannot be
+serialized as current accepted state or restored for continuation. Their
+inspectable fields and history identities do not authorize reconstructing the
+missing attempt from a macrostep or a face ledger.
 
 An AMR composite history ancestor has a stricter requirement. The
 [condensed-prior path](../../include/pops/runtime/program/amr_program_context_spatial_operations.inc#L488-L531)

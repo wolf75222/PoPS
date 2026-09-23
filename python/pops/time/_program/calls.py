@@ -200,6 +200,10 @@ class _ProgramCall(_ProgramBase):
         diffusion = lower_diffusive_rate(self, op, args, name)
         if diffusion is not None:
             return diffusion
+        from .nonconservative import lower_path_rate
+        path = lower_path_rate(self, op, args, name)
+        if path is not None:
+            return path
         # grid_operator (flux divergence only) and local_rate (flux + sources per op.lowering).
         fields = args[1] if len(args) > 1 else None
         if op.kind == "grid_operator":

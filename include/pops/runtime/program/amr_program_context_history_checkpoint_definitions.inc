@@ -1,3 +1,6 @@
+// Transparent string ordering is non-throwing.  Deferred-read publication can therefore move a
+// preallocated node into this map without allocating or invoking a throwing comparison.
+using DeferredHistoryLagScratches = std::map<std::string, field_type, std::less<>>;
 
 class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
  public:
@@ -10,6 +13,9 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         history_generation_(owner.history_generation_),
         history_levels_(owner.history_levels_),
         history_flux_expressions_(owner.history_flux_expressions_),
+        history_flux_regrid_sources_(owner.history_flux_regrid_sources_),
+        history_flux_regrid_source_epoch_(owner.history_flux_regrid_source_epoch_),
+        history_flux_regrid_source_generation_(owner.history_flux_regrid_source_generation_),
         pending_history_remaps_(owner.pending_history_remaps_),
         deferred_history_lag_scratches_(owner.deferred_history_lag_scratches_),
         accepted_temporal_partition_(owner.accepted_temporal_partition_),
@@ -21,6 +27,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         interface_flux_ledger_(
             std::make_unique<interface_flux_ledger_type>(*owner.interface_flux_ledger_)),
         accepted_synchronization_events_(owner.accepted_synchronization_events_),
+        accepted_subcycling_attempt_(owner.accepted_subcycling_attempt_),
         accepted_state_revision_(owner.accepted_state_revision_) {}
 
   AcceptedContextSnapshot(const AcceptedContextSnapshot& accepted)
@@ -32,6 +39,9 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         history_generation_(accepted.history_generation_),
         history_levels_(accepted.history_levels_),
         history_flux_expressions_(accepted.history_flux_expressions_),
+        history_flux_regrid_sources_(accepted.history_flux_regrid_sources_),
+        history_flux_regrid_source_epoch_(accepted.history_flux_regrid_source_epoch_),
+        history_flux_regrid_source_generation_(accepted.history_flux_regrid_source_generation_),
         pending_history_remaps_(accepted.pending_history_remaps_),
         deferred_history_lag_scratches_(accepted.deferred_history_lag_scratches_),
         accepted_temporal_partition_(accepted.accepted_temporal_partition_),
@@ -43,6 +53,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         interface_flux_ledger_(
             std::make_unique<interface_flux_ledger_type>(*accepted.interface_flux_ledger_)),
         accepted_synchronization_events_(accepted.accepted_synchronization_events_),
+        accepted_subcycling_attempt_(accepted.accepted_subcycling_attempt_),
         accepted_state_revision_(accepted.accepted_state_revision_) {}
 
   std::unique_ptr<AcceptedProgramContextSnapshot> prepare_restore() const override {
@@ -56,6 +67,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     static_assert(std::is_nothrow_swappable_v<ClockScheduleState>);
     static_assert(std::is_nothrow_swappable_v<decltype(history_levels_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(history_flux_expressions_)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(history_flux_regrid_sources_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(pending_history_remaps_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(deferred_history_lag_scratches_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(accepted_temporal_partition_)>);
@@ -75,6 +87,9 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     owner_->history_generation_ = history_generation_;
     owner_->history_levels_.swap(history_levels_);
     owner_->history_flux_expressions_.swap(history_flux_expressions_);
+    owner_->history_flux_regrid_sources_.swap(history_flux_regrid_sources_);
+    owner_->history_flux_regrid_source_epoch_ = history_flux_regrid_source_epoch_;
+    owner_->history_flux_regrid_source_generation_ = history_flux_regrid_source_generation_;
     owner_->pending_history_remaps_.swap(pending_history_remaps_);
     owner_->deferred_history_lag_scratches_.swap(deferred_history_lag_scratches_);
     owner_->scratches_.swap(discarded_scratches_);
@@ -86,8 +101,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     owner_->hierarchy_tensor_topology_epoch_ = std::numeric_limits<std::uint64_t>::max();
     owner_->hierarchy_tensor_materialization_generation_ =
         std::numeric_limits<std::uint64_t>::max();
-    owner_->multiblock_subcycling_.reset();
-    owner_->multiblock_subcycling_has_accepted_step_ = false;
+    owner_->retire_multiblock_subcycling_engine_();
     owner_->multiblock_subcycling_epoch_ = std::numeric_limits<std::uint64_t>::max();
     owner_->multiblock_subcycling_generation_ = std::numeric_limits<std::uint64_t>::max();
     owner_->multiblock_subcycling_program_budget_contract_.swap(discarded_subcycling_contract_);
@@ -100,6 +114,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     owner_->interface_flux_commit_guard_.reset();
     owner_->interface_flux_ledger_.swap(interface_flux_ledger_);
     owner_->accepted_synchronization_events_.swap(accepted_synchronization_events_);
+    owner_->accepted_subcycling_attempt_ = accepted_subcycling_attempt_;
     owner_->accepted_state_revision_ = accepted_state_revision_;
     for (const auto& diagnostic : owner_->cell_temporal_diagnostics_)
       if (diagnostic)
@@ -117,8 +132,13 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   std::uint64_t history_generation_ = std::numeric_limits<std::uint64_t>::max();
   std::map<std::string, int> history_levels_;
   std::map<std::string, std::vector<FluxExpression>> history_flux_expressions_;
+  std::map<std::string, std::vector<FluxExpression>> history_flux_regrid_sources_;
+  std::uint64_t history_flux_regrid_source_epoch_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t history_flux_regrid_source_generation_ =
+      std::numeric_limits<std::uint64_t>::max();
   std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
-  std::map<std::string, field_type> deferred_history_lag_scratches_;
+  DeferredHistoryLagScratches deferred_history_lag_scratches_;
   CellTemporalPartitionAcceptedState accepted_temporal_partition_;
   std::optional<CellTemporalConfiguration> cell_temporal_configuration_;
   std::string accepted_flux_budget_contract_;
@@ -128,6 +148,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
       accepted_face_flux_;
   std::unique_ptr<interface_flux_ledger_type> interface_flux_ledger_;
   std::vector<AmrProgramSynchronizationEvent> accepted_synchronization_events_;
+  std::uint64_t accepted_subcycling_attempt_ = 0;
   std::uint64_t accepted_state_revision_ = std::numeric_limits<std::uint64_t>::max();
   std::map<ScratchKey, field_type> discarded_scratches_;
   std::string discarded_subcycling_contract_;

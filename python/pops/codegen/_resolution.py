@@ -214,6 +214,12 @@ def _resolve_amr_program(
             "AMR Program local_transform is unavailable on a refined hierarchy: it requires a "
             "semantically correct post-synchronization Program phase after reflux"
         )
+    if context.refined_hierarchy:
+        from pops.time._program.affine_moments import validate_affine_moment_prefix
+        try:
+            validate_affine_moment_prefix(time)
+        except ValueError as exc:
+            raise CapabilityResolutionError(str(exc)) from exc
     try:
         support = amr_program_op_support(time, context=context)
     except AMRProgramSupportError as exc:

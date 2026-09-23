@@ -361,6 +361,13 @@ def _module_to_model(module: Any, state_space: Any = None,
         from pops.numerics.diffusion import diffusion_balance_supported
         from pops.numerics.scharfetter_gummel import fitted_balance_supported
         diffusion_view = op.lowering.get("physical_balance")
+        from pops.numerics.nonconservative import path_balance_supported
+        if path_balance_supported(diffusion_view):
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:path_conservative_rhs",)))
+            continue
+        if op.lowering.get("nonconservative_law") is not None:
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:nonconservative_constitutive_law",)))
+            continue
         from pops._ir.balance import source_balance_supported
         if source_balance_supported(diffusion_view):
             coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:source_balance",)))
@@ -539,7 +546,7 @@ def remap_lowering_error(exc: Any, facade: Any) -> None:
 
 
 def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
-                       *, resolved_operations: Any = None) -> Any:
+                       *, resolved_operations: Any = None, numerics: Any = None) -> Any:
     """The SINGLE validate + lower entry of the compile pipeline (ADC-557).
 
     Validates @p model ONCE and returns ``(emit_model, source_module)``:
@@ -612,6 +619,8 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
                     owns_emitter=True,
                 )
             object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
+        from pops.codegen.nonconservative_lowering import prepare_path_carrier
+        prepare_path_carrier(lowering.emit_model, lowering.source_module, resolved_operations, numerics)
         lowering.bind_component_provider_packs(packs)
         lowering.emit_model.check()
         return lowering.emit_model, lowering.source_module

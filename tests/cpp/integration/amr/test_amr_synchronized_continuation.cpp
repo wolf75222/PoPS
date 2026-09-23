@@ -396,6 +396,80 @@ TEST(test_amr_synchronized_continuation, exact_clock_and_collective_operation_au
   prove_collective_identity_and_sequence();
 }
 
+TEST(test_amr_synchronized_continuation, AttemptAuthoritySurvivesPreparedEngineReplacement) {
+  auto hierarchy = make_hierarchy<1>();
+  auto engine = prepare_engine(hierarchy);
+  const pops::amr::ClockWindow window{{0, 0, {0, 1}, 0.0}, {0, 0, {1, 1}, 0.25}};
+  engine.restore_attempt_authority(0, 0);
+  EXPECT_EQ(engine.begin_synchronized(window), 1u);
+  engine.resume_synchronized([](auto) {});
+  engine.finish_synchronized([](auto&) {}, [](std::size_t, std::size_t, const auto&) {});
+  EXPECT_EQ(engine.last_accepted_attempt(), 1u);
+  for (std::size_t block = 0; block < hierarchy.block_count(); ++block)
+    for (std::size_t parent = 0; parent + 1 < hierarchy.level_count(); ++parent)
+      for (const auto& ledger : engine.ledgers(block, parent))
+        EXPECT_EQ(ledger.published_size(), 0u);
+
+  EXPECT_EQ(engine.begin_synchronized(window), 2u);
+  engine.abort_synchronized();
+  EXPECT_EQ(engine.last_accepted_attempt(), 1u);
+  EXPECT_EQ(engine.last_allocated_attempt(), 2u);
+  auto replacement = prepare_engine(hierarchy);
+  replacement.restore_attempt_authority(engine.last_allocated_attempt(),
+                                         engine.last_accepted_attempt());
+  EXPECT_EQ(replacement.begin_synchronized(window), 3u);
+  replacement.resume_synchronized([](auto) {});
+  replacement.finish_synchronized([](auto&) {}, [](std::size_t, std::size_t, const auto&) {});
+  EXPECT_EQ(replacement.last_accepted_attempt(), 3u);
+  EXPECT_EQ(replacement.last_allocated_attempt(), 3u);
+}
+
+TEST(test_amr_synchronized_continuation, AttemptAuthorityRejectsCorruptActiveAsymmetricAndOverflow) {
+  auto hierarchy = make_hierarchy<1>();
+  auto engine = prepare_engine(hierarchy);
+  const pops::amr::ClockWindow window{{0, 0, {0, 1}, 0.0}, {0, 0, {1, 1}, 0.25}};
+  const auto unchanged = [&] {
+    EXPECT_EQ(engine.last_allocated_attempt(), 0u);
+    EXPECT_EQ(engine.last_accepted_attempt(), 0u);
+    EXPECT_FALSE(engine.has_attempt_candidates());
+  };
+  if (hierarchy.lane().size() == 1)
+    EXPECT_THROW(engine.restore_attempt_authority(1, 2), std::invalid_argument);
+  else
+    EXPECT_THROW(engine.restore_attempt_authority(1, 2), std::runtime_error);
+  unchanged();
+  if (hierarchy.lane().size() > 1) {
+    EXPECT_THROW(engine.restore_attempt_authority(2 + hierarchy.lane().rank(), 1),
+                 std::invalid_argument);
+    unchanged();
+  }
+  engine.restore_attempt_authority(0, 0);
+  if (hierarchy.lane().size() == 1)
+    EXPECT_THROW(engine.restore_attempt_authority(0, 0), std::logic_error);
+  else
+    EXPECT_THROW(engine.restore_attempt_authority(0, 0), std::runtime_error);
+  EXPECT_EQ(engine.begin_synchronized(window), 1u);
+  if (hierarchy.lane().size() == 1)
+    EXPECT_THROW(engine.restore_attempt_authority(7, 7), std::logic_error);
+  else
+    EXPECT_THROW(engine.restore_attempt_authority(7, 7), std::runtime_error);
+  EXPECT_EQ(engine.synchronized_attempt(), 1u);
+  EXPECT_EQ(engine.last_allocated_attempt(), 1u);
+  EXPECT_EQ(engine.last_accepted_attempt(), 0u);
+  engine.abort_synchronized();
+
+  auto exhausted = prepare_engine(hierarchy);
+  constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+  exhausted.restore_attempt_authority(maximum, maximum);
+  if (hierarchy.lane().size() == 1)
+    EXPECT_THROW(exhausted.begin_synchronized(window), std::overflow_error);
+  else
+    EXPECT_THROW(exhausted.begin_synchronized(window), std::runtime_error);
+  EXPECT_EQ(exhausted.last_allocated_attempt(), maximum);
+  EXPECT_EQ(exhausted.last_accepted_attempt(), maximum);
+  EXPECT_FALSE(exhausted.has_attempt_candidates());
+}
+
 TEST(test_amr_synchronized_continuation,
      rank_local_callback_reentry_is_rejected_before_collectives) {
   auto hierarchy = make_hierarchy<1>();

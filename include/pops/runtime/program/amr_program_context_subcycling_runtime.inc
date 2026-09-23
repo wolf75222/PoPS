@@ -1,3 +1,15 @@
+void retain_subcycling_attempt_authority_() const noexcept {
+  if (multiblock_subcycling_)
+    allocated_subcycling_attempt_ =
+        std::max(allocated_subcycling_attempt_, multiblock_subcycling_->last_allocated_attempt());
+}
+
+void retire_multiblock_subcycling_engine_() const noexcept {
+  retain_subcycling_attempt_authority_();
+  multiblock_subcycling_.reset();
+  multiblock_subcycling_has_accepted_step_ = false;
+}
+
 void begin_interface_flux_attempt_() const {
   const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
   std::optional<typename interface_flux_ledger_type::PreparedBegin> prepared_begin;
@@ -93,9 +105,13 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
           stage_prepared_publication_candidates_(level, pack);
         },
         operation == "advance_composite_hierarchy");
+    retain_subcycling_attempt_authority_();
     commit_interface_flux_attempt_();
+    accepted_subcycling_attempt_ = multiblock_subcycling_->last_accepted_attempt();
     multiblock_subcycling_has_accepted_step_ = true;
   } catch (...) {
+    retain_subcycling_attempt_authority_();
+    rhs_input_traces_.clear();
     if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
       interface_flux_ledger_->rollback();
     active_level_ = prior_level;
@@ -108,6 +124,7 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
     clear_active_multiblock_group_();
     throw;
   }
+  rhs_input_traces_.clear();
   active_level_ = prior_level;
   current_dt_ = prior_dt;
   current_interval_start_time_ = prior_interval_start;
@@ -292,6 +309,8 @@ void prepare_multiblock_subcycling_engine_() const {
     throw std::runtime_error("AMR Program subcycling preparation failed collectively");
   }
 
+  retain_subcycling_attempt_authority_();
+  prepared->restore_attempt_authority(allocated_subcycling_attempt_, accepted_subcycling_attempt_);
   multiblock_subcycling_ = std::move(prepared);
   multiblock_subcycling_has_accepted_step_ = false;
   prepared_rhs_basis_bounds_ = std::move(rhs_basis_bounds);
@@ -389,7 +408,11 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, double m
     collectively_rethrow_exception(preparation_error, prepared_execution_lane(),
                                    "AMR Program level envelope preparation failed collectively");
     facade_->clear_prepared_amr_level_evaluations();
-    body(current_dt_);
+    // Agree on body completion before a peer can enter retained/shared-flux collectives.
+    const ExecutionLane& body_lane = prepared_execution_lane();
+    runtime::program::collective_step_rejection_phase(
+        body_lane.communicator(), {"pops.amr-level-body.v1", "amr-level-body", false, false},
+        "AMR Program level body failed collectively", [&] { body(current_dt_); });
     if (multiblock_subcycling_->has_synchronized_groups()) {
       for (int level = 0; level < nlev(); ++level)
         with_program_attempt_level(level, [&] {

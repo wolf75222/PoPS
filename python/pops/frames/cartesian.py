@@ -32,6 +32,8 @@ class CartesianDirection(Enum):
 class CartesianAxis:
     """One immutable, typed axis of a Cartesian frame."""
 
+    __pops_ir_immutable__ = True
+
     direction: CartesianDirection
 
     def __post_init__(self) -> None:

@@ -64,6 +64,7 @@ AmrProgramAcceptedState<Dim> accepted_state_() const {
   state.spatial_contract = runtime_->spatial_contract();
   state.topology_epoch = runtime_->topology_epoch();
   state.materialization_generation = runtime_->materialization_generation();
+  state.accepted_attempt = accepted_subcycling_attempt_;
   state.level_clocks.reserve(runtime_->hierarchy().num_levels());
   for (std::size_t level = 0; level < runtime_->hierarchy().num_levels(); ++level)
     state.level_clocks.push_back(
@@ -177,6 +178,10 @@ void import_accepted_state_(bool force) const {
   const std::uint64_t revision = facade_->program_accepted_state_revision();
   if (!force && revision == accepted_state_revision_)
     return;
+  if (!active_attempt_states_.empty() ||
+      (multiblock_subcycling_ && multiblock_subcycling_->has_attempt_candidates()) ||
+      (interface_flux_ledger_ && interface_flux_ledger_->in_transaction()))
+    throw std::logic_error("AMR accepted-state import crossed an active Program attempt");
   try {
     prepare_multiblock_subcycling_engine_();
   } catch (const std::exception& exception) {
@@ -311,6 +316,9 @@ void import_accepted_state_(bool force) const {
   static_assert(std::is_nothrow_swappable_v<decltype(accepted_face_flux_)>);
   static_assert(std::is_nothrow_swappable_v<decltype(accepted_synchronization_events_)>);
   history_flux_expressions_.swap(restored_history_flux);
+  history_flux_regrid_sources_.clear();
+  history_flux_regrid_source_epoch_ = std::numeric_limits<std::uint64_t>::max();
+  history_flux_regrid_source_generation_ = std::numeric_limits<std::uint64_t>::max();
   std::swap(accepted_temporal_partition_, state.temporal_partition);
   pending_history_remaps_.swap(restored_pending);
   deferred_history_lag_scratches_.clear();
@@ -325,7 +333,10 @@ void import_accepted_state_(bool force) const {
   interface_flux_commit_guard_.reset();
   interface_flux_ledger_.swap(restored_interface_flux);
   accepted_synchronization_events_.swap(state.synchronization_events);
-  multiblock_subcycling_has_accepted_step_ = false;
+  retire_multiblock_subcycling_engine_();
+  accepted_subcycling_attempt_ = *state.accepted_attempt;
+  allocated_subcycling_attempt_ =
+      std::max(allocated_subcycling_attempt_, accepted_subcycling_attempt_);
   accepted_state_revision_ = revision;
 }
 
@@ -398,7 +409,9 @@ void refresh_accepted_hierarchy_state_after_remap_(
           }
         }
         ExactContractBuilder contract;
-        contract.text("pops.amr.accepted-history-remap.v1")
+        contract.text("pops.amr.accepted-history-remap.v2")
+            .scalar(descriptor.source_topology_epoch)
+            .scalar(descriptor.source_materialization_generation)
             .scalar(descriptor.parent_level)
             .scalar(descriptor.child_level)
             .scalar(descriptor.child_published)
@@ -527,8 +540,7 @@ void restart_regrid_() const {
     end_restart_regrid_history_sequence();
     throw;
   }
-  multiblock_subcycling_.reset();
-  multiblock_subcycling_has_accepted_step_ = false;
+  retire_multiblock_subcycling_engine_();
   accepted_face_flux_ = {};
   accepted_face_evidence_provenance_.reset();
   interface_flux_commit_guard_.reset();
@@ -544,8 +556,7 @@ void restart_regrid_() const {
 void resync_after_restart_() const {
   if (!active_attempt_states_.empty())
     throw std::logic_error("AMR restart resynchronization crossed an active Program attempt");
-  multiblock_subcycling_.reset();
-  multiblock_subcycling_has_accepted_step_ = false;
+  retire_multiblock_subcycling_engine_();
   // rebuild_hierarchy publishes a temporary newer topology epoch; restore_checkpoint_counters
   // then republishes the authenticated checkpoint epoch. The interface-flux ledger followed
   // the temporary epoch and must be requalified rather than treated as a live regression.
@@ -727,11 +738,34 @@ void refresh_resources_after_accepted_history_remap_(
   // the prepared-lane agreement below have completed.
   struct RemappedFluxCandidate {
     std::map<std::string, std::vector<FluxExpression>> expressions;
+    std::map<std::string, std::vector<FluxExpression>> sequence_sources;
+    bool replace_sequence_sources = false;
     std::string exact_contract;
   };
   RemappedFluxCandidate remapped = prepare_history_mutation_collectively_(
       [&]() {
         RemappedFluxCandidate staged;
+        staged.replace_sequence_sources =
+            history_flux_regrid_source_epoch_ != descriptor.source_topology_epoch ||
+            history_flux_regrid_source_generation_ !=
+                descriptor.source_materialization_generation;
+        if (staged.replace_sequence_sources) {
+          if (resource_epoch_ != descriptor.source_topology_epoch ||
+              resource_generation_ != descriptor.source_materialization_generation ||
+              history_flux_expressions_.size() != history_levels_.size())
+            throw std::runtime_error(
+                "AMR history flux regrid source differs from the accepted hierarchy generation");
+          for (const auto& [key, level] : history_levels_) {
+            (void)level;
+            if (!history_flux_expressions_.contains(key))
+              throw std::runtime_error(
+                  "AMR history flux regrid source omits a prior accepted ring");
+          }
+          staged.sequence_sources = history_flux_expressions_;
+        }
+        const auto& sequence_sources = staged.replace_sequence_sources
+                                           ? staged.sequence_sources
+                                           : history_flux_regrid_sources_;
         std::map<std::pair<std::string, int>, std::shared_ptr<const HistoryFluxSnapshot>>
             projections;
         std::map<std::string, const AmrProgramHistoryRemapEntry*> plan;
@@ -740,7 +774,8 @@ void refresh_resources_after_accepted_history_remap_(
             throw std::runtime_error("AMR Program history flux remap has a non-canonical plan");
           const bool parent_source =
               entry.source == AmrProgramHistoryRemapSource::ParentDeferred ||
-              entry.source == AmrProgramHistoryRemapSource::ParentAlignedState;
+              entry.source == AmrProgramHistoryRemapSource::ParentAlignedState ||
+              entry.source == AmrProgramHistoryRemapSource::ParentAlignedScalarOutput;
           if (parent_source && entry.parent_key.empty())
             throw std::runtime_error("AMR Program history flux remap has no parent provenance key");
           if (!parent_source && !entry.parent_key.empty())
@@ -748,14 +783,19 @@ void refresh_resources_after_accepted_history_remap_(
                 "AMR Program history flux remap has a non-canonical retained/removal parent key");
         }
         ExactContractBuilder contract;
-        contract.text("pops.amr.history-flux-remap.v1")
+        contract.text("pops.amr.history-flux-remap.v2")
+            .scalar(descriptor.source_topology_epoch)
+            .scalar(descriptor.source_materialization_generation)
             .scalar(runtime_->topology_epoch())
             .scalar(runtime_->materialization_generation())
             .scalar(descriptor.parent_level)
             .scalar(descriptor.child_level)
             .scalar(descriptor.child_published)
             .scalar(descriptor.child_physical_layout_changed)
-            .scalar(static_cast<std::uint64_t>(runtime_state().hist_.histories.size()));
+            .scalar(static_cast<std::uint64_t>(runtime_state().hist_.histories.size()))
+            .scalar(static_cast<std::uint64_t>(sequence_sources.size()));
+        for (const auto& [key, slots] : sequence_sources)
+          contract.bytes(key).scalar(static_cast<std::uint64_t>(slots.size()));
         for (const auto& [key, ring] : runtime_state().hist_.histories) {
           const auto decoded = decode_history_key_(key);
           if (!decoded)
@@ -767,33 +807,83 @@ void refresh_resources_after_accepted_history_remap_(
           if (decoded->first == descriptor.child_level && !descriptor.child_published)
             throw std::runtime_error(
                 "AMR Program history flux remap retained a removed child-level ring");
-          const auto retained = history_flux_expressions_.find(key);
+          const bool from_sequence =
+              planned != plan.end() &&
+              planned->second->source != AmrProgramHistoryRemapSource::Removed;
+          const auto& retained_registry =
+              from_sequence ? sequence_sources : history_flux_expressions_;
+          const auto retained = retained_registry.find(key);
           const bool source_from_parent =
               planned != plan.end() &&
               (planned->second->source == AmrProgramHistoryRemapSource::ParentDeferred ||
-               planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState);
-          if (!source_from_parent && retained != history_flux_expressions_.end() &&
+               planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState ||
+               planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedScalarOutput);
+          if (!source_from_parent && retained != retained_registry.end() &&
               retained->second.size() == ring.size()) {
             staged.expressions.emplace(key, retained->second);
           } else {
-            if (!source_from_parent)
+            if (!source_from_parent) {
+              std::string prior_keys;
+              for (const auto& [prior_key, expressions] : history_flux_expressions_)
+                prior_keys += " [" + prior_key + ":" +
+                              std::to_string(expressions.size()) + "]";
               throw std::runtime_error(
-                  "AMR Program history flux remap lacks its retained history provenance");
+                  "AMR Program history flux remap lacks its retained history provenance for " +
+                  key + " (ring depth " + std::to_string(ring.size()) +
+                  ", plan source " +
+                  (planned == plan.end()
+                       ? std::string("unplanned")
+                       : std::to_string(static_cast<int>(planned->second->source))) +
+                  ", prior provenance" + prior_keys + ")");
+            }
             const auto parent = history_flux_expressions_.find(planned->second->parent_key);
             if (parent == history_flux_expressions_.end() || parent->second.size() != ring.size())
               throw std::runtime_error(
                   "AMR Program history flux remap lacks its authenticated parent sample");
-            if (planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState) {
+            const bool scalar_output =
+                planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedScalarOutput;
+            if (planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState ||
+                scalar_output) {
               const auto has_flux = [](const auto& slots) {
                 return std::any_of(slots.begin(), slots.end(),
                                    [](const auto& expression) { return !expression.empty(); });
               };
               if (descriptor.temporal_numerator != 1 || descriptor.temporal_denominator != 1 ||
                   !descriptor.integral_only || has_flux(parent->second) ||
-                  (retained != history_flux_expressions_.end() && has_flux(retained->second)))
+                  (retained != retained_registry.end() && has_flux(retained->second)))
                 throw std::runtime_error(
                     "AMR Program aligned state history projection requires equal-clock state "
                     "samples without interface-flux provenance");
+              if (scalar_output) {
+                const auto& manager = runtime_state().hist_;
+                const std::string& parent_key = planned->second->parent_key;
+                if (ring.size() != 2 || manager.depth.at(key) != 2 ||
+                    manager.depth.at(parent_key) != 2 ||
+                    !manager.initialized.at(key) || !manager.initialized.at(parent_key) ||
+                    manager.store_pending.at(key) || manager.store_pending.at(parent_key) ||
+                    manager.space_identity.at(key) != kScalarOutputHistorySpace ||
+                    manager.space_identity.at(parent_key) != kScalarOutputHistorySpace ||
+                    manager.state_identity.at(key) != "scalar-history:" + decoded->second ||
+                    manager.state_identity.at(parent_key) != manager.state_identity.at(key) ||
+                    manager.owner.at(parent_key) != manager.owner.at(key) ||
+                    manager.clock_identity.at(parent_key) != manager.clock_identity.at(key) ||
+                    manager.interpolation_identity.at(parent_key) !=
+                        manager.interpolation_identity.at(key) ||
+                    manager.slot_dt.at(parent_key) != manager.slot_dt.at(key) ||
+                    manager.slot_sample.at(parent_key) != manager.slot_sample.at(key) ||
+                    manager.fill_count.at(parent_key) != manager.fill_count.at(key) ||
+                    manager.slot_dt.at(key).size() != 2 ||
+                    !std::all_of(manager.slot_dt.at(key).begin(), manager.slot_dt.at(key).end(),
+                                 [](Real dt) { return std::isfinite(dt) && dt > Real(0); }) ||
+                    manager.slot_sample.at(key).size() != 2 ||
+                    !std::all_of(manager.slot_sample.at(key).begin(),
+                                 manager.slot_sample.at(key).end(),
+                                 [](const auto& sample) { return sample.authenticated(); }) ||
+                    !std::all_of(ring.begin(), ring.end(),
+                                 [](const auto& slot) { return slot.ncomp() == 1; }))
+                  throw std::runtime_error(
+                      "AMR scalar output history remap lacks its exact parent capability");
+              }
             }
             auto projected_slots = parent->second;
             for (auto& expression : projected_slots)
@@ -868,10 +958,17 @@ void refresh_resources_after_accepted_history_remap_(
   if (active_level_ >= nlev())
     active_level_ = 0;
   static_assert(std::is_nothrow_swappable_v<decltype(history_flux_expressions_)>);
+  static_assert(std::is_nothrow_swappable_v<decltype(history_flux_regrid_sources_)>);
   prepare_remapped_history_flux_faces_(remapped.expressions);
+  if (remapped.replace_sequence_sources) {
+    history_flux_regrid_sources_.swap(remapped.sequence_sources);
+    history_flux_regrid_source_epoch_ = descriptor.source_topology_epoch;
+    history_flux_regrid_source_generation_ = descriptor.source_materialization_generation;
+  }
   history_flux_expressions_.swap(remapped.expressions);
   publish_history_flux_snapshots_();
   scratches_.clear();
+  rhs_input_traces_.clear();
 }
 
 void publish_history_flux_snapshots_() const {

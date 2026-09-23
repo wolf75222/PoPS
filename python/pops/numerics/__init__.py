@@ -19,6 +19,7 @@ from __future__ import annotations
 from . import riemann, reconstruction, variables, projections, spatial, terms
 from .reconstruction import limiters
 from .spatial import FiniteVolume
+from .nonconservative import FanLi15RawMomentPath, PathConservativeFiniteVolume
 from .state_storage import StateStorage
 from .named_flux import NamedCenteredDivergence
 from .interactions import JointEvaluation
@@ -28,6 +29,7 @@ from .indicator_stencils import DiscreteGradientStencil, LinearAxisStencil
 from .plan import DiscretizationPlan
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
-           "spatial", "FiniteVolume", "StateStorage", "NamedCenteredDivergence", "Diffusion", "TensorDiffusion",
+           "spatial", "FiniteVolume", "FanLi15RawMomentPath", "PathConservativeFiniteVolume",
+           "StateStorage", "NamedCenteredDivergence", "Diffusion", "TensorDiffusion",
            "ScharfetterGummel",
            "DiscreteGradientStencil", "LinearAxisStencil", "DiscretizationPlan", "JointEvaluation"]

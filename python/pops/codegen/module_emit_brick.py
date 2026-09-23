@@ -65,6 +65,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         raise ValueError("emit_cpp_brick : set_conservative_from([...]) expected (%d expressions)"
                          % model.n_vars)
     program_only = bool(getattr(model, "_program_only_storage_axes", ()))
+    path_conservative = getattr(model, "_path_conservative", None) is not None
     if not model._flux and not program_only:
         raise ValueError("emit_cpp_brick : call set_flux(...) first")
     axes = _ranked_axes(model)
@@ -78,7 +79,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             "emit_cpp_brick : flux expected with %d components on every ranked axis; got %r"
             % (model.n_vars, wrong_flux_arity)
         )
-    if not program_only and not model._eig and model._wave_speeds is None and model._ws_jacobian is None:
+    if not program_only and not path_conservative and not model._eig and model._wave_speeds is None and model._ws_jacobian is None:
         raise ValueError("emit_cpp_brick : call set_eigenvalues(...), set_wave_speeds(...) "
                          "or set_wave_speeds_from_jacobian(...) first (source of "
                          "max_wave_speed / CFL)")
@@ -300,7 +301,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "#include <Kokkos_MathematicalFunctions.hpp>",
         "#include <pops/core/identity/prepared_provider.hpp>",
         "#include <pops/numerics/fv/flux_interfaces.hpp>",
-        "#include <pops/numerics/spatial/nd/state_schema.hpp>",
+        "#include <pops/numerics/spatial/nd/state_conversion.hpp>",
         "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_brick)."
         % model.name,
         "// Satisfait pops::HyperbolicModel : flux + max_wave_speed + conversions + descripteurs.",
@@ -316,6 +317,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     eig_pairs = _collect_eig_witnesses(model._proj or [])
     if model._ws_jacobian is not None or eig_pairs or model._roe_jacobian is not None:
         S.append("#include <pops/numerics/linalg/dense_eig.hpp>")
+    if path_conservative:
+        S += ["#include <string_view>", "#include <pops/numerics/moments/normalized_moment_path.hpp>"]
     S += [
         "namespace %s {" % namespace,
         "struct %s {" % nm,
@@ -382,6 +385,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     S.append("  static constexpr int n_providers = %d;" % input_width)
     if model._total_n_aux():
         S.append("  static constexpr int n_aux = %d;" % model._total_n_aux())
+    from pops.codegen.module_emit_path import emit_path_members
+    S += emit_path_members(model, cse=cse, aux_locals=aux_locals)
     if not program_only:
         from pops._ir.native_call import native_functions
         from pops._ir.primitive_expansion import expand_primitive_recipes
@@ -487,13 +492,15 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         # parameter must be named even if no formula reads a provider directly.
         ws_jac: Any = model._ws_jacobian
         jac_fd = model._ws_jacobian is not None and model._ws_jacobian["eig"] == "fd"
-        mws_aux_param = "const auto& a" if (jac_fd and not model._eig) else aux_param
+        mws_aux_param = "const auto& a" if (path_conservative or (jac_fd and not model._eig)) else aux_param
         S += [
             "  template <int Axis>",
             "  POPS_HD pops::Real max_wave_speed(const State& U, %s) const {" % mws_aux_param,
             axis_guard("maximum-wave-speed"),
         ]
-        if model._eig:
+        if path_conservative:
+            mws_drv = []
+        elif model._eig:
             mws_drv = axis_values(model._eig, "eigenvalues")
         elif model._wave_speeds is not None:
             mws_drv = axis_values(model._wave_speeds, "explicit wave speeds")
@@ -502,7 +509,10 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         else:
             mws_drv = _jac_entries(model)
         S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, mws_drv))
-        if model._eig:
+        if path_conservative:
+            from pops.codegen.module_emit_path import emit_path_proposal_speed
+            S += emit_path_proposal_speed()
+        elif model._eig:
             for ordinal, axis in enumerate(axes):
                 S.append(axis_branch(ordinal))
                 etl, ecpps = _codegen_exprs(
@@ -737,7 +747,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S += ["    return Up;", "  }", ""]
 
     recovery_constraints = getattr(model, "_recovery_admissibility", {})
-    if recovery_constraints:
+    if recovery_constraints or path_conservative:
         S.append("  POPS_HD bool recovery_admissible(const Prim& P, int* failing_component_) const {")
         S += ["    const pops::Real %s = P[%d];" % (name, index)
               for index, name in enumerate(model.prim_state)]
@@ -749,6 +759,13 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             S.append("      if (failing_component_ != nullptr) *failing_component_ = %d;" % component)
             S.append("      return false;")
             S.append("    }")
+        if path_conservative:
+            S += [
+                "    if (!path_admissible(to_conservative(P))) {",
+                "      if (failing_component_ != nullptr) *failing_component_ = 0;",
+                "      return false;",
+                "    }",
+            ]
         S += [
             "    if (failing_component_ != nullptr) *failing_component_ = -1;",
             "    return true;",
@@ -781,7 +798,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "    for (int component = 0; component < n_vars; ++component)",
         "      if (!Kokkos::isfinite(result.value[component])) return result;",
     ]
-    if recovery_constraints:
+    if path_conservative:
+        S.append("    if (!path_admissible(U)) return result;")
+    if recovery_constraints or path_conservative:
         S += [
             "    int failing_component = -1;",
             "    if (!recovery_admissible(result.value, &failing_component)) return result;",
@@ -800,7 +819,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "    for (int component = 0; component < n_vars; ++component)",
         "      if (!Kokkos::isfinite(P[component])) return result;",
     ]
-    if recovery_constraints:
+    if recovery_constraints or path_conservative:
         S += [
             "    int failing_component = -1;",
             "    if (!recovery_admissible(P, &failing_component)) return result;",

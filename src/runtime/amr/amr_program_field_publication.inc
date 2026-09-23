@@ -219,8 +219,9 @@ void AmrSystem<Dim>::publish_program_field_components(
         hierarchy.provider_candidate_physical_boundaries[level]->execute(candidate);
       };
       refresh_ghosts();
+      const auto auxiliary_geometry = prepared_amr_level_geometry(static_cast<int>(level));
       transactions[level]->launch_ready_native(
-          {hierarchy.provider_storage[level].get(), &candidate},
+          {hierarchy.provider_storage[level].get(), &candidate, &auxiliary_geometry},
           [&](const auto&, std::exception_ptr provider_error) {
             auxiliary_ghost_detail::rethrow_collective_failure(
                 provider_error, &lane, "AMR Program field prerequisite launch failed collectively");

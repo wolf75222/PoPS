@@ -8,9 +8,11 @@
 #include <pops/numerics/fv/flux_interfaces.hpp>
 #include <pops/physics/composition/exact_brick_contract.hpp>
 
+#include <array>
 #include <concepts>
 #include <cstdint>
 #include <limits>
+#include <string_view>
 #include <type_traits>
 
 /// @file
@@ -249,6 +251,44 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
   using State = typename Hyperbolic::State;
   using Prim = typename composite_detail::PrimitiveType<Hyperbolic>::type;
   static constexpr int n_vars = Hyperbolic::n_vars;
+  // A composite has exactly one transport brick. Keep its path authority on
+  // that brick; source and elliptic members do not create a transport clone.
+  static constexpr bool path_conservative = path_conservative_model<Hyperbolic>;
+  static constexpr std::string_view path_operator_identity()
+    requires(path_conservative)
+  {
+    return Hyperbolic::path_operator_identity();
+  }
+  POPS_HD static constexpr std::array<bool, 2 * dimension> path_zero_measure_faces()
+    requires(path_conservative)
+  {
+    return Hyperbolic::path_zero_measure_faces();
+  }
+  template <int Axis, class Providers>
+  POPS_HD auto path_covector(const Providers& providers) const
+    requires(path_conservative)
+  {
+    static_assert(Axis >= 0 && Axis < dimension);
+    return hyp.template path_covector<Axis>(providers);
+  }
+  template <class Direction>
+  POPS_HD auto path_integral(const State& left, const State& right,
+                             const Direction& direction) const
+    requires(path_conservative)
+  {
+    return hyp.path_integral(left, right, direction);
+  }
+  template <class Direction>
+  POPS_HD auto path_directional_flux(const State& state, const Direction& direction) const
+    requires(path_conservative)
+  {
+    return hyp.path_directional_flux(state, direction);
+  }
+  POPS_HD bool path_admissible(const State& state) const
+    requires(path_conservative)
+  {
+    return hyp.path_admissible(state);
+  }
   static constexpr int characteristic_no_inflow_contract_version = [] {
     if constexpr (requires { Hyperbolic::characteristic_no_inflow_contract_version; })
       return static_cast<int>(Hyperbolic::characteristic_no_inflow_contract_version);

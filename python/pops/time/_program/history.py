@@ -276,6 +276,17 @@ class _ProgramHistory(_ProgramBase):
             if self._histories_ncomp.get(name, width) != width:
                 raise ValueError("store_history: solved field gradient history width changed")
             self._histories_ncomp[name] = width
+        elif value.vtype == "scalar_field" and value.block is not None:
+            # A block-owned scalar scratch/solve already carries its exact component
+            # count. A store-only ring must register that count and owner without
+            # inventing a history read (which has temporal semantics after regrid).
+            width = value.attrs.get("ncomp", 1)
+            if isinstance(width, bool) or not isinstance(width, int) or width < 1:
+                raise ValueError("store_history: scalar history requires a positive component width")
+            if self._histories_ncomp.get(name, width) != width:
+                raise ValueError("store_history: scalar history component width changed")
+            self._histories_ncomp[name] = width
+            self._declare_history_block(name, value.block)
         node = self._new(
             "state", "store_history", (value,),
             {"history": name, "state": value.state_ref}, name, value.block,
