@@ -16,6 +16,7 @@
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 
 #include <algorithm>
@@ -505,7 +506,7 @@ prepare_hierarchy_tensor_solver_collectively(
   std::string support_contract;
   std::string expected_contract;
   PreparedProviderSupport support;
-  long inspection_failure = 0;
+  std::exception_ptr inspection_error;
   try {
     hierarchy_tensor_detail::validate_request(request);
     const auto& rank_space = request.levels.front().distribution.rank_space();
@@ -522,10 +523,10 @@ prepare_hierarchy_tensor_solver_collectively(
     if (support.accepted())
       expected_contract = provider->expected_prepared_contract(request);
   } catch (...) {
-    inspection_failure = 1;
+    inspection_error = std::current_exception();
   }
-  if (all_reduce_max(inspection_failure, lane) != 0)
-    throw std::runtime_error("hierarchy tensor support inspection failed collectively");
+  collectively_rethrow_exception(inspection_error, lane,
+                                 "hierarchy tensor support inspection failed collectively");
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"hierarchy-tensor-provider", declaration},
                                                  {"hierarchy-tensor-request", request_contract},
                                                  {"hierarchy-tensor-support", support_contract},
@@ -537,7 +538,7 @@ prepare_hierarchy_tensor_solver_collectively(
                                 std::to_string(support.code) + "): " + std::string(support.reason));
 
   std::unique_ptr<solver_type> prepared;
-  long preparation_failure = 0;
+  std::exception_ptr preparation_error;
   try {
     prepared = provider->prepare(request, lane);
     if (!prepared || prepared->exact_prepared_contract() != expected_contract ||
@@ -550,10 +551,10 @@ prepare_hierarchy_tensor_solver_collectively(
       throw std::invalid_argument("hierarchy tensor provider rejected its execution path");
     prepared->seal_preparation(lane);
   } catch (...) {
-    preparation_failure = 1;
+    preparation_error = std::current_exception();
   }
-  if (all_reduce_max(preparation_failure, lane) != 0)
-    throw std::runtime_error("hierarchy tensor preparation failed on at least one MPI rank");
+  collectively_rethrow_exception(preparation_error, lane,
+                                 "hierarchy tensor preparation failed collectively");
   return prepared;
 }
 
