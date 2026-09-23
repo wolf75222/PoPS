@@ -784,9 +784,20 @@ void refresh_resources_after_accepted_history_remap_(
               retained->second.size() == ring.size()) {
             staged.expressions.emplace(key, retained->second);
           } else {
-            if (!source_from_parent)
+            if (!source_from_parent) {
+              std::string prior_keys;
+              for (const auto& [prior_key, expressions] : history_flux_expressions_)
+                prior_keys += " [" + prior_key + ":" +
+                              std::to_string(expressions.size()) + "]";
               throw std::runtime_error(
-                  "AMR Program history flux remap lacks its retained history provenance");
+                  "AMR Program history flux remap lacks its retained history provenance for " +
+                  key + " (ring depth " + std::to_string(ring.size()) +
+                  ", plan source " +
+                  (planned == plan.end()
+                       ? std::string("unplanned")
+                       : std::to_string(static_cast<int>(planned->second->source))) +
+                  ", prior provenance" + prior_keys + ")");
+            }
             const auto parent = history_flux_expressions_.find(planned->second->parent_key);
             if (parent == history_flux_expressions_.end() || parent->second.size() != ring.size())
               throw std::runtime_error(
