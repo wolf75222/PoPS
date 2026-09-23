@@ -31,11 +31,8 @@ auto prepare_history_mutation_collectively_(Build&& build, Contract&& contract,
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error(std::string(operation) + " preparation failed collectively");
-  }
+  collectively_rethrow_exception(local_error, lane,
+                                 std::string(operation) + " preparation failed collectively");
   const std::string& exact_contract = std::invoke(contract, *result);
   if (!all_ranks_agree_exact_ordered_byte_pairs({{operation, exact_contract}}, lane))
     throw std::runtime_error(std::string(operation) +
