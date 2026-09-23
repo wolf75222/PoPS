@@ -1434,9 +1434,16 @@ TEST(test_amr_synthetic_program_loader_transaction,
         refusal = error.what();
       }
       ASSERT_EQ(pops::all_reduce_max(refusal.empty() ? 1L : 0L, artifact_lane), 0L);
-      EXPECT_EQ(refusal, artifact_lane.size() == 1
-                             ? "injected history resource refresh"
-                             : "AMR Program hierarchy-state publication failed collectively");
+      if (artifact_lane.size() == 1) {
+        EXPECT_EQ(refusal, "injected history resource refresh");
+      } else {
+        EXPECT_NE(refusal.find("AMR Program hierarchy-state publication failed collectively"),
+                  std::string::npos);
+        EXPECT_NE(refusal.find("rank 0: fixture resource publication failed"),
+                  std::string::npos);
+        EXPECT_NE(refusal.find("rank 0: injected history resource refresh"),
+                  std::string::npos);
+      }
       std::fprintf(stderr, "scheduled-history-remap rank=%d refused=%s\n", pops::my_rank(),
                    refusal.c_str());
       std::fflush(stderr);
