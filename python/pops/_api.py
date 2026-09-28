@@ -77,12 +77,12 @@ def bind(
 
     select_native_dimension(getattr(artifact, "resolved_dimension", None))
     from pops import _bootstrap  # noqa: F401  # intentional native cut line
-    from pops.codegen._plans import BindInputs, _canonical_initial_values
+    from pops.codegen._plans import BindInputs, _canonical_initial_values, _canonical_bind_params
     from pops.codegen._phases import bind as phase
 
     inputs = BindInputs(
         initial_state={} if initial_state is None else initial_state,
-        params={} if params is None else params,
+        params=_canonical_bind_params(artifact.bind_schema, {} if params is None else params),
         aux={} if aux is None else aux,
         resources={} if resources is None else resources,
         initial_values=_canonical_initial_values(

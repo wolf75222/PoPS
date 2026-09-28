@@ -126,7 +126,7 @@ def test_local_nonlinear_expression_captures_equation_data_separately():
     assert token.attrs["capture_names"] == ("old",)
     source = emit(model, program)
     assert "Cval0[0]" in source
-    assert "std::pow(expression_leaf_" in source
+    assert "std::pow(cse" in source
     assert "pops::solve_prepared_local_nonlinear" in source
     assert program.to_graph() is not None
 
@@ -174,7 +174,7 @@ def test_shared_expression_dag_is_not_expanded_into_a_tree():
     assert len(str(value.attrs["expression_nodes"])) < 2000
     program.commit(q.next, value)
     source = emit(model, program)
-    assert source.count("const pops::Real cse") == 32
+    assert source.count("const pops::Real cse") == 34  # 32 operations plus two captured leaves.
     assert len(source) < 30000
 
 
@@ -193,3 +193,76 @@ def test_local_residual_checks_intermediates_hidden_by_minimum():
     source = emit(model, program)
     assert "!Kokkos::isfinite(cse" in source
     assert "rout[0] = std::numeric_limits<pops::Real>::quiet_NaN();" in source
+
+
+def test_conditional_body_is_shared_by_physics_program_and_local_unknown():
+    from pops.math import where, rounded
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import FailRun, LocalResidual
+    model, state, program, q = fixture()
+
+    def guarded(value):
+        return (where(value[0] > 0, lambda: rounded(1 / value[0]), lambda: 7.), value[1])
+
+    assert len(guarded(state)) == 2
+    value = program.value("guarded", guarded(q.n), at=q.next.point)
+
+    def residual(p, unknown):
+        return guarded(unknown)
+
+    outcome = program.solve(LocalResidual(residual, value), solver=LocalNewton()).consume(action=FailRun())
+    program.commit(q.next, outcome)
+    source = emit(model, program)
+    assert "volatile double rounded_value_" in source
+    assert "? ([&]()" in source
+    assert "!Kokkos::isfinite(guard" in source
+
+
+def test_declared_conditional_source_keeps_selected_intermediate_checks():
+    from pops.math import where, minimum
+    model = Model("conditional_source", frame=Cartesian2D())
+    state = model.state("U", components=("q",))
+    zero = state[0] - state[0]
+    model.source("guarded", on=state,
+                 value=(where(state[0] > 0, lambda: minimum(zero / zero, state[0]), lambda: 7.),))
+    program = Program("physical_conditional")
+    block, _ = state_refs(program, "fluid", model=model, state=state)
+    q = program.state(block[state])
+    rhs = program.source(model.module.operator_handle("guarded"), q.n)
+    candidate = program.value("endpoint", q.n + program.dt * rhs, at=q.next.point)
+    program.commit(q.next, candidate)
+    source = emit(model, program)
+    assert "std::isfinite(guard" in source
+    assert "quiet_NaN" in source
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_named_primitive_is_scoped_in_program_source_and_local_residual(local):
+    from pops.math import where
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import FailRun, LocalResidual
+    model = Model("primitive_source", frame=Cartesian2D())
+    state = model.state("U", components=("q",))
+    dangerous = model.scalar("danger", 1 / (state[0] - state[0]))
+    model.source("guarded", on=state,
+                 value=(where(state[0] > 0, lambda: dangerous, lambda: 7.),))
+    program = Program("physical_primitive")
+    block, _ = state_refs(program, "fluid", model=model, state=state)
+    q = program.state(block[state])
+    operation = model.module.operator_handle("guarded")
+    if local:
+        def residual(p, unknown):
+            return p.value("residual", unknown - p.dt * p.source(operation, unknown),
+                           at=unknown.point)
+        candidate = program.solve(LocalResidual(residual, q.n),
+                                  solver=LocalNewton()).consume(action=FailRun())
+        candidate = program.value("endpoint", candidate, at=q.next.point)
+    else:
+        rhs = program.source(operation, q.n)
+        candidate = program.value("endpoint", q.n + program.dt * rhs, at=q.next.point)
+    program.commit(q.next, candidate)
+    source = emit(model, program)
+    assert "const pops::Real danger =" not in source
+    assert "? ([&]()" in source
+    assert "std::isfinite(guard" in source
+    assert "quiet_NaN" in source

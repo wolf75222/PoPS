@@ -606,7 +606,24 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     the ``params`` struct is bound by _kernel_open at the fab-loop level (ADC-510), so no per-cell
     binding is emitted here (a runtime param is NOT a per-cell aux/cons local)."""
     from pops._ir.visitors import _children, _dependencies
+    from pops._ir.primitive_expansion import expand_evaluation_boundaries
+    from pops.codegen.module_emit_helpers import _checked_inline_expr
 
+    from pops._ir.control_expr import has_evaluation_boundary
+    expanded = expand_evaluation_boundaries(exprs, impl.prim_defs)
+    if has_evaluation_boundary(expanded):
+        from pops._ir.expr import Var
+        pending, checked = list(exprs), set()
+        while pending:
+            node = pending.pop()
+            if id(node) in checked:
+                continue
+            checked.add(id(node))
+            if isinstance(node, Var) and node.kind == "prim":
+                raise NotImplementedError(
+                    "this Program kernel must inline primitive recipes before lowering "
+                    "where/rounded evaluation boundaries")
+            pending.extend(_children(node))
     deps = _dependencies(exprs)
     lines = []
     live = impl._live_prims(exprs) if with_prim else set()
@@ -624,7 +641,8 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     if with_prim:
         for p, expr in impl.prim_defs.items():  # declaration order (a prim may use an earlier prim)
             if p in live:
-                lines.append("const pops::Real %s = %s;" % (p, expr.to_cpp()))
+                expression = expand_evaluation_boundaries(expr, impl.prim_defs)
+                lines.append("const pops::Real %s = %s;" % (p, _checked_inline_expr(expression)))
     # The ProviderPack plan, not a model-side named component cache, is the sole
     # authority for auxiliary/field values.  Walk typed leaves to distinguish a
     # provider named ``rho`` from the conservative variable ``rho``.

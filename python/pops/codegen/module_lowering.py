@@ -591,6 +591,9 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
             emit_model = _module_to_model(
                 lowering.source_module, state_space=state_space,
                 resolved_operations=resolved_operations)
+            from pops.codegen.user_reconstruction_lowering import prepare_user_reconstruction_carrier
+
+            prepare_user_reconstruction_carrier(emit_model, numerics)
             emit_model.check()
             return emit_model, lowering.source_module
         if resolved_operations is not None:
@@ -621,6 +624,8 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
             object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
         from pops.codegen.nonconservative_lowering import prepare_path_carrier
         prepare_path_carrier(lowering.emit_model, lowering.source_module, resolved_operations, numerics)
+        from pops.codegen.user_reconstruction_lowering import prepare_user_reconstruction_carrier
+        prepare_user_reconstruction_carrier(lowering.emit_model, numerics)
         lowering.bind_component_provider_packs(packs)
         lowering.emit_model.check()
         return lowering.emit_model, lowering.source_module

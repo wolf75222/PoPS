@@ -45,12 +45,13 @@ class ProgramSourceKernelHelpers:
         if binding["count"] != 0 or not _transparent_roots(impl, roots):
             return None
         from pops.codegen.program_emit_kernels import _cell_locals
+        from pops.codegen.module_emit_helpers import _checked_inline_expr
 
         # These fixed input/output names are private C++ argument names, never
         # scientific identities. Authentication has already bound every leaf.
         numerical = _cell_locals(impl, roots, "kernel_input", with_cons=True,
                                  with_prim=True, provider_binding=binding)
-        numerical += ["outA(index, %d) = %s;" % (i, root.to_cpp())
+        numerical += ["outA(index, %d) = %s;" % (i, _checked_inline_expr(root))
                       for i, root in enumerate(roots)]
         owner = str(impl.owner_path.canonical())
         key = json.dumps({"owner": owner, "components": tuple(impl.cons_names),

@@ -32,6 +32,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pops.codegen.module_emit_helpers import _checked_inline_expr
+
 from pops.codegen.program_emit_kernels import (
     _cell_locals, _coeff_cpp, _deref, _model_impl, _prepare_provider_values,
 )
@@ -152,7 +154,7 @@ def _emit_block_M(body: Any, impl: Any, jblock: Any, th_dt_cpp: Any, indent: Any
         for c in range(n):
             ident = "pops::Real(1)" if r == c else "pops::Real(0)"
             body.append("%sM_[%d][%d] = %s - th_dt_ * (%s);"
-                        % (indent, r, c, ident, jblock[r][c].to_cpp()))
+                        % (indent, r, c, ident, _checked_inline_expr(jblock[r][c])))
     return n
 
 
@@ -214,7 +216,7 @@ def _matrix_roots(*matrices: Any) -> list:
 def _matrix_entry(matrix: Any, row: int, column: int) -> str:
     if matrix is None:
         return "pops::Real(1)" if row == column else "pops::Real(0)"
-    return "(%s)" % matrix[row][column].to_cpp()
+    return "(%s)" % _checked_inline_expr(matrix[row][column])
 
 
 def _emit_condensed_coeffs_kernel(

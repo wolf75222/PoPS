@@ -19,10 +19,29 @@ TESTS = (
     "tests/python/unit/numerics/test_symbolic_path.py",
     "tests/python/unit/numerics/test_symbolic_path_adversarial.py",
     "tests/python/unit/numerics/test_symbolic_path_consistency.py",
+    "tests/python/unit/numerics/test_symbolic_path_param_routing.py",
     "tests/python/unit/problem/test_deep_freeze_storage.py",
+    "tests/python/unit/codegen/test_conditional_rounding.py",
+    "tests/python/unit/codegen/test_conditional_rounding_adversarial.py",
+    "tests/python/unit/codegen/test_program_emit_params_multimodel.py",
+    "tests/python/unit/codegen/test_bind_parameter_evidence.py",
+    "tests/python/unit/codegen/test_bind_schema.py",
+    "tests/python/unit/codegen/test_typed_phase_records.py",
+    "tests/python/unit/codegen/test_conditional_consumers.py",
+    "tests/python/unit/codegen/test_symbolic_path_name_hygiene.py",
+    "tests/python/unit/numerics/test_user_reconstruction_adversarial.py",
+    "tests/python/unit/codegen/test_user_reconstruction_gap_review.py",
+    "tests/python/unit/codegen/test_user_reconstruction_multiblock.py",
     "tests/python/integration/runtime/test_program_expression_runtime.py",
+    "tests/python/integration/runtime/test_conditional_consumers_runtime.py",
+    "tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py",
     "tests/python/integration/runtime/test_symbolic_path_runtime.py",
     "tests/python/integration/runtime/test_symbolic_path_param_runtime.py",
+    "tests/python/integration/runtime/test_symbolic_path_adversarial_runtime.py",
+    "tests/python/integration/runtime/test_symbolic_path_four_state_runtime.py",
+    "tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py",
+    "tests/python/integration/runtime/test_balance_multiplicity_runtime.py",
+    "tests/python/integration/amr/test_symbolic_path_amr_runtime.py",
     "tests/python/integration/runtime/test_local_transform_runtime.py",
     "tests/python/integration/runtime/test_native_retry_transactions.py",
 )
@@ -40,6 +59,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--identity-only", action="store_true")
+    parser.add_argument("--test", action="append", dest="tests",
+                        help="explicit pytest path/node; repeat to run a bounded group")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -50,6 +71,7 @@ def main() -> int:
     from pops._native_selector import select_native_dimension
     from pops.runtime.doctor import doctor
     from scripts.verify_installed_native import verify_installed_native
+    from scripts.check_packaging_manifest import read_manifest, PYTHON_SOURCE_SUFFIXES
 
     package = Path(pops.__file__).resolve().parent
     if not package.is_relative_to(Path(sys.prefix).resolve()) or package.is_relative_to(ROOT):
@@ -62,23 +84,31 @@ def main() -> int:
     if any(not passed for passed, _ in checks.values()):
         raise RuntimeError(f"native doctor failed: {checks}")
     sources = {}
-    # HEAD diff includes staged new modules. Do not accept a source-only fix in
-    # a native receipt merely because an earlier wheel still imports successfully.
-    for name in git("diff", "HEAD", "--name-only", "--", "python/pops", "include/pops").splitlines():
+    # Use the production packaging manifest: test-only headers are deliberately
+    # not shipped. Verify every shipped header and tracked Python module/type
+    # declaration, including staged additions, even when the checkout is clean.
+    names = [name for name in git("ls-files", "--", "python/pops").splitlines()
+             if Path(name).suffix in PYTHON_SOURCE_SUFFIXES]
+    names += ["include/" + str(path) for path in read_manifest(ROOT).installed_headers]
+    names.append("include/pops_headers.manifest")
+    for name in sorted(names):
         source = ROOT / name
-        if not source.is_file() or source.suffix not in {".py", ".hpp", ".h", ".inc"}:
-            continue
+        if not source.is_file():
+            raise RuntimeError(f"tracked production source is absent: {source}")
         relative = name.removeprefix("python/pops/") if name.startswith("python/") else name
         installed = package / relative
         if not installed.is_file() or digest(source) != digest(installed):
             raise RuntimeError(f"installed/source mismatch for {name}: {installed}")
         sources[name] = digest(source)
+    source_manifest = json.dumps(sources, indent=2, sort_keys=True) + "\n"
+    (output / "source-files.json").write_text(source_manifest)
     identity = {
         "schema_version": 1, "source_commit": git("rev-parse", "HEAD"),
         "source_diff_sha256": hashlib.sha256(git("diff", "HEAD", "--binary").encode()).hexdigest(),
         "python": sys.executable, "package_file": pops.__file__, "package_version": pops.__version__,
         "native_file": str(origin), "native_sha256": digest(origin), "abi_key": native.abi_key(),
-        "doctor": checks, "modified_installed_files": sources,
+        "doctor": checks, "verified_source_files": len(sources),
+        "source_files_sha256": digest(output / "source-files.json"),
         "scope": "installed production PoPS, local CPU Kokkos, MPI-enabled Dim=2",
         "sys_path": sys.path,
     }
@@ -86,8 +116,8 @@ def main() -> int:
     if args.identity_only:
         return 0
     environment = dict(os.environ, POPS_REQUIRE_NATIVE_TESTS="1")
-    command = [sys.executable, "-m", "pytest", "-q", "-o", "pythonpath=",
-               f"--junitxml={output / 'pytest.xml'}", *TESTS]
+    command = [sys.executable, "-m", "pytest", "-v", "--tb=short", "-o", "pythonpath=",
+               f"--junitxml={output / 'pytest.xml'}", *(args.tests or TESTS)]
     start = time.monotonic()
     with (output / "pytest.log").open("w") as log:
         result = subprocess.run(command, cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT)

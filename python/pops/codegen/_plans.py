@@ -836,6 +836,29 @@ def _canonical_initial_values(artifact: Any, values: Any) -> Mapping[Any, Any]:
     return _canonicalize_initial_value_mapping(initial_plan, values)
 
 
+def _canonical_bind_params(schema: Any, values: Any) -> Mapping[Any, Any]:
+    """Authenticate authored parameter aliases before recording immutable evidence.
+
+    The compiled BindSchema is the sole authority for aliases. In particular,
+    neither a matching local name nor a fresh canonical projection authenticates
+    a handle from another Case. Value/domain checks remain in resolve_bind.
+    """
+    from pops.model.bind_schema import BindSchema
+    if type(schema) is not BindSchema:
+        raise TypeError("pops.bind parameter normalization requires an exact BindSchema")
+    if not isinstance(values, Mapping):
+        raise TypeError("pops.bind params must be a ParamHandle-keyed mapping")
+    canonical = {}
+    for handle, value in values.items():
+        slot = schema.slot(handle)
+        if slot.kind != "runtime":
+            raise TypeError("only RuntimeParam slots are settable at bind: %s" % slot.qid)
+        if slot.handle in canonical:
+            raise ValueError("multiple bind entries resolve to the same ParamHandle %s" % slot.qid)
+        canonical[slot.handle] = value
+    return canonical
+
+
 @dataclass(frozen=True, slots=True)
 class BindInputs:
     """Concrete values/resources accepted by bind, with reference-preserving evidence."""

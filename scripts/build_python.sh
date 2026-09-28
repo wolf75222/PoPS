@@ -279,4 +279,4 @@ PYTHONPATH= PYTHONNOUSERSITE=1 \
 echo ""
 echo "--- pops.runtime.doctor.doctor() ---"
 PYTHONPATH= PYTHONNOUSERSITE=1 \
-  python -c "import pops; from pops._native_selector import select_native_dimension; select_native_dimension($POPS_NATIVE_DIM); from pops.runtime.doctor import doctor; print('pops', pops.__version__, 'Dim=$POPS_NATIVE_DIM'); doctor()"
+  python -c "import pops; from pops._native_selector import select_native_dimension; select_native_dimension($POPS_NATIVE_DIM); from pops.runtime.doctor import doctor; print('pops', pops.__version__, 'Dim=$POPS_NATIVE_DIM'); checks = doctor(); raise SystemExit(0 if all(ok for ok, detail in checks.values()) else 1)"

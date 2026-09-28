@@ -10,6 +10,8 @@
 #include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <concepts>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <type_traits>
 
@@ -55,15 +57,38 @@ struct ConservativeComponentSampler {
   }
 };
 
-template <class Primitive, int MinimumOffset, int MaximumOffset>
+template <int Axis, int Orientation, int Dim, class Model, int MinimumOffset, int MaximumOffset>
 struct PrimitiveComponentSampler {
   static_assert(MinimumOffset <= MaximumOffset);
-  static constexpr int count = MaximumOffset - MinimumOffset + 1;
-
-  const Primitive* values = nullptr;
+  const Model& model;
+  FieldView<const Real, Dim> state{};
+  Index<Dim> source{};
+  typename Model::Primitive* values = nullptr;
+  bool* ready = nullptr;
+  StateConversionStatus* status = nullptr;
   int component = 0;
 
-  POPS_HD Real operator()(int offset) const { return values[offset - MinimumOffset][component]; }
+  POPS_HD Real operator()(int offset) const {
+    const Real invalid = std::numeric_limits<Real>::quiet_NaN();
+    if (*status != StateConversionStatus::Success)
+      return invalid;
+    if (offset < MinimumOffset || offset > MaximumOffset) {
+      *status = StateConversionStatus::NonFiniteState;
+      return invalid;
+    }
+    const int slot = offset - MinimumOffset;
+    if (!ready[slot]) {
+      const auto recovered = model.recover(
+          pops::load_state<Model>(state, displaced<Axis, Orientation>(source, offset)));
+      if (!recovered.succeeded()) {
+        *status = recovered.status;
+        return invalid;
+      }
+      values[slot] = recovered.value;
+      ready[slot] = true;
+    }
+    return values[slot][component];
+  }
 };
 
 template <class Model>
@@ -133,20 +158,24 @@ POPS_HD StateConversion<typename Model::State> reconstruct_primitive(
     using Envelope = ReconstructionStencilEnvelope<Reconstruction>;
     constexpr int minimum = Envelope::min_offset;
     constexpr int maximum = Envelope::max_offset;
-    constexpr int count = maximum - minimum + 1;
+    constexpr std::int64_t count_wide =
+        std::int64_t(maximum) - std::int64_t(minimum) + std::int64_t(1);
+    static_assert(count_wide <= std::numeric_limits<int>::max(),
+                  "sampled reconstruction envelope exceeds native storage metadata");
+    constexpr int count = static_cast<int>(count_wide);
     Primitive values[count]{};
-    for (int offset = minimum; offset <= maximum; ++offset) {
-      const auto recovered = model.recover(
-          pops::load_state<Model>(state, displaced<Axis, Orientation>(source, offset)));
-      if (!recovered.succeeded())
-        return {{}, recovered.status};
-      values[offset - minimum] = recovered.value;
-    }
+    bool ready[count]{};
+    StateConversionStatus status = StateConversionStatus::Success;
 
     Primitive face{};
     for (int component = 0; component < Model::n_vars; ++component) {
-      const PrimitiveComponentSampler<Primitive, minimum, maximum> sample{values, component};
+      // Conversion is shared across components but occurs only for offsets reached by the
+      // policy's control flow.  A failed active conversion cannot be hidden by min/where.
+      const PrimitiveComponentSampler<Axis, Orientation, Dim, Model, minimum, maximum> sample{
+          model, state, source, values, ready, &status, component};
       face[component] = reconstruction.stencil_face_value(sample);
+      if (status != StateConversionStatus::Success)
+        return {{}, status};
     }
     return model.make_conservative(face);
   }

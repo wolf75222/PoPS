@@ -30,6 +30,7 @@ def expression_cpp(node, inputs):
 def checked_pointwise_rows(value, inputs):
     """Restore the closed DAG into the common CSE emitter and observe every result."""
     from pops._ir import expr as ir
+    from pops._ir.control_expr import Where, Rounded
     from pops.codegen.cpp_writer import _cse_emit
     from pops.time.expressions import component_names
     if len(inputs) != len(value.inputs):
@@ -41,33 +42,41 @@ def checked_pointwise_rows(value, inputs):
     if len(expressions) != len(component_names(value)):
         raise ValueError("pointwise expression output Space changed")
     binary = {"add": ir.Add, "sub": ir.Sub, "mul": ir.Mul, "div": ir.Div,
-              "pow": ir.Pow, "minimum": ir.Minimum, "maximum": ir.Maximum}
-    unary = {"neg": ir.Neg, "abs": ir.Abs, "sqrt": ir.Sqrt, "sign": ir.Sign}
-    restored, declarations, observed = [], [], []
+              "pow": ir.Pow, "minimum": ir.Minimum, "maximum": ir.Maximum,
+              "and": ir.BooleanAnd, "or": ir.BooleanOr}
+    unary = {"neg": ir.Neg, "abs": ir.Abs, "sqrt": ir.Sqrt, "sign": ir.Sign,
+             "not": ir.BooleanNot, "rounded": Rounded}
+    restored, bindings = [], {}
     for index, node in enumerate(value.attrs["expression_nodes"]):
         if not isinstance(node, (tuple, list)) or not node:
             raise TypeError("pointwise expression requires a closed DAG")
         operation = node[0]
         if operation in ("input", "literal", "coefficient"):
             name = "expression_leaf_%d_" % index
-            declarations.append("const pops::Real %s = %s;" % (name, expression_cpp(node, inputs)))
+            bindings[name] = expression_cpp(node, inputs)
             restored.append(ir.Var(name, "program_expression"))
-            observed.append(name)
             continue
-        arity = 2 if operation in binary else 1 if operation in unary else None
-        if arity is None or len(node) != arity + 1:
+        children = node[2:] if operation == "compare" else node[1:]
+        arity = (3 if operation == "where" else 2 if operation == "compare"
+                 or operation in binary else 1 if operation in unary else None)
+        if arity is None or len(children) != arity:
             raise ValueError("pointwise expression has unsupported operation or arity")
-        if any(type(child) is not int or not 0 <= child < index for child in node[1:]):
+        if any(type(child) is not int or not 0 <= child < index for child in children):
             raise ValueError("pointwise expression DAG must reference earlier nodes")
-        constructor = binary[operation] if operation in binary else unary[operation]
-        restored.append(constructor(*(restored[child] for child in node[1:])))
+        arguments = tuple(restored[child] for child in children)
+        if operation == "compare":
+            result = ir.Compare(node[1], *arguments)
+        else:
+            constructor = Where if operation == "where" else binary.get(operation, unary.get(operation))
+            result = constructor(*arguments)
+        restored.append(result)
     if any(type(root) is not int or not 0 <= root < len(restored) for root in expressions):
         raise ValueError("pointwise expression output is outside its closed DAG")
     lines, values, names = _cse_emit([restored[root] for root in expressions],
-                                    "pops::Real", "", materialize_all=True, return_names=True)
-    observed.extend(names)
-    return declarations + lines, values, " || ".join(
-        "!Kokkos::isfinite(%s)" % name for name in observed) or "false"
+                                    "pops::Real", "", materialize_all=True, return_names=True,
+                                    scalar_bindings=bindings)
+    return lines, values, " || ".join(
+        "!Kokkos::isfinite(%s)" % name for name in names) or "false"
 
 
 def emit_pointwise_kernel(value, variables, output, *, block_index, status):

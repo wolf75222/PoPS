@@ -863,6 +863,47 @@ void System<Dim>::block_rhs_into_at_prepared(
 }
 
 template <int Dim>
+void System<Dim>::block_path_rhs_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+    MultiFab<Dim>& state, MultiFab<Dim>& residual, Real courant,
+    const System* prepared_system, int prepared_block,
+    const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+    const ExecutionLane& lane,
+    const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+  const bool valid_block = block >= 0 && block < p_->blocks_.size();
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_path_rhs_into_at", [&] {
+        if (prepared_system != this || !valid_block || prepared_block != block ||
+            prepared_point != point || &transport.lane() != &lane)
+          throw std::invalid_argument("Uniform path RHS has a foreign prepared session");
+        if (!std::isfinite(courant) || !(courant > Real(0)) ||
+            courant != static_cast<Real>(active_program_step_courant()))
+          throw std::invalid_argument("Uniform path RHS Courant differs from the active step");
+      });
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_path_rhs_into_at", [&] {
+        if (&state == &residual || state.shares_storage_with(residual))
+          throw std::invalid_argument("Uniform path RHS state and result alias storage");
+        require_same_block_field(state, selected.U, "Uniform path RHS state");
+        require_same_block_field(residual, selected.U, "Uniform path RHS result");
+        if (!selected.path_rhs_at_point_prepared || p_->blocks_.has_interfaces(block) ||
+            (p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
+                                           runtime::system::PreparedEmbeddedBoundaryMode::inactive))
+          throw std::invalid_argument("Uniform path RHS has no complete single-block path authority");
+      });
+  invoke_prepared_boundary_transaction<Dim>(
+      state, residual, lane, "System::block_path_rhs_into_at", transport,
+      [&](MultiFab<Dim>& candidate, auto& scratch) {
+        materialize_detached_valid_field(state, scratch.detached_state);
+        selected.path_rhs_at_point_prepared(point, scratch.detached_state, candidate, courant,
+                                            selected.boundary.get(), lane, transport);
+      });
+}
+
+template <int Dim>
 void System<Dim>::block_neg_div_flux_into_at_prepared(
     const runtime::multiblock::BoundaryEvaluationPoint& point, int block, MultiFab<Dim>& state,
     MultiFab<Dim>& residual, const System* prepared_system, int prepared_block,
@@ -1423,6 +1464,11 @@ template void System<kNativeDimension>::block_rhs_core_into_at(
 template void System<kNativeDimension>::block_rhs_into_at_prepared(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&, const System<kNativeDimension>*, int,
+    const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
+    const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
+template void System<kNativeDimension>::block_path_rhs_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
+    MultiFab<kNativeDimension>&, Real, const System<kNativeDimension>*, int,
     const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
     const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
 template void System<kNativeDimension>::block_neg_div_flux_into_at_prepared(

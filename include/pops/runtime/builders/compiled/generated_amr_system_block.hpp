@@ -2094,6 +2094,31 @@ auto prepare_generated_amr_system_block(Request request)
   }
 }
 
+template <class Request, class Reconstruction>
+  requires ReconstructionPolicy<Reconstruction>
+auto prepare_generated_amr_system_block(Request request, Reconstruction reconstruction)
+    -> PreparedAmrSystemBlock<Request::dimension> {
+  constexpr int Dim = Request::dimension;
+  using Model = std::remove_cvref_t<decltype(request.model)>;
+  static_assert(Model::dimension == Dim);
+  static_assert(StencilReconstruction<Reconstruction>);
+  static_assert(stencil_envelope_fits_storage<Reconstruction>);
+  if (request.routes.limiter !=
+      std::string("source_stencil:") + Reconstruction::source_identity)
+    throw std::invalid_argument("generated AMR reconstruction source identity differs from package");
+  switch (parse_recon_route(request.routes.reconstruction, "generated AMR block")) {
+    case ReconRouteId::kConservative:
+      return generated_amr_detail::select_riemann<
+          Dim, nd::ReconstructionVariables::Conservative>(
+          std::move(request), reconstruction);
+    case ReconRouteId::kPrimitive:
+      return generated_amr_detail::select_riemann<
+          Dim, nd::ReconstructionVariables::Primitive>(
+          std::move(request), reconstruction);
+  }
+  throw std::logic_error("generated AMR reconstruction route escaped its exhaustive selector");
+}
+
 /// Authored routes frozen into one exact-ranked generated AMR package image.
 struct CompiledAmrSystemBlockRoutes {
   std::string limiter;
@@ -2126,7 +2151,9 @@ struct CompiledAmrSystemBlockPreparation {
 /// Validate the authored routes shared by the host package preflight and the exact generated
 /// installer. State storage is one complete typed route; it never enters the hyperbolic limiter or
 /// Riemann dispatch, while either half of that route remains an error.
-inline void validate_compiled_amr_system_block_routes(const CompiledAmrSystemBlockRoutes& routes) {
+inline void validate_compiled_amr_system_block_routes(
+    const CompiledAmrSystemBlockRoutes& routes,
+    std::string_view source_reconstruction_identity = {}) {
   if (routes.limiter.empty() || routes.riemann.empty())
     throw std::invalid_argument("compiled AMR block requires explicit limiter and Riemann routes");
   const bool storage_only = routes.limiter == "state_storage" && routes.riemann == "unavailable";
@@ -2137,7 +2164,13 @@ inline void validate_compiled_amr_system_block_routes(const CompiledAmrSystemBlo
   } else {
     if (routes.limiter == "state_storage" || routes.riemann == "unavailable")
       throw std::invalid_argument("compiled AMR state-storage route is partial");
-    (void)parse_limiter_route(routes.limiter, "compiled AMR block");
+    if (source_reconstruction_identity.empty()) {
+      (void)parse_limiter_route(routes.limiter, "compiled AMR block");
+    } else if (routes.limiter !=
+               std::string("source_stencil:") + std::string(source_reconstruction_identity)) {
+      throw std::invalid_argument(
+          "compiled AMR reconstruction source identity differs from package");
+    }
     (void)parse_riemann_route(routes.riemann, "compiled AMR block");
     (void)parse_recon_route(routes.reconstruction, "compiled AMR block");
   }
@@ -2201,6 +2234,34 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
   return prepare_generated_amr_system_block(CompiledAmrSystemBlockPreparation<Dim, Model>{
       name, provider_consumer_qid, std::move(model), std::move(routes), gamma, substeps, stride,
       newton, newton_diagnostics});
+}
+
+template <int Dim, class Model, class Reconstruction>
+  requires ReconstructionPolicy<Reconstruction>
+PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
+    const std::string& name, Model model, const std::string& limiter, const std::string& riemann,
+    const std::string& reconstruction, const std::string& time, double gamma, int substeps,
+    int stride, double positivity_floor, double weno_epsilon, bool wave_speed_cache,
+    const std::string& provider_consumer_qid, NewtonOptions newton,
+    bool newton_diagnostics, Reconstruction policy) {
+  static_assert(Dim >= 1 && Dim <= 3);
+  static_assert(Model::dimension == Dim);
+  static_assert(StencilReconstruction<Reconstruction>);
+  static_assert(stencil_envelope_fits_storage<Reconstruction>);
+  if (name.empty() || provider_consumer_qid.empty())
+    throw std::invalid_argument("compiled AMR source reconstruction needs block and provider identities");
+  if (!std::isfinite(gamma) || !(gamma > 0.0) || substeps < 1 || stride < 1)
+    throw std::invalid_argument("compiled AMR source reconstruction has invalid time controls");
+  validate_newton_options(newton, "compiled AMR block");
+  if (positivity_floor > 0.0 && Model::conservative_vars().index_of(VariableRole::Density) < 0)
+    throw std::invalid_argument("compiled AMR positivity requires a conservative Density variable");
+  CompiledAmrSystemBlockRoutes routes{limiter, riemann, reconstruction, time,
+                                      static_cast<Real>(positivity_floor),
+                                      static_cast<Real>(weno_epsilon), wave_speed_cache};
+  validate_compiled_amr_system_block_routes(routes, Reconstruction::source_identity);
+  return prepare_generated_amr_system_block(CompiledAmrSystemBlockPreparation<Dim, Model>{
+      name, provider_consumer_qid, std::move(model), std::move(routes), gamma, substeps, stride,
+      newton, newton_diagnostics}, policy);
 }
 
 /// Stage the same default block/state identity Python add_equation installs when pops.bind is

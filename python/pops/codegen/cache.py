@@ -23,6 +23,11 @@ from typing import Any
 # through the closed path-free vocabulary below. The flags do not alter the ABI contract; explicit
 # ISA choices and every other accepted codegen option remain part of the artifact identity.
 _DSL_OPTFLAGS_DEFAULT = "-O3 -DNDEBUG"
+_STRICT_FLOATING_FLAGS = ("-fno-fast-math", "-ffp-contract=off")
+_INCOMPATIBLE_FLOATING_FLAGS = frozenset({
+    "-Ofast", "-ffast-math", "-fassociative-math", "-ffinite-math-only",
+    "-fno-signed-zeros", "-freciprocal-math", "-ffp-contract=fast", "-ffp-contract=on",
+})
 
 # This is deliberately a closed vocabulary. ``POPS_DSL_OPTFLAGS`` participates in a native
 # compiler command whose other inputs are content-authenticated. Accepting a generic compiler token
@@ -90,6 +95,8 @@ def _dsl_optflags() -> list[str]:
     except ValueError as exc:
         raise ValueError("POPS_DSL_OPTFLAGS is not a valid shell-style token list") from exc
     for flag in flags:
+        if flag in _INCOMPATIBLE_FLOATING_FLAGS:
+            raise ValueError("strict scientific floating profile rejects %r" % flag)
         if not _is_safe_dsl_codegen_flag(flag):
             raise ValueError(
                 "POPS_DSL_OPTFLAGS rejects unsupported token %r; only the closed path-free "
@@ -97,7 +104,7 @@ def _dsl_optflags() -> list[str]:
                 "includes, object/response files, linker options, plugins or toolchain overrides)"
                 % flag
             )
-    return flags
+    return flags + [flag for flag in _STRICT_FLOATING_FLAGS if flag not in flags]
 
 
 def _platform_cache_key() -> str:

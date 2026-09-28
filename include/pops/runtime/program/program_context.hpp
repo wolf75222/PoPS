@@ -397,6 +397,57 @@ class ProgramContext {
                                prototype.ghosts());
   }
 
+  double path_rhs_courant() const { return system_->active_program_step_courant(); }
+
+  void path_rhs_into(int program_block, field_type& input, field_type& output, int rate_id,
+                     std::string_view temporal_family, double courant) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    int runtime_block = -1;
+    runtime::multiblock::BoundaryEvaluationPoint point;
+    std::string contract;
+    std::exception_ptr error;
+    try {
+      runtime_block = sys_block(program_block);
+      require_rate_identity_(rate_id);
+      point = boundary_evaluation_point(rate_id);
+      const double authored_courant = system_->active_program_step_courant();
+      if (!std::isfinite(authored_courant) || !(authored_courant > 0.0))
+        throw std::invalid_argument(
+            "Uniform path RHS requires an active authored step_cfl Courant");
+      const auto destination = scratch_.find(ScratchKey{ScratchKind::Rhs, rate_id, 0});
+      if (rate_id < 0 || temporal_family.empty() || &input == &output ||
+          input.shares_storage_with(output) ||
+          destination == scratch_.end() || &destination->second != &output ||
+          !std::isfinite(courant) || !(courant > 0.0) ||
+          courant != authored_courant)
+        throw std::invalid_argument("Uniform path RHS lost its exact staged input, output or Courant");
+      require_same_field_contract_(input, output, "Uniform path RHS output");
+      ExactContractBuilder identity;
+      identity.text("pops.uniform-path-rhs-stage.v1")
+          .scalar(runtime_block).scalar(rate_id).text(temporal_family)
+          .scalar(point.tick).scalar(point.stage)
+          .scalar(point.stage_fraction.numerator).scalar(point.stage_fraction.denominator)
+          .scalar(point.dt).scalar(point.physical_time).scalar(courant);
+      contract = std::move(identity).release();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && error)
+        std::rethrow_exception(error);
+      throw std::runtime_error("Uniform path RHS staging failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"uniform-path-rhs-stage", contract}}, lane))
+      throw std::invalid_argument("Uniform path RHS stage differs between ranks");
+    auto boundary = prepare_block_boundary_session(program_block, input, point, lane);
+    count_kernel_();
+    system_->block_path_rhs_into_at(point, runtime_block, input, output,
+                                    static_cast<Real>(courant), boundary->system(),
+                                    boundary->runtime_block(), boundary->point(), boundary->lane(),
+                                    boundary->transport());
+  }
+
   template <class Resource, class Matches, class... Args>
   Resource& prepared_resource(std::int64_t node, int block, Matches&& matches,
                               Args&&... args) const {

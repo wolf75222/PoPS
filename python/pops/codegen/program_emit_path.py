@@ -1,10 +1,10 @@
-"""Stage a complete path RHS before the synchronized hierarchy continuation."""
+"""Emit complete path RHS evaluation on native uniform or AMR storage."""
 import json
 
 
 def emit_path_rhs(value, var, lines, model, provider_plans, block, target):
-    if target != "amr_system":
-        raise NotImplementedError("path-conservative transport requires synchronous AMR execution")
+    if target not in {"system", "amr_system"}:
+        raise NotImplementedError("path-conservative transport requires a native System target")
     from pops.codegen.program_emit_kernels import _model_impl
     from pops.codegen.program_emit_ops import _rhs_flux_temporal_family
     from pops.codegen.program_emit_kernels import prepare_default_rhs_providers
@@ -24,7 +24,11 @@ def emit_path_rhs(value, var, lines, model, provider_plans, block, target):
     lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     lines += prepare_default_rhs_providers(model, value, block, var[state.id], provider_plans,
                                           target=target, flux=True, source=False)
-    trace = emit_rhs_input_trace(value, block, var[state.id], lines, target, force=True)
-    lines.append("ctx.stage_path_rhs(%d, %s, %s, %d, %s, %s, ctx.path_rhs_courant());" %
-                 (block, var[state.id], var[value.id], value.id,
-                  json.dumps(_rhs_flux_temporal_family(value)), trace))
+    family = json.dumps(_rhs_flux_temporal_family(value))
+    if target == "amr_system":
+        trace = emit_rhs_input_trace(value, block, var[state.id], lines, target, force=True)
+        lines.append("ctx.stage_path_rhs(%d, %s, %s, %d, %s, %s, ctx.path_rhs_courant());" %
+                     (block, var[state.id], var[value.id], value.id, family, trace))
+    else:
+        lines.append("ctx.path_rhs_into(%d, %s, %s, %d, %s, ctx.path_rhs_courant());" %
+                     (block, var[state.id], var[value.id], value.id, family))

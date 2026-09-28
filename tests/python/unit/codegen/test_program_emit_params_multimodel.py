@@ -154,6 +154,29 @@ def test_sparse_parameter_read_materialises_the_complete_stable_abi_vector():
     ]
 
 
+def test_alternating_model_owners_keep_each_complete_parameter_table():
+    first_owner = OwnerPath.model("alternating-first")
+    second_owner = OwnerPath.model("alternating-second")
+    first = _SparseReadImpl(first_owner)
+    second = _Impl(second_owner, "beta", 2.0)
+    first_block = _block("first", first_owner)
+    second_block = _block("second", second_owner)
+    program = _Program(
+        (first_block, second_block),
+        (_node("first_before", first_block),
+         _node("second", second_block),
+         _node("first_after", first_block)),
+    )
+    models = _graph((("first", first_owner, first),
+                     ("second", second_owner, second)))
+
+    assert program_param_entries(program, models) == [
+        (0, "alpha", 0, 1.0),
+        (0, "omega", 1, 3.0),
+        (1, "beta", 0, 2.0),
+    ]
+
+
 def test_ranked_named_flux_collects_runtime_parameters_from_the_third_axis():
     owner = OwnerPath.model("ranked-flux")
     impl = _RankedFluxImpl(owner)

@@ -71,6 +71,9 @@ def emit_path_members(model, *, cse, aux_locals):
 def emit_path_proposal_speed():
     # The current-state speed proposes a step. The hierarchy RHS barrier separately checks
     # actual source-transformed/predictor common-face and canonical subface speeds.
+    # This adapter consumes only U and the provider pack a. Do not inject named
+    # scientific locals here: the path methods own those bindings, and a state
+    # component named a/g/result is unrelated to these private adapter variables.
     return [
         "    const auto g = path_covector<Axis>(a);",
         "    const auto result = path_integral(U, U, g);",

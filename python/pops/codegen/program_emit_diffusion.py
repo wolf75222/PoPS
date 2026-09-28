@@ -197,7 +197,8 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                                                  provider_plans,bidx,target))
     lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);" % (
         out,v.id,state_var))
-    exprs=_law_expressions(selected)
+    from pops._ir.primitive_expansion import expand_evaluation_boundaries
+    exprs=tuple(expand_evaluation_boundaries(_law_expressions(selected), impl.prim_defs))
     sources=tuple(row for row in v.attrs["physical_balance"].occurrences if row.kind=="source")
     roots=list(exprs)
     for row in sources:

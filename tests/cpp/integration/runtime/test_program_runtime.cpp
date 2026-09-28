@@ -82,6 +82,13 @@ struct NoEll {
 };
 using GasModel = CompositeModel<EulerND<kNativeDimension>, NoSource, NoEll>;
 
+// Deliberately select storage only even though the reusable physical state type
+// also has gas conversions. No spatial or elliptic law is selected by this route.
+struct ProgramStorageGas : GasModel {
+  static constexpr bool program_only_storage = true;
+  static constexpr int program_state_ghost_depth = 1;
+};
+
 struct UnitDensitySource {
   template <class State, class Providers>
   POPS_HD State apply(const State&, const Providers&) const {
@@ -130,6 +137,10 @@ SystemConfig<Dim> unit_domain_config(int cells_per_axis) {
 
 template <int Dim>
 SystemConfig<Dim> distributed_boundary_domain_config(int cells_per_axis) {
+  // Establish the execution world before querying its rank count or constructing
+  // a configuration whose defaults depend on it. This fixture can run first in
+  // an MPI-filtered binary, without a preceding System having initialized MPI.
+  comm_init();
   SystemConfig<Dim> config = unit_domain_config<Dim>(cells_per_axis);
   const int ranks = n_ranks();
   if (ranks == 1)
@@ -1007,6 +1018,161 @@ TEST(ProgramRuntime, CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresenta
   EXPECT_DOUBLE_EQ(system.time(), 1.0);
   EXPECT_EQ(system.macro_step(), 0);
   EXPECT_EQ(calls, 0);
+}
+
+TEST(ProgramRuntime, ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System<kNativeDimension> system(distributed_boundary_domain_config<kNativeDimension>(8));
+  install_execution_lane(system, "pops.test.program-runtime.storage-field-capability");
+  system.install_block_state_route("gas", "test.program-runtime.storage.state@1");
+  system.seal_auxiliary_providers();
+  const auto prepared = prepare_compiled_system_block<kNativeDimension>(
+      system, "gas", ProgramStorageGas{}, "state_storage", "unavailable", "conservative",
+      "explicit", 1.4, 1, true, 1);
+  EXPECT_FALSE(static_cast<bool>(prepared.poisson_rhs));
+}
+
+TEST(ProgramRuntime, CflWithoutPoissonProviderPublishesTheProgramStep) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr double dt = 1.e-4;
+  System<kNativeDimension> system(distributed_boundary_domain_config<kNativeDimension>(8));
+  install_execution_lane(system, "pops.test.program-runtime.cfl-no-field");
+  system.install_block_state_route("gas", "test.program-runtime.cfl-no-field.state@1");
+  system.seal_auxiliary_providers();
+  auto prepared = prepare_compiled_system_block<kNativeDimension>(
+      system, "gas", GasModel{}, "none", "rusanov", "conservative", "explicit", 1.4,
+      1, true, 1);
+  prepared.poisson_rhs = {};
+  install_prepared_block(system, std::move(prepared));
+  std::vector<double> initial;
+  fill_ic(initial, 8, 1.4);
+  system.set_state("gas", initial);
+  const auto accepted = system.get_state("gas");
+  system.set_program_block_map({0});
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->install([context](double h) {
+    context->begin_step(h);
+    auto& state = context->state(0);
+    context->axpy(state, Real(.1), state);
+  });
+  system.set_program_block_map({0});
+  EXPECT_TRUE(system.configured_field_provider_slots().empty());
+  EXPECT_NO_THROW(system.step_cfl(.25, 1.e-12, dt, 0.));
+  const auto result = system.get_state("gas");
+  ASSERT_EQ(result.size(), accepted.size());
+  for (std::size_t i = 0; i < result.size(); ++i)
+    EXPECT_NEAR(result[i], 1.1 * accepted[i], 2.e-14);
+  EXPECT_TRUE(system.field_provider_slots().empty());
+  EXPECT_DOUBLE_EQ(system.time(), dt);
+  EXPECT_EQ(system.macro_step(), 1);
+}
+
+TEST(ProgramRuntime, CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System<kNativeDimension> system(distributed_boundary_domain_config<kNativeDimension>(8));
+  install_execution_lane(system, "pops.test.program-runtime.cfl-missing-field");
+  system.install_block_state_route("gas", "test.program-runtime.cfl-missing-field.state@1");
+  system.seal_auxiliary_providers();
+  auto prepared = prepare_compiled_system_block<kNativeDimension>(
+      system, "gas", GasModel{}, "none", "rusanov", "conservative", "explicit", 1.4,
+      1, true, 1);
+  prepared.poisson_rhs = {};
+  install_prepared_block(system, std::move(prepared));
+  system.set_poisson("charge_density", "cartesian_cg");
+  std::vector<double> initial;
+  fill_ic(initial, 8, 1.4);
+  system.set_state("gas", initial);
+  const auto accepted = system.get_state("gas");
+  int program_calls = 0;
+  system.install_program_step([&program_calls](double) { ++program_calls; });
+  EXPECT_THROW(system.step_cfl(.25, 1.e-12, 1.e-4, 0.), std::runtime_error);
+  EXPECT_THROW((void)system.solve_fields(), std::runtime_error);
+  EXPECT_EQ(program_calls, 0);
+  EXPECT_EQ(system.get_state("gas"), accepted);
+  EXPECT_DOUBLE_EQ(system.time(), 0.);
+  EXPECT_EQ(system.macro_step(), 0);
+}
+
+TEST(ProgramRuntime, CflRetainsImplicitPoissonProviderAndStageStateConsumption) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System<kNativeDimension> system(distributed_boundary_domain_config<kNativeDimension>(8));
+  install_execution_lane(system, "pops.test.program-runtime.cfl-stage-field");
+  system.install_block_state_route("gas", "test.program-runtime.cfl-stage-field.state@1");
+  system.seal_auxiliary_providers();
+  auto prepared = prepare_compiled_system_block<kNativeDimension>(
+      system, "gas", GasModel{}, "none", "rusanov", "conservative", "explicit", 1.4,
+      1, true, 1);
+  std::vector<Real> rhs_densities;
+  auto physical_rhs = std::move(prepared.poisson_rhs);
+  ASSERT_TRUE(static_cast<bool>(physical_rhs));
+  prepared.poisson_rhs = [&rhs_densities, physical_rhs](const auto& state, auto& rhs) {
+    rhs_densities.push_back(reduce_min(state, 0));
+    physical_rhs(state, rhs);
+  };
+  install_prepared_block(system, std::move(prepared));
+  std::vector<double> initial;
+  fill_ic(initial, 8, 1.4);
+  system.set_state("gas", initial);
+  system.set_program_block_map({0});
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->install([context](double h) {
+    context->begin_step(h);
+    auto& state = context->state(0);
+    context->axpy(state, Real(1), state);
+    auto outcome = context->solve_fields_from_state(0, state);
+    (void)outcome.consume(SolveConsumption::kAccept);
+  });
+  system.set_program_block_map({0});
+  EXPECT_NO_THROW(system.step_cfl(.25, 1.e-12, 1.e-4, 0.));
+  ASSERT_EQ(rhs_densities.size(), 2u);
+  EXPECT_DOUBLE_EQ(rhs_densities[0], 1.);
+  EXPECT_DOUBLE_EQ(rhs_densities[1], 2.);
+  EXPECT_TRUE(system.field_provider_materialized("pops.system.default-field"));
+  EXPECT_DOUBLE_EQ(system.time(), 1.e-4);
+  EXPECT_EQ(system.macro_step(), 1);
+}
+
+TEST(ProgramRuntime, CflRejectsRankLocalPoissonRequirementsBeforeBranching) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  if (n_ranks() < 2)
+    GTEST_SKIP() << "requires two MPI ranks to disagree about the field requirement";
+  for (const bool explicit_request : {false, true}) {
+    System<kNativeDimension> system(distributed_boundary_domain_config<kNativeDimension>(8));
+    install_execution_lane(system, "pops.test.program-runtime.cfl-rank-field-contract");
+    system.install_block_state_route("gas", "test.program-runtime.cfl-rank-field.state@1");
+    system.seal_auxiliary_providers();
+    auto prepared = prepare_compiled_system_block<kNativeDimension>(
+        system, "gas", GasModel{}, "none", "rusanov", "conservative", "explicit", 1.4,
+        1, true, 1);
+    // First probe differs only in RHS availability; second only in the explicit
+    // field request. Both must converge before any field/provider collective.
+    if (explicit_request || system.prepared_boundary_execution_lane().rank() == 0)
+      prepared.poisson_rhs = {};
+    install_prepared_block(system, std::move(prepared));
+    if (explicit_request && system.prepared_boundary_execution_lane().rank() == 0)
+      system.set_poisson("charge_density", "cartesian_cg");
+    std::vector<double> initial;
+    fill_ic(initial, 8, 1.4);
+    system.set_state("gas", initial);
+    const auto accepted = system.get_state("gas");
+    int calls = 0;
+    system.install_program_step([&calls](double) { ++calls; });
+    EXPECT_THROW(system.step_cfl(.25, 1.e-12, 1.e-4, 0.), std::invalid_argument);
+    EXPECT_EQ(calls, 0);
+    EXPECT_EQ(system.get_state("gas"), accepted);
+    EXPECT_DOUBLE_EQ(system.time(), 0.);
+    EXPECT_EQ(system.macro_step(), 0);
+  }
 }
 
 TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels) {
@@ -2210,6 +2376,66 @@ TEST(ProgramRuntime, EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntr
   EXPECT_FALSE((HasUnqualifiedBoundaryLinearization<Context, Field>));
 }
 
+TEST(ProgramRuntime, UniformPathPreflightPreservesScratchOnRankLocalRefusal) {
+  comm_init();
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr int rate_id = 820001;
+  constexpr double gamma = 1.4;
+  System<kNativeDimension> system(distributed_boundary_domain_config<kNativeDimension>(n));
+  install_execution_lane(system, "pops.test.program-runtime.uniform-path-preflight");
+  // A regular block is sufficient: invalid staging must be rejected before any
+  // native path closure is invoked. Path-kernel execution has separate witnesses.
+  add_gas(system, gamma);
+  std::vector<double> initial;
+  fill_ic(initial, n, gamma);
+  system.set_state("gas", initial);
+  const auto accepted_state = system.get_state("gas");
+  system.set_program_block_map({0});
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("uniform-path-preflight");
+  auto& state = context->state(0);
+  auto& residual = context->rhs_scratch(rate_id, 0, state);
+  auto foreign_output = context->rhs_scratch_like(state);
+  const ExecutionLane& lane = context->prepared_execution_lane();
+  int failure = 0;
+  bool entered_path_call = false;
+  context->install([&](double dt) {
+    context->begin_step(dt);
+    const bool inject = lane.rank() == 0;
+    const int selected_rate = inject && failure == 1 ? -1 : rate_id;
+    const double courant = inject && failure == 0 ? 0.0 : context->path_rhs_courant();
+    auto& selected_output = inject && failure == 2 ? state
+                            : inject && failure == 3 ? foreign_output : residual;
+    entered_path_call = true;
+    context->path_rhs_into(0, state, selected_output, selected_rate,
+                           "test.uniform-path-preflight", courant);
+  });
+
+  for (failure = 0; failure != 4; ++failure) {
+    SCOPED_TRACE(failure);
+    residual.set_val(Real(7));
+    foreign_output.set_val(Real(11));
+    entered_path_call = false;
+    // Peers carry valid staging arguments. The common preflight must refuse on
+    // every rank without clearing the output merely to look up its identity.
+    EXPECT_THROW(system.step_cfl(0.25, 1.e-12, 1.e-4, 0.0), std::exception);
+    EXPECT_TRUE(entered_path_call);
+    for (int component = 0; component < residual.ncomp(); ++component) {
+      EXPECT_EQ(reduce_min(residual, component), Real(7));
+      EXPECT_EQ(reduce_max(residual, component), Real(7));
+      EXPECT_EQ(reduce_min(foreign_output, component), Real(11));
+      EXPECT_EQ(reduce_max(foreign_output, component), Real(11));
+    }
+    EXPECT_EQ(system.get_state("gas"), accepted_state);
+    EXPECT_DOUBLE_EQ(system.time(), 0.0);
+    EXPECT_EQ(system.macro_step(), 0);
+    EXPECT_DOUBLE_EQ(system.active_program_step_courant(), 0.0);
+  }
+}
+
 TEST(ProgramRuntime, PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally) {
   comm_init();
 #if defined(POPS_HAS_KOKKOS)
@@ -2397,6 +2623,9 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
   std::vector<double> initial;
   fill_ic(initial, n, gamma);
   sim.set_state("gas", initial);
+  // Global reads are gathered on the root; non-root ranks retain an empty
+  // global projection and must still participate in every collective read.
+  const auto accepted_state = sim.get_state("gas");
   sim.set_program_block_map({0});
 
   auto ctx = runtime::program::make_program_execution_provider(&sim);
@@ -2419,7 +2648,7 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
   EXPECT_THROW(sim.step(1e-3), runtime::program::StepAttemptRejected);
   EXPECT_EQ(sim.macro_step(), 0);
   EXPECT_DOUBLE_EQ(sim.time(), 0.0);
-  EXPECT_EQ(sim.get_state("gas"), initial);
+  EXPECT_EQ(sim.get_state("gas"), accepted_state);
   EXPECT_FALSE(sim.history_initialized("gas.U"));
   EXPECT_FALSE(sim.program_cache().has(17));
   EXPECT_TRUE(sim.program_diagnostics().empty());
@@ -2438,6 +2667,7 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
   std::vector<double> initial;
   fill_ic(initial, n, 1.4);
   sim.set_state("gas", initial);
+  const auto accepted_state = sim.get_state("gas");
   sim.set_program_block_map({0});
   auto ctx = runtime::program::make_program_execution_provider(&sim);
   ctx->register_history("gas.U", 2, kGasComponents);
@@ -2468,7 +2698,7 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
   sim.set_program_block_map({0});
 
   const auto expect_initial = [&] {
-    EXPECT_EQ(sim.get_state("gas"), initial);
+    EXPECT_EQ(sim.get_state("gas"), accepted_state);
     EXPECT_EQ(sim.time(), 0.0);
     EXPECT_EQ(sim.macro_step(), 0);
     EXPECT_FALSE(sim.history_initialized("gas.U"));

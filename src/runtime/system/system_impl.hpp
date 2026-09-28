@@ -170,8 +170,11 @@ struct System<Dim>::Impl {
   double t = 0.0;
   int macro_step_ = 0;
   std::string last_dt_reason_;
+  // Invocation-only Courant authority. Zero refuses a path RHS without step_cfl.
+  double active_program_step_courant_ = 0.0;
   NewtonReport last_newton_report_{};
   std::string poisson_solver_ = "cartesian_cg";
+  bool explicit_default_poisson_requested_ = false;
   std::string poisson_bc_ = "auto";
   double poisson_abs_tol_ = 0.0;
   double poisson_rel_tol_ = static_cast<double>(kCartesianCGDefaultRelTol);

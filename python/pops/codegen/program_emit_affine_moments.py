@@ -7,6 +7,7 @@ from pops.codegen.program_emit_kernels import (
     _cell_locals, _coeff_cpp, _has_runtime_param, _kernel_close, _kernel_open, _model_impl,
 )
 from pops.codegen.program_emit_model_kernels import _linear_source_rows, _provider_binding
+from pops.codegen.module_emit_helpers import _checked_inline_expr
 
 
 def emit_affine_moment_kernel(
@@ -47,7 +48,7 @@ def emit_affine_moment_kernel(
     body.extend("    " + line for line in _cell_locals(
         impl, entries, old, with_cons=True, with_prim=True, provider_binding=provider))
     for label, expression in zip(("jxx", "jxy", "jyx", "jyy"), entries, strict=True):
-        body.append("    const pops::Real %s = %s;" % (label, expression.to_cpp()))
+        body.append("    const pops::Real %s = %s;" % (label, _checked_inline_expr(expression)))
     body.append("    pops::Real old_moments[%d], endpoint[%d], mapped[%d];" % (count, count, count))
     for component in range(count):
         body.append("    old_moments[%d] = %sA(index, %d);" % (component, old, component))

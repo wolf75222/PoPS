@@ -999,6 +999,16 @@ class System {
   /// Point-qualified twin used by compiled Programs and native boundary components.
   POPS_EXPORT void block_rhs_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                      int b, MultiFab<Dim>& U, MultiFab<Dim>& R);
+  /// Dedicated first-order path balance. The complete F/L/R face tuple is evaluated and
+  /// published only after collective finite-value and incident-face CFL validation.
+  POPS_EXPORT void block_path_rhs_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, Real courant, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+      const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
+  /// The active authored step_cfl request; zero means no path Courant authority.
+  POPS_EXPORT double active_program_step_courant() const;
   /// R <- -div F(U) for block @p b -- the SAME flux divergence as block_rhs_into but WITHOUT the
   /// model's default/composite source (Poisson frozen, ghosts filled identically). The block's
   /// flux-only closure is the rhs_into path on SourceFreeModel<Model> (the zero-source adapter the

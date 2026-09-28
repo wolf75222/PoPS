@@ -87,7 +87,7 @@ env -u PYTHONPATH PYTHONNOUSERSITE=1 POPS_NATIVE_DIM=2 \
 ```
 
 The runner refuses source/prototype imports, verifies the selected extension,
-compares modified package/SDK files with the checkout, requires a healthy doctor,
+compares all tracked package/SDK files with the checkout, requires a healthy doctor,
 and writes imports, hashes, commands, pytest XML and exit status. It does not
 promote skipped checks to successful runtime coverage.
 

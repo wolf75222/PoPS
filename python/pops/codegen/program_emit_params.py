@@ -32,7 +32,7 @@ def _formula_carrier(model: Any) -> Any:
 
 _MODEL_PARAM_OPS = frozenset({
     "source", "apply", "local_transform", "affine_moment_update", "solve_local_linear", "rhs", "diffusive_rhs",
-    "solve_local_nonlinear", "path_conservative_rhs",
+    "solve_local_nonlinear",
 })
 
 
@@ -65,7 +65,7 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     lin = getattr(impl, "_linear_sources", {}) or {}
     flux = getattr(impl, "_flux_terms", {}) or {}
     transforms = getattr(impl, "_local_transforms", {}) or {}
-    if v.op == "path_conservative_rhs":
+    if v.op == "rhs" and v.attrs.get("path_conservative", False):
         path = impl._path_conservative
         out.extend(path["kernel"].get("parameter_expressions", ()))
         out.extend(value for row in path["covectors"] for value in row)
@@ -150,6 +150,17 @@ def _qualified_param_identity(ref: Any, block: Any, *, graph_aware: bool) -> tup
                 "runtime parameter %r in block %r has no owner-qualified ParamHandle"
                 % (ref.name, block.local_id))
         return owner, ref.name
+    if handle.is_instance:
+        # Program nodes retain their authenticated authoring handle, while
+        # resolved numerical bodies use its detached canonical projection.
+        # Compare both at that same phase, including exact Case/model ownership.
+        if handle.block_ref is None or handle.block_ref._resolved() != block._resolved():
+            raise ValueError(
+                "runtime parameter %r is captured from a different block instance" % ref.name)
+        # The native slot belongs to the model declaration, while the routing
+        # key below retains the exact Program block. Do not drop block ownership
+        # merely because two instances share a scientific parameter definition.
+        handle = handle.declaration_ref
     actual = handle.owner_path.canonical()
     if actual != owner:
         raise ValueError(
@@ -193,7 +204,7 @@ def program_param_entries(program: Any, model: Any) -> list:
             nodes = impl.assign_runtime_indices()
             by_name = {node.name: (index, node) for index, node in enumerate(nodes)}
             by_identity = {
-                getattr(getattr(node, "handle", None), "qualified_id", None): node
+                (node.handle.declaration_ref if node.handle.is_instance else node.handle).qualified_id: node
                 for node in nodes
                 if getattr(node, "handle", None) is not None
             }
@@ -240,14 +251,10 @@ def program_param_entries(program: Any, model: Any) -> list:
         # RuntimeParams is indexed by the model's complete stable declaration table.  If the only
         # read is at index N, indices 0..N-1 still have to be materialised from BindSchema; compacting
         # the vector here would silently redirect the generated ``params.get(N)`` read.
-        for index, node in enumerate(nodes):
-            handle = getattr(node, "handle", None)
-            if graph_aware and handle is None:
-                raise ValueError(
-                    "runtime parameter %r in block %r has no owner-qualified ParamHandle"
-                    % (node.name, v.block.local_id))
-            qualified_id = getattr(handle, "qualified_id", None) or node.name
-            route = (blk, v.block.model_owner_path.canonical(), qualified_id)
+        for index, node in sorted(by_name.values(), key=lambda item: item[0]):
+            owner, qualified_id = _qualified_param_identity(
+                node, v.block, graph_aware=graph_aware)
+            route = (blk, owner, qualified_id)
             collision_key = (blk, node.name)
             prior = emitted_names.get(collision_key)
             if prior is not None and prior != route:

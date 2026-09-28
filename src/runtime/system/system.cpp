@@ -322,18 +322,20 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
       throw std::invalid_argument("System::step_cfl min_dt must be finite and non-negative");
     ExactContractBuilder contract;
     contract.text("pops.system.step-cfl-request")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
         .scalar(cfl)
         .scalar(speed_floor)
         .scalar(max_dt)
         .scalar(min_dt)
-        .scalar(static_cast<std::uint64_t>(p_->sp.size()));
+        .scalar(static_cast<std::uint64_t>(p_->sp.size()))
+        .presence(p_->explicit_default_poisson_requested_);
     for (const typename Impl::Species& block : p_->sp) {
       contract.text(block.name)
           .scalar(block.evolve)
           .scalar(block.substeps)
           .scalar(block.stride)
+          .presence(static_cast<bool>(block.add_poisson_rhs))
           .presence(static_cast<bool>(block.source_frequency))
           .presence(block.parabolic_frequency.has_value());
       if (block.parabolic_frequency) {
@@ -370,21 +372,26 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     throw std::invalid_argument(
         "System::step_cfl inputs or prepared scalar authorities differ between MPI ranks");
 
-  SolveOutcome field_outcome = solve_fields();
-  const SolveConsumption field_consumption =
-      field_outcome.report().solved_value_available()
-          ? SolveConsumption::kAccept
-          : (field_outcome.report().action == SolveAction::kRejectAttempt
-                 ? SolveConsumption::kRejectAttempt
-                 : SolveConsumption::kFailRun);
-  const SolveReport field_report = field_outcome.consume(field_consumption);
-  if (!field_report.solved_value_available()) {
-    if (field_consumption == SolveConsumption::kRejectAttempt)
-      throw runtime::program::StepAttemptRejected(field_report.status, "CFL field evaluation",
-                                                  field_report.reason);
-    throw std::runtime_error(std::string("System::step_cfl field evaluation failed: status=") +
-                             field_report.status_name() + " action=" + field_report.action_name() +
-                             " reason=" + field_report.reason);
+  const bool has_default_poisson_source = std::any_of(
+      p_->sp.begin(), p_->sp.end(),
+      [](const auto& block) { return static_cast<bool>(block.add_poisson_rhs); });
+  if (p_->explicit_default_poisson_requested_ || has_default_poisson_source) {
+    SolveOutcome field_outcome = solve_fields();
+    const SolveConsumption field_consumption =
+        field_outcome.report().solved_value_available()
+            ? SolveConsumption::kAccept
+            : (field_outcome.report().action == SolveAction::kRejectAttempt
+                   ? SolveConsumption::kRejectAttempt
+                   : SolveConsumption::kFailRun);
+    const SolveReport field_report = field_outcome.consume(field_consumption);
+    if (!field_report.solved_value_available()) {
+      if (field_consumption == SolveConsumption::kRejectAttempt)
+        throw runtime::program::StepAttemptRejected(field_report.status, "CFL field evaluation",
+                                                    field_report.reason);
+      throw std::runtime_error(std::string("System::step_cfl field evaluation failed: status=") +
+                               field_report.status_name() + " action=" + field_report.action_name() +
+                               " reason=" + field_report.reason);
+    }
   }
 
   Real minimum_spacing = p_->geom.spacing(0);
@@ -523,9 +530,22 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     throw std::runtime_error("System::step_cfl selected different bounds across MPI ranks");
 
   p_->last_dt_reason_ = std::move(reason);
-  p_->execute_step_transaction(
-      [&] { p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System"); });
+  const double prior_courant = p_->active_program_step_courant_;
+  p_->active_program_step_courant_ = cfl;
+  try {
+    p_->execute_step_transaction(
+        [&] { p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System"); });
+  } catch (...) {
+    p_->active_program_step_courant_ = prior_courant;
+    throw;
+  }
+  p_->active_program_step_courant_ = prior_courant;
   return selected;
+}
+
+template <int Dim>
+double System<Dim>::active_program_step_courant() const {
+  return p_->active_program_step_courant_;
 }
 
 template <int Dim>
@@ -712,6 +732,7 @@ template void System<kNativeDimension>::commit_restart_transaction();
 template void System<kNativeDimension>::finalize_restart_transaction() noexcept;
 template void System<kNativeDimension>::rollback_restart_transaction();
 template double System<kNativeDimension>::step_cfl(double, double, double, double);
+template double System<kNativeDimension>::active_program_step_courant() const;
 template int System<kNativeDimension>::macro_step() const;
 template void System<kNativeDimension>::mark_bound();
 template std::string System<kNativeDimension>::lifecycle_state() const;

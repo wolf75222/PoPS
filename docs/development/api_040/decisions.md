@@ -24,10 +24,49 @@ CSE emitter, not evaluated by a host interpreter. Nonfinite leaves or
 intermediates produce collective native rejection before publication, even
 when a later minimum/maximum could mask the invalid result.
 
-The currently implemented pointwise subset does not establish general lazy
-`where`, arbitrary heterogeneous supports, floating `rounded` barriers, mixed
-global unknown products or all implicit library compositions. Those are open
-implementation obligations, not new mathematical limitations.
+The common expression DAG now retains lazy `where` branch scopes and explicit
+binary64 `rounded` barriers. See [the floating profile](floating_profile.md)
+for supported consumers, strict compiler flags and the formal derivative
+contract. Arbitrary heterogeneous supports, mixed global unknown products and
+all implicit library compositions remain implementation obligations, not new
+mathematical limitations.
+
+## Field capability and qualified bind inputs
+
+A state-storage package does not imply a default Poisson source. Its absent
+RHS callback is represented by an absent capability, not a callback that only
+throws. Uniform CFL stepping requests the default field when a block supplies
+its RHS or the caller explicitly configured that field. MPI request schema 2
+compares these requirements collectively before branching. An explicit field
+request without a provider still fails before Program publication. This changes
+field scheduling, not the physical equation; it removes the old fabricated
+dependency from transport-only programs.
+
+`bind(params=...)` authenticates qualified authoring handles with the compiled
+artifact's BindSchema and only then constructs immutable canonical inputs.
+Duplicate aliases, unqualified declarations and foreign authoring capabilities
+are rejected. An exact canonical identity remains suitable for a restored
+artifact. This makes the public convenience path follow the same ownership
+rules as explicit `validated.resolve(handle)`; it does not weaken BindInputs.
+
+## Source-authored reconstruction
+
+`reconstruction.User(body, formal_order=..., name=...)` traces a scalar body
+over `sample(integer_offset)` and freezes its live stencil and source identity.
+Generated C++ specializes the existing native oriented stencil policy, so the
+body executes in Kokkos face loops for each component. The halo derives from
+the actual stencil, including both branches of a conditional. There is no
+16-cell mathematical restriction: integer offsets, halo depth and envelope
+width must fit their native integer representation, and actual resource
+availability governs allocation. Declared formal order is an author's claim,
+not an order certificate or a TVD/positivity guarantee.
+
+The current integration has a scalar componentwise body and one policy per
+compiled model package. Runtime-parameter captures, cross-component bodies,
+different methods on occurrences within one block and composed higher-order
+path policies are still open implementation obligations. The supplied
+mini-runtime is not used to realize any of these paths. Source and installed
+native evidence are recorded separately while this tranche is under test.
 
 ## Authored nonconservative paths
 
@@ -60,6 +99,13 @@ realization is first order in conservative variables with Rusanov dissipation;
 higher-order interior path contributions, arbitrary reconstructions, auxiliary
 traces and general face solvers remain gaps. The new mechanism is not a full
 Fan–Li or HyQMOM scientific qualification.
+
+Uniform path evaluation now uses the same conservative face flux and lateral
+nonconservative contributions as the native AMR operator. Its current native
+acceptance route requires an authored Courant budget and checks actual incident
+face speeds before publication. A FixedDt program without that separate budget
+is rejected. Adding a public acceptance budget independent of the step selector
+remains an extension obligation; a universal hardcoded CFL value is not assumed.
 
 ## Resource and floating-point corrections
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops._ir import expr as ir
+from pops._ir.control_expr import Where, Rounded
 from pops._ir.symbolic import ImmutableSymbolic
 
 
@@ -141,8 +142,10 @@ class CoefficientExpression(ir.Expr):
 
 
 _BINARY = {ir.Add: "add", ir.Sub: "sub", ir.Mul: "mul", ir.Div: "div",
-           ir.Pow: "pow", ir.Minimum: "minimum", ir.Maximum: "maximum"}
-_UNARY = {ir.Neg: "neg", ir.Sqrt: "sqrt", ir.Abs: "abs", ir.Sign: "sign"}
+           ir.Pow: "pow", ir.Minimum: "minimum", ir.Maximum: "maximum",
+           ir.BooleanAnd: "and", ir.BooleanOr: "or"}
+_UNARY = {ir.Neg: "neg", ir.Sqrt: "sqrt", ir.Abs: "abs", ir.Sign: "sign",
+          ir.BooleanNot: "not", Rounded: "rounded"}
 
 
 def encode_expressions(expressions, program):
@@ -167,6 +170,10 @@ def encode_expressions(expressions, program):
             encoded = ("literal", node.literal)
         elif type(node) is CoefficientExpression:
             encoded = ("coefficient", node.polynomial)
+        elif type(node) is Where:
+            encoded = ("where", encode(node.test), encode(node.yes), encode(node.no))
+        elif type(node) is ir.Compare:
+            encoded = ("compare", node.comparison, encode(node.a), encode(node.b))
         elif type(node) in _BINARY:
             encoded = (_BINARY[type(node)], encode(node.a), encode(node.b))
         elif type(node) in _UNARY:

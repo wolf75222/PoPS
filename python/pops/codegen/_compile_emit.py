@@ -212,6 +212,11 @@ def model_hash(model: Any, params: Any = None) -> str:
 
     m = model
     parts = []
+    from pops.codegen.user_reconstruction_lowering import user_reconstruction_source_identity
+
+    reconstruction_identity = user_reconstruction_source_identity(m)
+    if reconstruction_identity is not None:
+        parts.append("user_reconstruction=" + reconstruction_identity)
     from pops.codegen.native_build import model_native_roots
     from pops._ir.native_call import native_functions
     native_roots = model_native_roots(m)
@@ -904,6 +909,12 @@ def emit_cpp_native_loader(
             "emit_cpp_native_loader: target 'system' | 'amr_system' (got %r)" % (target,)
         )
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
+    from pops.codegen.user_reconstruction_lowering import (
+        emit_user_reconstruction_policy, user_reconstruction_source_identity,
+    )
+
+    user_reconstruction_identity = user_reconstruction_source_identity(m)
+    user_reconstruction_source = emit_user_reconstruction_policy(m)
     model_identity = str(model_identity if model_identity is not None else model_hash(m))
     if len(model_identity) != 64 or any(ch not in "0123456789abcdef" for ch in model_identity):
         raise ValueError("emit_cpp_native_loader requires one lowercase 64-hex model identity")
@@ -921,6 +932,7 @@ def emit_cpp_native_loader(
         "#include <array>\n"
         "#include <cstddef>\n"
         "#include <optional>\n"
+        "#include <limits>\n"
         "#include <stdexcept>\n"
         "#include <string>\n"
         "#include <utility>\n"
@@ -1195,8 +1207,10 @@ def emit_cpp_native_loader(
             "  package.block = pops::prepare_compiled_amr_system_block<pops::kNativeDimension>(\n"
             "      name, std::move(model), limiter, riemann, recon, time, gamma, substeps,\n"
             "      stride, pos_floor, weno_epsilon, wave_speed_cache, %s, newton,\n"
-            "      newton_diagnostics != 0);\n"
-            % json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model")
+            "      newton_diagnostics != 0%s);\n"
+            % (json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model"),
+               ", pops_generated::UserReconstructionPolicy{}"
+               if user_reconstruction_identity is not None else "")
             + amr_elliptic_package_lines
             + "  s->install_prepared_native_amr_package(std::move(package));\n"
             "}\n"
@@ -1216,8 +1230,10 @@ def emit_cpp_native_loader(
             '              "generated model rank differs from the selected native artifact");\n'
             "inline pops::PreparedSystemBlock<pops::kNativeDimension> prepare_exact_system_block(\n"
             "    pops::CompiledSystemBlockPreparation<pops::kNativeDimension, ProdModel> request) {\n"
-            "  return pops::prepare_generated_system_block(std::move(request));\n"
-            "}\n"
+            "  return pops::prepare_generated_system_block(std::move(request)%s);\n"
+            % (", UserReconstructionPolicy{}"
+               if user_reconstruction_identity is not None else "")
+            + "}\n"
             "}  // namespace pops_generated\n"
         )
     auxiliary_routes = _emit_auxiliary_route_registration(
@@ -1229,6 +1245,7 @@ def emit_cpp_native_loader(
     return (
         head
         + bricks
+        + user_reconstruction_source
         + "\nnamespace pops_generated { using ProdModel = %s; }\n" % composite
         + package_preparer
         + key

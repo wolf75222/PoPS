@@ -13,6 +13,7 @@ from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow, Div, Mul,
 from pops._ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, _EIG_PREDICATES
 from pops._ir.visitors import _dag_key_ids, _key, _children
 from pops._ir.expr import _wrap
+from pops._ir.control_expr import Where, Rounded, has_evaluation_boundary
 
 
 _CPP_KEYWORDS = frozenset({
@@ -99,6 +100,12 @@ def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None, guarded: Any = None)
                                 "&&" if isinstance(e, BooleanAnd) else "||", right)
     if isinstance(e, BooleanNot):
         return "(!%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
+    if isinstance(e, Where):
+        yes = guarded(e.yes, cse_map) if guarded is not None else _cpp_cse(e.yes, cse_map, key_memo)
+        no = guarded(e.no, cse_map) if guarded is not None else _cpp_cse(e.no, cse_map, key_memo)
+        return "(%s ? %s : %s)" % (_cpp_cse(e.test, cse_map, key_memo, guarded), yes, no)
+    if isinstance(e, Rounded):
+        return Rounded.emit(_cpp_cse(e.a, cse_map, key_memo, guarded))
     if isinstance(e, _Bin):
         return "(%s %s %s)" % (_cpp_cse(e.a, cse_map, key_memo, guarded), e.op, _cpp_cse(e.b, cse_map, key_memo, guarded))
     raise TypeError("expression not handled by the codegen: %r" % (e,))
@@ -120,6 +127,7 @@ def _cse_emit(
     materialize_all: bool = False,
     return_names: bool = False,
     return_native_statuses: bool = False,
+    scalar_bindings: Any = None,
 ) -> Any:
     """Return (local_declaration_lines, [C++ per root]). Compound subexpressions seen >= 2 times
     become ``cseK_`` locals. roots: list of Expr.
@@ -136,11 +144,18 @@ def _cse_emit(
     (post-order of the first visit) -> emitted C++ is bit-identical."""
     from pops._ir.native_call import NativeCall
     from ._joint_cpp import joint_kind, joint_neutral, native_declaration
+    controlled = has_evaluation_boundary(roots)
+    # New scientific evaluation boundaries require observation even in physical
+    # emitters that consume only the rendered roots. Existing unchecked algebra
+    # keeps its prior emission until its caller opts into checked evaluation.
+    materialize_all = materialize_all or controlled
+    observe_finite = return_names or controlled
     key_memo, _, _ = _dag_key_ids(roots)
     declarations, observed_names, native_statuses = [], [], []
     next_scope = 0
     full_sizes = {}
     dependency_calls = {}
+    bindings = {} if scalar_bindings is None else dict(scalar_bindings)
 
     def native_dependencies(expression):
         cached = dependency_calls.get(id(expression))
@@ -165,7 +180,8 @@ def _cse_emit(
         counts, rep, size, memo = {}, {}, {}, {}
 
         def visit(e):
-            if isinstance(e, (Const, Var)) or _key(e, key_memo) in inherited:
+            if (isinstance(e, Const) or (isinstance(e, Var) and e.name not in bindings and not controlled)
+                    or _key(e, key_memo) in inherited):
                 return 1, None
             sub = memo.get(id(e))
             if sub is None:
@@ -173,14 +189,15 @@ def _cse_emit(
                 s, cnt = 1, {}
                 # The right operand belongs to its selected control-flow region. Its operations
                 # may not become unconditional CSE declarations, even under materialize_all.
-                children = (e.a,) if isinstance(e, (BooleanAnd, BooleanOr)) else _children(e)
+                children = ((e.test,) if isinstance(e, Where) else (e.a,)
+                            if isinstance(e, (BooleanAnd, BooleanOr)) else _children(e))
                 for c in children:
                     cs, ccnt = visit(c)
                     s += cs
                     if ccnt:
                         for ck, cc in ccnt.items():
                             cnt[ck] = cnt.get(ck, 0) + cc
-                if isinstance(e, (BooleanAnd, BooleanOr)):
+                if isinstance(e, (BooleanAnd, BooleanOr, Where)):
                     # Already-unconditional dependencies must precede the guarded use, permitting
                     # same-context reuse without moving a guarded-only operation out of its branch.
                     s = full_size(e)
@@ -198,7 +215,8 @@ def _cse_emit(
                     counts[k] = counts.get(k, 0) + c
         cand = sorted(
             (k for k, count in counts.items() if materialize_all or count >= 2 or joint_kind(rep[k])
-             or isinstance(rep[k], (BooleanAnd, BooleanOr))),
+             or isinstance(rep[k], (BooleanAnd, BooleanOr, Where))
+             or isinstance(rep[k], Var) and rep[k].name in bindings),
             key=lambda k: size[k],
         )
         cse_map, lines = dict(inherited), []
@@ -238,12 +256,14 @@ def _cse_emit(
                 lines += rendered
                 native_statuses.append(name)
             else:
-                value = _cpp_expand(expression, cse_map, key_memo, guarded)
+                value = (bindings[expression.name] if isinstance(expression, Var)
+                         and expression.name in bindings else
+                         _cpp_expand(expression, cse_map, key_memo, guarded))
                 if prerequisite is not None:
                     neutral = (joint_neutral(expression, real) if joint_kind(expression)
                                else "std::numeric_limits<%s>::quiet_NaN()" % real)
                     value = "((%s) ? (%s) : %s)" % (prerequisite, value, neutral)
-                if conditional and return_names and not joint_kind(expression):
+                if conditional and observe_finite and not joint_kind(expression):
                     declarations.append("%s%s %s = 0;" % (indent, real, name))
                     lines.append("%s%s = %s;" % (indent, name, value))
                 else:
@@ -257,6 +277,11 @@ def _cse_emit(
 
     lines, rendered = emit_scope(roots, {}, "", False)
     lines = declarations + lines
+    if controlled and not return_names:
+        finite = " && ".join("std::isfinite(%s)" % name for name in observed_names) or "true"
+        rendered = [value if joint_kind(root) else
+                    "((%s) ? (%s) : std::numeric_limits<%s>::quiet_NaN())" % (finite, value, real)
+                    for root, value in zip(roots, rendered, strict=True)]
     if return_names:
         return lines, rendered, tuple(observed_names)
     if return_native_statuses:

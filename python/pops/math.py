@@ -8,7 +8,7 @@ from __future__ import annotations
 
 __all__ = [
     "sqrt", "minimum", "maximum", "grad", "norm", "div", "laplacian", "dx", "dy", "dz", "ddt", "rate", "unknown",
-    "integral",
+    "integral", "where", "rounded",
     # Public symbolic values and node types.
     "Expr", "Const", "Var", "ValueExpr", "SymbolicTruthValueError",
     "Equation", "Gradient", "GradientMagnitude", "Partial", "Laplacian", "Divergence",
@@ -39,6 +39,7 @@ from pops._ir.expr import (  # noqa: F401
 )
 from pops._ir.handle_expr import ValueExpr  # noqa: F401
 from pops._ir.symbolic import SymbolicTruthValueError  # noqa: F401
+from pops._ir.control_expr import where, rounded  # noqa: F401
 from pops._ir.elliptic import (  # noqa: F401  (Spec 5 sec.9.2 elliptic field-operator algebra)
     Reaction,
     CoeffGradient,

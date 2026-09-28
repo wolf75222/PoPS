@@ -748,7 +748,7 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
       !closures.prepare_generated_state_at_point ||
       !closures.prepare_generated_state_at_point_prepared ||
       !closures.prepare_generated_state_with_transport_prepared ||
-      !closures.external_ghost_boundary || !block.maximum_speed || !block.poisson_rhs ||
+      !closures.external_ghost_boundary || !block.maximum_speed ||
       !block.primitive_to_conservative || !block.conservative_to_primitive ||
       !block.batch_conservative_to_primitive)
     throw std::invalid_argument(
@@ -849,6 +849,8 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   candidate.rhs_core_at_point_prepared = std::move(prepared.closures.rhs_core_at_point_prepared);
   candidate.rhs_flux_only_core_at_point_prepared =
       std::move(prepared.closures.rhs_flux_only_core_at_point_prepared);
+  candidate.path_rhs_at_point_prepared =
+      std::move(prepared.closures.path_rhs_at_point_prepared);
   candidate.boundary_full_at_point_prepared =
       std::move(prepared.closures.boundary_full_at_point_prepared);
   candidate.boundary_core_at_point_prepared =

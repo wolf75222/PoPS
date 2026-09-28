@@ -113,6 +113,7 @@ class SystemBlockStore {
         periodic_full_at_point_prepared;
     typename SystemBlockClosures<Dim>::PreparedPointPeriodicResidual
         periodic_flux_at_point_prepared;
+    typename SystemBlockClosures<Dim>::PreparedPointPathResidual path_rhs_at_point_prepared;
     PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
     PreparedPointJvp boundary_jvp_at_point_prepared;
     std::shared_ptr<BoundaryFluxTransform> external_boundary_flux;

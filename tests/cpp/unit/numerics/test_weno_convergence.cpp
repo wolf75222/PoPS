@@ -44,6 +44,18 @@ struct ExternalFourSamplePolicy {
   }
 };
 
+struct GuardedSamplePolicy {
+  static constexpr int formal_order = 1;
+  static constexpr int n_ghost = 2;
+  static constexpr int stencil_min_offset = -1;
+  static constexpr int stencil_max_offset = 1;
+
+  template <class Sample>
+  POPS_HD Real stencil_face_value(const Sample& sample) const {
+    return sample(0) > Real(0) ? sample(-1) : sample(1);
+  }
+};
+
 struct AmbiguousPolicy {
   static constexpr int formal_order = 1;
   static constexpr int n_ghost = 1;
@@ -177,10 +189,13 @@ struct PrimitiveTestModel {
   static constexpr int dimension = 1;
   static constexpr int n_vars = 2;
   int* primitive_calls = nullptr;
+  bool reject_nonpositive = false;
 
   POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
     if (primitive_calls != nullptr)
       ++*primitive_calls;
+    if (reject_nonpositive && state[0] <= Real(0))
+      return {{}, nd::StateConversionStatus::NonPositiveDensity};
     return {Primitive{state[0] * state[0], state[1]}, nd::StateConversionStatus::Success};
   }
   POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
@@ -516,9 +531,8 @@ TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orienta
   const auto primitive = nd::reconstruct_face_state<0, 1, nd::ReconstructionVariables::Primitive>(
       model, state, Index<1>{5}, policy);
   ASSERT_TRUE(primitive.succeeded());
-  EXPECT_EQ(primitive_calls, ExternalFourSamplePolicy::stencil_max_offset -
-                                 ExternalFourSamplePolicy::stencil_min_offset + 1)
-      << "primitive states are converted once per declared offset, not once per component";
+  EXPECT_EQ(primitive_calls, 4)
+      << "primitive states are converted once per requested offset, not once per component";
   const Real primitive_component = combine([&](int offset) {
     const Real conservative = sample_x(5 + offset);
     return conservative * conservative;
@@ -526,6 +540,33 @@ TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orienta
   EXPECT_NEAR(primitive.value[0], std::sqrt(primitive_component), Real(1e-14));
   EXPECT_DOUBLE_EQ(primitive.value[1], combine([&](int offset) { return sample_y(5 + offset); }));
   EXPECT_NE(primitive.value[0], right.value[0]);
+}
+
+TEST(test_weno_convergence, primitive_sampled_policy_converts_only_the_selected_branch) {
+  const Box<1> valid = Box<1>::from_extents(Extent<1>{11});
+  Fab<1> values(valid, PrimitiveTestModel::n_vars, Extent<1>{GuardedSamplePolicy::n_ghost});
+  auto host = values.create_host_mirror();
+  for (int i = values.grown_box().lo[0]; i <= values.grown_box().hi[0]; ++i) {
+    const Real value = i == 6 ? Real(-1) : Real(i == 4 ? 3 : 2);
+    for (int component = 0; component < PrimitiveTestModel::n_vars; ++component)
+      host(host_offset(values.grown_box(), Index<1>{i}, component)) = value;
+  }
+  values.copy_from_host(host);
+
+  int recover_calls = 0;
+  const PrimitiveTestModel model{&recover_calls, true};
+  const auto state = static_cast<const Fab<1>&>(values).view();
+  const auto selected = nd::reconstruct_face_state<0, 1, nd::ReconstructionVariables::Primitive>(
+      model, state, Index<1>{5}, GuardedSamplePolicy{});
+  ASSERT_TRUE(selected.succeeded());
+  EXPECT_DOUBLE_EQ(selected.value[0], Real(3));
+  EXPECT_DOUBLE_EQ(selected.value[1], Real(3));
+  EXPECT_EQ(recover_calls, 2) << "inactive invalid offset was converted";
+
+  const auto rejected = nd::reconstruct_face_state<0, -1, nd::ReconstructionVariables::Primitive>(
+      model, state, Index<1>{5}, GuardedSamplePolicy{});
+  EXPECT_EQ(rejected.status, nd::StateConversionStatus::NonPositiveDensity);
+  EXPECT_EQ(recover_calls, 4) << "the active conversion must fail without reading other offsets";
 }
 
 template <int Dim>

@@ -3,14 +3,9 @@
 FirstOrder / MUSCL / WENO5 / WENO5Z selectors. The slope limiters are catalogued
 separately in :mod:`pops.numerics.reconstruction.limiters`.
 
-An external reconstruction is deliberately not exposed by this catalog.  A
-reconstruction policy is a compile-time, device-callable Kokkos type; the legacy
-external-brick manifest carries only a loaded shared-library id and cannot
-authenticate the provider source, stencil extent, or formal order.  Treating that
-id as an executable reconstruction would therefore be a host-only illusion on
-CUDA and would make halo allocation unverifiable.  A future external route must
-enter as an authenticated source component compiled into the generated native
-artifact, not through a ``dlopen`` function pointer.
+``User`` retains an authored scalar stencil expression and its exact source
+identity for compilation into the generated native artifact. The legacy
+external-brick manifest remains insufficient to provide such a policy.
 
 pops::Weno5 IS the WENO5-Z reconstruction (it wraps weno5z()); WENO5 and WENO5Z both
 select it. MUSCL is reconstruction-by-limiter and preserves the selected native limiter route.
@@ -26,6 +21,7 @@ from typing import Any
 from pops.descriptors import BrickDescriptor
 from pops.params.use_sites import ParamUse, resolve_param_use
 from .limiters import Minmod, _native_reconstruction_descriptor, limiters
+from .user import User, authenticated_user_reconstruction
 
 # Spec 5 sec.7 / criterion 11: the GHOST (halo) depth a reconstruction stencil NEEDS, by its
 # lowered scheme token. A first-order scheme reads the cell mean (1 ghost); a second-order
@@ -167,27 +163,8 @@ def _muscl(limiter: Any = None) -> Any:
         route, category="reconstruction", name="muscl", limiter=selected)
 
 
-_EXTERNAL_RECONSTRUCTION_ERROR = (
-    "reconstruction.User is not an executable PoPS route: reconstruction policies are "
-    "compile-time device-callable Kokkos types, while the legacy external-brick manifest "
-    "carries only a shared-library id and cannot authenticate provider source, formal_order, "
-    "or ghost_depth. Supply a native reconstruction descriptor; an external reconstruction "
-    "will require an authenticated source-compiled Kokkos provider contract."
-)
-
-
 class _ReconstructionCatalog(SimpleNamespace):
-    """The ready-to-lower reconstruction catalog.
-
-    ``User`` used to fabricate a descriptor that no native lowering could execute.  Keep an
-    actionable attribute error for callers migrating from that surface, but do not publish a
-    selector whose result would be non-executable.
-    """
-
-    def __getattr__(self, name: str) -> Any:
-        if name == "User":
-            raise AttributeError(_EXTERNAL_RECONSTRUCTION_ERROR)
-        raise AttributeError(name)
+    """Builtin and source-authored reconstruction factories."""
 
 
 def _first_order() -> Any:
@@ -202,6 +179,7 @@ reconstruction = _ReconstructionCatalog(
     MUSCL=_muscl,
     WENO5=lambda epsilon=None: _weno5("weno5", epsilon),
     WENO5Z=lambda epsilon=None: _weno5("weno5z", epsilon),
+    User=User,
 )
 
 
@@ -228,6 +206,8 @@ def required_ghost_depth(reconstruction_or_token: Any) -> Any:
     declared = resolve_param_use(
         declared, ParamUse.STENCIL, where="reconstruction(ghost_depth=)")
     if type(descriptor) is BrickDescriptor:
+        if descriptor.scheme == "source_stencil":
+            return authenticated_user_reconstruction(descriptor).options["ghost_depth"]
         return authenticated_reconstruction_route(descriptor).metadata["n_ghost"]
     if isinstance(declared, int) and not isinstance(declared, bool):
         return declared
@@ -289,13 +269,10 @@ MUSCL = reconstruction.MUSCL
 WENO5 = reconstruction.WENO5
 WENO5Z = reconstruction.WENO5Z
 
-__all__ = ["reconstruction", "limiters", "FirstOrder", "MUSCL", "WENO5", "WENO5Z",
+__all__ = ["reconstruction", "limiters", "FirstOrder", "MUSCL", "WENO5", "WENO5Z", "User",
            "REQUIRED_GHOST_DEPTH", "INSPECT_GHOST_DEPTH_ASSUMPTION", "required_ghost_depth",
            "validate_ghost_depth"]
 
 
 def __getattr__(name: str) -> Any:
-    """Refuse the retired non-executable ``User`` selector with an actionable explanation."""
-    if name == "User":
-        raise AttributeError(_EXTERNAL_RECONSTRUCTION_ERROR)
     raise AttributeError(name)

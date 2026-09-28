@@ -129,14 +129,20 @@ def _lower_selector(
 
 
 def _lower_reconstruction_selector(value: Any) -> Any:
-    """Lower only a catalogue-authenticated native reconstruction descriptor."""
+    """Lower a catalogue route or a source-bound generated reconstruction."""
     from pops.descriptors import reject_string_selector
     from pops.numerics.reconstruction import authenticated_reconstruction_route
+    from pops.numerics.reconstruction.user import authenticated_user_reconstruction
 
     if value is None:
         return None
     if isinstance(value, str):
         reject_string_selector(value, "limiter", _LIMITER_SUGGEST)  # always raises
+    if getattr(value, "scheme", None) == "source_stencil":
+        authored = authenticated_user_reconstruction(value)
+        # This is a package-source identity, not a catalogued algorithm token. The
+        # generated C++ package must carry the same expression and verify the digest.
+        return "source_stencil:" + authored.options["source_identity"]
     try:
         return authenticated_reconstruction_route(value)
     except TypeError as error:
@@ -319,6 +325,8 @@ class Spatial:
                 )
             limiter = enabled_limiter_shortcuts[0][1]()
         lim_tok = _lower_reconstruction_selector(limiter)
+        self.source_reconstruction = (
+            limiter if getattr(limiter, "scheme", None) == "source_stencil" else None)
         flux_tok = _lower_selector(
             flux,
             param="flux",
@@ -480,6 +488,9 @@ class Spatial:
         def _manifest(slot_route: Any) -> Any:
             if hasattr(slot_route, "manifest"):
                 return slot_route.manifest()
+            if isinstance(slot_route, str) and slot_route.startswith("source_stencil:"):
+                return {"family": "reconstruction", "id": slot_route,
+                        "source_compiled": True}
             return {
                 "family": "riemann",
                 "id": "riemann.user",
@@ -523,7 +534,8 @@ class Spatial:
         from pops.numerics.reconstruction import validate_ghost_depth
 
         available = None if ghost_depth is None else int(ghost_depth)
-        return validate_ghost_depth(self.limiter, available=available, block=block)
+        return validate_ghost_depth(
+            self.source_reconstruction or self.limiter, available=available, block=block)
 
 
 class Explicit:

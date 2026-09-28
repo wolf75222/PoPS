@@ -391,12 +391,13 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     S += emit_path_members(model, cse=cse, aux_locals=aux_locals)
     if not program_only:
         from pops._ir.native_call import native_functions
+        from pops._ir.control_expr import has_evaluation_boundary
         from pops._ir.primitive_expansion import expand_primitive_recipes
         physical_fluxes = expand_primitive_recipes(model._flux, model.prim_defs)
         if not isinstance(physical_fluxes, Mapping):
             raise TypeError("expanded physical fluxes must preserve the axis mapping")
         all_fluxes = axis_values(physical_fluxes, "physical flux")
-        fallible_flux = bool(native_functions(all_fluxes))
+        fallible_flux = bool(native_functions(all_fluxes)) or has_evaluation_boundary(all_fluxes)
         # Keep legacy primitive locals for pure laws. Fallible recipes belong inside
         # the selected axis's joint evaluation and must not execute before its guard.
         if not fallible_flux:
@@ -510,7 +511,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             mws_drv = []  # fd path: max_wave_speed calls flux(), no direct primitive
         else:
             mws_drv = _jac_entries(model)
-        S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, mws_drv))
+        if not path_conservative:
+            S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, mws_drv))
         if path_conservative:
             from pops.codegen.module_emit_path import emit_path_proposal_speed
             S += emit_path_proposal_speed()

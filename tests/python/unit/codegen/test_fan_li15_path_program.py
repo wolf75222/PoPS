@@ -55,8 +55,11 @@ def test_public_ssprk2_path_retains_both_native_hierarchy_barriers():
     assert "real_eig_minmax" not in brick
     assert emitter._m._path_conservative["identity"].startswith(
         "pops.fan-li15.path-operator.v1:sha256:")
-    with pytest.raises(NotImplementedError, match="synchronous AMR"):
-        emit_cpp_program(resolved.time, model=emitter, target="system")
+    uniform = emit_cpp_program(resolved.time, model=emitter, target="system")
+    assert uniform.count("ctx.path_rhs_into(") == 2
+    assert uniform.count("ctx.path_rhs_courant()") == 2
+    assert "ctx.stage_path_rhs(" not in uniform
+    assert "ctx.capture_rhs_input_trace(" not in uniform
 
 
 def test_cpp_model_fixture_is_generated_from_the_python_constitutive_plan():

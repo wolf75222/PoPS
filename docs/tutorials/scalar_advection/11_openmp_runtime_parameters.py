@@ -139,7 +139,7 @@ artifact = pops.compile(resolved)
 # 6. Premier bind : transport lent.
 slow = pops.bind(
     artifact,
-    params={a_x_param: 0.50, a_y_param: 0.10},
+    params={tracer[a_x_param]: 0.50, tracer[a_y_param]: 0.10},
     initial_state={"tracer": initial_state.copy()},
 )
 pops.run(slow, t_end=T_END, max_steps=MAX_STEPS)
@@ -149,7 +149,7 @@ slow_state = np.asarray(slow.state_global("tracer"), dtype=np.float64).copy()
 # 7. Second bind frais du meme artefact : transport plus rapide.
 fast = pops.bind(
     artifact,
-    params={a_x_param: 1.00, a_y_param: 0.25},
+    params={tracer[a_x_param]: 1.00, tracer[a_y_param]: 0.25},
     initial_state={"tracer": initial_state.copy()},
 )
 pops.run(fast, t_end=T_END, max_steps=MAX_STEPS)

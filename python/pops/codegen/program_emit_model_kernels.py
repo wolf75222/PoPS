@@ -13,6 +13,8 @@ from typing import Any
 from pops.identity.scalar import scalar_cpp
 from pops.model.state_symbols import state_component_symbol
 from pops.codegen.cpp_writer import _cse_emit
+from pops._ir.primitive_expansion import expand_evaluation_boundaries
+from pops.codegen.module_emit_helpers import _checked_inline_expr
 
 from pops.codegen.program_emit_kernels import (
     _cell_locals,
@@ -50,7 +52,7 @@ def _emit_local_transform_kernel(
         raise ValueError(
             "local transform '%s' has %d outputs for %d conservative components"
             % (name, len(exprs), len(impl.cons_names)))
-    roots = exprs + [valid_if]
+    roots = list(expand_evaluation_boundaries(exprs + [valid_if], impl.prim_defs))
     provider_binding = _provider_binding(impl, roots, provider_plans, consumer_qid)
     impl.assign_runtime_indices()
     params_block = block_idx if _has_runtime_param(roots) else None
@@ -127,7 +129,7 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
         raise NotImplementedError(
             "emit_cpp_program: source '%s' is not declared on the model (m.source_term); declared: %s"
             % (name, sorted(impl._source_terms)))
-    exprs = impl._source_terms[name]
+    exprs = list(expand_evaluation_boundaries(impl._source_terms[name], impl.prim_defs))
     provider_binding = _provider_binding(
         impl, exprs if plan_exprs is None else plan_exprs, provider_plans, consumer_qid)
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
@@ -143,7 +145,7 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
                         program_block=block_idx)
     body += ["    " + ln for ln in _cell_locals(impl, exprs, state_var, with_cons=True,
                                                  with_prim=True, provider_binding=provider_binding)]
-    body += ["    outA(index, %d) = %s;" % (c, e.to_cpp()) for c, e in enumerate(exprs)]
+    body += ["    outA(index, %d) = %s;" % (c, _checked_inline_expr(e)) for c, e in enumerate(exprs)]
     body += _kernel_close()
     return body
 
@@ -501,7 +503,9 @@ def _emit_flux_kernel(
                 for component in range(n)
             ]
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
-    roots = [expression for axis in axes for expression in expressions[axis]]
+    roots = list(expand_evaluation_boundaries(
+        [expression for axis in axes for expression in expressions[axis]], impl.prim_defs))
+    expressions = {axis: roots[i * n:(i + 1) * n] for i, axis in enumerate(axes)}
     provider_binding = _provider_binding(
         impl, roots if plan_exprs is None else plan_exprs, provider_plans, consumer_qid)
     params_block = block_idx if _has_runtime_param(roots) else None
@@ -530,7 +534,7 @@ def _emit_flux_kernel(
     ]
     for axis in axes:
         body += [
-            "    %s(index, %d) = %s;" % (handles[axis], component, expression.to_cpp())
+            "    %s(index, %d) = %s;" % (handles[axis], component, _checked_inline_expr(expression))
             for component, expression in enumerate(expressions[axis])
         ]
     body += _kernel_close()
@@ -556,7 +560,7 @@ def _emit_apply_kernel(model: Any, name: Any, state_var: Any, out_var: Any, bloc
                                                  with_prim=False, provider_binding=provider_binding)]
     for r in range(n):
         terms = [
-            "(%s) * %sA(index, %d)" % (rows[r][c].to_cpp(), state_var, c)
+            "(%s) * %sA(index, %d)" % (_checked_inline_expr(rows[r][c]), state_var, c)
             for c in range(n)
         ]
         body.append("    outA(index, %d) = %s;" % (r, " + ".join(terms)))
@@ -595,7 +599,7 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
     for r in range(n):
         for c in range(n):
             ident = "pops::Real(1)" if r == c else "pops::Real(0)"
-            body.append("    M_[%d][%d] = %s - a_ * (%s);" % (r, c, ident, rows[r][c].to_cpp()))
+            body.append("    M_[%d][%d] = %s - a_ * (%s);" % (r, c, ident, _checked_inline_expr(rows[r][c])))
             body.append(
                 "    if (!std::isfinite(M_[%d][%d])) solve_failure_ = 3;" % (r, c))
     for c in range(n):
@@ -641,13 +645,14 @@ def _residual_term_exprs(impl: Any, w: Any) -> list:
             raise NotImplementedError(
                 "emit_cpp_program: residual source '%s' is not declared on the model (m.source_term); "
                 "declared: %s" % (name, sorted(impl._source_terms)))
-        return list(impl._source_terms[name])
+        return list(expand_evaluation_boundaries(impl._source_terms[name], impl.prim_defs))
     if w.op == "apply":
         rows = _linear_source_rows(impl, w.attrs["linear_source"])
         n = len(rows)
         # (L U)_r = sum_c L[r][c] * cons_c -- a per-component Expr in the cons names + aux.
-        return [sum((rows[r][c] * Var(impl.cons_names[c], "cons") for c in range(n)),
-                    Const(0.0)) for r in range(n)]
+        expressions = [sum((rows[r][c] * Var(impl.cons_names[c], "cons") for c in range(n)),
+                           Const(0.0)) for r in range(n)]
+        return list(expand_evaluation_boundaries(expressions, impl.prim_defs))
     raise NotImplementedError(
         "emit_cpp_program: residual op '%s' is not a per-cell Expr term (source / apply only)" % w.op)
 
@@ -693,9 +698,9 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
             live = impl._live_prims(exprs)
             for name, expression in impl.prim_defs.items():
                 if name in live:
-                    lines.append("  const pops::Real %s = %s;" % (name, expression.to_cpp()))
+                    lines.append("  const pops::Real %s = %s;" % (name, _checked_inline_expr(expand_evaluation_boundaries(expression, impl.prim_defs))))
             for c, expression in enumerate(exprs):
-                lines.append("  %s[%d] = %s;" % (target, c, expression.to_cpp()))
+                lines.append("  %s[%d] = %s;" % (target, c, _checked_inline_expr(expression)))
             lines.append("}")
             comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
         elif w.op == "pointwise_expression":
@@ -822,7 +827,7 @@ def _emit_solve_local_nonlinear_kernel(
     live = impl._live_prims(term_exprs) if term_exprs else set()
     for name, expr in impl.prim_defs.items():
         if name in live:
-            body.append("      const pops::Real %s = %s;" % (name, expr.to_cpp()))
+            body.append("      const pops::Real %s = %s;" % (name, _checked_inline_expr(expand_evaluation_boundaries(expr, impl.prim_defs))))
     body += ["      " + line for line in _emit_residual_eval(impl, v, n)]
     body.append("    };")
     attrs = dict(v.attrs)
