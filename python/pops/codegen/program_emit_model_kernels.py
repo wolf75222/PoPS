@@ -672,10 +672,47 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
     lines = []
     for w in block:
         if w.op == "state":
-            continue  # the iterate / guess placeholders: bound in `comps` above, nothing to emit
+            if "capture_index" in w.attrs:
+                slot = w.attrs["capture_index"]
+                if type(slot) is not int or not 0 <= slot < len(v.inputs) - 1:
+                    raise ValueError("local residual capture index is not authenticated")
+                comps[w.id] = ["Cval%d[%d]" % (slot, c) for c in range(n)]
+            elif w.id not in comps:
+                raise ValueError("local residual contains an unbound State placeholder")
+            continue
         if w.op in ("source", "apply"):
             exprs = _residual_term_exprs(impl, w)
-            comps[w.id] = ["(%s)" % e.to_cpp() for e in exprs]
+            # Bind the actual argument of every call, including frozen captures and
+            # earlier derived values. Using Ueval unconditionally changes the equation.
+            source = comps[w.inputs[0].id]
+            target = "residual_value_%d" % w.id
+            lines.append("pops::Real %s[%d];" % (target, n))
+            lines.append("{")
+            for c, name in enumerate(impl.cons_names):
+                lines.append("  const pops::Real %s = %s;" % (name, source[c]))
+            live = impl._live_prims(exprs)
+            for name, expression in impl.prim_defs.items():
+                if name in live:
+                    lines.append("  const pops::Real %s = %s;" % (name, expression.to_cpp()))
+            for c, expression in enumerate(exprs):
+                lines.append("  %s[%d] = %s;" % (target, c, expression.to_cpp()))
+            lines.append("}")
+            comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
+        elif w.op == "pointwise_expression":
+            from pops.codegen.program_emit_expressions import checked_pointwise_rows
+            temporaries, rendered, invalid = checked_pointwise_rows(
+                w, [comps[item.id] for item in w.inputs])
+            target = "residual_expression_%d" % w.id
+            lines.extend(["pops::Real %s[%d];" % (target, n), "{"])
+            lines.extend("  " + line for line in temporaries)
+            lines.append("  if (%s) {" % invalid)
+            for c in range(n):
+                lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
+            lines.extend(["    return;", "  }"])
+            lines.extend("  %s[%d] = %s;" % (target, c, expression)
+                         for c, expression in enumerate(rendered))
+            lines.append("}")
+            comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
         elif w.op == "linear_combine":
             # An affine sum over earlier terms: comps[w] = sum_k coeff_k(dt) * comps[input_k].
             coeffs = w.attrs["coeffs"]  # aligned with w.inputs; each a dt-polynomial power->float dict
@@ -709,7 +746,7 @@ def _emit_solve_local_nonlinear_kernel(
     status_var: Any,
     active_mask_var: Any,
     block_idx: Any = 0,
-    *, provider_plans: Any, consumer_qid: str,
+    *, provider_plans: Any, consumer_qid: str, capture_vars: tuple = (),
 ) -> list:
     """Lower ``solve_local_nonlinear`` to the unique prepared local nonlinear provider.
 
@@ -729,7 +766,13 @@ def _emit_solve_local_nonlinear_kernel(
     params_block = block_idx if _has_runtime_param(term_exprs) else None
     body = _kernel_open(out_var, guess_var, params_block, provider_binding=provider_binding,
                         program_block=block_idx, prepare_providers=False)
+    if len(capture_vars) != len(v.inputs) - 1:
+        raise ValueError("local residual capture input arity changed")
     lambda_index = next(index for index, line in enumerate(body) if "pops::for_each_cell" in line)
+    body[lambda_index:lambda_index] = [
+        "  const auto capture%dA = std::as_const(%s).fab(li).view();" % (i, name)
+        for i, name in enumerate(capture_vars)]
+    lambda_index += len(capture_vars)
     body[lambda_index:lambda_index] = [
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> solve_statusA = "
         "%s.fab(li).view();" % status_var,
@@ -765,6 +808,11 @@ def _emit_solve_local_nonlinear_kernel(
     body.append("    pops::Real Gval[%d];" % n)
     for component in range(n):
         body.append("    Gval[%d] = %sA(index, %d);" % (component, guess_var, component))
+    for slot, _ in enumerate(capture_vars):
+        body.append("    pops::Real Cval%d[%d];" % (slot, n))
+        for component in range(n):
+            body.append("    Cval%d[%d] = capture%dA(index, %d);"
+                        % (slot, component, slot, component))
     body.append(
         "    auto residual_eval = "
         "[&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {" % (n, n)

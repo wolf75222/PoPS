@@ -21,7 +21,8 @@ namespace pops::runtime::program {
 /// reevaluate its law after acquire. Matches must be rank-local, including every
 /// getter it calls: some ranks can have no resource and skip the predicate entirely.
 /// Constructors containing collectives must make their internal allocations/failures
-/// collective too, as prepared providers do.
+/// collective too, as prepared providers do. Replacement is published only after every
+/// rank constructs successfully; a failed candidate leaves existing storage unchanged.
 class PreparedResourceCache {
  public:
   PreparedResourceCache() = default;
@@ -35,6 +36,7 @@ class PreparedResourceCache {
                     Matches&& matches, Args&&... args) {
     using Slot = std::optional<Resource>;
     std::shared_ptr<Slot> slot;
+    std::shared_ptr<void>* entry_storage = nullptr;
     std::exception_ptr error;
     long disposition = 0;
     try {
@@ -42,6 +44,7 @@ class PreparedResourceCache {
         throw std::invalid_argument("prepared resource requires exact nonnegative scope ids");
       const Key key{std::type_index(typeid(Resource)), node, block, level};
       auto entry = entries_.try_emplace(key).first;
+      entry_storage = &entry->second;
       // Allocate the empty holder before peers can enter a provider constructor.
       // Allocation failure leaves a retryable empty entry, never a readable resource.
       if (!entry->second)
@@ -58,8 +61,37 @@ class PreparedResourceCache {
         std::rethrow_exception(error);
       throw std::runtime_error("prepared resource preflight failed on another rank");
     }
-    if (collective == 1)
-      slot->emplace(std::forward<Args>(args)...);
+    if (collective == 1) {
+      // Keep the current holder (and its numerical buffers) alive while building the
+      // candidate. In-place optional::emplace would destroy it before construction.
+      std::shared_ptr<Slot> candidate;
+      try {
+        candidate = std::make_shared<Slot>();
+      } catch (...) {
+        error = std::current_exception();
+      }
+      // A holder allocation must fail collectively before any provider constructor
+      // can enter its own collectives.
+      if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+        if (error)
+          std::rethrow_exception(error);
+        throw std::runtime_error("prepared resource candidate allocation failed on another rank");
+      }
+      try {
+        candidate->emplace(std::forward<Args>(args)...);
+      } catch (...) {
+        error = std::current_exception();
+      }
+      if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+        if (error)
+          std::rethrow_exception(error);
+        throw std::runtime_error("prepared resource construction failed on another rank");
+      }
+      // Shared-holder publication cannot allocate or move Resource. Non-movable
+      // resources and their retained lane/buffer addresses remain supported.
+      *entry_storage = candidate;
+      slot = std::move(candidate);
+    }
     return slot->value();
   }
 

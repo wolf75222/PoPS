@@ -1,0 +1,559 @@
+{
+  "source": "PoPS_Codex_handoff_0.4.0/reference/PoPS_API_v0.4.0/results/corpus_matrix.json",
+  "witness_source": "PoPS_Codex_handoff_0.4.0/context/CORPUS_ORIGINAL.md:278-289",
+  "current_head": "3a93ba7f1b3fc46ee85a06d9d3482c9b4ece7feb",
+  "mapping_kind": "provisional source-level candidates; no production tests run by this inventory",
+  "models": [
+    {
+      "id": "M01",
+      "title": "Advection scalaire",
+      "definition": "u_t+a u_x=0; a=1; moyennes de cellules périodiques.",
+      "planned_test": {
+        "initial_boundary_data": "Cosinus 1+0.1 cos(2πx), domaine [0,1), moyenne analytique; MC/SSPRK2.",
+        "mesh_time": "N=40,80,160,320; t=0.125; CFL=0.3.",
+        "oracle": "Erreur L1, bilan périodique et ordre observé >1.6; conservation tol=1e-12."
+      },
+      "reference_profile": "direct",
+      "reference_limit": "Cosinus périodique complet en 1D/2D/3D; traversée AMR non exécutée.",
+      "reference_evidence": [
+        "N01"
+      ],
+      "production_candidate_symbols": "python/pops/numerics/spatial.py:FiniteVolume;python/pops/lib/time/ssprk.py",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M02",
+      "title": "Burgers / flux utilisateur",
+      "definition": "u_t+(u²/2)_x=0; solution faible entropique, pas changement de coordonnées non conservatif.",
+      "planned_test": {
+        "initial_boundary_data": "Riemann uL=1,uR=0 (choc); uL=0,uR=1 (raréfaction), [-1,1].",
+        "mesh_time": "N=100,200,400; t=0.2; flux Godunov écrit en Python; premier ordre.",
+        "oracle": "Erreur contre moyenne exacte de la solution entropique; vitesse de choc 0.5; bilan frontière tol=1e-11."
+      },
+      "reference_profile": "direct",
+      "reference_limit": "Burgers lisse périodique complet. Choc, raréfaction et changement de coordonnées non exécutés.",
+      "reference_evidence": [
+        "N03"
+      ],
+      "production_candidate_symbols": "python/pops/physics/_authoring_flux.py:flux_term;python/pops/numerics/spatial.py:FiniteVolume",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M03",
+      "title": "Euler / EOS",
+      "definition": "Euler compressible; fermer séparément EOS, admissibilité et borne caractéristique.",
+      "planned_test": {
+        "initial_boundary_data": "Gaz parfait γ=1.4, Sod: (ρ,u,p)L=(1,0,1), R=(0.125,0,0.1), [-0.5,0.5]. Deuxième EOS non fixée.",
+        "mesh_time": "N=100,200,400; t=0.15; HLL/Rusanov avec borne documentée.",
+        "oracle": "Résidu de Riemann exact pour EOS choisie, bilan, ρ>0 et e>0 sans clipping; seuils font partie du cas."
+      },
+      "reference_profile": "direct",
+      "reference_limit": "Ondes d’entropie avec EOS parfaite et raidie. Sod et EOS implicite non exécutés.",
+      "reference_evidence": [
+        "N05"
+      ],
+      "production_candidate_symbols": "python/pops/physics/_facade.py:Model;include/pops/physics/fluids/euler.hpp",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M04",
+      "title": "Advection–diffusion",
+      "definition": "u_t+a u_x=D u_xx; extension anisotrope/non linéaire distincte.",
+      "planned_test": {
+        "initial_boundary_data": "a=1,D=0.01, cosinus périodique: exp(-4π²Dt) cos(2π(x-at)).",
+        "mesh_time": "N=32,64,128; t=0.1; dt≤0.9/(|a|/h+2D/h²).",
+        "oracle": "Moyennes exactes; L1 et positivité conditionnelle; témoin violation W02."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Advection–diffusion scalaire directe. Flux anisotrope et variables de gradient générales à réaliser.",
+      "reference_evidence": [
+        "N04"
+      ],
+      "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion;python/pops/numerics/spatial.py:FiniteVolume",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M05",
+      "title": "Navier–Stokes avec conduction",
+      "definition": "Distinguer stress visqueux, conduction et dissipation du flux numérique.",
+      "planned_test": {
+        "initial_boundary_data": "Sous-problème périodique u_t=νu_xx, ν=0.03,u=sin(2πx). Couette complet exige données thermiques fixées.",
+        "mesh_time": "N=32,64,128; t=0.1.",
+        "oracle": "Identité de dissipation discrète et amortissement; bilan total avec flux thermique pour le cas complet."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Flux visqueux/thermiques, gradients primitifs et conditions de paroi non réalisés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M06",
+      "title": "Enthalpie / Stefan",
+      "definition": "Accumulation H(T,phase); plateau latent, pas Euler sur T équivalent supposé.",
+      "planned_test": {
+        "initial_boundary_data": "H(T) par morceaux, c=2,L=3,Tm=1, apport homogène; front: variante de Stefan à fermer.",
+        "mesh_time": "Test homogène sans espace; durée/apport explicites dans script.",
+        "oracle": "Respect H_new=H_old+apport; T=Tm dans plateau; fraction dans [0,1]."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Calcul d’accumulation possible; relation de phase et front de Stefan non construits.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M07",
+      "title": "Saint-Venant / topographie",
+      "definition": "h_t+(hu)_x=0; flux/source topographie doivent être réalisés ensemble.",
+      "planned_test": {
+        "initial_boundary_data": "Lac h+z=1,u=0, topographie lisse z=0.2 exp(-50x²), [-1,1], bords même équilibre.",
+        "mesh_time": "N=40,80,160; t=1; reconstruction hydrostatique.",
+        "oracle": "Équilibre discret ≤1e-12 après normalisation; humide-sec requiert domaine et solveur dédiés à la méthode."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Association flux–topographie et états sec/mouillé à réaliser sans double comptage.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_authoring_flux.py:flux_term",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M08",
+      "title": "Centre-guide / advection–Poisson",
+      "definition": "Vitesse dérivée d’un potentiel; champ lié au stage exact.",
+      "planned_test": {
+        "initial_boundary_data": "Carré périodique [0,2π]²; charge de moyenne nulle et vortex fabriqué.",
+        "mesh_time": "32²,64²; SSPRK2; changer un stage à même date.",
+        "oracle": "Requêtes de cache différentes; résidu champ ≤1e-10; divergence vitesse compatible à vérifier."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Solve et gradient disponibles; assemblage centre-guide 2D compatible non construit.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/fields/poisson.py;python/pops/time/_program/calls.py",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M09",
+      "title": "Euler–Poisson magnétique de Hoffart",
+      "definition": "Variante arXiv v2 examinée; sous-système source potentiel–vitesse avec ρ gelée.",
+      "planned_test": {
+        "initial_boundary_data": "Relations discrètes A v+Bφ=f, C v+Kφ=g; rotation J connue; Dirichlet homogène du témoin.",
+        "mesh_time": "N=8; s=0.03; α=0.5; données RNG graine 20260928; puis disque du papier à établir en FV.",
+        "oracle": "Même résidu original mono/Schur; erreur≤1e-11; norme et phase séparées; aucune garantie FEM importée."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Potentiel continué par la méthode et condensation d’applications à intégrer; témoins de Schur hérités seulement.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/time/_program/condensed.py;python/pops/fields/problem.py:FieldProblem",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M10",
+      "title": "Dérive–diffusion–Poisson",
+      "definition": "j=-D(∇n+n∇ψ); Scharfetter–Gummel réalise les deux termes.",
+      "planned_test": {
+        "initial_boundary_data": "nR=nL exp(-(ψR-ψL)); ψR-ψL∈{-10,-1,0,1,10}; D/h explicite.",
+        "mesh_time": "Témoin de face; puis équilibre 1D auto-cohérent avec charges/bords fermés.",
+        "oracle": "Flux nul relatif au niveau d’échelle; limite δ=0; ne pas doubler la diffusion."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Corps de Bernoulli testé auparavant; réalisation conjointe dérive–diffusion avec champ non intégrée.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/drift_diffusion.py;python/pops/fields/poisson.py",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M11",
+      "title": "Poisson–Maxwell–Stefan",
+      "definition": "Flux collectifs et contrainte de référentiel; variante masses molaires encore à fixer.",
+      "planned_test": {
+        "initial_boundary_data": "Témoin symétrique trois flux avec somme nulle et matrice friction rang2.",
+        "mesh_time": "Résolution augmentée 4×4; données script. Mélange ternaire physique exige fermeture documentée.",
+        "oracle": "Résidu contraint et somme flux≤1e-12; pas renormalisation postérieure."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Loi collective et contraintes de mélange à écrire; aucune substitution par diffusions indépendantes.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/diffusion.py;python/pops/fields/problem.py:FieldProblem",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M12",
+      "title": "Multifluide cinq/dix moments–Maxwell",
+      "definition": "États hétérogènes, symbole principal collectif et représentations Maxwell compatibles.",
+      "planned_test": {
+        "initial_boundary_data": "Onde EM périodique; une espèce5 et une10 moments; fermetures thermiques à fixer.",
+        "mesh_time": "Grilles32,64,128; direction oblique; données normalisées une fois fermées.",
+        "oracle": "Relations curl/div et échanges; pas découpage selon seul nom d’espèce."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Deux fluides isothermes–Poisson exécutés comme cas distinct. Maxwell cinq/dix moments non construit.",
+      "reference_evidence": [
+        "N06"
+      ],
+      "production_candidate_symbols": "python/pops/physics/multispecies.py;python/pops/fields/poisson.py",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M13",
+      "title": "Réactions / streamers / photoionisation",
+      "definition": "Stœchiométrie visible; radiatif non local distinct de la source locale.",
+      "planned_test": {
+        "initial_boundary_data": "Réseau A→B→C avec coefficients≥0; streamer exige chimie, transport et photoionisation précis.",
+        "mesh_time": "Homogène: exact exponentielle matricielle; t=1.",
+        "oracle": "Inventaire atomique; positivité et erreur de taux; bilan photonique selon fermeture retenue."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Réseaux mass-action explicites et implicites exécutés; photoionisation et front non exécutés.",
+      "reference_evidence": [
+        "N09",
+        "N11"
+      ],
+      "production_candidate_symbols": "python/pops/physics/_authoring_sources.py:source_term;python/pops/time/_program/local.py:solve",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M14",
+      "title": "Gaine / paroi / circuit",
+      "definition": "Courant de trace alimente une quantité de surface/circuit persistante.",
+      "planned_test": {
+        "initial_boundary_data": "Capacité normalisée C=1, charge initiale0.7; enfant produit un courant, parent rejette.",
+        "mesh_time": "Une fenêtre parent/deux étapes; aucune géométrie physique prétendue.",
+        "oracle": "État, histoire et échange inchangés après rejet; seconde acceptation interdite."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Rejet d’un état de surface testé au niveau protocole; paroi PDE et circuit non intégrés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/time/_step/transaction.py:StepTransactionPlan",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M15",
+      "title": "HyQMOM 1D / ordres",
+      "definition": "Fox–Laurent: récurrence polynomiale et fermeture a_n moyenne; réalisation Gram choisie.",
+      "planned_test": {
+        "initial_boundary_data": "Gaussiennes modérées et mélange fixé; n=1..4, 3/5/7/9moments.",
+        "mesh_time": "Dix données gaussiennes/order; spectres comparés par DF et factorisation.",
+        "oracle": "Erreurs flottantes bornées dans résultats; rang/bord exclus du témoin."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Récurrences héritées seulement. Hiérarchies HyQMOM 1D de plusieurs ordres non assemblées ici.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/moments/hierarchy.py",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M16",
+      "title": "HyQMOM15 magnétique",
+      "definition": "Fermeture B.1 du code épinglé, six polynômes; PDF joint seul incomplet.",
+      "planned_test": {
+        "initial_boundary_data": "Gaussienne corrélée Θ=[[1,1/2],[1/2,1]], normales axiales et (1,-1)/√2; permutations.",
+        "mesh_time": "15moments; Jacobiennes450coefficients; transforms affines16.",
+        "oracle": "Quatre racines non réelles attendues dans cas identifié, jamais corrigées en réel."
+      },
+      "reference_profile": "direct",
+      "reference_limit": "Transport B.1 complet, 1D–2V, quinze moments. Le contre-exemple oblique interdit une garantie hyperbolique globale.",
+      "reference_evidence": [
+        "N10_hyqmom"
+      ],
+      "production_candidate_symbols": "python/pops/moments/transport.py;python/pops/physics/_board_rate.py:rate",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M17",
+      "title": "Fan–Li15",
+      "definition": "D=2,M=4, température complète; dix lignes conservatives + cinq régularisées.",
+      "planned_test": {
+        "initial_boundary_data": "États non gaussiens périodiques; chemin droit dans moments bruts.",
+        "mesh_time": "N=16; huit pasSSPRK2; ratiosdensité0.2..5 pour intégrale.",
+        "oracle": "Bilan dixlignes, côtés non conservatifs actifs; quadrature indépendante intégrale."
+      },
+      "reference_profile": "direct",
+      "reference_limit": "Flux et produit non conservatif complets avec chemin droit. Reconstruction d’ordre supérieur non réalisée.",
+      "reference_evidence": [
+        "N10_fan_li"
+      ],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:nonconservative_product;python/pops/numerics/nonconservative.py:PathConservativeFiniteVolume",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M18",
+      "title": "Fermeture entropique MN",
+      "definition": "Quadrature positive fixe cinq nœuds et trois moments; intérieur et bord distingués.",
+      "planned_test": {
+        "initial_boundary_data": "V=(-1,-.5,0,.5,1), w=(.1,.2,.4,.2,.1); données exp(λ·m), puis hors cône.",
+        "mesh_time": "20targets natifs modérés;12Newton fixes+garde; autre oracle amorti/LP.",
+        "oracle": "Résidu, populations, minimum entropique le long du noyau; E-CLOSURE-INFEASIBLE vs BOUNDARY."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Newton public disponible; fermeture entropique complète sur quadrature paramétrable non construite.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/moments/closures/protocol.py;python/pops/time/_program/local.py:solve",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M19",
+      "title": "Vlasov–Poisson / BGK",
+      "definition": "Support produit x×v, réduction en v, champ en x, relèvement; pas tableau monodomaine.",
+      "planned_test": {
+        "initial_boundary_data": "Chaîne finie4×3→4→4×3; ensuite transportlibre périodique solutionf(x-vt,v).",
+        "mesh_time": "Nx=32,64; Nv=32,64; supportvtronqué et bordsflux définis.",
+        "oracle": "Bilan masse, compatibilité champ et norme projection; Landau/amortissement fullcase distinct."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Réduction partielle et relèvement entre supports absents du profil exécuté.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/moments/projection.py;python/pops/fields/poisson.py",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M20",
+      "title": "Fokker–Planck multiespèces",
+      "definition": "Collision différentielle en vitesse; coefficients et conservation interespèces à fixer par article.",
+      "planned_test": {
+        "initial_boundary_data": "Maxwelliennes initiales de vitesses/températures différentes; masses, diffusivité et convention à documenter.",
+        "mesh_time": "À verrouiller après choix de variante; aucune substitution par ODE de friction.",
+        "oracle": "Résidu sur domainev, masses/impulsion/énergie et fluxbord; tolérances après normalisation."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Portée différentielle en vitesse et couplage par fibre non réalisés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/diffusion.py",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M21",
+      "title": "Gyrocinétique full-f",
+      "definition": "Mesure phase et dérivée de champ; papier DG, adaptation FV distincte.",
+      "planned_test": {
+        "initial_boundary_data": "Slab et onde d’Alfvén cinétique; équations/bracket/mesure/bords à fermer.",
+        "mesh_time": "Non fixé: dépend de la variante et des opérateurs compatibles.",
+        "oracle": "Dispersion/énergie/charge selon la construction réelle; échec explicite service de fibre absent."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Mesure de phase, géométrie et dérivée de champ spécifiques à expliciter; pas de remplacement par Vlasov.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_facade.py:Model",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M22",
+      "title": "Rayonnement M1–matière",
+      "definition": "Fermeture radiative et échange d’énergie raide; transport/diffusion limites séparées.",
+      "planned_test": {
+        "initial_boundary_data": "χ(f) bornes isotrope/libre; deux réservoirs linéaires normalisés, pas loiT⁴ remplacée silencieusement.",
+        "mesh_time": "Testalgebrique dt0.4,k0.8; Marshak à fermer avec opacité et bords.",
+        "oracle": "Énergie deuxréservoirs,χ(0)=1/3 χ(1)=1; domaine|F|≤cE."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Fermeture M1, échange matière–rayonnement et régime de diffusion non assemblés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M23",
+      "title": "MHD Hall",
+      "definition": "Terme dispersif antisymétrique distinct de la diffusion ohmique.",
+      "planned_test": {
+        "initial_boundary_data": "Fourier transverse linéaire k=2,ηH=0.3; matrice rotation.",
+        "mesh_time": "Temps0.2; référence exponentielle.",
+        "oracle": "ω=ηH k² et norme; limiteHall0; pas garantiecomplèteMHD."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Gradients réversibles prévus par la note; réalisation MHD–Hall complète absente.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M24",
+      "title": "Baer–Nunziato",
+      "definition": "Deux phases et fraction volumique; chemins et relaxations font partie de la variante.",
+      "planned_test": {
+        "initial_boundary_data": "Contact/Riemann/phase disparaissante; pressions interfaciales et vitesses à fixer.",
+        "mesh_time": "Non fermé par le corpus; pas paramètres inventés de modèle.",
+        "oracle": "Conservation/positivité/chemin et équilibre selon variante; tests de limite physique requis."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Produits non conservatifs disponibles; relations de phases et choix de chemin du cas à fermer.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:nonconservative_product",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M25",
+      "title": "GPR thermomécanique",
+      "definition": "Distorsion et impulsion thermique sont de vraies variables internes.",
+      "planned_test": {
+        "initial_boundary_data": "Onde cisaillement et relaxation; énergie constitutive, coefficients et bords à fixer.",
+        "mesh_time": "Non fixé; bibliothèque scientifique nécessaire.",
+        "oracle": "Compatibilité évolutiondistorsion, énergie, limitevisqueuse; invariants ne viennent pas du typage."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "États internes persistants représentables; équations GPR et relaxation complète non codées.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M26",
+      "title": "Agrégation–diffusion",
+      "definition": "Interaction par noyau symétrique; mesure et appariement explicites.",
+      "planned_test": {
+        "initial_boundary_data": "W(x)=cos(2πx) périodique et densité positive; énergieE=.5〈ρ,Wρ〉.",
+        "mesh_time": "N=12témoin; PDE N32,64,128 avecdiffusionàfixer.",
+        "oracle": "Dérivée énergétique et masse; énergie pleine seulement sifluxgradientcompatible."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Convolution générale et portée de l’interaction non locale non réalisées.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/time/_program/local.py:solve",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M27",
+      "title": "Cahn–Hilliard",
+      "definition": "Formulation mixte (c,μ), opérateurordre4 et deux relations de bord.",
+      "planned_test": {
+        "initial_boundary_data": "Sous-cas linéarisé stable μ=c-ε²Δc,ε=.08, périodique.",
+        "mesh_time": "N16;dt.01; puis raffinement32/64 et potentiel doublepuits explicitementdistinct.",
+        "oracle": "Masse et décroissancequadratique; pas conclusion sur séparation non linéaire."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Produit d’inconnues et Laplaciens disponibles; formulation mixte, bords et solve Cahn–Hilliard non testés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/fields/problem.py:FieldProblem;python/pops/time/_program/local.py:solve",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    },
+    {
+      "id": "M28",
+      "title": "ALE / volumes mobiles",
+      "definition": "Évoluer volume et inventaire avec même volume balayé; pas remap instantané.",
+      "planned_test": {
+        "initial_boundary_data": "Troiscellules périodiques de volumes(.2,.3,.5), étatuniforme2.3, volumesbalayés(.01,-.02,.01).",
+        "mesh_time": "Une miseàjourGCL; grilleoscillante surpériode à intégrer ensuite.",
+        "oracle": "Uniformité≤1e-13 et sommervolumes conservée; fluxrelatifphysique ultérieur."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Extension ALE déjà explicite dans la note; volumes mobiles et flux balayés non réalisés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/mesh/_amr/hierarchy_regrid.py:RegridTransactionGate",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established"
+    }
+  ],
+  "witnesses": [
+    {
+      "id": "W01",
+      "title": "Cosinus scalaire en FV",
+      "related_model": "M01",
+      "production_candidate_symbols": "python/pops/initial/__init__.py;python/pops/numerics/spatial.py:FiniteVolume",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W02",
+      "title": "Advection-diffusion avec borne combinée",
+      "related_model": "M04",
+      "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion;python/pops/time/_step/transaction.py:AcceptanceGuard",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W03",
+      "title": "Flux principal entre deux blocs",
+      "related_model": "M12",
+      "production_candidate_symbols": "python/pops/_ir/balance.py:BalanceView",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W04",
+      "title": "Poisson au vrai stage",
+      "related_model": "M08",
+      "production_candidate_symbols": "python/pops/time/_program/clocks.py:stage;python/pops/fields/poisson.py",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W05",
+      "title": "Rotation pure de Lorentz",
+      "related_model": "M12",
+      "production_candidate_symbols": "python/pops/physics/_authoring_sources.py:source_term",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W06",
+      "title": "Solve par blocs contre solve monolithique",
+      "related_model": "M09",
+      "production_candidate_symbols": "python/pops/time/_program/condensed.py;python/pops/linalg/problem.py:LinearProblem",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W07",
+      "title": "HyQMOM15 états réalisables normales et permutations",
+      "related_model": "M16",
+      "production_candidate_symbols": "python/pops/moments/hierarchy.py;python/pops/moments/transport.py",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W08",
+      "title": "Fan-Li réellement non conservatif",
+      "related_model": "M17",
+      "production_candidate_symbols": "python/pops/numerics/nonconservative.py:PathConservativeFiniteVolume",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W09",
+      "title": "Fermeture infaisable sur sa quadrature",
+      "related_model": "M18",
+      "production_candidate_symbols": "python/pops/moments/closures/protocol.py",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W10",
+      "title": "Contrainte collective de mélange",
+      "related_model": "M11",
+      "production_candidate_symbols": "python/pops/physics/diffusion.py",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W11",
+      "title": "Rejet après calcul d'un courant de paroi",
+      "related_model": "M14",
+      "production_candidate_symbols": "python/pops/time/_step/transaction.py:StepTransactionPlan",
+      "production_status": "not_executed_for_this_mapping"
+    },
+    {
+      "id": "W12",
+      "title": "Construction dépendant de la durée",
+      "related_model": "M17",
+      "production_candidate_symbols": "python/pops/runtime/_history_sample_identity.py",
+      "production_status": "not_executed_for_this_mapping"
+    }
+  ]
+}

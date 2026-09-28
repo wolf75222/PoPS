@@ -12,7 +12,7 @@ def emit_path_rhs(value, var, lines, model, provider_plans, block, target):
     from pops.time._evaluation_point import evaluation_stage_fraction
 
     if getattr(_model_impl(model), "_path_conservative", None) is None:
-        raise ValueError("path RHS has no authenticated complete native Fan–Li15 model")
+        raise ValueError("path RHS has no authenticated complete native path model")
     if (not value.attrs.get("flux") or value.attrs.get("fluxes")
             or tuple(value.attrs.get("sources", ())) or value.attrs.get("schedule") is not None):
         raise ValueError("path RHS must retain one complete unscheduled flux/product balance")

@@ -19,6 +19,7 @@
 
 #include <cmath>
 #include <concepts>
+#include <limits>
 #include <type_traits>
 
 namespace pops {
@@ -50,37 +51,53 @@ inline constexpr bool supports_embedded_boundary_reconstruction_v =
 
 /// minmod limiter: TVD (Total Variation Diminishing), 2 ghosts, order 2 in smooth regions.
 ///
-/// Returns min(|a|,|b|)*sgn(a) if a and b have the same sign, 0 otherwise. Implemented without
-/// std::min / std::abs to stay device-safe (no <cmath> required). Order 1 locally at extrema
-/// (clips smooth peaks): prefer VanLeer when smooth growth modes must survive.
+/// Returns min(|a|,|b|)*sgn(a) if a and b have the same sign, 0 otherwise. Sign tests avoid
+/// underflow in a*b. Non-finite inputs remain non-finite so the native flux guard can reject them.
+/// Order 1 locally at extrema (clips smooth peaks).
 struct Minmod {
   static constexpr int formal_order = 2;
   static constexpr int n_ghost = 2;
   POPS_HD Real limited_slope(Real backward, Real forward) const {
     const Real a = backward;
     const Real b = forward;
-    if (a * b <= Real(0))
+    constexpr Real largest = std::numeric_limits<Real>::max();
+    if (!(a == a && a <= largest && a >= -largest))
+      return a;
+    if (!(b == b && b <= largest && b >= -largest))
+      return b;
+    if (!((a > Real(0) && b > Real(0)) || (a < Real(0) && b < Real(0))))
       return Real(0);
     const Real fa = a < 0 ? -a : a, fb = b < 0 ? -b : b;  // |.| device-safe
     return (fa < fb) ? a : b;
   }
 };
 
-/// van Leer limiter: smooth, 2 ghosts, better order at extrema than Minmod.
+/// van Leer limiter: smooth, 2 ghosts, order 1 locally at extrema like Minmod.
 ///
-/// Harmonic average of the differences: 2ab/(a+b) if same sign, 0 otherwise. No sign branch
-/// (no std::abs). Preferred over Minmod for preserving smooth growth modes (less
-/// dissipative at the density profile extrema).
+/// Harmonic average of the differences: 2ab/(a+b) if same sign, 0 otherwise. Evaluate via the
+/// smaller magnitude and a bounded ratio to avoid underflow/overflow in a*b and a+b. Non-finite
+/// inputs remain non-finite so the native flux guard can reject them.
 struct VanLeer {
   static constexpr int formal_order = 2;
   static constexpr int n_ghost = 2;
   POPS_HD Real limited_slope(Real backward, Real forward) const {
     const Real a = backward;
     const Real b = forward;
-    const Real ab = a * b;
-    if (ab <= Real(0))
+    constexpr Real largest = std::numeric_limits<Real>::max();
+    if (!(a == a && a <= largest && a >= -largest))
+      return a;
+    if (!(b == b && b <= largest && b >= -largest))
+      return b;
+    const bool positive = a > Real(0) && b > Real(0);
+    const bool negative = a < Real(0) && b < Real(0);
+    if (!positive && !negative)
       return Real(0);
-    return Real(2) * ab / (a + b);
+    const Real aa = positive ? a : -a;
+    const Real bb = positive ? b : -b;
+    const Real smaller = aa < bb ? aa : bb;
+    const Real larger = aa < bb ? bb : aa;
+    const Real magnitude = smaller * (Real(2) / (Real(1) + smaller / larger));
+    return positive ? magnitude : -magnitude;
   }
 };
 
@@ -94,6 +111,11 @@ struct MC {
   static constexpr int formal_order = 2;
   static constexpr int n_ghost = 2;
   POPS_HD Real limited_slope(Real backward, Real forward) const {
+    constexpr Real largest = std::numeric_limits<Real>::max();
+    if (!(backward == backward && backward <= largest && backward >= -largest))
+      return backward;
+    if (!(forward == forward && forward <= largest && forward >= -largest))
+      return forward;
     const bool positive = backward > Real(0) && forward > Real(0);
     const bool negative = backward < Real(0) && forward < Real(0);
     if (!positive && !negative)
@@ -101,8 +123,10 @@ struct MC {
 
     const Real a = positive ? backward : -backward;
     const Real b = positive ? forward : -forward;
-    const Real centred = Real(0.5) * a + Real(0.5) * b;
     const Real smaller = a < b ? a : b;
+    const Real larger = a < b ? b : a;
+    // Halving each operand first loses two equal subnormal differences.
+    const Real centred = smaller + Real(0.5) * (larger - smaller);
     // centred <= 2*smaller without forming the potentially overflowing doubled value.
     const Real magnitude = Real(0.5) * centred <= smaller ? centred : Real(2) * smaller;
     return positive ? magnitude : -magnitude;
@@ -119,6 +143,11 @@ struct Superbee {
   static constexpr int formal_order = 2;
   static constexpr int n_ghost = 2;
   POPS_HD Real limited_slope(Real backward, Real forward) const {
+    constexpr Real largest = std::numeric_limits<Real>::max();
+    if (!(backward == backward && backward <= largest && backward >= -largest))
+      return backward;
+    if (!(forward == forward && forward <= largest && forward >= -largest))
+      return forward;
     const bool positive = backward > Real(0) && forward > Real(0);
     const bool negative = backward < Real(0) && forward < Real(0);
     if (!positive && !negative)
@@ -142,10 +171,26 @@ struct Superbee {
 /// ternary (device-safe, avoids std::abs).
 /// Must NOT be called directly by a mesh user: go through the Weno5 policy and the reconstruct
 /// function of spatial_operator.hpp.
-POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2,
-                           Real eps = kWenoEpsilon) {
-  // ADC-645: eps is the WENO-Z smoothness regulariser (default = the historical kWenoEpsilon
-  // literal, bit-identical); a per-block override reaches here through Weno5::eps.
+namespace detail {
+
+template <class Scalar>
+POPS_HD constexpr Scalar weno5z_scale_limit() {
+  if constexpr (std::is_same_v<Scalar, double>)
+    return Scalar(1e37);
+  else
+    return Scalar(1e7);
+}
+
+template <class Scalar>
+POPS_HD constexpr Scalar weno5z_ratio_limit() {
+  if constexpr (std::is_same_v<Scalar, double>)
+    return Scalar(1e100);
+  else
+    return Scalar(1e10);
+}
+
+POPS_HD inline Real weno5z_core(Real vm2, Real vm1, Real v0, Real vp1, Real vp2, Real eps,
+                                 bool force_bounded_weights) {
   // three third-order reconstructions of the +x face of v0
   const Real q0 = (Real(2) * vm2 - Real(7) * vm1 + Real(11) * v0) / Real(6);
   const Real q1 = (-vm1 + Real(5) * v0 + Real(2) * vp1) / Real(6);
@@ -159,11 +204,73 @@ POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2,
                   Real(0.25) * (3 * v0 - 4 * vp1 + vp2) * (3 * v0 - 4 * vp1 + vp2);
   // WENO-Z weights: alpha_k = d_k (1 + (tau5/(eps+beta_k))^2), tau5 = |beta0 - beta2|
   const Real tau5 = (b0 - b2 < 0 ? b2 - b0 : b0 - b2);
+  const Real d0 = eps + b0, d1 = eps + b1, d2 = eps + b2;
+  const Real smallest = d0 < d1 ? (d0 < d2 ? d0 : d2) : (d1 < d2 ? d1 : d2);
+  if (force_bounded_weights || tau5 > weno5z_ratio_limit<Real>() * smallest) {
+    // Multiplying the WENO-Z alphas by a common factor leaves the reconstruction unchanged.
+    // This form keeps every alpha finite even when tau/(eps+beta) would overflow.  A scaled
+    // epsilon may round to zero for an enormous finite stencil: zero-beta substencils then
+    // dominate with their original ideal-weight ratios.
+    if (tau5 == Real(0))
+      return Real(0.1) * q0 + Real(0.6) * q1 + Real(0.3) * q2;
+    if (smallest == Real(0)) {
+      const Real a0 = d0 == Real(0) ? Real(0.1) : Real(0);
+      const Real a1 = d1 == Real(0) ? Real(0.6) : Real(0);
+      const Real a2 = d2 == Real(0) ? Real(0.3) : Real(0);
+      return (a0 * q0 + a1 * q1 + a2 * q2) / (a0 + a1 + a2);
+    }
+    if (tau5 <= smallest) {
+      const Real r0 = tau5 / d0, r1 = tau5 / d1, r2 = tau5 / d2;
+      const Real a0 = Real(0.1) * (Real(1) + r0 * r0);
+      const Real a1 = Real(0.6) * (Real(1) + r1 * r1);
+      const Real a2 = Real(0.3) * (Real(1) + r2 * r2);
+      return (a0 * q0 + a1 * q1 + a2 * q2) / (a0 + a1 + a2);
+    }
+    const Real common = smallest / tau5;
+    const Real a0 = Real(0.1) * (common * common +
+                                 (smallest / d0) * (smallest / d0));
+    const Real a1 = Real(0.6) * (common * common +
+                                 (smallest / d1) * (smallest / d1));
+    const Real a2 = Real(0.3) * (common * common +
+                                 (smallest / d2) * (smallest / d2));
+    return (a0 * q0 + a1 * q1 + a2 * q2) / (a0 + a1 + a2);
+  }
   const Real a0 = (Real(1) / Real(10)) * (Real(1) + (tau5 / (eps + b0)) * (tau5 / (eps + b0)));
   const Real a1 = (Real(6) / Real(10)) * (Real(1) + (tau5 / (eps + b1)) * (tau5 / (eps + b1)));
   const Real a2 = (Real(3) / Real(10)) * (Real(1) + (tau5 / (eps + b2)) * (tau5 / (eps + b2)));
   const Real inv = Real(1) / (a0 + a1 + a2);
   return (a0 * q0 + a1 * q1 + a2 * q2) * inv;
+}
+
+}  // namespace detail
+
+POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2,
+                           Real eps = kWenoEpsilon) {
+  // ADC-645: eps is the WENO-Z smoothness regulariser; the ordinary-scale path preserves
+  // the historical arithmetic. Invalid options and stencil samples must reach native finite
+  // diagnostics rather than being replaced by a plausible face state.
+  constexpr Real largest = std::numeric_limits<Real>::max();
+  if (!(eps > Real(0) && eps <= largest))
+    return std::numeric_limits<Real>::quiet_NaN();
+  if (vm2 == vm1 && vm1 == v0 && v0 == vp1 && vp1 == vp2)
+    return v0;
+  const Real limit = detail::weno5z_scale_limit<Real>();
+  if (vm2 > limit || vm2 < -limit || vm1 > limit || vm1 < -limit || v0 > limit ||
+      v0 < -limit || vp1 > limit || vp1 < -limit || vp2 > limit || vp2 < -limit) {
+    const Real values[5] = {vm2, vm1, v0, vp1, vp2};
+    Real scale = Real(0);
+    for (const Real value : values) {
+      const Real magnitude = value < Real(0) ? -value : value;
+      if (magnitude > scale)
+        scale = magnitude;
+    }
+    if (!(scale <= largest))
+      return scale;
+    const Real scaled_eps = (eps / scale) / scale;
+    return scale * detail::weno5z_core(vm2 / scale, vm1 / scale, v0 / scale,
+                                        vp1 / scale, vp2 / scale, scaled_eps, true);
+  }
+  return detail::weno5z_core(vm2, vm1, v0, vp1, vp2, eps, false);
 }
 
 /// WENO5 policy: declares a three-cell storage requirement and delegates its sampled stencil to

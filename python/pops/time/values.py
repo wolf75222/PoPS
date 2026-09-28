@@ -66,7 +66,10 @@ class _Coeff(ImmutableSymbolic):
         return _Coeff({p: _exact_negate(c) for p, c in self.powers.items()})
 
     def __sub__(self, other: Any) -> Any:
-        return self.__add__(-(other if isinstance(other, _Coeff) else _Coeff({0: _exact_number(other)})))
+        coefficient = other if isinstance(other, _Coeff) else self._binop_number(other)
+        if coefficient is None:
+            return NotImplemented
+        return self.__add__(-coefficient)
 
     def __mul__(self, other: Any) -> Any:
         if not isinstance(other, (_Coeff, ProgramValue, _Affine)):
@@ -109,6 +112,12 @@ class _Coeff(ImmutableSymbolic):
 
     def to_polynomial(self) -> CoeffPolynomial:
         return CoeffPolynomial(self.powers)
+
+    @property
+    def _node(self) -> Any:
+        """Promote method coefficients into the shared scalar expression algebra."""
+        from pops.time.expressions import CoefficientExpression
+        return CoefficientExpression(self.to_polynomial())
 
     def _key(self) -> Any:
         return tuple((p, tuple(sorted(scalar_data(c).items())))
@@ -179,6 +188,9 @@ class _Affine(ImmutableSymbolic):
         return [acc[v.id] for v in order]
 
     def __add__(self, other: Any) -> Any:
+        from pops.time.expressions import ProgramExpression, as_expression
+        if isinstance(other, ProgramExpression):
+            return as_expression(self) + other
         return _Affine(self.terms + _to_affine(other).terms)
 
     __radd__ = __add__
@@ -187,12 +199,19 @@ class _Affine(ImmutableSymbolic):
         return _Affine([(v, -c) for v, c in self.terms])
 
     def __sub__(self, other: Any) -> Any:
+        from pops.time.expressions import ProgramExpression, as_expression
+        if isinstance(other, ProgramExpression):
+            return as_expression(self) - other
         return _Affine(self.terms + (-_to_affine(other)).terms)
 
     def __rsub__(self, other: Any) -> Any:
         return _Affine((-self).terms + _to_affine(other).terms)
 
     def __mul__(self, other: Any) -> Any:
+        from pops.time.expressions import ProgramExpression, as_expression
+        resolved = _resolve_handle(other)
+        if isinstance(resolved, (ProgramExpression, ProgramValue, _Affine)):
+            return as_expression(self) * resolved
         if not isinstance(other, _Coeff):
             try:
                 other = _Coeff({0: _exact_number(other)})
@@ -384,6 +403,14 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
     def __le__(self, other: Any) -> Any:
         return self._compare(other, "<=")
 
+    def __getitem__(self, component):
+        from pops.time.expressions import ProgramComponent
+        return ProgramComponent(self, component)
+
+    def __pow__(self, exponent):
+        from pops.time.expressions import as_expression
+        return as_expression(self) ** exponent
+
     # --- affine algebra (field values only) ---
     def _affine(self) -> Any:
         if not self.is_field():
@@ -404,11 +431,17 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
     def __add__(self, other: Any) -> Any:
         if self.vtype == "scalar":
             return self._scalar_op(other, "add")
+        from pops.time.expressions import ProgramExpression, as_expression
+        if isinstance(other, ProgramExpression):
+            return as_expression(self) + other
         return self._affine() + _to_affine(other)
 
     def __radd__(self, other: Any) -> Any:
         if self.vtype == "scalar":
             return self._scalar_op(other, "add", swap=True)
+        from pops.time.expressions import ProgramExpression, as_expression
+        if isinstance(other, ProgramExpression):
+            return as_expression(self) + other
         return self._affine() + _to_affine(other)
 
     def __neg__(self) -> Any:
@@ -419,6 +452,9 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
     def __sub__(self, other: Any) -> Any:
         if self.vtype == "scalar":
             return self._scalar_op(other, "sub")
+        from pops.time.expressions import ProgramExpression, as_expression
+        if isinstance(other, ProgramExpression):
+            return as_expression(self) - other
         return self._affine() - _to_affine(other)
 
     def __rsub__(self, other: Any) -> Any:
@@ -440,6 +476,10 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
             if isinstance(other, _Coeff):
                 return _Operator(_Coeff({}), [(self, other)])
             return NotImplemented
+        from pops.time.expressions import ProgramExpression, as_expression
+        resolved = _resolve_handle(other)
+        if isinstance(resolved, (ProgramExpression, _Affine)) or _is_field_value(resolved):
+            return as_expression(self) * resolved
         if isinstance(other, _Coeff):
             return self._affine() * other
         try:
@@ -458,6 +498,10 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
     def __truediv__(self, other: Any) -> Any:
         if self.vtype == "scalar":
             return self._scalar_op(other, "div")
+        from pops.time.expressions import ProgramExpression, as_expression
+        resolved = _resolve_handle(other)
+        if isinstance(resolved, (ProgramExpression, _Affine)) or _is_field_value(resolved):
+            return as_expression(self) / resolved
         try:
             exact = _exact_number(other)
         except CoefficientLiteralError:
@@ -469,7 +513,8 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
     def __rtruediv__(self, other: Any) -> Any:
         if self.vtype == "scalar":
             return self._scalar_op(other, "div", swap=True)
-        return NotImplemented
+        from pops.time.expressions import as_expression
+        return other / as_expression(self)
 
     # --- operator application (Spec 3 board notation): operator @ state -> apply ---
     def __matmul__(self, other: Any) -> Any:

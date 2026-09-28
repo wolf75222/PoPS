@@ -2424,3 +2424,83 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
   EXPECT_FALSE(sim.program_cache().has(17));
   EXPECT_TRUE(sim.program_diagnostics().empty());
 }
+
+TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr int node = 17;
+  constexpr double skipped_dt = 0.25;
+  System<kNativeDimension> sim(unit_domain_config<kNativeDimension>(n));
+  install_execution_lane(sim, "pops.test.program-runtime.nested-duration-rollback");
+  add_gas(sim, 1.4);
+  std::vector<double> initial;
+  fill_ic(initial, n, 1.4);
+  sim.set_state("gas", initial);
+  sim.set_program_block_map({0});
+  auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ctx->register_history("gas.U", 2, kGasComponents);
+  ctx->cache_store_scratch(node, ctx->state(0));
+  ctx->cache_accumulate_dt(node, Real(skipped_dt));
+  const auto initial_cache = sim.program_cache_global(node);
+
+  bool fail_after_effective_dt = true;
+  std::vector<Real> observed_effective_dt;
+  ctx->install([&](double dt) {
+    ctx->begin_step(dt);
+    const Real effective_dt = ctx->cache_effective_dt(node, Real(dt));
+    observed_effective_dt.push_back(effective_dt);
+    MultiFab<kNativeDimension>& state = ctx->state(0);
+    MultiFab<kNativeDimension> bump = state;
+    bump.set_val(Real(1));
+    ctx->axpy(state, Real(1), bump);
+    ctx->store_history("gas.U", state);
+    ctx->rotate_histories();
+    ctx->cache_store_scratch(node, state);
+    sim.stage_program_exchange(runtime::program::ExchangeRecord{
+        "transport.face", "face.0", "stage.0", "euler", 1, 1.0, 2.0, dt, 1});
+    if (fail_after_effective_dt)
+      throw runtime::program::StepAttemptRejected(
+          SolveStatus::kIterationLimit, "injected",
+          "failure after consuming cached duration and staging native outputs");
+  });
+  sim.set_program_block_map({0});
+
+  const auto expect_initial = [&] {
+    EXPECT_EQ(sim.get_state("gas"), initial);
+    EXPECT_EQ(sim.time(), 0.0);
+    EXPECT_EQ(sim.macro_step(), 0);
+    EXPECT_FALSE(sim.history_initialized("gas.U"));
+    EXPECT_EQ(sim.history_fill_count("gas.U"), 0);
+    EXPECT_TRUE(sim.program_cache().has(node));
+    EXPECT_DOUBLE_EQ(sim.program_cache().accumulated_dt_of(node), skipped_dt);
+    EXPECT_EQ(sim.program_cache_global(node), initial_cache);
+    EXPECT_TRUE(sim.program_exchange_records().empty());
+  };
+  expect_initial();
+
+  sim.begin_step_transaction();
+  sim.begin_nested_step_transaction();
+  EXPECT_THROW(sim.step(0.1), runtime::program::StepAttemptRejected);
+  ASSERT_EQ(observed_effective_dt.size(), 1u);
+  EXPECT_DOUBLE_EQ(observed_effective_dt.back(), Real(skipped_dt + 0.1));
+  expect_initial();
+
+  fail_after_effective_dt = false;
+  sim.step(0.1);
+  ASSERT_EQ(observed_effective_dt.size(), 2u);
+  EXPECT_DOUBLE_EQ(observed_effective_dt.back(), Real(skipped_dt + 0.1));
+  EXPECT_EQ(sim.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.1);
+  EXPECT_TRUE(sim.history_initialized("gas.U"));
+  EXPECT_EQ(sim.history_fill_count("gas.U"), 1);
+  EXPECT_DOUBLE_EQ(sim.program_cache().accumulated_dt_of(node), 0.0);
+  ASSERT_EQ(sim.program_exchange_records().size(), 1u);
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  EXPECT_EQ(sim.step_transaction_depth(), 1u);
+  sim.rollback_step_transaction();
+  EXPECT_EQ(sim.step_transaction_depth(), 0u);
+  expect_initial();
+}

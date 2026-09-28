@@ -170,6 +170,15 @@ class Descriptor:
                 % (getattr(self, "name", type(self).__name__), self.category, key))
         object.__setattr__(self, key, value)
 
+    def __delattr__(self, key: str) -> None:
+        """Deletion is a mutation too, including deletion of the freeze marker itself."""
+        if getattr(self, "_frozen", False):
+            raise RuntimeError(
+                "%s [%s] is frozen (ADC-563): cannot delete %r after validation. "
+                "Author a fresh descriptor / Case and repeat validate/resolve/compile instead."
+                % (getattr(self, "name", type(self).__name__), self.category, key))
+        object.__delattr__(self, key)
+
     @property
     def name(self) -> str:
         return type(self).__name__

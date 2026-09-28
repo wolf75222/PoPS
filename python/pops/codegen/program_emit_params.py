@@ -32,7 +32,7 @@ def _formula_carrier(model: Any) -> Any:
 
 _MODEL_PARAM_OPS = frozenset({
     "source", "apply", "local_transform", "affine_moment_update", "solve_local_linear", "rhs", "diffusive_rhs",
-    "solve_local_nonlinear",
+    "solve_local_nonlinear", "path_conservative_rhs",
 })
 
 
@@ -65,7 +65,12 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     lin = getattr(impl, "_linear_sources", {}) or {}
     flux = getattr(impl, "_flux_terms", {}) or {}
     transforms = getattr(impl, "_local_transforms", {}) or {}
-    if v.op == "diffusive_rhs":
+    if v.op == "path_conservative_rhs":
+        path = impl._path_conservative
+        out.extend(path["kernel"].get("parameter_expressions", ()))
+        out.extend(value for row in path["covectors"] for value in row)
+        out.extend(value for row in impl._flux.values() for value in row)
+    elif v.op == "diffusive_rhs":
         from pops.codegen.program_emit_diffusion import _selected, _law_expressions
         _, selected, _ = _selected(v, impl, require_realization=False)
         # Parameter discovery follows the full constitutive declaration. It must

@@ -1138,6 +1138,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         consumer_qid = program_provider_consumer_qid(node_model, v.id, v.block)
         kernel = _emit_solve_local_nonlinear_kernel(
             node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx,
+            capture_vars=tuple(var[item.id] for item in v.inputs[1:]),
             provider_plans=provider_plans,
             consumer_qid=consumer_qid,
         )
@@ -1428,6 +1429,23 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         _emit_branch(
             program, v, base, var, model, lines, prelude, block_idx, field_plans,
             target=target)
+    elif v.op == "pointwise_expression":
+        from pops.codegen.program_emit_expressions import emit_pointwise_kernel
+        var[v.id] = "u%d" % v.id
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                     % (var[v.id], v.id, var[v.inputs[0].id]))
+        output_setup_end = len(lines)
+        status = "expression_status_%d" % v.id
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
+                     % (status, v.id, var[v.inputs[0].id]))
+        lines += emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
+        reduction = "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
+        lines.append("if (ctx.%s(%d, %s, expression_active_%d, ctx.prepared_execution_lane()) != pops::Real(0)) {"
+                     % (reduction, bidx, status, v.id))
+        lines.append("  throw pops::runtime::program::StepAttemptRejected("
+                     "pops::SolveStatus::kInvalidEvaluation, \"pointwise_expression\", "
+                     "\"non-finite scientific expression input or intermediate\");")
+        lines.append("}")
     elif v.op == "linear_combine":
         from pops.codegen.program_partition_stability import (
             emit_partition_stability, has_independent_diffusion_transport,

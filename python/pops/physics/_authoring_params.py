@@ -57,6 +57,10 @@ class _RuntimeParamsMixin(_HyperbolicModel):
             out.extend((law["density"],law["mobility"],law["potential"]))
         for term in (getattr(self, "_flux_terms", {}) or {}).values():
             out += [_wrap(e) for e in flattened_axis_values(term)]
+        path = getattr(self, "_path_conservative", None)
+        if path is not None:
+            out.extend(path["kernel"].get("parameter_expressions", ()))
+            out.extend(value for row in path["covectors"] for value in row)
         if self.cons_from is not None:
             out += list(self.cons_from)
         if self._elliptic is not None:

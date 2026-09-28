@@ -261,9 +261,14 @@ class RateApplicationProjection(RateTerm):
                 "rate_space": self.rate_space.to_data()}
 
 
-def substitute_quantities(body: Any, bindings: Mapping) -> Any:
-    """Clone captured expressions while replacing exact input quantity leaves."""
-    memo: dict[int, Any] = {}
+def substitute_quantities(body: Any, bindings: Mapping, *, expression_bindings=None) -> Any:
+    """Clone a body, replacing qualified quantities and exact expression identities.
+
+    ``expression_bindings`` maps ``id(node)`` to its replacement. It is used by
+    numerical bodies to specialize a quadrature coordinate without substituting
+    unrelated variables that happen to have the same display name.
+    """
+    memo: dict[int, Any] = dict(expression_bindings or {})
 
     def clone(value: Any) -> Any:
         if isinstance(value, QuantityRef):

@@ -117,6 +117,10 @@ class _ProgramTimeHandles(_ProgramBase):
         if handle in self._time_stage_values:
             raise ValueError("SSA stage already defined")
         resolved = _resolve_handle(value)
+        from pops.time._program.expressions import is_pointwise_expression
+        if is_pointwise_expression(resolved):
+            resolved = self._pointwise_expression(None, resolved, at=handle.point)
+            value = resolved
         if isinstance(resolved, _Affine):
             if not resolved.terms:
                 raise TypeError("T.value stage: an empty affine value is not a State")

@@ -6,6 +6,7 @@ from typing import Any, TYPE_CHECKING
 
 from pops.model import Handle
 from .spatial import FiniteVolume, _brick_data, _resolved_brick
+from .symbolic_path import SymbolicPath
 
 if TYPE_CHECKING:
     from pops._ir.expr import Expr
@@ -144,6 +145,36 @@ class FanLi15RawMomentPath:
                 "face_geometry": "arithmetic_trace_covector",
                 "stability": "whole_path_raw_second_moment_bound"}
 
+    def native_kernel(self) -> dict[str, Any]:
+        """The scientific library owns this optimized constitutive realization."""
+        from pops.moments.fan_li import fan_li15_native_plan
+        return {"kind": "normalized_moment_path", "plan": fan_li15_native_plan(),
+                "identity_namespace": "fan-li15.path-operator"}
+
+    def validate_native(self, *, law: Any, flux_body: Any, native: Any) -> None:
+        """Reauthenticate the optimized library kernel after instance resolution."""
+        from pops._ir.expr import _wrap
+        from pops.model.hash_data import canonical_hash_data
+        from pops.moments.fan_li import fan_li15_expressions, FAN_LI15_REGULARIZED_COMPONENTS
+        from pops.moments.model_builder import moment_names
+        if tuple(law.state.space.components) != tuple(moment_names(4)):
+            raise ValueError("Fan–Li15 native path requires complete q-outer raw moment storage")
+        conserved = tuple(name for slot, name in enumerate(moment_names(4))
+                          if slot not in FAN_LI15_REGULARIZED_COMPONENTS)
+        if law.conservative_components != conserved:
+            raise ValueError("Fan–Li15 native path lost a conservative row")
+        physical = fan_li15_expressions(native(law.variables))
+        covectors = native(self.covectors)
+        expected_b = tuple(tuple(tuple(_wrap(value) for value in row)
+                                 for row in physical.directional_nonconservative_matrix(g))
+                           for g in covectors)
+        if canonical_hash_data(native(law.matrices)) != canonical_hash_data(expected_b):
+            raise ValueError("native Fan–Li15 matrix differs from its authenticated constitutive law")
+        expected_f = {axis: physical.directional_flux(g)
+                      for axis, g in zip(law.axes, covectors, strict=True)}
+        if canonical_hash_data(native(flux_body)) != canonical_hash_data(expected_f):
+            raise ValueError("native Fan–Li15 speed proof requires the complete Grad flux plus B")
+
 
 class PathConservativeFiniteVolume(FiniteVolume):
     """Shared conservative flux plus distinct signed nonconservative side terms.
@@ -156,8 +187,8 @@ class PathConservativeFiniteVolume(FiniteVolume):
 
     def __init__(self, *, flux: Any, path: Any, variables: Any,
                  reconstruction: Any, riemann: Any, zero_measure_faces: Any = ()) -> None:
-        if type(path) is not FanLi15RawMomentPath:
-            raise TypeError("this path-conservative route requires a typed FanLi15RawMomentPath")
+        if type(path) not in (FanLi15RawMomentPath, SymbolicPath):
+            raise TypeError("path-conservative transport requires a typed numerical path")
         super().__init__(flux=flux, variables=variables, reconstruction=reconstruction, riemann=riemann)
         if (isinstance(flux, tuple) or flux.owner_path != path.product.owner_path
                 or self.variables.options.get("state") != path.product.state):
@@ -226,4 +257,4 @@ class PathConservativeFiniteVolume(FiniteVolume):
                 "nonconservative_interfaces": "canonical_fine_subface_side_contributions"}
 
 
-__all__ = ["FanLi15RawMomentPath", "PathConservativeFiniteVolume"]
+__all__ = ["FanLi15RawMomentPath", "SymbolicPath", "PathConservativeFiniteVolume"]

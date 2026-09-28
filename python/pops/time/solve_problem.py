@@ -57,18 +57,29 @@ class CoupledImplicitEuler:
 
 @dataclass(frozen=True, slots=True)
 class LocalResidual:
-    """A cell-local residual callback and its exact initial temporal state."""
+    """A local equation, its algorithmic seed, and optional frozen equation inputs.
+
+    With captures, the body is called as ``residual(P, iterate, **captures)``.
+    Without captures the historical ``residual(P, iterate, initial)`` form remains.
+    A capture is an equation argument; changing the seed does not change it.
+    """
 
     residual: Any
     initial: Any
+    captures: Any = None
 
     def __post_init__(self) -> None:
         if not callable(self.residual):
             raise TypeError("LocalResidual residual must be an IR-building callable")
+        if self.captures is not None:
+            if not isinstance(self.captures, Mapping) or any(
+                    not isinstance(key, str) or not key.isidentifier() for key in self.captures):
+                raise TypeError("LocalResidual captures require named equation inputs")
+            object.__setattr__(self, "captures", MappingProxyType(dict(self.captures)))
 
     def build_with(self, *, program: Any, prepared_solver: Any, name: Any = None) -> Any:
         return program._solve_local_nonlinear(
-            residual=self.residual, initial_guess=self.initial,
+            residual=self.residual, initial_guess=self.initial, captures=self.captures,
             prepared=prepared_solver, name=name)
 
 

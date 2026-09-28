@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pops.time._authoring import atomic_authoring
+
 from pops.time.handles import (
     HistoryHandle,
     StageHandle,
@@ -458,6 +460,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         """Map of qualified state Handle -> committed State value (copy)."""
         return dict(self._commits)
 
+    @atomic_authoring
     def value(self, name: Any, expr: Any, *, at: Any = None) -> Any:
         """Materialize one named SSA value or one exact temporal stage.
 
@@ -493,6 +496,9 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                     "value(%r): an equation must read 'rate(U) == <rate expression>'" % (name,)
                 )
             value = value.rhs
+        from pops.time._program.expressions import is_pointwise_expression
+        if is_pointwise_expression(value):
+            return self._pointwise_expression(name, value, at=at)
         if isinstance(value, _Affine):
             return self._linear_combine(name, value, at=at)
         if isinstance(value, ProgramValue):

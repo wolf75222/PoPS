@@ -318,7 +318,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     if model._ws_jacobian is not None or eig_pairs or model._roe_jacobian is not None:
         S.append("#include <pops/numerics/linalg/dense_eig.hpp>")
     if path_conservative:
-        S += ["#include <string_view>", "#include <pops/numerics/moments/normalized_moment_path.hpp>"]
+        S += ["#include <string_view>", "#include <pops/numerics/fv/path_result.hpp>"]
+        if model._path_conservative["kernel"]["kind"] == "normalized_moment_path":
+            S.append("#include <pops/numerics/moments/normalized_moment_path.hpp>")
     S += [
         "namespace %s {" % namespace,
         "struct %s {" % nm,
