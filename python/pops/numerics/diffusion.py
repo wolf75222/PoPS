@@ -24,6 +24,7 @@ class Diffusion(Descriptor):
         self.validate()
 
     def validate(self):
+        import math
         from pops._ir.expr import Const
         from pops.physics.diffusion import DiffusiveFluxLaw
 
@@ -44,7 +45,8 @@ class Diffusion(Descriptor):
         for component, (variable, tensor) in enumerate(zip(law.variables, law.component_coefficients, strict=True)):
             # The physical declaration can express cross-gradients. This two-point
             # monotone realization requires each W_i to depend only on U_i; its
-            # positive coefficients may depend on every component and field.
+            # nonnegative diagonal coefficients may depend on every component and
+            # field. An exactly zero axis carries no flux or stability frequency.
             pending = [variable]
             while pending:
                 node = pending.pop()
@@ -58,8 +60,9 @@ class Diffusion(Descriptor):
                 for column, value in enumerate(row):
                     if axis != column and not (isinstance(value, Const) and value.value == 0):
                         raise ValueError("two-point monotone diffusion requires diagonal spatial tensors; off-diagonal fluxes require a transverse-gradient realization")
-                    if axis == column and isinstance(value, Const) and value.value <= 0:
-                        raise ValueError("diffusion coefficients must be strictly positive")
+                    if axis == column and isinstance(value, Const) and (
+                            not math.isfinite(value.value) or value.value < 0):
+                        raise ValueError("diffusion coefficients must be finite and nonnegative")
         return True
 
     def _transport_frequency_contract(self):

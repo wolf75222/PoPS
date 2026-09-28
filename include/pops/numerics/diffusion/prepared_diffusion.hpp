@@ -49,7 +49,7 @@ struct DiffusiveBoundary {
 };
 
 /// One preparation per Program evaluation/implicit operator, reused for every trial.
-/// The law factory supplies W(U), positive diagonal A(U,fields), and dW/dU at each cell.
+/// The law factory supplies W(U), nonnegative diagonal A(U,fields), and dW/dU at each cell.
 /// Neighbor differences are taken AFTER evaluating W: no discrete chain rule is substituted.
 template <int Dim, int Components = 1, bool Tensor = false>
 class PreparedDiffusion {
@@ -293,7 +293,8 @@ class PreparedDiffusion {
               for (int axis = 0; axis < Dim; ++axis) {
                 a(cell, component * Dim + axis) = values[offset + axis + 1];
                 valid = valid && Kokkos::isfinite(values[offset + axis + 1]) &&
-                        values[offset + axis + 1] > 0;
+                        (Fitted ? values[offset + axis + 1] > 0
+                                : values[offset + axis + 1] >= 0);
               }
             }
           }
@@ -525,29 +526,40 @@ class PreparedDiffusion {
               } else if ((lower || upper) && boundary.kind != DiffusiveBoundaryKind::periodic) {
                 const Index<Dim> center = lower ? right : left;
                 const Real orientation = lower ? Real(-1) : Real(1);
-                if (boundary.kind == DiffusiveBoundaryKind::conormal)
-                  flux = orientation * boundary.trace(geometry, face, axis);
-                else {
-                  Index<Dim> inside = center;
-                  inside[axis] += lower ? 1 : -1;
-                  const Real coefficient = Real(1.5) * a(center, component * Dim + axis) -
-                                           Real(0.5) * a(inside, component * Dim + axis);
-                  flux = orientation * coefficient * Real(2) *
-                         (boundary.trace(geometry, face, axis) - w(center, component)) / h;
-                  conductance = Real(2) * coefficient * w(center, Components + component) / h;
-                  if (!(coefficient > 0))
+                Index<Dim> inside = center;
+                inside[axis] += lower ? 1 : -1;
+                const Real coefficient = Real(1.5) * a(center, component * Dim + axis) -
+                                         Real(0.5) * a(inside, component * Dim + axis);
+                if (boundary.kind == DiffusiveBoundaryKind::conormal) {
+                  const Real trace = boundary.trace(geometry, face, axis);
+                  flux = orientation * trace;
+                  if (!(coefficient >= 0) || (coefficient == 0 && trace != 0))
                     flux = std::numeric_limits<Real>::quiet_NaN();
+                } else {
+                  if (coefficient == 0) {
+                    flux = conductance = Real(0);
+                  } else if (!(coefficient > 0)) {
+                    flux = std::numeric_limits<Real>::quiet_NaN();
+                  } else {
+                    flux = orientation * coefficient * Real(2) *
+                           (boundary.trace(geometry, face, axis) - w(center, component)) / h;
+                    conductance = Real(2) * coefficient * w(center, Components + component) / h;
+                  }
                 }
               } else {
                 const Real coefficient = Real(0.5) * (a(left, component * Dim + axis) +
                                                       a(right, component * Dim + axis));
-                flux = coefficient * (w(right, component) - w(left, component)) / h;
-                const Real difference = q(right, component) - q(left, component);
-                const Real secant = difference != 0
-                                        ? (w(right, component) - w(left, component)) / difference
-                                        : Real(0.5) * (w(right, Components + component) +
-                                                       w(left, Components + component));
-                conductance = coefficient * secant / h;
+                if (coefficient == 0) {
+                  flux = conductance = Real(0);
+                } else {
+                  flux = coefficient * (w(right, component) - w(left, component)) / h;
+                  const Real difference = q(right, component) - q(left, component);
+                  const Real secant = difference != 0
+                                          ? (w(right, component) - w(left, component)) / difference
+                                          : Real(0.5) * (w(right, Components + component) +
+                                                         w(left, Components + component));
+                  conductance = coefficient * secant / h;
+                }
               }
               if constexpr (!Fitted)
                 left_loss = right_loss = conductance;
