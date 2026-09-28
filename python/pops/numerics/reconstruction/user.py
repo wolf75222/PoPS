@@ -39,6 +39,30 @@ class _Sample:
         return self.nodes[offset]
 
 
+def _capture_identities(expression: Expr) -> tuple[tuple[str, str], ...]:
+    """Infer live typed runtime reads without baking their declaration values."""
+    from pops._ir.values import RuntimeParamRef
+    from pops.model import ParamHandle
+
+    found: dict[str, str] = {}
+    pending, seen = [expression], set()
+    while pending:
+        node = pending.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, RuntimeParamRef):
+            handle = node.handle
+            if not isinstance(handle, ParamHandle) or handle.param_kind != "runtime":
+                raise TypeError("user reconstruction runtime read needs model.value(RuntimeParam handle)")
+            qid = handle.qualified_id
+            prior = found.setdefault(node.name, qid)
+            if prior != qid:
+                raise ValueError("user reconstruction has colliding runtime parameter names")
+        pending.extend(_children(node))
+    return tuple(sorted(found.items()))
+
+
 def _body_data(expression: Expr, nodes: dict[int, Var]) -> tuple[Any, tuple[int, ...]]:
     from pops._ir.native_call import NativeCall
     from pops._ir.values import RuntimeParamRef
@@ -53,8 +77,7 @@ def _body_data(expression: Expr, nodes: dict[int, Var]) -> tuple[Any, tuple[int,
             continue
         seen.add(id(node))
         if isinstance(node, RuntimeParamRef):
-            raise NotImplementedError(
-                "user reconstruction runtime parameters need an exact model/block capture route")
+            continue
         if isinstance(node, NativeCall):
             raise NotImplementedError(
                 "user reconstruction native calls need a declared fallible status contract")
@@ -71,9 +94,11 @@ def _body_data(expression: Expr, nodes: dict[int, Var]) -> tuple[Any, tuple[int,
 
 
 def _identity_data(*, body_data: Any, order: int, offsets: tuple[int, ...],
+                   captures: tuple[tuple[str, str], ...],
                    minimum: int, maximum: int) -> dict[str, Any]:
     return {"schema_version": 1, "kind": _SCHEME, "body": body_data,
             "formal_order": order, "sample_offsets": offsets,
+            "runtime_captures": captures,
             "stencil_min_offset": minimum,
             "stencil_max_offset": maximum}
 
@@ -96,8 +121,10 @@ def _retained_offsets(expression: Expr) -> tuple[int, ...]:
         if id(node) in seen:
             continue
         seen.add(id(node))
-        if isinstance(node, (NativeCall, RuntimeParamRef)):
+        if isinstance(node, NativeCall):
             raise ValueError("user reconstruction body has an unsupported native capture")
+        if isinstance(node, RuntimeParamRef):
+            continue
         if isinstance(node, Var):
             match = re.fullmatch(r"pops_recon_sample_([mp])(\d+)", node.name)
             if node.kind != "reconstruction_sample" or match is None:
@@ -118,9 +145,9 @@ def User(body: Any, *, formal_order: int, name: str = "user") -> BrickDescriptor
 
     The formula is applied independently to each component and each oriented face.
     ``formal_order`` is an authored assertion, not an order proof.  Captured Python
-    scalars are evaluated now and become exact literals in the frozen expression;
-    runtime parameters and cross-component/characteristic recipes require a
-    separate typed capture protocol and are rejected here.
+    scalars are evaluated now and become exact literals in the frozen expression.
+    Typed RuntimeParam reads stay live through native block binding. The scalar
+    body is applied independently to each state component.
     """
     if not callable(body):
         raise TypeError("reconstruction.User(body=) requires a callable symbolic body")
@@ -137,12 +164,14 @@ def User(body: Any, *, formal_order: int, name: str = "user") -> BrickDescriptor
             raise TypeError("reconstruction.User is scalar per component; vector bodies are unsupported")
         expression = Const(expression)
     body_data, offsets = _body_data(expression, sample.nodes)
+    captures = _capture_identities(expression)
     minimum = min(offsets, default=0)
     maximum = max(offsets, default=0)
     ghost_depth = max(1, 1 - minimum, maximum + 1)
     if ghost_depth > _NATIVE_INT_MAX or maximum - minimum + 1 > _NATIVE_INT_MAX:
         raise ValueError("user reconstruction stencil cannot fit native int32 ghost/count metadata")
     identity_data = _identity_data(body_data=body_data, order=formal_order, offsets=offsets,
+                                   captures=captures,
                                    minimum=minimum, maximum=maximum)
     identity = _source_identity(identity_data)
     return BrickDescriptor(
@@ -150,7 +179,8 @@ def User(body: Any, *, formal_order: int, name: str = "user") -> BrickDescriptor
         scheme=_SCHEME,
         options={"formal_order": formal_order, "ghost_depth": ghost_depth,
                  "stencil_min_offset": minimum, "stencil_max_offset": maximum,
-                 "sample_offsets": offsets, "source_identity": identity, "body": body_data},
+                 "sample_offsets": offsets, "runtime_captures": captures,
+                 "source_identity": identity, "body": body_data},
         requirements={"ghost_depth": ghost_depth, "source_compiled": True},
         capabilities={"componentwise_scalar": True, "oriented_sample": True},
         expression=expression,
@@ -165,7 +195,8 @@ def authenticated_user_reconstruction(value: Any) -> BrickDescriptor:
         raise TypeError("user reconstruction requires an exact source-authored descriptor")
     options = value.options
     if set(options) != {"formal_order", "ghost_depth", "stencil_min_offset",
-                        "stencil_max_offset", "sample_offsets", "source_identity", "body"}:
+                        "stencil_max_offset", "sample_offsets", "runtime_captures",
+                        "source_identity", "body"}:
         raise ValueError("user reconstruction source contract is incomplete")
     order = options["formal_order"]
     minimum = options["stencil_min_offset"]
@@ -195,8 +226,11 @@ def authenticated_user_reconstruction(value: Any) -> BrickDescriptor:
         raise ValueError("user reconstruction body changed after authoring")
     if _retained_offsets(value.expression) != tuple(offsets):
         raise ValueError("user reconstruction stencil differs from its body")
+    captures = _capture_identities(value.expression)
+    if tuple(tuple(item) for item in options["runtime_captures"]) != captures:
+        raise ValueError("user reconstruction runtime captures differ from its body")
     expected = _source_identity(_identity_data(
-        body_data=observed_body, order=order, offsets=tuple(offsets),
+        body_data=observed_body, order=order, offsets=tuple(offsets), captures=captures,
         minimum=minimum, maximum=maximum))
     if expected != options["source_identity"]:
         raise ValueError("user reconstruction source identity changed after authoring")

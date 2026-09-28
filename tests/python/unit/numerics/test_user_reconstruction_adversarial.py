@@ -150,14 +150,20 @@ def test_public_case_freeze_and_resolve_preserve_source_stencil():
     assert case.snapshot.hash == before
 
 
-def test_runtime_parameter_is_refused_until_owner_capture_routing_exists():
+def test_runtime_parameter_is_inferred_from_the_live_body_without_baking_its_value():
     import pops
     from pops.params import RuntimeParam
 
     model = pops.Model("coefficient_owner")
     coefficient = model.value(model.param(RuntimeParam("coefficient", default=.25)))
-    with pytest.raises(NotImplementedError, match="exact model/block capture route"):
-        reconstruction.User(lambda sample: coefficient * sample(0), formal_order=1)
+    recipe = reconstruction.User(lambda sample: coefficient * sample(0), formal_order=1)
+    from pops.numerics.reconstruction.user import authenticated_user_reconstruction
+
+    assert authenticated_user_reconstruction(recipe) is recipe
+    assert recipe.options["runtime_captures"] == (("coefficient", coefficient.handle.qualified_id),)
+    changed = model.value(model.params["coefficient"])
+    assert reconstruction.User(lambda sample: changed * sample(0), formal_order=1).options[
+        "source_identity"] == recipe.options["source_identity"]
 
 
 @pytest.mark.parametrize("mutation", ("expression", "source_identity", "ghost_depth"))

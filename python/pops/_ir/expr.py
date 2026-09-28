@@ -34,11 +34,18 @@ class Expr(ImmutableSymbolic):
         collect_expr_references(self, references, set())
         return tuple(references)
 
-    def __add__(self, o: Any) -> Any: return Add(self, _wrap(o))
+    def __add__(self, o: Any) -> Any:
+        from .vector_expr import VectorExpr
+        return o.__radd__(self) if isinstance(o, VectorExpr) else Add(self, _wrap(o))
     def __radd__(self, o: Any) -> Any: return Add(_wrap(o), self)
-    def __sub__(self, o: Any) -> Any: return Sub(self, _wrap(o))
+    def __sub__(self, o: Any) -> Any:
+        from .vector_expr import VectorExpr
+        return o.__rsub__(self) if isinstance(o, VectorExpr) else Sub(self, _wrap(o))
     def __rsub__(self, o: Any) -> Any: return Sub(_wrap(o), self)
     def __mul__(self, o: Any) -> Any:
+        from .vector_expr import VectorExpr
+        if isinstance(o, VectorExpr):
+            return o.__rmul__(self)
         # ``kappa_expr * unknown`` is an elliptic reaction term, not an ordinary pointwise
         # multiplication.  Keeping this conversion here makes the natural screened-Poisson
         # spelling work for an explicit ``model.value(RuntimeParam(...))`` while Handles retain
@@ -48,7 +55,9 @@ class Expr(ImmutableSymbolic):
             return Reaction(o, self)
         return Mul(self, _wrap(o))
     def __rmul__(self, o: Any) -> Any: return Mul(_wrap(o), self)
-    def __truediv__(self, o: Any) -> Any: return Div(self, _wrap(o))
+    def __truediv__(self, o: Any) -> Any:
+        from .vector_expr import VectorExpr
+        return o.__rtruediv__(self) if isinstance(o, VectorExpr) else Div(self, _wrap(o))
     def __rtruediv__(self, o: Any) -> Any: return Div(_wrap(o), self)
     def __neg__(self) -> Any: return Neg(self)
     def __pos__(self) -> Any: return self  # +expr = identity (the CoupledSource API writes +k*ne*ng)

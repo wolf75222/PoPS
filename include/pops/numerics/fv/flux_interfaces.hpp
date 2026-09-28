@@ -143,6 +143,8 @@ enum class RiemannFailureCause : std::uint32_t {
   kRoeInvalidStability = UINT32_C(0x53544204),
   kRoeNonFiniteDissipation = UINT32_C(0x524f4501),
   kRoeNonFiniteFlux = UINT32_C(0x524f4502),
+  kUserInvalidStability = UINT32_C(0x53544205),
+  kUserNonFiniteFlux = UINT32_C(0x55534501),
   kNonconservativePathRequired = UINT32_C(0x50415401),
 };
 

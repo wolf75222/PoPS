@@ -29,6 +29,29 @@ def prepare_user_reconstruction_carrier(emitter: Any, numerics: Any) -> Any:
     if len(identities) != 1:
         raise ValueError("one native model package cannot install different user reconstructions")
     impl = getattr(emitter, "_m", emitter)
+    registry = getattr(emitter, "_param_registry", None)
+    from pops._ir.values import RuntimeParamRef
+    from pops._ir.visitors import _children
+    for descriptor in selected:
+        pending, seen = [descriptor.expression], set()
+        while pending:
+            node = pending.pop()
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            if isinstance(node, RuntimeParamRef):
+                handle = node.handle.declaration_ref if node.handle.is_instance else node.handle
+                if registry is None:
+                    raise ValueError("user reconstruction runtime read has no model parameter authority")
+                try:
+                    registered = registry.handle(handle)
+                except (KeyError, ValueError) as exc:
+                    raise ValueError(
+                        "user reconstruction runtime parameter belongs to another model: %s"
+                        % node.name) from exc
+                if registered.param_kind != "runtime":
+                    raise ValueError("user reconstruction capture is not a RuntimeParam")
+            pending.extend(_children(node))
     prior = getattr(impl, "_user_reconstruction", None)
     if prior is not None and prior.options["source_identity"] not in identities:
         raise ValueError("native model reconstruction body changed across resolved rates")
@@ -47,6 +70,8 @@ def emit_user_reconstruction_policy(emitter: Any) -> str:
         return ""
     descriptor = authenticated_user_reconstruction(descriptor)
     options = descriptor.options
+    if options["runtime_captures"]:
+        impl.assign_runtime_indices()
     sample_bindings = {}
     for offset in options["sample_offsets"]:
         spelling = "m%d" % -offset if offset < 0 else "p%d" % offset
@@ -60,6 +85,7 @@ def emit_user_reconstruction_policy(emitter: Any) -> str:
     lines = [
         "namespace pops_generated {",
         "struct UserReconstructionPolicy {",
+        *(["  pops::RuntimeParams params{};"] if options["runtime_captures"] else []),
         "  static constexpr int formal_order = %d;" % options["formal_order"],
         "  static constexpr int n_ghost = %d;" % options["ghost_depth"],
         "  static constexpr int stencil_min_offset = %d;" % options["stencil_min_offset"],

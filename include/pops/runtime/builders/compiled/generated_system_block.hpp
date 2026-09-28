@@ -1409,6 +1409,32 @@ PreparedSystemBlock<Dim> select_reconstruction(Request request) {
   throw std::logic_error("generated limiter route escaped its exhaustive selector");
 }
 
+template <int Dim, nd::ReconstructionVariables Variables, class Request, class Numerical>
+PreparedSystemBlock<Dim> select_reconstruction_with_face(Request request, Numerical numerical) {
+  using Model = std::remove_cvref_t<decltype(request.model)>;
+  switch (parse_limiter_route(request.routes.limiter, "generated System face block")) {
+    case LimiterRouteId::kNone:
+      return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(
+          std::move(request), NoSlope{}, numerical);
+    case LimiterRouteId::kMinmod:
+      return materialize_block<Dim, Model, Minmod, Numerical, Variables>(
+          std::move(request), Minmod{}, numerical);
+    case LimiterRouteId::kVanLeer:
+      return materialize_block<Dim, Model, VanLeer, Numerical, Variables>(
+          std::move(request), VanLeer{}, numerical);
+    case LimiterRouteId::kWeno5:
+      return materialize_block<Dim, Model, Weno5, Numerical, Variables>(
+          std::move(request), configured_reconstruction<Weno5>(), numerical);
+    case LimiterRouteId::kMc:
+      return materialize_block<Dim, Model, MC, Numerical, Variables>(
+          std::move(request), MC{}, numerical);
+    case LimiterRouteId::kSuperbee:
+      return materialize_block<Dim, Model, Superbee, Numerical, Variables>(
+          std::move(request), Superbee{}, numerical);
+  }
+  throw std::logic_error("generated face limiter route escaped its exhaustive selector");
+}
+
 }  // namespace generated_system_detail
 
 /// Materialize the exact-ranked elliptic RHS closure owned by one bound generated model. Native
@@ -1478,6 +1504,61 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
             std::move(request), reconstruction);
     }
     throw std::logic_error("generated reconstruction route escaped its exhaustive selector");
+  }
+}
+
+/// A source-authored face body is instantiated only by its owning package and
+/// still flows through the ordinary shared conservative face operator.
+template <class Request, class Numerical>
+  requires requires { Numerical::source_identity; } && (!ReconstructionPolicy<Numerical>)
+auto prepare_generated_system_block(Request request, Numerical numerical)
+    -> PreparedSystemBlock<Request::dimension> {
+  constexpr int Dim = Request::dimension;
+  using Model = std::remove_cvref_t<decltype(request.model)>;
+  if (request.routes.riemann != std::string("source_face:") + Numerical::source_identity)
+    throw std::invalid_argument("generated System face source identity differs from package");
+  if constexpr (path_conservative_model<Model>) {
+    throw std::invalid_argument("source face needs a composed path face policy");
+  } else {
+    switch (parse_recon_route(request.routes.reconstruction, "generated System face block")) {
+      case ReconRouteId::kConservative:
+        return generated_system_detail::select_reconstruction_with_face<
+            Dim, nd::ReconstructionVariables::Conservative>(std::move(request), numerical);
+      case ReconRouteId::kPrimitive:
+        return generated_system_detail::select_reconstruction_with_face<
+            Dim, nd::ReconstructionVariables::Primitive>(std::move(request), numerical);
+    }
+    throw std::logic_error("generated face reconstruction route escaped its exhaustive selector");
+  }
+}
+
+template <class Request, class Reconstruction, class Numerical>
+  requires ReconstructionPolicy<Reconstruction> && requires { Numerical::source_identity; }
+auto prepare_generated_system_block(Request request, Reconstruction reconstruction,
+                                    Numerical numerical)
+    -> PreparedSystemBlock<Request::dimension> {
+  constexpr int Dim = Request::dimension;
+  using Model = std::remove_cvref_t<decltype(request.model)>;
+  static_assert(StencilReconstruction<Reconstruction>);
+  static_assert(stencil_envelope_fits_storage<Reconstruction>);
+  if (request.routes.limiter !=
+      std::string("source_stencil:") + Reconstruction::source_identity ||
+      request.routes.riemann != std::string("source_face:") + Numerical::source_identity)
+    throw std::invalid_argument("generated System numerical source identity differs from package");
+  if constexpr (path_conservative_model<Model>) {
+    throw std::invalid_argument("source face/reconstruction need a composed path face policy");
+  } else {
+    switch (parse_recon_route(request.routes.reconstruction, "generated System source block")) {
+      case ReconRouteId::kConservative:
+        return generated_system_detail::materialize_block<
+            Dim, Model, Reconstruction, Numerical, nd::ReconstructionVariables::Conservative>(
+            std::move(request), reconstruction, numerical);
+      case ReconRouteId::kPrimitive:
+        return generated_system_detail::materialize_block<
+            Dim, Model, Reconstruction, Numerical, nd::ReconstructionVariables::Primitive>(
+            std::move(request), reconstruction, numerical);
+    }
+    throw std::logic_error("generated source reconstruction route escaped its exhaustive selector");
   }
 }
 

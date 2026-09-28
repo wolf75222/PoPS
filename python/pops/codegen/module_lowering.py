@@ -610,6 +610,8 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
             from pops.codegen.user_reconstruction_lowering import prepare_user_reconstruction_carrier
 
             prepare_user_reconstruction_carrier(emit_model, numerics)
+            from pops.codegen.user_riemann_lowering import prepare_user_face_carrier
+            prepare_user_face_carrier(emit_model, numerics)
             from pops.codegen.principal_lowering import prepare_principal_carrier
             prepare_principal_carrier(emit_model, lowering.source_module, numerics)
             emit_model.check()
@@ -644,6 +646,8 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
         prepare_path_carrier(lowering.emit_model, lowering.source_module, resolved_operations, numerics)
         from pops.codegen.user_reconstruction_lowering import prepare_user_reconstruction_carrier
         prepare_user_reconstruction_carrier(lowering.emit_model, numerics)
+        from pops.codegen.user_riemann_lowering import prepare_user_face_carrier
+        prepare_user_face_carrier(lowering.emit_model, numerics)
         lowering.bind_component_provider_packs(packs)
         lowering.emit_model.check()
         return lowering.emit_model, lowering.source_module

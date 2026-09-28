@@ -327,13 +327,20 @@ class Spatial:
         lim_tok = _lower_reconstruction_selector(limiter)
         self.source_reconstruction = (
             limiter if getattr(limiter, "scheme", None) == "source_stencil" else None)
-        flux_tok = _lower_selector(
-            flux,
-            param="flux",
-            schemes=_FLUX_SCHEMES,
-            suggestion=_FLUX_SUGGEST,
-            categories=("riemann",),
-        )
+        self.source_riemann = None
+        if getattr(flux, "scheme", None) == "source_face":
+            from pops.numerics.riemann.user import authenticated_user_face
+
+            self.source_riemann = authenticated_user_face(flux)
+            flux_tok = "source_face:" + self.source_riemann.options["source_identity"]
+        else:
+            flux_tok = _lower_selector(
+                flux,
+                param="flux",
+                schemes=_FLUX_SCHEMES,
+                suggestion=_FLUX_SUGGEST,
+                categories=("riemann",),
+            )
         recon_tok = _lower_selector(
             recon,
             param="recon",
@@ -491,6 +498,10 @@ class Spatial:
             if isinstance(slot_route, str) and slot_route.startswith("source_stencil:"):
                 return {"family": "reconstruction", "id": slot_route,
                         "source_compiled": True}
+            if isinstance(slot_route, str) and slot_route.startswith("source_face:"):
+                return {"family": "riemann", "id": slot_route,
+                        "source_compiled": True,
+                        "requirements": list(self.riemann_capability_contract.required_capabilities)}
             return {
                 "family": "riemann",
                 "id": "riemann.user",

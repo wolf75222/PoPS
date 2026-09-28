@@ -114,6 +114,12 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
         x, y = 1, v.attrs["order"] + 1
         out.extend((matrix[x][x], matrix[x][y], matrix[y][x], matrix[y][y]))
     elif v.op == "rhs":
+        authored_reconstruction = getattr(impl, "_user_reconstruction", None)
+        if authored_reconstruction is not None:
+            out.append(authored_reconstruction.expression)
+        authored_face = getattr(impl, "_user_face", None)
+        if authored_face is not None:
+            out.extend(authored_face.expression)
         for s in (v.attrs.get("sources") or []):
             if s != "default":
                 out += list(src.get(s, []))

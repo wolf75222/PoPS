@@ -217,6 +217,11 @@ def model_hash(model: Any, params: Any = None) -> str:
     reconstruction_identity = user_reconstruction_source_identity(m)
     if reconstruction_identity is not None:
         parts.append("user_reconstruction=" + reconstruction_identity)
+    from pops.codegen.user_riemann_lowering import user_face_source_identity
+
+    face_identity = user_face_source_identity(m)
+    if face_identity is not None:
+        parts.append("user_face=" + face_identity)
     from pops.codegen.native_build import model_native_roots
     from pops._ir.native_call import native_functions
     native_roots = model_native_roots(m)
@@ -915,6 +920,17 @@ def emit_cpp_native_loader(
 
     user_reconstruction_identity = user_reconstruction_source_identity(m)
     user_reconstruction_source = emit_user_reconstruction_policy(m)
+    user_reconstruction_descriptor = getattr(getattr(m, "_m", m), "_user_reconstruction", None)
+    user_reconstruction_captures = bool(
+        user_reconstruction_descriptor is not None and
+        user_reconstruction_descriptor.options["runtime_captures"])
+    from pops.codegen.user_riemann_lowering import emit_user_face_policy, user_face_source_identity
+
+    user_face_identity = user_face_source_identity(m)
+    user_face_source = emit_user_face_policy(m)
+    user_face_descriptor = getattr(getattr(m, "_m", m), "_user_face", None)
+    user_face_captures = bool(user_face_descriptor is not None and
+                              user_face_descriptor.options["runtime_captures"])
     model_identity = str(model_identity if model_identity is not None else model_hash(m))
     if len(model_identity) != 64 or any(ch not in "0123456789abcdef" for ch in model_identity):
         raise ValueError("emit_cpp_native_loader requires one lowercase 64-hex model identity")
@@ -1200,6 +1216,16 @@ def emit_cpp_native_loader(
             "  auto* s = reinterpret_cast<NativeAmrSystem*>(sys);\n"
             "  auto model = pops::compiled_model::bind_runtime_params(\n"
             "      pops_generated::ProdModel{}, params, nparams);\n"
+            + ("  auto user_reconstruction = pops_generated::UserReconstructionPolicy{\n"
+               "      pops::compiled_model::declaration_runtime_params(model)};\n"
+               if user_reconstruction_captures else
+               "  auto user_reconstruction = pops_generated::UserReconstructionPolicy{};\n"
+               if user_reconstruction_identity is not None else "")
+            + ("  auto user_face = pops_generated::UserFacePolicy{\n"
+               "      pops::compiled_model::declaration_runtime_params(model)};\n"
+               if user_face_captures else
+               "  auto user_face = pops_generated::UserFacePolicy{};\n"
+               if user_face_identity is not None else "")
             + amr_elliptic_prepare_lines
             + "  pops::PreparedNativeAmrPackage<pops::kNativeDimension> package;\n"
             "  const pops::NewtonOptions newton = pops::newton_options_from_abi(\n"
@@ -1209,8 +1235,8 @@ def emit_cpp_native_loader(
             "      stride, pos_floor, weno_epsilon, wave_speed_cache, %s, newton,\n"
             "      newton_diagnostics != 0%s);\n"
             % (json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model"),
-               ", pops_generated::UserReconstructionPolicy{}"
-               if user_reconstruction_identity is not None else "")
+               (", user_reconstruction" if user_reconstruction_identity is not None else "") +
+               (", user_face" if user_face_identity is not None else ""))
             + amr_elliptic_package_lines
             + "  s->install_prepared_native_amr_package(std::move(package));\n"
             "}\n"
@@ -1230,9 +1256,19 @@ def emit_cpp_native_loader(
             '              "generated model rank differs from the selected native artifact");\n'
             "inline pops::PreparedSystemBlock<pops::kNativeDimension> prepare_exact_system_block(\n"
             "    pops::CompiledSystemBlockPreparation<pops::kNativeDimension, ProdModel> request) {\n"
-            "  return pops::prepare_generated_system_block(std::move(request)%s);\n"
-            % (", UserReconstructionPolicy{}"
+            + ("  auto user_reconstruction = UserReconstructionPolicy{\n"
+               "      pops::compiled_model::declaration_runtime_params(request.model)};\n"
+               if user_reconstruction_captures else
+               "  auto user_reconstruction = UserReconstructionPolicy{};\n"
                if user_reconstruction_identity is not None else "")
+            + ("  auto user_face = UserFacePolicy{\n"
+               "      pops::compiled_model::declaration_runtime_params(request.model)};\n"
+               if user_face_captures else
+               "  auto user_face = UserFacePolicy{};\n"
+               if user_face_identity is not None else "")
+            + "  return pops::prepare_generated_system_block(std::move(request)%s);\n"
+            % ((", user_reconstruction" if user_reconstruction_identity is not None else "") +
+               (", user_face" if user_face_identity is not None else ""))
             + "}\n"
             "}  // namespace pops_generated\n"
         )
@@ -1246,6 +1282,7 @@ def emit_cpp_native_loader(
         head
         + bricks
         + user_reconstruction_source
+        + user_face_source
         + "\nnamespace pops_generated { using ProdModel = %s; }\n" % composite
         + package_preparer
         + key
