@@ -90,6 +90,19 @@ def _collective_call(world, label, operation):
     return result
 
 
+def _prepared_case(cells: int):
+    step = T_END / cells
+    fraction = step * 2 * VISCOSITY * cells**2
+    if fraction > CRITERIA["explicit_frequency_fraction_max"]:
+        raise AssertionError("M05 authored Forward Euler frequency bound is inadmissible")
+    initial = np.ascontiguousarray(initial_means(cells)[None, :])
+    if np.max(np.abs(initial[0] - integrated_initial_means(cells))) > 2e-14:
+        raise AssertionError("M05 requires true cell means, not center samples")
+    case, layout, subject = build_case(cells)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    return step, fraction, initial, subject, resolved
+
+
 def _ledger_metrics(rows: list[dict], before: np.ndarray, after: np.ndarray,
                     step: float) -> dict[str, float | int]:
     """Reconstruct the last accepted cell update from genuine face records."""
@@ -187,39 +200,61 @@ def run_and_archive(destination: Path) -> list[dict]:
     from pops._native_selector import select_native_dimension
 
     native = select_native_dimension(1)
-    package = Path(pops.__file__).resolve()
-    if "PYTHONPATH" in os.environ or not package.is_relative_to(Path(sys.prefix).resolve()):
-        raise RuntimeError("M05 reception requires installed PoPS with PYTHONPATH unset")
-    pops.set_threads(int(os.environ.get("POPS_THREADS", "1")))
-    destination = Path(destination)
-    records = []
-    for cells in RESOLUTIONS:
-        step = T_END / cells
-        fraction = step * 2 * VISCOSITY * cells**2
-        if fraction > CRITERIA["explicit_frequency_fraction_max"]:
-            raise AssertionError("M05 authored Forward Euler frequency bound is inadmissible")
-        initial = np.ascontiguousarray(initial_means(cells)[None, :])
-        if np.max(np.abs(initial[0] - integrated_initial_means(cells))) > 2e-14:
-            raise AssertionError("M05 requires true cell means, not center samples")
-        case, layout, subject = build_case(cells)
-        resolved = pops.resolve(pops.validate(case), layout=layout)
-        from pops.codegen._native_mpi import native_mpi_communicator
-        if native_mpi_communicator(native) == "MPI_COMM_WORLD":
+    bootstrap_world = native.mpi_world()
+
+    def authenticate_installation():
+        package = Path(pops.__file__).resolve()
+        if "PYTHONPATH" in os.environ or not package.is_relative_to(Path(sys.prefix).resolve()):
+            raise RuntimeError("M05 reception requires installed PoPS with PYTHONPATH unset")
+        pops.set_threads(int(os.environ.get("POPS_THREADS", "1")))
+        return Path(destination)
+
+    destination = _collective_call(
+        bootstrap_world, "installed identity and output preflight", authenticate_installation)
+    from pops.codegen._native_mpi import native_mpi_communicator
+    mpi_route = _collective_call(
+        bootstrap_world, "MPI route", lambda: native_mpi_communicator(native))
+    routes = bootstrap_world.allgather_bytes(mpi_route.encode())
+    if len(set(routes)) != 1:
+        raise RuntimeError("M05 MPI route differs across ranks")
+    compile_once = None
+    if mpi_route == "MPI_COMM_WORLD":
+        def load_compile_helper():
             repository = str(Path(__file__).resolve().parents[3])
             sys.path.insert(0, repository)
             try:
                 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
             finally:
                 sys.path.remove(repository)
-            artifact = compile_resolved_plan_once(
-                native.mpi_world(), resolved, route="M05 periodic shear",
+            return compile_resolved_plan_once
+
+        compile_once = _collective_call(
+            bootstrap_world, "authenticated MPI compiler helper", load_compile_helper)
+    records = []
+    for cells in RESOLUTIONS:
+        step, fraction, initial, subject, resolved = _collective_call(
+            bootstrap_world, f"N={cells} numpy/authoring/resolve preflight",
+            lambda cells=cells: _prepared_case(cells))
+        if compile_once is not None:
+            artifact = compile_once(
+                bootstrap_world, resolved, route="M05 periodic shear",
                 compile_artifact=pops.compile)
         else:
             artifact = pops.compile(resolved)
-        if artifact.resolved_dimension != 1:
-            raise RuntimeError("M05 requires a genuine one-dimensional artifact")
-        execution = pops.ExecutionContext.mpi_world(artifact)
-        world = execution.communicator.handle
+        def prepare_execution(artifact=artifact):
+            if artifact.resolved_dimension != 1:
+                raise RuntimeError("M05 requires a genuine one-dimensional artifact")
+            return pops.ExecutionContext.mpi_world(artifact)
+
+        execution = _collective_call(
+            bootstrap_world, "Dim1 artifact and execution context", prepare_execution)
+        world = _collective_call(
+            bootstrap_world, "execution communicator",
+            lambda execution=execution: execution.communicator.handle)
+        mismatch = world.rank != bootstrap_world.rank or world.size != bootstrap_world.size
+        if any(row == b"different" for row in bootstrap_world.allgather_bytes(
+                b"different" if mismatch else b"same")):
+            raise RuntimeError("M05 bound execution world differs from its preflight world")
         simulation = _collective_call(world, "bind", lambda artifact=artifact,
                 initial=initial, subject=subject, execution=execution: pops.bind(
                     artifact, initial_values={subject: initial},

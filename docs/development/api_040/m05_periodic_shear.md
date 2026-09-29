@@ -50,6 +50,12 @@ ranks participate in bind/run/gather/status; `BindArray` is supplied through
 legacy `initial_state` authority). Only rank zero writes NPZ and
 receipt, then broadcasts the verdict. Package prefix, native file hash,
 artifact identity/ABI, execution context and each NPZ hash enter the receipt.
+All Python/NumPy authoring, oracle and installed-package preflight decisions
+are agreed by the bootstrap world before compilation or bind; rank-local
+errors cannot let a peer enter the next native collective alone. The runtime
+test must be run through `docs/development/api_040/run_installed_checks.py`
+with its explicit `--test` path and `env -u PYTHONPATH`, after the matching
+Dim1 wheel is installed. Source-only pytest results do not prove bind or run.
 
 Criteria were set before native execution: initial means 2e−14; state versus
 the independent Forward Euler oracle 5e−12; state versus continuous cell
