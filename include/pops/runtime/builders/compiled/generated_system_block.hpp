@@ -1256,7 +1256,7 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
         [model, spatial, geometry, provider_storage_owner, provider_plan_owner,
          provider_storage, provider_plan](
             const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
-            MultiFab<Dim>& residual, Real courant,
+            MultiFab<Dim>& residual,
             const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
           constexpr int flux_count = flux_provider_count<Model>;
@@ -1350,11 +1350,12 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
               },
               "generated Uniform path face/residual materialization failed collectively");
           const Real frequency = all_reduce_max(local_frequency, lane);
-          const double scaled = point.dt * static_cast<double>(frequency);
-          if (!std::isfinite(frequency) || !std::isfinite(scaled) ||
-              !std::isfinite(courant) || !(courant > Real(0)) || scaled > courant)
+          if (!std::isfinite(frequency) || frequency < Real(0))
             throw std::runtime_error(
-                "Uniform path RHS refused publication: actual incident-face CFL exceeds Courant");
+                "Uniform path RHS has an invalid incident-face stability frequency");
+          // A residual has no time-step weight. Its explicit consumer supplies
+          // the Shu--Osher state/rate weights and checks this actual face bound.
+          return frequency;
         };
   }
   return result;

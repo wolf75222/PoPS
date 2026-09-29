@@ -111,6 +111,41 @@ def test_convex_stage_budgets_do_not_accumulate_predictor_ancestry():
     assert partition_stability_groups(predictor)[0][1] == 1
 
 
+def test_butcher_ssprk2_recovers_the_retained_stage_without_changing_the_program():
+    initial = _state(0)
+    first = _rate(10, "rhs", initial)
+    predictor = _combine(20, (initial, {0: 1}), (first, {1: 1}))
+    second = _rate(30, "rhs", predictor)
+    final = _combine(40, (initial, {0: 1}), (first, {1: Fraction(1, 2)}),
+                     (second, {1: Fraction(1, 2)}))
+    original_inputs, original_coefficients = final.inputs, final.attrs["coeffs"]
+    assert partition_stability_groups(final, include_transport=True) == (
+        (predictor, Fraction(1, 2), ((second, Fraction(1, 2)),)),)
+    assert final.inputs is original_inputs and final.attrs["coeffs"] is original_coefficients
+
+
+def test_acceptance_guard_keeps_explicit_budget_and_is_only_a_value_alias():
+    initial = _state(0)
+    condition = SimpleNamespace(id=2, op="constant", vtype="bool", inputs=(), attrs={})
+
+    def guard(identifier, value):
+        return SimpleNamespace(id=identifier, op="acceptance_guard", vtype="state",
+                               inputs=(value, condition), attrs={}, block=value.block,
+                               point=value.point)
+
+    first = _rate(10, "rhs", guard(3, initial))
+    predictor = _combine(20, (initial, {0: 1}), (first, {1: 1}))
+    second = _rate(30, "rhs", guard(21, predictor))
+    final = _combine(40, (initial, {0: 1}), (first, {1: Fraction(1, 2)}),
+                     (second, {1: Fraction(1, 2)}))
+    assert explicit_update_consumers(SimpleNamespace(_commits={"state": guard(41, final)})) == \
+        frozenset({20, 40})
+    assert partition_stability_groups(predictor, include_transport=True) == (
+        (initial, Fraction(1), ((first, Fraction(1)),)),)
+    assert partition_stability_groups(final, include_transport=True) == (
+        (predictor, Fraction(1, 2), ((second, Fraction(1, 2)),)),)
+
+
 def test_same_timestamp_does_not_merge_independent_state_budgets():
     first, second = _state(0), _state(1)
     a, b = _pair(first)

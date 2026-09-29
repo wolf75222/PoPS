@@ -1007,7 +1007,17 @@ class System {
       const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
       const ExecutionLane& lane,
       const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
-  /// The active authored step_cfl request; zero means no path Courant authority.
+  /// Capture the actual incident-face frequency for a separately certified
+  /// explicit consumer. A null result retains the immediate full-step check.
+  /// The result is assigned only after successful residual publication.
+  POPS_EXPORT void block_path_rhs_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, Real courant, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+      const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport,
+      Real* evaluated_frequency);
+  /// The active authored step_cfl request; zero denotes a fixed/external time step.
   POPS_EXPORT double active_program_step_courant() const;
   /// R <- -div F(U) for block @p b -- the SAME flux divergence as block_rhs_into but WITHOUT the
   /// model's default/composite source (Poisson frozen, ghosts filled identically). The block's

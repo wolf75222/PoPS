@@ -36,7 +36,9 @@ def _resolved(strategy, *, hot_stage=False):
         stage = StagePoint("hot", {"main": TimePoint(program.clock, 0)})
         hot = program.value("hot_input", 100. * temporal.n, at=stage)
         rhs = program.value("path_rhs", rate(hot), at=stage)
-        result = program.value("next", temporal.n + program.dt * rhs, at=temporal.next.point)
+        # The hot value is the exact state of this explicit Euler consumer.
+        # Using q.n with R(hot) has no convex stage certificate in the first place.
+        result = program.value("next", hot + program.dt * rhs, at=temporal.next.point)
         program.commit(temporal.next, result)
     else:
         program = ForwardEuler(block[state], rate=rate)
@@ -94,19 +96,27 @@ def test_uniform_path_adaptive_cfl_without_max_dt_matches_two_step_oracle(
 def test_uniform_path_refusal_preserves_accepted_state_and_clock(
         isolated_native_cache, native_cxx, kokkos_root, hot_stage):
     del isolated_native_cache, native_cxx, kokkos_root
-    dt = 1.e-4
+    dt = 1.e-4 if hot_stage else .1
     strategy = AdaptiveCFL(cfl=.25, max_dt=dt) if hot_stage else FixedDt(dt)
     runtime, initial = _bind(strategy, hot_stage=hot_stage)
-    message = ("actual incident-face CFL exceeds Courant" if hot_stage
-               else "active authored step_cfl Courant")
     # A serial invalid_argument maps to ValueError; collective refusals and the
     # numerical stage guard map to RuntimeError. Both must retain the diagnostic.
-    with pytest.raises((ValueError, RuntimeError), match=message):
+    with pytest.raises((ValueError, RuntimeError), match="user_face_numerical_stability"):
         pops.run(runtime, t_end=dt, max_steps=1)
     np.testing.assert_array_equal(
         np.asarray(runtime.state_global("transport")).reshape(initial.shape), initial)
     assert runtime.time() == 0.
     assert runtime.macro_step() == 0
+
+
+def test_uniform_path_fixed_dt_uses_unit_numerical_budget(
+        isolated_native_cache, native_cxx, kokkos_root):
+    del isolated_native_cache, native_cxx, kokkos_root
+    dt = 1.e-4
+    runtime, initial = _bind(FixedDt(dt))
+    assert pops.run(runtime, t_end=dt, max_steps=1).accepted_steps == 1
+    actual = np.asarray(runtime.state_global("transport")).reshape(initial.shape)
+    np.testing.assert_allclose(actual, _step(initial, dt), rtol=0., atol=6.e-14)
 
 
 def test_uniform_path_checkpoint_restart_does_not_request_an_absent_poisson_field(

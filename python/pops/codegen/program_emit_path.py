@@ -25,10 +25,17 @@ def emit_path_rhs(value, var, lines, model, provider_plans, block, target):
     lines += prepare_default_rhs_providers(model, value, block, var[state.id], provider_plans,
                                           target=target, flux=True, source=False)
     family = json.dumps(_rhs_flux_temporal_family(value))
+    frequency = "path_frequency_%d" % value.id
     if target == "amr_system":
         trace = emit_rhs_input_trace(value, block, var[state.id], lines, target, force=True)
-        lines.append("ctx.stage_path_rhs(%d, %s, %s, %d, %s, %s, ctx.path_rhs_courant());" %
-                     (block, var[state.id], var[value.id], value.id, family, trace))
+        lines.append("const auto %s = ctx.stage_path_rhs(%d, %s, %s, %d, %s, %s, "
+                     "ctx.path_rhs_courant(), true);" %
+                     (frequency, block, var[state.id], var[value.id], value.id, family, trace))
+        token = "(*%s)" % frequency
     else:
-        lines.append("ctx.path_rhs_into(%d, %s, %s, %d, %s, ctx.path_rhs_courant());" %
-                     (block, var[state.id], var[value.id], value.id, family))
+        lines.append("pops::Real %s = 0;" % frequency)
+        lines.append("ctx.path_rhs_into(%d, %s, %s, %d, %s, ctx.path_rhs_courant(), &%s);" %
+                     (block, var[state.id], var[value.id], value.id, family, frequency))
+        token = frequency
+    var[("partition_frequency", value.id)] = token
+    var[("path_frequency", value.id)] = token

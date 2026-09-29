@@ -870,6 +870,19 @@ void System<Dim>::block_path_rhs_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
     const ExecutionLane& lane,
     const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+  block_path_rhs_into_at(point, block, state, residual, courant, prepared_system,
+                         prepared_block, prepared_point, lane, transport, nullptr);
+}
+
+template <int Dim>
+void System<Dim>::block_path_rhs_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+    MultiFab<Dim>& state, MultiFab<Dim>& residual, Real courant,
+    const System* prepared_system, int prepared_block,
+    const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+    const ExecutionLane& lane,
+    const runtime::program::PreparedScalarBoundarySession<Dim>& transport,
+    Real* evaluated_frequency) {
   const bool valid_block = block >= 0 && block < p_->blocks_.size();
   collective_boundary_preflight<Dim>(
       point, block, prepared_system, prepared_block, prepared_point, lane,
@@ -877,10 +890,18 @@ void System<Dim>::block_path_rhs_into_at(
         if (prepared_system != this || !valid_block || prepared_block != block ||
             prepared_point != point || &transport.lane() != &lane)
           throw std::invalid_argument("Uniform path RHS has a foreign prepared session");
-        if (!std::isfinite(courant) || !(courant > Real(0)) ||
-            courant != static_cast<Real>(active_program_step_courant()))
+        const double active_courant = active_program_step_courant();
+        const Real budget = std::isfinite(active_courant) && active_courant > 0
+                                ? static_cast<Real>(active_courant) : Real(1);
+        if (!std::isfinite(courant) || !(courant > Real(0)) || courant != budget)
           throw std::invalid_argument("Uniform path RHS Courant differs from the active step");
       });
+  ExactContractBuilder stability_contract;
+  stability_contract.text("pops.uniform-path-stability.v2")
+      .scalar(courant).scalar(evaluated_frequency != nullptr);
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"path-stability", std::move(stability_contract).release()}}, lane))
+    throw std::invalid_argument("Uniform path stability consumer differs between ranks");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
   collective_boundary_preflight<Dim>(
       point, block, prepared_system, prepared_block, prepared_point, lane,
@@ -894,13 +915,23 @@ void System<Dim>::block_path_rhs_into_at(
                                            runtime::system::PreparedEmbeddedBoundaryMode::inactive))
           throw std::invalid_argument("Uniform path RHS has no complete single-block path authority");
       });
+  Real frequency = Real(0);
   invoke_prepared_boundary_transaction<Dim>(
       state, residual, lane, "System::block_path_rhs_into_at", transport,
       [&](MultiFab<Dim>& candidate, auto& scratch) {
         materialize_detached_valid_field(state, scratch.detached_state);
-        selected.path_rhs_at_point_prepared(point, scratch.detached_state, candidate, courant,
-                                            selected.boundary.get(), lane, transport);
+        frequency = selected.path_rhs_at_point_prepared(
+            point, scratch.detached_state, candidate, selected.boundary.get(), lane, transport);
+        const double scaled = point.dt * static_cast<double>(frequency);
+        if (!std::isfinite(frequency) || frequency < Real(0) ||
+            (evaluated_frequency == nullptr &&
+             (!std::isfinite(point.dt) || point.dt < 0 || !std::isfinite(scaled) ||
+              scaled > static_cast<double>(courant))))
+          throw std::runtime_error(
+              "Uniform path RHS refused publication: actual incident-face CFL exceeds Courant");
       });
+  if (evaluated_frequency != nullptr)
+    *evaluated_frequency = frequency;
 }
 
 template <int Dim>
@@ -1471,6 +1502,11 @@ template void System<kNativeDimension>::block_path_rhs_into_at(
     MultiFab<kNativeDimension>&, Real, const System<kNativeDimension>*, int,
     const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
     const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
+template void System<kNativeDimension>::block_path_rhs_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
+    MultiFab<kNativeDimension>&, Real, const System<kNativeDimension>*, int,
+    const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
+    const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&, Real*);
 template void System<kNativeDimension>::block_neg_div_flux_into_at_prepared(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&, const System<kNativeDimension>*, int,

@@ -401,9 +401,9 @@ class ProgramContext {
                                prototype.ghosts());
   }
 
-  double path_rhs_courant() const { return system_->active_program_step_courant(); }
+  double path_rhs_courant() const { return numerical_face_courant(); }
 
-  /// The authored numerical face bound is checked at the actual RHS stage. A
+  /// The authored numerical face bound is checked at its explicit consumer. A
   /// FixedDt invocation has no CFL proposal, so it uses the unit incident-face
   /// budget; step_cfl supplies its caller-authored Courant instead.
   double numerical_face_courant() const {
@@ -412,7 +412,8 @@ class ProgramContext {
   }
 
   void path_rhs_into(int program_block, field_type& input, field_type& output, int rate_id,
-                     std::string_view temporal_family, double courant) const {
+                     std::string_view temporal_family, double courant,
+                     Real* evaluated_frequency = nullptr) const {
     const ExecutionLane& lane = prepared_execution_lane();
     int runtime_block = -1;
     runtime::multiblock::BoundaryEvaluationPoint point;
@@ -422,10 +423,7 @@ class ProgramContext {
       runtime_block = sys_block(program_block);
       require_rate_identity_(rate_id);
       point = boundary_evaluation_point(rate_id);
-      const double authored_courant = system_->active_program_step_courant();
-      if (!std::isfinite(authored_courant) || !(authored_courant > 0.0))
-        throw std::invalid_argument(
-            "Uniform path RHS requires an active authored step_cfl Courant");
+      const double authored_courant = numerical_face_courant();
       const auto destination = scratch_.find(ScratchKey{ScratchKind::Rhs, rate_id, 0});
       if (rate_id < 0 || temporal_family.empty() || &input == &output ||
           input.shares_storage_with(output) ||
@@ -435,11 +433,12 @@ class ProgramContext {
         throw std::invalid_argument("Uniform path RHS lost its exact staged input, output or Courant");
       require_same_field_contract_(input, output, "Uniform path RHS output");
       ExactContractBuilder identity;
-      identity.text("pops.uniform-path-rhs-stage.v1")
+      identity.text("pops.uniform-path-rhs-stage.v2")
           .scalar(runtime_block).scalar(rate_id).text(temporal_family)
           .scalar(point.tick).scalar(point.stage)
           .scalar(point.stage_fraction.numerator).scalar(point.stage_fraction.denominator)
-          .scalar(point.dt).scalar(point.physical_time).scalar(courant);
+          .scalar(point.dt).scalar(point.physical_time).scalar(courant)
+          .scalar(evaluated_frequency != nullptr);
       contract = std::move(identity).release();
     } catch (...) {
       error = std::current_exception();
@@ -457,7 +456,7 @@ class ProgramContext {
     system_->block_path_rhs_into_at(point, runtime_block, input, output,
                                     static_cast<Real>(courant), boundary->system(),
                                     boundary->runtime_block(), boundary->point(), boundary->lane(),
-                                    boundary->transport());
+                                    boundary->transport(), evaluated_frequency);
   }
 
   template <class Resource, class Matches, class... Args>

@@ -9,15 +9,21 @@ struct StagedPathRhs {
   runtime::multiblock::BoundaryEvaluationPoint point;
   std::string temporal_family, operator_identity;
   double courant = 0;
+  bool defer_stability = false;
+  std::shared_ptr<Real> frequency;
 };
 mutable std::map<int, StagedPathRhs> staged_path_rhs_;
 
 public:
-double path_rhs_courant() const { return facade_->active_program_step_courant_(); }
+double path_rhs_courant() const { return numerical_face_courant(); }
 
-void stage_path_rhs(int program_block, field_type& input, field_type& output, int rate_id,
-                    std::string_view temporal_family, const RhsInputTrace* input_trace,
-                    double courant) const {
+// A continuation retains the immutable view by value. The producer alone writes
+// the frequency, after the complete hierarchy's residual/flux publication. A
+// failed barrier leaves NaN, which cannot serve as an acceptance certificate.
+std::shared_ptr<const Real> stage_path_rhs(
+    int program_block, field_type& input, field_type& output, int rate_id,
+    std::string_view temporal_family, const RhsInputTrace* input_trace,
+    double courant, bool defer_stability = false) const {
   const ExecutionLane& lane = prepared_execution_lane();
   // These facade getters may materialize/enter collectives, so call them in common order.
   const bool shared = facade_->prepared_amr_multiblock_hierarchy_().has_interface_flux_provider();
@@ -42,7 +48,7 @@ void stage_path_rhs(int program_block, field_type& input, field_type& output, in
       if (relation.temporal_ratio() != ::pops::amr::Rational(1, 1))
         throw std::invalid_argument("AMR path RHS requires equal parent/child clock windows");
     if (!std::isfinite(courant) || !(courant > 0.0) ||
-        courant != facade_->active_program_step_courant_())
+        courant != numerical_face_courant())
       throw std::invalid_argument("AMR path RHS Courant differs from its authored invocation");
     const auto destination = scratches_.find(
         ScratchKey{ScratchKind::Rhs, active_level_, block, rate_id, 0});
@@ -55,10 +61,13 @@ void stage_path_rhs(int program_block, field_type& input, field_type& output, in
       throw std::length_error("AMR path RHS exceeds its exact hierarchy stage capacity");
     candidate.emplace(StagedPathRhs{program_block, block, active_level_, rate_id, &input, &output,
                                    *input_trace, boundary_evaluation_point(rate_id),
-                                   std::string(temporal_family), path_identity, courant});
+                                   std::string(temporal_family), path_identity, courant,
+                                   defer_stability,
+                                   std::make_shared<Real>(std::numeric_limits<Real>::quiet_NaN())});
     ExactContractBuilder contract;
-    contract.text("pops.amr-path-rhs-stage.v1")
+    contract.text("pops.amr-path-rhs-stage.v2")
         .scalar(block).scalar(active_level_).scalar(rate_id).scalar(courant)
+        .scalar(defer_stability)
         .scalar(active_subcycling_attempt_).scalar(current_dt_)
         .scalar(stage_time_.numerator).scalar(stage_time_.denominator)
         .text(temporal_family).bytes(path_identity)
@@ -72,6 +81,7 @@ void stage_path_rhs(int program_block, field_type& input, field_type& output, in
     throw std::invalid_argument("AMR path RHS stage differs between ranks");
   // Authentication and snapshot ownership are independent of the caller's live scratch contents.
   (void)rhs_input_parent_(block, input, rate_id, &*candidate->trace);
+  std::shared_ptr<const Real> frequency = candidate->frequency;
   std::map<int, StagedPathRhs> next;
   error = nullptr;
   try {
@@ -83,6 +93,7 @@ void stage_path_rhs(int program_block, field_type& input, field_type& output, in
   }
   collectively_rethrow_exception(error, lane, "AMR path RHS reservation failed collectively");
   staged_path_rhs_.swap(next);
+  return frequency;
 }
 
 private:
@@ -315,7 +326,7 @@ void canonicalize_path_interfaces_(int runtime_block,
   }
 }
 
-void validate_path_stage_values_(const StagedPathRhs& request,
+Real validate_path_stage_values_(const StagedPathRhs& request,
                                  const level_evaluation_type& evaluation) const {
   const ExecutionLane& lane = prepared_execution_lane();
   const auto geometry = facade_->prepared_amr_level_geometry(request.level);
@@ -372,7 +383,8 @@ void validate_path_stage_values_(const StagedPathRhs& request,
   collectively_rethrow_exception(error, lane, "AMR path stage validation failed collectively");
   const double frequency = static_cast<double>(all_reduce_max(local_frequency, lane));
   const double scaled = request.point.dt * frequency;
-  if (!std::isfinite(frequency) || !std::isfinite(scaled) || scaled > request.courant) {
+  if (!std::isfinite(frequency) || frequency < 0 ||
+      (!request.defer_stability && (!std::isfinite(scaled) || scaled > request.courant))) {
     std::ostringstream message;
     message << std::setprecision(std::numeric_limits<double>::max_digits10)
             << "AMR path RHS refused publication: actual face CFL exceeds authored Courant; level="
@@ -380,6 +392,7 @@ void validate_path_stage_values_(const StagedPathRhs& request,
             << " dt_frequency=" << scaled << " courant=" << request.courant;
     throw std::runtime_error(message.str());
   }
+  return static_cast<Real>(frequency);
 }
 
 public:
@@ -395,6 +408,7 @@ void publish_staged_path_rhs(int rate_id) const {
     FluxExpressionRegistry* registry_target = nullptr;
     std::vector<std::size_t>* counts_target = nullptr;
     std::uint64_t* identity_target = nullptr;
+    Real frequency = Real(0);
   };
   std::vector<Publication> publications;
   std::vector<level_evaluation_type*> evaluations;
@@ -418,6 +432,7 @@ void publish_staged_path_rhs(int rate_id) const {
         if (request.level != level || request.rate != rate_id ||
             request.runtime_block != first.runtime_block || request.operator_identity != first.operator_identity ||
             request.temporal_family != first.temporal_family || request.courant != first.courant ||
+            request.defer_stability != first.defer_stability || !request.frequency ||
             request.point.physical_time != first.point.physical_time ||
             request.point.dt != first.point.dt || !std::isfinite(request.point.dt) ||
             !(request.point.dt > 0) ||
@@ -454,7 +469,7 @@ void publish_staged_path_rhs(int rate_id) const {
       at_level(level, [&] {
         auto& publication = publications[static_cast<std::size_t>(level)];
         auto& request = *publication.request;
-        validate_path_stage_values_(request, *publication.evaluation);
+        publication.frequency = validate_path_stage_values_(request, *publication.evaluation);
         prepare_spatial_collectively([&] {
           publication.backup = rhs_scratch_like(*request.output);
           copy_valid_(*request.output, publication.backup);
@@ -512,6 +527,8 @@ void publish_staged_path_rhs(int rate_id) const {
       *publication.identity_target = publication.next_identity;
     }
     facade_->publish_prepared_amr_block_level_batch(targets);
+    for (const auto& publication : publications)
+      *publication.request->frequency = publication.frequency;
     staged_path_rhs_.clear();
   } catch (...) {
     staged_path_rhs_.clear();

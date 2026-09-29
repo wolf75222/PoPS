@@ -39,10 +39,24 @@ def has_independent_diffusion_transport(model):
     return transport and diffusion
 
 
+def _unguarded(value):
+    # A successful acceptance guard returns the same value. Its condition is
+    # neither a new field nor an explicit update. Project-and-recheck branches
+    # are deliberately not aliases: they may return a different field.
+    while value.op == "acceptance_guard":
+        value = value.inputs[0]
+    return value
+
+
+def _rate_state(value):
+    return _unguarded(value.inputs[value.attrs.get("target_input", 0)])
+
+
 def _affine_terms(value, stops=()):
     result = {}
 
     def walk(node, weight):
+        node = _unguarded(node)
         if node.op != "linear_combine" or node.id in stops:
             entry = result.setdefault(node.id, (node, {}))[1]
             for power, amount in weight.items():
@@ -111,12 +125,58 @@ def explicit_update_consumers(program):
         elif node.op in {"solve_local_nonlinear", "solve_coupled_implicit",
                          "solve_implicit_source"}:
             return
+        elif node.op == "acceptance_guard":
+            walk(node.inputs[0])
         elif node.vtype == "state" and len(node.inputs) == 1:
             walk(node.inputs[0])
 
     for value in program._commits.values():
         walk(value)
     return frozenset(updates)
+
+
+def _retain_convex_stage_values(terms):
+    """Recover a positive certificate from retained affine SSA stage identities.
+
+    A Butcher-form update can spend a rate evaluated at a stage that is absent
+    from its written final state sum. Substitute that *exact* already evaluated
+    stage using rational coefficients. For example U0+dt/2*(R0+R1) admits
+    U0/2+U1/2+dt/2*R1 when U1=U0+dt*R0. The emitted floating-point arithmetic is
+    untouched. This is a sufficient certificate, not an SSP claim for every RK
+    tableau; negative or non-affine identities still require authored evidence.
+    """
+    table = {node.id: (node, dict(weight)) for node, weight in terms}
+    missing = {_rate_state(node).id: _rate_state(node)
+               for node, _ in terms if _is_rate(node)
+               and _rate_state(node).id not in table}
+    for state in sorted(missing.values(), key=lambda node: node.id, reverse=True):
+        if state.op != "linear_combine":
+            continue
+        beta = sum(weight.get(1, Fraction()) for node, weight in table.values()
+                   if _is_rate(node) and _rate_state(node).id == state.id)
+        if beta <= 0:
+            continue
+        expansion = _affine_terms(state)
+        if (not expansion or
+                any(set(weight) != ({1} if _is_rate(node) else {0}) or
+                    next(iter(weight.values())) <= 0 or
+                    (not _is_rate(node) and node.vtype != "state")
+                    for node, weight in expansion)):
+            continue
+        if sum(weight[0] for node, weight in expansion if not _is_rate(node)) != 1:
+            continue
+        capacity = min(table.get(node.id, (None, {}))[1].get(power, Fraction()) / amount
+                       for node, weight in expansion for power, amount in weight.items())
+        alpha = min(beta, capacity)
+        if alpha <= 0:
+            continue
+        for node, weight in expansion:
+            existing = table[node.id][1]
+            for power, amount in weight.items():
+                existing[power] -= alpha * amount
+        table[state.id] = (state, {0: alpha})
+    return tuple((node, {power: amount for power, amount in weight.items() if amount})
+                 for node, weight in table.values() if any(weight.values()))
 
 
 def partition_stability_groups(value, *, include_transport=False):
@@ -135,9 +195,9 @@ def partition_stability_groups(value, *, include_transport=False):
     if not include_transport and not (any(node.op == "rhs" for node in rates)
                                       and any(node.op == "diffusive_rhs" for node in rates)):
         return ()
-    bases = {node.inputs[node.attrs.get("target_input", 0)].id:
-             node.inputs[node.attrs.get("target_input", 0)] for node in rates}
+    bases = {_rate_state(node).id: _rate_state(node) for node in rates}
     terms = _affine_terms(value, bases)
+    terms = _retain_convex_stage_values(terms)
     rates = [(node, weight) for node, weight in terms if _is_rate(node)]
     states = [(node, weight) for node, weight in terms if not _is_rate(node)]
     if not states:
@@ -152,7 +212,7 @@ def partition_stability_groups(value, *, include_transport=False):
     budgets = {node.id: weight[0] for node, weight in states}
     groups = {}
     for rate, weight in rates:
-        state = rate.inputs[rate.attrs.get("target_input", 0)]
+        state = _rate_state(rate)
         if budgets.get(state.id, 0) <= 0 or rate.block != state.block:
             raise ValueError(_DIAGNOSTIC)
         if rate.attrs.get("schedule") is not None:
@@ -205,9 +265,10 @@ def emit_partition_stability(value, var, lines, *, block_index, include_transpor
 
 
 def emit_user_face_stability(value, var, lines, *, block_index):
-    """Check explicit consumers of authored or principal faces with one shared budget."""
+    """Check explicit consumers of numerical faces with one shared convex budget."""
     def selected(node):
-        return any((kind, node.id) in var for kind in ("user_face_frequency", "principal_frequency"))
+        return any((kind, node.id) in var for kind in (
+            "user_face_frequency", "principal_frequency", "path_frequency"))
 
     if not any(selected(node)
                for node, _ in _affine_terms(value)):
