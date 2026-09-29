@@ -68,8 +68,14 @@ def _initial():
     x = (np.arange(NX) + .5) / NX
     y = (np.arange(NY) + .5) / NY
     phase = 2 * np.pi * (x[None, :] + 2 * y[:, None])
-    return np.stack((1 + .1 * np.cos(phase) + .03 * np.cos(4 * np.pi * y[:, None]) * np.ones((1, NX)),
-                     -.2 + .07 * np.sin(phase) + .02 * np.sin(2 * np.pi * x)[None, :]))
+    # Exact rectangular cell means of the prescribed continuous Fourier modes.
+    oblique = np.sinc(1 / NX) * np.sinc(2 / NY)
+    x_mode = np.sinc(1 / NX)
+    y_mode = np.sinc(2 / NY)
+    return np.stack((1 + .1 * oblique * np.cos(phase) +
+                     .03 * y_mode * np.cos(4 * np.pi * y[:, None]) * np.ones((1, NX)),
+                     -.2 + .07 * oblique * np.sin(phase) +
+                     .02 * x_mode * np.sin(2 * np.pi * x)[None, :]))
 
 
 def _laplacian(values):
@@ -108,6 +114,7 @@ def test_dim2_fourier_faces_and_component_permutation(isolated_native_cache, nat
             expected = .5 * (initial + predictor + DT * _rate(predictor))
             actual = actual.reshape(2, NY, NX)[np.argsort(order)]
             np.testing.assert_allclose(actual, expected, rtol=0, atol=4.e-12)
+            assert len({row["operation_identity"] for row in records}) == 1
             contexts = tuple(dict.fromkeys(row["evaluation_context"] for row in records))
             assert len(contexts) == 2
             stages = {}
@@ -154,6 +161,7 @@ def test_dim2_fourier_faces_and_component_permutation(isolated_native_cache, nat
             np.testing.assert_allclose(increments.sum(axis=(1, 2)), 0, rtol=0, atol=4.e-13)
             np.savez_compressed(tmp_path / "coupled_gradient_dim2.npz",
                                 initial=initial, final=actual, increments=increments,
-                                order=order, dt=DT)
+                                order=order, dt=DT, cells=(NX, NY), lengths=(LX, LY),
+                                dissipative=D, reversible=R, occurrence_weights=WEIGHTS)
             (tmp_path / "coupled_gradient_dim2_ledger.json").write_text(
-                json.dumps(records, indent=2) + "\n")
+                json.dumps(records, indent=2, allow_nan=False) + "\n")
