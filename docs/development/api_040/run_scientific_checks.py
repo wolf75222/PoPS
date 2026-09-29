@@ -35,6 +35,7 @@ CASES = {
     "m06": ("api040_m06_enthalpy.py", "result.json", {}),
     "m08": ("api040_m08_guiding_center.py", "receipt.json", {}),
     "m13": ("api040_m13_reaction_chain.py", "result.json", {}),
+    "m15-axial-b1": ("api040_m15_hyqmom_axial_b1.py", "receipt.json", {}),
     "cattaneo": ("structural_cattaneo.py", "result.json", {}),
 }
 
@@ -64,7 +65,8 @@ def main() -> int:
     if any(output.iterdir()):
         parser.error("output must be empty to exclude stale receipts")
     script, receipt_name, overrides = CASES[args.case]
-    environment = dict(os.environ, PYTHONNOUSERSITE="1", POPS_NATIVE_DIM="2",
+    dimension = 1 if args.case == "m15-axial-b1" else 2
+    environment = dict(os.environ, PYTHONNOUSERSITE="1", POPS_NATIVE_DIM=str(dimension),
                        POPS_REQUIRE_NATIVE_TESTS="1", OMP_NUM_THREADS=str(args.threads),
                        POPS_THREADS=str(args.threads), POPS_API040_OUTPUT=str(output / "states"))
     environment.update(overrides)
@@ -138,6 +140,7 @@ def main() -> int:
     result = {"schema_version": 1, "case": args.case,
               "status": "passed" if passed else "failed", "command": command,
               "returncode": code, "seconds": elapsed, "ranks": args.ranks,
+              "dimension": dimension,
               "phases": phases,
               "threads": args.threads, "authentication_before": before_code,
               "authentication_after": after_code, "example_sources_unchanged": unchanged,

@@ -109,7 +109,7 @@ def main() -> int:
         "native_file": str(origin), "native_sha256": digest(origin), "abi_key": native.abi_key(),
         "doctor": checks, "verified_source_files": len(sources),
         "source_files_sha256": digest(output / "source-files.json"),
-        "scope": "installed production PoPS, local CPU Kokkos, MPI-enabled Dim=2",
+        "scope": f"installed production PoPS, local CPU Kokkos, MPI-enabled Dim={dimension}",
         "sys_path": sys.path,
     }
     (output / "identity.json").write_text(json.dumps(identity, indent=2) + "\n")
