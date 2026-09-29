@@ -3,7 +3,76 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Latest reception: SDK 242e849c; corrected package ABI6 rebuilding
+## Latest reception: SDK 02723ae9, source 4bb0639
+
+Both actual Dim1 and Dim2 OpenMP/MPI extensions have been rebuilt. SDK SHA256 is
+`02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e`;
+Dim1 native SHA256 is
+`84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c`;
+Dim2 native SHA256 is
+`7105935a756fc6f0411c831ea18500f549365a30bc35cdbe340ef4ef11d56011`.
+The common Python installation was refreshed through `e5ce699`; later commits
+through `4bb0639` contain tests/evidence/runners only. All receptions authenticate
+the installed package and its shipped files; no prototype import is used.
+
+- Five affected C++ targets pass 92 tests, with three single-rank guards skipped
+  (95 CTest rows). Four actual MPI2 aggregates pass. This includes C38's original
+  rank-local refresh failure reason, rollback/retry, AND9 history qualification,
+  and actual boundary callbacks at two prepared physical times. It does not
+  prove a full SSPRK trajectory for that boundary witness.
+- M07's fully wet lake at rest passes six true Dim1 runs, N40/80/160 and two
+  component orders, to time 1 on one rank and again on two MPI ranks. The fixed
+  mirror boundary is exact for this equilibrium; wet/dry or perturbed flows are
+  distinct obligations.
+- M15's fixed B.1 axial five-moment closure passes six true Dim1 runs,
+  N32/64/128 and two orders, to time .02. Maximum state error is 4.441e-16;
+  six inadmissible initial-state injections preserve state and clock. MPI2
+  reception failed: after more than eight minutes, captured rank stacks show
+  rank 0 in a host allgather and rank 1 in native step rejection. Only the
+  isolated MPI process group was interrupted; stacks and interruption receipt
+  are retained in `outputs/m15-4bb0639-dim1-mpi2` in the workspace. The common
+  rejection frontier is under investigation. Arbitrary moment order and full
+  magnetic transport are not implied.
+- M08's corrected stage observation passes the independent SSPRK2/FV oracle
+  on N32/N64, Dim2, two steps to .04. The N32 fresh/stale separation is
+  4.441e-9 versus the unchanged 3e-11 criterion. M10's self-consistent Poisson
+  plus Scharfetter--Gummel one-step witness passes in actual Dim1 on one and two
+  MPI ranks. This is a prescribed discrete-average witness, not a full campaign.
+- 163 installed source/host unit checks pass for the integrated sparse Program
+  detachment, local-product algebra, C22 external-grid frontier and M10 oracle.
+  They are not 163 native PDE experiments. The 19-test native reception at
+  `cfef849` has eleven passes and eight compilation failures: an integral lane
+  vote is ambiguous. `e5ce699` selects the exact `long` overload, independently
+  reviewed with real-header syntax probes. The subsequent 21-test reception
+  completes with eleven passes and ten failures after successful JIT: eight
+  local-product/H05 binds lack an explicit storage halo in the resolved plan,
+  and two seven-unknown variants incorrectly merge homonymous parameter
+  metadata from distinct block owners. Both mechanisms are being corrected;
+  native product acceptance remains open.
+- The frozen T2 resource collector v1.3 executes after its cache-root repair.
+  Numerical equivalence passes for the same historical pair as timing v1.2.
+  Its `kernels=36` per lane counts Program batches, not Kokkos launches. Halo,
+  MPI, scratch allocation and launch counters are unavailable, not zero.
+
+Completed C++/M07/M15/resource receipts are versioned in
+`evidence/native-388c323-and-t2-v1-3/`; subsequent scoped receipts remain in the
+workspace output directories while their bundle is prepared. Relevant source
+commits include `c38623b` (sparse-ID-preserving detach), `6e6c825` (local product
+physical operators, representation v2), `7915354/bf9b7b4` (exact C22 frontier and
+collective preparation), `dfe6e6e/3ee3160` (M10 and independent signed-flux review),
+`e5ce699` (integral vote), and `54b1620/3ae0a15` (seven-unknown native fixture and
+cross-review). MPI reception receipt schema 2 (`4bb0639`) records and selects
+the actual native dimension rather than always using Dim2.
+
+Active bounded work: qualified parameter inspection and native reception at
+primary; public affine moment composition at Astra Semantics; local StateStorage
+resolution after delivering M11/W10 at Astra Protocols; generic public
+exponential plus M18/W09 entropy closure at Sol Native; the M15 MPI rejection
+frontier at Sol Reference. All workers remain actual GPT-6/high selections. Production sources
+stay frozen during campaigns. No GPU, remote CI, external HPC or complete
+specification acceptance is claimed; broader T3/T5 and corpus gaps remain open.
+
+## Previous reception: SDK 242e849c; package ABI6 rebuilding (historical)
 
 The source through `c659dd2` integrates the exact local State storage carrier
 (`ef5e756/34cd0ab`), the typed prepared physical-boundary route (`31d83dd`,
