@@ -329,6 +329,12 @@ static bool reject_history_resource_refresh = false;
 extern "C" void pops_test_reject_history_resource_refresh(bool reject) {
   reject_history_resource_refresh = reject;
 }
+static int reject_history_resource_refresh_on_call = 0;
+extern "C" void pops_test_reject_history_resource_refresh_on_call(int ordinal) {
+  if (ordinal < 0)
+    throw std::invalid_argument("history resource refresh rejection ordinal is negative");
+  reject_history_resource_refresh_on_call = ordinal;
+}
 extern "C" void pops_install_program_amr(
     pops::AmrSystem<pops::kNativeDimension>* system) {
   auto context = pops::runtime::program::make_program_execution_provider(system);
@@ -428,7 +434,9 @@ extern "C" void pops_install_program_amr(
     });
     error = {};
     try {
-      if (std::exchange(reject_history_resource_refresh, false))
+      const bool reject_ordinal = reject_history_resource_refresh_on_call > 0 &&
+                                  --reject_history_resource_refresh_on_call == 0;
+      if (std::exchange(reject_history_resource_refresh, false) || reject_ordinal)
         throw std::runtime_error("injected history resource refresh");
     } catch (...) { error = std::current_exception(); }
     pops::collectively_rethrow_exception(error, lane, "fixture resource publication failed");

@@ -1316,6 +1316,12 @@ TEST(test_amr_synthetic_program_loader_transaction,
       pops::ExecutionLane::duplicate_world_collectively("test.three-level-history.artifact");
   ASSERT_NO_THROW((void)prepare_exact_loader_artifact(stem + ".cpp", shared_object,
                                                      artifact_lane, false, true));
+  const auto handle = pops::dynlib::open(shared_object);
+  ASSERT_NE(handle, nullptr);
+  using RejectNthRefresh = void (*)(int);
+  const auto reject_nth_refresh = reinterpret_cast<RejectNthRefresh>(
+      pops::dynlib::sym(handle, "pops_test_reject_history_resource_refresh_on_call"));
+  ASSERT_NE(reject_nth_refresh, nullptr);
   const auto settings = config(3);
   pops::AmrSystem<Dim> system(settings);
   ASSERT_NO_THROW(build_refined_system(system, shared_object, initial_state(settings.shape), true));
@@ -1327,9 +1333,15 @@ TEST(test_amr_synthetic_program_loader_transaction,
   const auto old_epoch = system.checkpoint_topology_epoch();
   const auto accepted = system.program_accepted_state();
   const auto exchanges = system.checkpoint_program_exchanges();
+  const auto flux_shard = system.program_history_flux_snapshot_shard();
+  const auto accepted_revision = system.program_accepted_state_revision();
   const auto regrid_count = system.checkpoint_regrid_count();
   const auto old_time = system.time();
   const auto old_step = system.macro_step();
+  const auto old_last_dt = system.program_last_dt();
+  const auto old_cadence_dt = system.program_cadence_window_dt();
+  const auto old_cadence_steps = system.program_cadence_window_steps();
+  const auto old_cadence_start = system.program_cadence_window_start_time();
   const std::vector<std::string> names{"tracer.first", "tracer.second"};
   std::vector<int> owners;
   std::vector<std::vector<double>> states;
@@ -1386,25 +1398,66 @@ TEST(test_amr_synthetic_program_loader_transaction,
   const auto old_descendant_coverage = covered_cells();
   ASSERT_FALSE(old_descendant_coverage.empty());
 
-  system.begin_restart_transaction();
-  ASSERT_NO_THROW(system.rebuild_hierarchy(old_boxes, owners));
-  ASSERT_NO_THROW(system.restore_checkpoint_counters(regrid_count, old_epoch));
-  ASSERT_NO_THROW(
-      system.materialize_program_restart_histories(accepted, names, {2, 2}, {1, 1}));
-  for (int level = 0; level < 3; ++level)
-    ASSERT_NO_THROW(system.set_block_level_state(kBlock, level, states.at(level)));
-  ASSERT_NO_THROW(system.restore_program_cadence_window(0.0, 0, 0.0, dt, old_time, old_step));
-  ASSERT_NO_THROW(system.set_clock(old_time, old_step));
-  for (const auto& row : histories) {
-    for (int slot = 0; slot < static_cast<int>(row.values.size()); ++slot)
-      ASSERT_NO_THROW(system.restore_history(row.name, row.level, slot, row.values.at(slot)));
-    ASSERT_NO_THROW(system.restore_history_provenance(row.name, row.level, row.dt,
-                                                      row.initialized, row.fill));
-    ASSERT_NO_THROW(system.restore_history_sample_identity(row.name, row.level, row.sample));
+  const auto prepare_restart = [&] {
+    system.begin_restart_transaction();
+    system.rebuild_hierarchy(old_boxes, owners);
+    system.restore_checkpoint_counters(regrid_count, old_epoch);
+    system.materialize_program_restart_histories(accepted, names, {2, 2}, {1, 1});
+    for (int level = 0; level < 3; ++level)
+      system.set_block_level_state(kBlock, level, states.at(level));
+    system.restore_program_cadence_window(0.0, 0, 0.0, dt, old_time, old_step);
+    system.set_clock(old_time, old_step);
+    for (const auto& row : histories) {
+      for (int slot = 0; slot < static_cast<int>(row.values.size()); ++slot)
+        system.restore_history(row.name, row.level, slot, row.values.at(slot));
+      system.restore_history_provenance(row.name, row.level, row.dt, row.initialized, row.fill);
+      system.restore_history_sample_identity(row.name, row.level, row.sample);
+    }
+    system.restore_checkpoint_program_exchanges(exchanges);
+    system.restore_checkpoint_accepted_state(accepted);
+    system.preflight_regrid_on_restart();
+  };
+  ASSERT_NO_THROW(prepare_restart());
+  // The first accepted child publication succeeds; rank zero refuses the second
+  // real resource refresh, after the intermediate hierarchy has been published.
+  reject_nth_refresh(pops::my_rank() == 0 ? 2 : 0);
+  std::string second_publication_failure;
+  try {
+    system.regrid_on_restart();
+  } catch (const std::exception& error) {
+    second_publication_failure = error.what();
   }
-  ASSERT_NO_THROW(system.restore_checkpoint_program_exchanges(exchanges));
-  ASSERT_NO_THROW(system.restore_checkpoint_accepted_state(accepted));
-  ASSERT_NO_THROW(system.preflight_regrid_on_restart());
+  ASSERT_EQ(pops::all_reduce_max(second_publication_failure.empty() ? 1L : 0L, artifact_lane),
+            0L);
+  EXPECT_NE(second_publication_failure.find("injected history resource refresh"),
+            std::string::npos);
+  ASSERT_NO_THROW(system.rollback_restart_transaction());
+  EXPECT_EQ(system.patch_boxes(), old_boxes);
+  EXPECT_EQ(system.checkpoint_topology_epoch(), old_epoch);
+  EXPECT_EQ(system.program_accepted_state(), accepted);
+  EXPECT_EQ(system.program_accepted_state_revision(), accepted_revision);
+  EXPECT_EQ(system.checkpoint_program_exchanges(), exchanges);
+  EXPECT_EQ(system.program_history_flux_snapshot_shard(), flux_shard);
+  EXPECT_EQ(system.checkpoint_regrid_count(), regrid_count);
+  EXPECT_EQ(system.time(), old_time);
+  EXPECT_EQ(system.macro_step(), old_step);
+  EXPECT_EQ(system.program_last_dt(), old_last_dt);
+  EXPECT_EQ(system.program_cadence_window_dt(), old_cadence_dt);
+  EXPECT_EQ(system.program_cadence_window_steps(), old_cadence_steps);
+  EXPECT_EQ(system.program_cadence_window_start_time(), old_cadence_start);
+  for (int level = 0; level < 3; ++level)
+    EXPECT_TRUE(byte_exact_equal(system.block_level_state_global(kBlock, level), states.at(level)));
+  for (const auto& row : histories) {
+    EXPECT_EQ(system.history_initialized(row.name, row.level), row.initialized);
+    EXPECT_EQ(system.history_fill_count(row.name, row.level), row.fill);
+    EXPECT_EQ(system.history_sample_identity(row.name, row.level), row.sample);
+    for (int slot = 0; slot < static_cast<int>(row.values.size()); ++slot) {
+      EXPECT_TRUE(byte_exact_equal(system.history_global(row.name, row.level, slot),
+                                   row.values.at(slot)));
+      EXPECT_DOUBLE_EQ(system.history_slot_dt(row.name, row.level, slot), row.dt.at(slot));
+    }
+  }
+  ASSERT_NO_THROW(prepare_restart());
   ASSERT_NO_THROW(system.regrid_on_restart());
   ASSERT_GT(system.checkpoint_topology_epoch(), old_epoch);
   const auto new_boxes = system.patch_boxes();
