@@ -2240,9 +2240,9 @@ struct CompiledAmrSystemBlockPreparation {
   bool newton_diagnostics = false;
 };
 
-/// Validate the authored routes shared by the host package preflight and the exact generated
-/// installer. State storage is one complete typed route; it never enters the hyperbolic limiter or
-/// Riemann dispatch, while either half of that route remains an error.
+/// Authenticate authored routes against the exact policies supplied by the generated installer.
+/// An absent source policy admits catalogue routes only. State storage is one complete typed route;
+/// it never enters hyperbolic dispatch, while either half of that route remains an error.
 inline void validate_compiled_amr_system_block_routes(
     const CompiledAmrSystemBlockRoutes& routes,
     std::string_view source_reconstruction_identity = {},
@@ -2286,6 +2286,30 @@ inline void validate_compiled_amr_system_block_routes(
   if (routes.wave_speed_cache)
     throw std::invalid_argument(
         "compiled exact-ranked AMR blocks have no prepared wave-speed cache provider");
+}
+
+/// Check transport syntax before the authenticated package and its policy types are available.
+/// A source route is a lowercase SHA-256 identifier, not a catalogue limiter/Riemann token. This
+/// preflight does not authenticate that identifier: the generated installer must still call the
+/// exact validator above with its compiled policy identities before publishing a prepared block.
+inline void validate_compiled_amr_system_block_route_syntax(
+    const CompiledAmrSystemBlockRoutes& routes) {
+  const auto source_identity = [](std::string_view route, std::string_view prefix) {
+    if (!route.starts_with(prefix))
+      return std::string_view{};
+    const auto identity = route.substr(prefix.size());
+    constexpr std::size_t sha256_hex_length = 64;
+    if (identity.size() != sha256_hex_length ||
+        !std::all_of(identity.begin(), identity.end(), [](char character) {
+          return (character >= '0' && character <= '9') ||
+                 (character >= 'a' && character <= 'f');
+        }))
+      throw std::invalid_argument("compiled AMR source route requires a lowercase SHA-256 identity");
+    return identity;
+  };
+  validate_compiled_amr_system_block_routes(
+      routes, source_identity(routes.limiter, "source_stencil:"),
+      source_identity(routes.riemann, "source_face:"));
 }
 
 /// Prepare a complete generated AMR block image without mutating the facade.

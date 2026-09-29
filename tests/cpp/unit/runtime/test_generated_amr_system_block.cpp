@@ -841,6 +841,76 @@ TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysi
                std::invalid_argument);
 }
 
+TEST(GeneratedAmrSystemBlock, SourceRoutePreflightDefersAuthenticationToCompiledPolicies) {
+  const std::string stencil_identity(64, 'a');
+  const std::string face_identity(64, 'b');
+  for (const bool source_stencil : {false, true}) {
+    for (const bool source_face : {false, true}) {
+      const pops::CompiledAmrSystemBlockRoutes routes{
+          source_stencil ? "source_stencil:" + stencil_identity : "minmod",
+          source_face ? "source_face:" + face_identity : "rusanov",
+          "conservative", "explicit"};
+      EXPECT_NO_THROW(pops::validate_compiled_amr_system_block_route_syntax(routes));
+      EXPECT_NO_THROW(pops::validate_compiled_amr_system_block_routes(
+          routes, source_stencil ? stencil_identity : "", source_face ? face_identity : ""));
+      if (source_stencil || source_face)
+        EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(routes), std::runtime_error);
+      if (source_stencil)
+        EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(
+                         routes, "c" + stencil_identity.substr(1), source_face ? face_identity : ""),
+                     std::invalid_argument);
+      if (source_face)
+        EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(
+                         routes, source_stencil ? stencil_identity : "", "c" + face_identity.substr(1)),
+                     std::invalid_argument);
+    }
+  }
+}
+
+TEST(GeneratedAmrSystemBlock, SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls) {
+  const std::string valid_identity(64, 'a');
+  for (const auto& malformed : {std::string{}, std::string(63, 'a'), std::string(65, 'a'),
+                              std::string(64, 'A'), std::string(64, 'g'),
+                              valid_identity + ":suffix", std::string(63, 'a') + '\0'}) {
+    EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(
+                     {"source_stencil:" + malformed, "rusanov", "conservative", "explicit"}),
+                 std::invalid_argument);
+    EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(
+                     {"minmod", "source_face:" + malformed, "conservative", "explicit"}),
+                 std::invalid_argument);
+  }
+  pops::CompiledAmrSystemBlockRoutes routes{
+      "source_stencil:" + valid_identity, "source_face:" + valid_identity,
+      "conservative", "explicit"};
+  const auto expect_invalid = [](auto value) {
+    EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(value), std::invalid_argument);
+  };
+  auto changed = routes;
+  changed.limiter = "source_face:" + valid_identity;
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed), std::runtime_error);
+  changed = routes;
+  changed.riemann = "source_stencil:" + valid_identity;
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed), std::runtime_error);
+  changed = routes;
+  changed.riemann = "unavailable";
+  expect_invalid(changed);
+  changed = routes;
+  changed.reconstruction = "unknown";
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed), std::runtime_error);
+  changed = routes;
+  changed.time = "unknown";
+  expect_invalid(changed);
+  changed = routes;
+  changed.positivity_floor = -pops::Real(1);
+  expect_invalid(changed);
+  changed = routes;
+  changed.weno_epsilon = pops::Real(2) * pops::kWenoEpsilon;
+  expect_invalid(changed);
+  changed = routes;
+  changed.wave_speed_cache = true;
+  expect_invalid(changed);
+}
+
 TEST(GeneratedAmrSystemBlock, PhysicalFacesUseTheirAuthenticatedNumericalAuthority) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;

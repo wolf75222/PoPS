@@ -1,0 +1,21 @@
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-resource-lifetime/outputs/standalone-user-amr-route-host.cpp:1:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[==========] Running 2 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 2 tests from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies
+[       OK ] GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies (0 ms)
+[ RUN      ] GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls
+[       OK ] GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls (0 ms)
+[----------] 2 tests from GeneratedAmrSystemBlock (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 2 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 2 tests.

@@ -11866,7 +11866,7 @@ void AmrSystem<Dim>::add_native_block(
       throw std::invalid_argument(
           "AmrSystem native package requires finite positive gamma, substeps, and stride");
     validate_newton_options(newton, "AmrSystem native package");
-    validate_compiled_amr_system_block_routes(CompiledAmrSystemBlockRoutes{
+    validate_compiled_amr_system_block_route_syntax(CompiledAmrSystemBlockRoutes{
         limiter, riemann, recon, time, static_cast<Real>(positivity_floor),
         static_cast<Real>(weno_epsilon), wave_speed_cache});
 
