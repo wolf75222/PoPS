@@ -162,12 +162,13 @@
       "reference_limit": "Association flux–topographie et états sec/mouillé à réaliser sans double comptage.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_authoring_flux.py:flux_term",
-      "production_status": "scoped_native_dim1_pass",
-      "qualification": "Six installed native Dim1 OpenMP1 runs N40/80/160 in two component orders reach T=1 with equilibrium criterion 1e-12; actual states are saved and hashed in the original workspace. This qualifies the hydrostatic lake-at-rest variant only.",
-      "assessment_kind": "scoped_scientific_receipt_after_388c323",
+      "production_status": "scoped_native_dim1_serial_and_mpi2_pass",
+      "qualification": "Six Dim1 OpenMP1 runs and a separate six-run true Dim1 MPI2 receipt pass the lake-at-rest hydrostatic variant N40/80/160 in two component orders to T=1. The MPI2 records report two native ranks; saved states and oracle/equilibrium errors were checked from NPZ.",
+      "assessment_kind": "scoped_scientific_serial_and_mpi2_receipts",
       "remaining_gap": "Wet/dry, non-equilibrium dynamics, multi-dimensional and broader boundary cases remain unqualified.",
       "production_evidence": [
-        "evidence/native-388c323-and-t2-v1-3/manifest.json"
+        "evidence/native-388c323-and-t2-v1-3/manifest.json",
+        "evidence/cfef849-scoped/manifest.json"
       ]
     },
     {
@@ -183,15 +184,16 @@
       "reference_limit": "Solve et gradient disponibles; assemblage centre-guide 2D compatible non construit.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/fields/poisson.py;python/pops/time/_program/calls.py",
-      "production_status": "partial_native_final_state_pass_stage_rerun_pending",
-      "qualification": "The installed eac92bb/native 6b5f452e Dim2 N32/N64 run passes final-state and current-field checks. A subsequent audit proves its saved stage0 diagnostic read the previous history slot, so that diagnostic and the complete stage/cache claim are not accepted by this receipt.",
-      "assessment_kind": "scoped_native_receipt_reconciled_at_5d11268",
-      "remaining_gap": "Rerun the corrected slot-1 observation with the independent SSPRK2 stage oracle; original stage/cache witness W04 and other dimensions/MPI remain open.",
+      "production_status": "scoped_native_dim2_stage_pass",
+      "qualification": "Corrected cfef849 Dim2 OpenMP1 N32²/N64² SSPRK2 two-step runs to T=.04 pass independent current-stage field/FV oracle; saved final-step stage0 charge and fresh-vs-stale alternative were checked against actual NPZ.",
+      "assessment_kind": "scoped_scientific_stage_receipt_at_cfef849",
+      "remaining_gap": "General cross-stage cache semantics, MPI, other dimensions and broader centre-guide dynamics remain unqualified; earlier stale-slot receipt is preserved.",
       "production_evidence": [
         "evidence/83b2b12/installed-38faddb-unit",
         "m08_scientific_variant.md",
         "evidence/scientific-eac92bb/m08-eac92bb-openmp1",
-        "history_post_run_observation_audit.md"
+        "history_post_run_observation_audit.md",
+        "evidence/cfef849-scoped/manifest.json"
       ]
     },
     {
@@ -228,10 +230,13 @@
       "reference_limit": "Corps de Bernoulli testé auparavant; réalisation conjointe dérive–diffusion avec champ non intégrée.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/drift_diffusion.py;python/pops/fields/poisson.py",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established",
-      "assessment_kind": "prior_mapping_retained_without_new_requalification",
-      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+      "production_status": "scoped_native_dim1_one_step_pass",
+      "qualification": "Installed Dim1 receipt has one source/emission check and one native N32 single-step self-consistent Poisson-stage/joint Scharfetter-Gummel flux check; independent stale-field and face-incidence discriminants apply to that test.",
+      "assessment_kind": "scoped_native_single_step_receipt_at_cfef849",
+      "remaining_gap": "Full M10 spatial/temporal campaign, multiple meshes, MPI and broader boundary cases remain unqualified.",
+      "production_evidence": [
+        "evidence/cfef849-scoped/manifest.json"
+      ]
     },
     {
       "id": "M11",
@@ -634,14 +639,15 @@
       "title": "Poisson au vrai stage",
       "related_model": "M08",
       "production_candidate_symbols": "python/pops/time/_program/clocks.py:stage;python/pops/fields/poisson.py",
-      "production_status": "partial_native_final_state_stage_rerun_pending",
-      "qualification": "M08 final-state/current-field Dim2 N32/N64 checks pass on native 6b5f452e, but its saved stage diagnostic used the prior history slot; the original same-time stage/cache witness is not qualified.",
-      "remaining_gap": "Corrected slot-1 stage diagnostic and independent stage oracle require a fresh native receipt; cross-stage reuse remains open.",
+      "production_status": "scoped_native_dim2_stage_pass",
+      "qualification": "Corrected cfef849 M08 N32²/N64² two-step Dim2 receipt authenticates final-step stage0 state, distinct same-time probe and physical stage field; independent saved-state checks reject stale-field transport for this witness.",
+      "remaining_gap": "General stage-cache equivalence, MPI and other model/dimension contexts remain open; prior stale-slot receipt stays historical.",
       "production_evidence": [
         "evidence/83b2b12/installed-38faddb-unit",
         "m08_scientific_variant.md",
         "evidence/scientific-eac92bb/m08-eac92bb-openmp1",
-        "history_post_run_observation_audit.md"
+        "history_post_run_observation_audit.md",
+        "evidence/cfef849-scoped/manifest.json"
       ]
     },
     {
@@ -729,7 +735,7 @@
       "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
     }
   ],
-  "production_evidence_schema": 4,
+  "production_evidence_schema": 5,
   "evidence_manifest": "evidence/83b2b12/manifest.json",
   "reception_window": {
     "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
@@ -807,6 +813,26 @@
         "T3 native after sparse detach fix",
         "C22 native after sparse detach fix",
         "M08 corrected stage reception"
+      ]
+    },
+    "after_cfef849": {
+      "manifest": "evidence/cfef849-scoped/manifest.json",
+      "native_sha256": {
+        "dim1": "84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c",
+        "dim2": "7105935a756fc6f0411c831ea18500f549365a30bc35cdbe340ef4ef11d56011"
+      },
+      "statuses": {
+        "m08-cfef849-stage-reviewed": "passed",
+        "m07-cfef849-dim1-mpi2": "passed",
+        "installed-cfef849-dim1-m10": "passed",
+        "installed-cfef849-integrated-unit": "passed",
+        "installed-cfef849-local-and-frontier": "failed"
+      },
+      "limits": "M08 corrected Dim2 stage witness, M07 true Dim1 MPI2 lake-at-rest, M10 one native Dim1 stage-field step, 163 selected unit/source/host checks (24 C22), and historical 19-test local/frontier red with eight failures. Not corpus-wide.",
+      "pending": [
+        "T3/H05 local product native after collective layout-vote fix",
+        "C22 general native PDE frontier",
+        "full M10 spatial campaign"
       ]
     }
   }

@@ -1,0 +1,534 @@
+{
+  "schema_version": 1,
+  "case": "M07",
+  "status": "passed",
+  "variant": "fully_wet_hydrostatic_lake",
+  "dimension": 1,
+  "package": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim1/_pops.cpython-312-darwin.so",
+  "native_sha256": "84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=1",
+  "threads_requested": "1",
+  "script_sha256": "8d5c87ecd7d9a96ece4502dad4fd006b088100a3f70f1baf1c734b763f6ce9f4",
+  "oracle_sha256": "2d47287e69b74a97bee1330917932a1ff2e817aa993b8fd1eeffdd190cac624f",
+  "criterion": 1e-12,
+  "time": 1.0,
+  "records": [
+    {
+      "cells": [
+        40
+      ],
+      "order": [
+        "h",
+        "q",
+        "z"
+      ],
+      "equilibrium_error": 3.330669073875555e-17,
+      "oracle_error": 8.566536392634425e-31,
+      "permutation_error": 0.0,
+      "boundary": "fixed_face_mirror_exact_for_initial_equilibrium",
+      "oracle_max_face_courant": 0.09999999999999999,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "e6eeed1eeeceadd98e694ed8867e21908e3e8ff2e87ca1d924d72ad0ff19ad38"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "mpi_ranks": 2,
+      "run_report": {
+        "accepted_steps": 200,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 200,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "05ef329d3e0ba7d99474d0702d10fa3d88c5d6d3101f21e79e745bbe2e56aa91"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "ba3db1fac73c487ca21bf9034b106aa6714161386a8421c9303769cb9a17e4b4"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a23f4bc24c3f354454da128126dbe1b53d6a2fd8a960fc9f31b211395c2a2226"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "cf0d62bd648246764ffbd198844e515ae3a99b780104ba84bd083ef24feb86d1"
+          }
+        },
+        "field_providers": []
+      },
+      "saved_state": "state_40_hqz.npz",
+      "saved_state_sha256": "b54a85e98a7611123bd1525d52b07a31ea13d975d05c300c3443a2a635ef3662"
+    },
+    {
+      "cells": [
+        80
+      ],
+      "order": [
+        "h",
+        "q",
+        "z"
+      ],
+      "equilibrium_error": 3.3306690738731886e-17,
+      "oracle_error": 2.2809173517366912e-29,
+      "permutation_error": 0.0,
+      "boundary": "fixed_face_mirror_exact_for_initial_equilibrium",
+      "oracle_max_face_courant": 0.09999999999999999,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "e6eeed1eeeceadd98e694ed8867e21908e3e8ff2e87ca1d924d72ad0ff19ad38"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "mpi_ranks": 2,
+      "run_report": {
+        "accepted_steps": 400,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 400,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "bd2d6dc182443ae1fd8194918b3f8e02a53a09be8f7ff5851c6aa6cd998be220"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b4234cdc0b5c70b2073c18a13d96d9eee425a64437f4e69c95fc000a518a00a1"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a23f4bc24c3f354454da128126dbe1b53d6a2fd8a960fc9f31b211395c2a2226"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "006e395cf21b9ce5eb4688273d3d646ba99efd9cac11e9059342e166e8e24bd1"
+          }
+        },
+        "field_providers": []
+      },
+      "saved_state": "state_80_hqz.npz",
+      "saved_state_sha256": "079bfd574b01ad0c504640cba2a74691b0e33478d93f7186de87964a555c58d0"
+    },
+    {
+      "cells": [
+        160
+      ],
+      "order": [
+        "h",
+        "q",
+        "z"
+      ],
+      "equilibrium_error": 3.330669073882459e-17,
+      "oracle_error": 6.989430879774605e-29,
+      "permutation_error": 0.0,
+      "boundary": "fixed_face_mirror_exact_for_initial_equilibrium",
+      "oracle_max_face_courant": 0.09999999999999999,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "e6eeed1eeeceadd98e694ed8867e21908e3e8ff2e87ca1d924d72ad0ff19ad38"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "mpi_ranks": 2,
+      "run_report": {
+        "accepted_steps": 800,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 800,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "01047aee986822a95ccc577968b14cd13b5d37cdea6cd1dbd99448633d40fbd3"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "994881f8dbe3b854092c06fb019b82089f91e4660c06a5d97e70ee38e4bb1bec"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a23f4bc24c3f354454da128126dbe1b53d6a2fd8a960fc9f31b211395c2a2226"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6b960057c7885705acbe8a7b0a318d07bb1ebc03ea07a72deb1abd898140596d"
+          }
+        },
+        "field_providers": []
+      },
+      "saved_state": "state_160_hqz.npz",
+      "saved_state_sha256": "6d76c492abc2561043562e2c2da5ecb7e05f5090dccc98e64c786131bafd8cf0"
+    },
+    {
+      "cells": [
+        40
+      ],
+      "order": [
+        "z",
+        "h",
+        "q"
+      ],
+      "equilibrium_error": 3.330669073875555e-17,
+      "oracle_error": 8.566536392634425e-31,
+      "permutation_error": 0.0,
+      "boundary": "fixed_face_mirror_exact_for_initial_equilibrium",
+      "oracle_max_face_courant": 0.09999999999999999,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "e6eeed1eeeceadd98e694ed8867e21908e3e8ff2e87ca1d924d72ad0ff19ad38"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "mpi_ranks": 2,
+      "run_report": {
+        "accepted_steps": 200,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 200,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "7b50e72c2f5dd59bed080713496241b2f28c3ae5eae12f83094f1c68c8cc72a1"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "c30d2c31ee762b817dc708aa5c9226138f50e102f852376126c68686bbd42a2f"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a23f4bc24c3f354454da128126dbe1b53d6a2fd8a960fc9f31b211395c2a2226"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "2a95550980e1d82e1fa42ab0c427d57a92f56a566fc4acfe6462f6cb4c84ffee"
+          }
+        },
+        "field_providers": []
+      },
+      "saved_state": "state_40_zhq.npz",
+      "saved_state_sha256": "4590fc8992bd5d829175c5fc7cd636a56d3131b6858016f9abeaabcf68bf490a"
+    },
+    {
+      "cells": [
+        80
+      ],
+      "order": [
+        "z",
+        "h",
+        "q"
+      ],
+      "equilibrium_error": 3.3306690738731886e-17,
+      "oracle_error": 2.2809173517366912e-29,
+      "permutation_error": 0.0,
+      "boundary": "fixed_face_mirror_exact_for_initial_equilibrium",
+      "oracle_max_face_courant": 0.09999999999999999,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "e6eeed1eeeceadd98e694ed8867e21908e3e8ff2e87ca1d924d72ad0ff19ad38"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "mpi_ranks": 2,
+      "run_report": {
+        "accepted_steps": 400,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 400,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "164554940552e78219f318aac363c1de20f343b0021bdd5036e9e58596d6cf23"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "3c741da0940281ee487fa36e432410f599e1359546acb36ab64dfdeda2e8f308"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a23f4bc24c3f354454da128126dbe1b53d6a2fd8a960fc9f31b211395c2a2226"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "f645a00f7e4978e60b2d0868a4a31e5667fac64122eafb43455ee756df29bde3"
+          }
+        },
+        "field_providers": []
+      },
+      "saved_state": "state_80_zhq.npz",
+      "saved_state_sha256": "3e28f26ad69af4be8aacf2f0ad41fa46fdce63d040580e164c9fefedcf092848"
+    },
+    {
+      "cells": [
+        160
+      ],
+      "order": [
+        "z",
+        "h",
+        "q"
+      ],
+      "equilibrium_error": 3.330669073882459e-17,
+      "oracle_error": 6.989430879774605e-29,
+      "permutation_error": 0.0,
+      "boundary": "fixed_face_mirror_exact_for_initial_equilibrium",
+      "oracle_max_face_courant": 0.09999999999999999,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "e6eeed1eeeceadd98e694ed8867e21908e3e8ff2e87ca1d924d72ad0ff19ad38"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "mpi_ranks": 2,
+      "run_report": {
+        "accepted_steps": 800,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 800,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "0d6758bb779bcfa59550d0fdc2b5e54d554328e9a8da137108395b099cc3547c"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "52250a24f51da2f0dbeb3766fb8a0ad7ba3088ce63f991d8f6fb56c827a23f5e"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a23f4bc24c3f354454da128126dbe1b53d6a2fd8a960fc9f31b211395c2a2226"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6df62510be761df1b734c9bf051907802ab49177829ae343fb443df2062a0f63"
+          }
+        },
+        "field_providers": []
+      },
+      "saved_state": "state_160_zhq.npz",
+      "saved_state_sha256": "37968ced543b5bdf36b84c1af531820962e7785d8adae1b8fb946f03fc6f358f"
+    }
+  ]
+}

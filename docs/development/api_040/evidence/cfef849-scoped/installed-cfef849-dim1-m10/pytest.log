@@ -1,0 +1,12 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 2 items
+
+tests/python/integration/runtime/test_m10_self_consistent_sg.py::test_m10_source_has_one_joint_face_construction_and_live_poisson_dependencies PASSED [ 50%]
+tests/python/integration/runtime/test_m10_self_consistent_sg.py::test_m10_native_self_consistent_stage_field_and_joint_flux PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-cfef849-dim1-m10/pytest.xml -
+============================== 2 passed in 25.99s ==============================

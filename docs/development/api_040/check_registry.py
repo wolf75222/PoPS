@@ -111,7 +111,7 @@ def main():
     cases = ET.parse(evidence_root / ctest["files"][0]["path"]).getroot().findall("testcase")
     require(len(cases) == ctest["total"] and dict(Counter(case.get("status") for case in cases))
             == ctest["counts"], "CTest inventory mismatch")
-    require(corpus["production_evidence_schema"] == 4, "unsupported reception registry schema")
+    require(corpus["production_evidence_schema"] == 5, "unsupported reception registry schema")
     expected_scopes = {
         "selected_amr": ("pops.api040.selected-native-evidence/v1", "production_commit"),
         "scientific": ("pops.api040.scientific-reception-evidence/v1", "production_source"),
@@ -295,10 +295,113 @@ def main():
             == {"baseline": [36, 36, 36], "candidate": [36, 36, 36]}
             and all(not entry["available"] for name, entry in counters.items()
                     if name != "kernels"), "resource observation overstated or changed")
+    cfef_registry = corpus["supplemental_receptions"]["after_cfef849"]
+    cfef_path = HERE / cfef_registry["manifest"]
+    cfef_root = cfef_path.parent
+    cfef = read_json(cfef_path)
+    require(cfef["schema"] == "pops.api040.cfef849-scoped-evidence/v1"
+            and cfef["mapping_source_commit"] == "4bb0639e33598b6c0aa0d1198ba74e5b5d5200db",
+            "wrong cfef849 bundle schema/source")
+    cfef_files = {item["path"]: item for item in cfef["files"]}
+    require(len(cfef_files) == len(cfef["files"]) == 31, "cfef849 file inventory changed")
+    for relative, item in cfef_files.items():
+        path = cfef_root / relative
+        require(path.is_file() and path.stat().st_size == item["bytes"]
+                and hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"],
+                f"cfef849 copied bytes changed: {relative}")
+    cfef_lines = (cfef_root / "SHA256SUMS").read_text().splitlines()
+    cfef_sums = dict(line.split("  ", 1)[::-1] for line in cfef_lines)
+    require(len(cfef_lines) == 33
+            and set(cfef_sums) == set(cfef_files) | {"README.md", "manifest.json"},
+            "cfef849 checksum inventory changed")
+    for relative, digest_value in cfef_sums.items():
+        require(hashlib.sha256((cfef_root / relative).read_bytes()).hexdigest() == digest_value,
+                f"cfef849 checksum changed: {relative}")
+    for model, expected_id, expected_dimension, expected_ranks, expected_cells in (
+        ("M08", "m08-cfef849-stage-reviewed", 2, 1, [(32, 32), (64, 64)]),
+        ("M07", "m07-cfef849-dim1-mpi2", 1, 2, [(40,), (80,), (160,)]),
+    ):
+        info = cfef["scientific"][model]
+        require(info["id"] == expected_id and info["dimension"] == expected_dimension
+                and info["ranks"] == expected_ranks,
+                f"{model} scientific dimension/ranks changed")
+        result = read_json(cfef_root / expected_id / "result.json")
+        science_path = f"{expected_id}/states/receipt.json"
+        science = read_json(cfef_root / science_path)
+        before = read_json(cfef_root / expected_id / "before/identity.json")
+        after = read_json(cfef_root / expected_id / "after/identity.json")
+        require(result["status"] == science["status"] == info["status"] == "passed"
+                and result["scientific_receipt_sha256"] == cfef_files[science_path]["sha256"]
+                and result["correct_backend"] is True
+                and all(result[key] is True for key in
+                        ("same_native", "same_shipped_sources", "example_sources_unchanged"))
+                and result["authentication_before"] == result["authentication_after"] == 0,
+                f"{model} scientific receipt status/authentication changed")
+        require(before["source_commit"] == after["source_commit"]
+                == info["source_commit"] == "cfef849e8e65aa4aa7d0d682084e1134688dcbbc"
+                and before["native_sha256"] == after["native_sha256"]
+                == info["native_sha256"] == result["native_sha256"]
+                == cfef_registry["native_sha256"][f"dim{expected_dimension}"]
+                and before["source_files_sha256"] == after["source_files_sha256"],
+                f"{model} native/source identity changed")
+        require(len(science["records"]) == info["records"]
+                and sorted({tuple(row["cells"]) for row in science["records"]})
+                == [tuple(row) for row in info["resolutions"]] == expected_cells
+                and all(row["mpi_ranks"] == expected_ranks for row in science["records"]),
+                f"{model} scientific inventory changed")
+        if model == "M08":
+            require(len(science["records"]) == 2
+                    and all(row["accepted_steps"] == 2 and row["time"] == 0.04
+                            and row["final_step_stage0_charge_max_error"] <= 1.4e-17
+                            and row["independent_fv_max_error"] <= 3e-11
+                            and row["stale_transport_margin"] >= 20
+                            and row["physical_stage_field_separation"] >= 1e-8
+                            for row in science["records"]), "M08 stage witness changed")
+        else:
+            require(len(science["records"]) == 6
+                    and len({tuple(row["order"]) for row in science["records"]}) == 2
+                    and all(row["run_report"]["final_time"] == 1.0
+                            for row in science["records"])
+                    and all(row["equilibrium_error"] <= 1e-12 for row in science["records"]),
+                    "M07 MPI2 equilibrium witness changed")
+    expected_installed = {
+        "installed-cfef849-dim1-m10": ("passed", 1, 2, 0),
+        "installed-cfef849-integrated-unit": ("passed", 2, 163, 0),
+        "installed-cfef849-local-and-frontier": ("failed", 2, 19, 8),
+    }
+    for name, (status, dimension, tests, failures) in expected_installed.items():
+        info = cfef["installed"][name]
+        result = read_json(cfef_root / name / "result.json")
+        identity_path = cfef_root / name / "identity.json"
+        identity = read_json(identity_path)
+        expected_counts = {"tests": tests, "failures": failures, "errors": 0, "skipped": 0}
+        require(info["status"] == result["status"] == status
+                and info["counts"] == result["counts"] == expected_counts
+                and pytest_counts(cfef_root / name / "pytest.xml") == expected_counts
+                and result["identity_sha256"] == hashlib.sha256(identity_path.read_bytes()).hexdigest()
+                and info["dimension"] == dimension
+                and identity["source_commit"] == info["source_commit"]
+                == "cfef849e8e65aa4aa7d0d682084e1134688dcbbc"
+                and identity["native_sha256"] == info["native_sha256"]
+                == cfef_registry["native_sha256"][f"dim{dimension}"],
+                f"installed cfef849 receipt changed: {name}")
+        require(cfef_registry["statuses"][name] == status, f"registry status changed: {name}")
+    unit_cases = list(ET.parse(cfef_root / "installed-cfef849-integrated-unit/pytest.xml")
+                      .getroot().iter("testcase"))
+    c22_names = [case.get("name") for case in unit_cases
+                 if case.get("classname", "").endswith("test_external_grid_frontier")]
+    require(c22_names == cfef["c22_source_host_nodes"] and len(c22_names) == 24,
+            "C22 source/host test selection changed")
+    require(cfef_registry["statuses"]["m08-cfef849-stage-reviewed"]
+            == cfef["scientific"]["M08"]["status"] == "passed"
+            and cfef_registry["statuses"]["m07-cfef849-dim1-mpi2"]
+            == cfef["scientific"]["M07"]["status"] == "passed",
+            "scientific status promotion")
     total_scoped = sum(len(read_json(HERE / data["manifest"])["receipts"])
                        for scope, data in corpus["scoped_receptions"].items()
                        if scope in expected_scopes)
-    print(f"40 contracts, 28 models, 12 witnesses; {len(manifest['receipts'])} historical and {total_scoped} scoped receipt snapshots consistent")
+    print(f"40 contracts, 28 models, 12 witnesses; {len(manifest['receipts'])} historical, "
+          f"{total_scoped} earlier scoped, 5 cfef849 selected receipt snapshots consistent")
     print("No native, numerical, MPI, or global acceptance implied.")
 
 
