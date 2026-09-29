@@ -217,7 +217,7 @@ def main():
                 canonical_final = saved_final[[order.index(pq) for pq in INDICES], 0, :]
                 oracle = solve_reference(canonical_initial, T_END)
                 error = float(np.max(np.abs(canonical_final-oracle)))
-                conserved = tuple(k for k, pq in enumerate(INDICES) if k not in TOP)
+                conserved = [k for k, pq in enumerate(INDICES) if k not in TOP]
                 balance = float(np.max(np.abs(canonical_final[conserved].mean(axis=1)
                                               - canonical_initial[conserved].mean(axis=1))))
                 y_invariance = float(np.max(np.abs(saved_final-saved_final[:, :1, :])))

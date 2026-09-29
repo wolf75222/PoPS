@@ -116,7 +116,8 @@ def _identity():
     package = Path(pops.__file__).resolve()
     if "PYTHONPATH" in os.environ or not package.is_relative_to(Path(sys.prefix).resolve()):
         raise RuntimeError("M13 native receipt requires installed PoPS and unset PYTHONPATH")
-    from pops import _pops
+    from pops._native_selector import select_native_dimension
+    _pops = select_native_dimension(2)
     native = Path(_pops.__file__).resolve()
     return {"package_file": str(package), "package_version": pops.__version__,
             "native_file": str(native), "native_sha256": sha256(native),
