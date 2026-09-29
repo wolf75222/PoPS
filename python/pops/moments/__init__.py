@@ -11,7 +11,9 @@ descriptors (:class:`MomentHierarchy` / :class:`MomentBasis` / ... ) and the clo
 surface (:mod:`pops.moments.closures`). This package is an advertised 2V/2D physical
 specialization, not a fallback used by the generic 1D/2D/3D runtime. One
 explicit order-four axial B.1 flux is also exported for a one-velocity case;
-no all-order one-velocity recurrence is implied.
+no all-order one-velocity recurrence is implied. The mathematical
+:func:`affine_push_forward` is independent of these physical closures and accepts
+explicit multi-indices in any velocity dimension.
 """
 # --- generator surface (the engine) ----------------------------------------
 from .model_builder import (
@@ -31,6 +33,7 @@ from .hierarchy import CartesianVelocityMoments, CompositeMean, MomentModel, Mom
 from .ordering import MomentOrdering
 from .basis import MomentBasis, RawMomentBasis
 from .transforms import CenteredTransform, StandardizedTransform
+from .affine import affine_push_forward
 from .speeds import ExactSpeeds
 from .projection import RealizabilityProjection, RealizableSet
 from .relaxation import HyQMOM15Relaxation
@@ -47,6 +50,7 @@ from .fan_li import (
 __all__ = [
     # public generator surface
     "moment_indices",
+    "affine_push_forward",
     "moment_names",
     "moment_transport_blocks",
     "MOMENT_VELOCITY_DIMENSION",
