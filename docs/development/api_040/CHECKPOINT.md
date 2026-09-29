@@ -3,7 +3,52 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Current reception: source 38faddb, native be89992b (in progress)
+## Current reception: source 83b2b12, native 4574ed60 (in progress)
+
+The incremental MPI/Dim2 OpenMP wheel build succeeded. The installed native SHA256 is
+`4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb`;
+header signature `188bd89463b43e0e8edfed6123df93d7eded84803eacdc6359f48d151089cc68`.
+All 1,079 shipped Python/header files match the checkout, manifest SHA256
+`c1f5d8141ac858aa80efc7e24ca1c2960b2733b83084b97b7715fb08ffeacaf5`.
+The installed package is under the `pops-api040` environment, not the handoff module.
+Parent-workspace receipts: `outputs/build-c17-c38-reviewed-openmp-mpi.log` and
+`outputs/installed-83b2b12-critical/identity.json`.
+
+The first installed reception ran 71 tests: 50 passed and 21 failed during fixture
+setup because the launch command omitted `Kokkos_ROOT`. The receipt remains failed;
+none of those 21 tests executed their numerical assertions. All C34 publication
+tests, including exact absent-versus-empty cursor rollback and independent nested
+NPZ publications, passed. The nine diagonal diffusion tests passed, including the
+native AMR refinement/mass case that previously aborted with an invalid communicator.
+The 21 omitted PDE tests are being rerun with the explicit Kokkos environment in
+`outputs/installed-83b2b12-critical-pde/`.
+
+Integrated since 38faddb: C17 LocalNewton requires the original residual for success;
+a small unconverged step is a safeguard failure. C34 compensation restores exact
+cursor membership while retaining disjoint updates. C38 freezes history mutations
+after the restart hierarchy image is captured and rejects unaccepted pending stores.
+The prior alleged multi-parent history-loss defect was not reproduced: the existing
+sequence image already preserved that remap; the new three-level test checks it.
+Independent source reviews passed, but native C17/C38 reception is still pending.
+
+Historical 38faddb reception: Python 209 passed / one real C34 failure, now corrected.
+The C++ reception had 123 run, nine not run and one failed invocation. The failed
+MPI Path suite still expected the old FixedDt policy; its updated tests now use an
+actually excessive face CFL and check exact rollback. Five of the nine not-run
+tests belonged to an unbuilt `test_program_context_schur_free` target, which must
+be built in the next C++ reception; four were serial-only rank-divergence skips.
+The four real MPI2 suites for resources, loader transactions, runtime and context
+passed. These historical results are not acceptance of 83b2b12.
+
+Root owns heavy builds and integration. Current bounded GPT-6 tasks: Astra/high
+implements vector/cross-state User reconstruction in an isolated worktree; Sol/high
+has independently frozen its review tests. A second Astra/high audits the stale
+contract/corpus registry against source and actual receipts. No remote job, push or
+merge has occurred. Next: finish installed PDE reception, build and run the nine
+affected native C++ targets including real MPI2 C38, then M17/M06/M13/Cattaneo/M08 and
+the scalar/Euler/diffusion scientific non-regressions. GPU remains not executed.
+
+## Previous reception: source 38faddb, native be89992b (historical)
 
 The incremental MPI/Dim2 OpenMP wheel build succeeded. The installed native SHA256 is
 `be89992bb2a67a5e3b04dfeb2552d5954f4c7e8d8f1c2ba094e8f0452b4d466c`;
