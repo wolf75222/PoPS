@@ -37,7 +37,7 @@ unrestricted integral omission. The primary corrected the path mechanism and
 the independent tests were retained. Reports distinguish source-only checks
 from installed/native runs.
 
-Current bounded follow-ups (same actual GPT-6/high workers):
+Earlier bounded follow-ups (same actual GPT-6/high workers):
 
 - Astra Protocols implements condensation failure propagation and equilibrated local inversion; Astra Semantics independently compiled 465 extreme-scale checks, including ASan/UBSan.
 - Sol Reference implements M08 current field-state provenance and the two-state scientific case; Astra Semantics counter-tested the frontier and found/fixed a non-discriminating stale-field reception threshold.
@@ -46,3 +46,11 @@ Current bounded follow-ups (same actual GPT-6/high workers):
 - Primary freezes shipped sources, rebuilds/authenticates the actual installed MPI/OpenMP package, registers tests in existing suites, and runs native reception.
 
 The tool calls selected `gpt-6-astra` and `gpt-6-sol` with `high`; follow-up tasks reuse those agents. No textual claim of hidden routing metadata substitutes for the observable invocation parameters.
+
+Current bounded assignments after T2 integration:
+
+- Astra Protocols: joint vector reconstruction and halo repair delivered, paired benchmark reviewed; now repairs standalone User AMR native installation.
+- Sol Native: independent T2 counterexamples and runtime tests delivered, paired benchmark authored; now counter-reviews the AMR installation fix.
+- Astra Semantics: genuine Dim1 M15 preparation and suspended-cadence fixture delivered; now implements generic coordinated face contributions after exposing the public M07 gap.
+- Sol Reference: independent M15, cadence/C38 and M07 oracles/reviews delivered; now reviews the new face contract and prepares a distinct generic witness.
+- Primary: integrates, freezes installed source identity, builds one heavy target group at a time, and owns installed/native/scientific reception. Source oracles are not substituted for native execution.

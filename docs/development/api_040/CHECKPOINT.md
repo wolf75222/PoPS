@@ -3,7 +3,65 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Current reception: source 3d06cab, native 4574ed60 (in progress)
+## Current reception: T2 source 3bd6ea9, native 4b458dab (in progress)
+
+Vector-row User reconstruction and its complete cross-row halo requirement are
+integrated in ba55091/5d030d4, with Sol's independent probes through 17383b5.
+The native Dim2 OpenMP/MPI package has been rebuilt; 1,080 shipped Python/SDK
+files match. Native SHA256 is
+`4b458dabd54357b8aa3a4659cee8363a9a4510e55aaa81706bfe03a445d27037`,
+SDK signature `7553c50eecb2bc352f276643fad748a168750d3c94badf1dcb3293ed933b343e`,
+source manifest `8c2d99c5149aee562ba0eddfcb7395958e77a28cac94af014ea0a2fc4caaeb45`.
+The new contract is `pops.generated.reconstruction.joint-stencil/v2`; the
+existing scalar contract remains accepted. No Python callback runs per face.
+
+Parent-workspace `outputs/installed-3bd6ea9-t2-amr/` records **8 passes, 6 failures**
+in 382.28 s. All seven new T2 checks passed: three storage projections and four
+actual installed native scenarios (cross-state/permuted Primitive/mixed scalar
+oracles, parameter rebind, invalid active branch rejection). Five principal AMR
+cases accepted one native step, then their fixture compared a bound `time`
+method to a number. They stopped before numerical assertions. cf6dace calls
+the actual clock getters and also repairs the rollback test's previously vacuous
+bound-method equality. Their numerical/clock reception remains pending rerun.
+The sixth failure is productive: standalone User AMR compilation succeeds, but
+native installation rejects its `source_stencil:<identity>` limiter route.
+Astra Protocols repairs this in isolation; Sol Native independently reviews it.
+
+The previous C++ reception (build ac2aed0, production 3d06cab) completed with
+173 CTest rows: 163 passed, six failed, four skipped by single-rank guards.
+Rows include MPI executable aggregates, not counts expanded per rank.
+Evidence: parent `outputs/native-c17-c38-3d06cab-{receipt.json,build.log,ctest.log}`
+and `outputs/native-c17-c38-3d06cab.xml`. The failures expose test setup errors:
+suspended-port success continued after a rejection that correctly revoked the
+port; restart history fixtures lacked their real Program/flux budget; and a
+three-level bootstrap fixture committed after the first refined level. Repairs
+69146a7/04116cb and independent tests/reviews 85966dc retain all native guards.
+The ten affected C++ targets, including WENO, are rebuilding at cf6dace in
+`build-mpi`; log `outputs/native-t2-c38-repaired-build.log`. Reception is pending.
+
+The genuine Dim1 M15 B.1 preparation and independent oracle are integrated in
+648ccaf/ba2199d/32b108a. Thirty integrated source T2/M15 checks passed; no Dim1
+build or native M15 trajectory has run yet. M07 physical declaration and two
+independent lake-at-rest oracles are integrated in c40306f/63c773e. They expose
+the absent public coordinated face contributions; native M07 remains EXPR/IMPL.
+Astra Semantics now implements the generic construction, with Sol Reference's
+independent contract/physics review. These are the same actual GPT-6/high workers.
+
+The paired performance protocol and identity counter-tests are integrated in
+330285a/f6af437. Its read-only plan passed, but no timings have been measured.
+Preserved local snapshots: `outputs/artifacts/3d06cab`, `3bd6ea9`, and the clean
+candidate `cf6dace` (full source SHA `cf6daceaa028df1343a303751ec9ae8f9f5ce6b3`).
+The 3bd6ea9 receipt includes a test-only worktree diff and is deliberately refused
+by the benchmark. The cf6dace snapshot was independently rehashed against all
+1,080 files and the native image. Never overwrite these historical snapshots.
+
+Next: finish C++ reception, rerun six principal AMR cases with clock reads fixed,
+receive standalone User AMR repair, run actual rank-one-owned MPI failure,
+build Dim1 preserving Dim2, and execute the frozen M15/M17 and other pending
+scientific campaigns. The corpus and T3/T5 gaps remain open; this is not global
+acceptance, GPU execution, remote CI, or a new PR.
+
+## Previous reception: source 3d06cab, native 4574ed60 (historical)
 
 The wheel was incrementally rebuilt after the principal carrier fix 3d06cab.
 Its native binary and SDK header signature remain those listed below: the change
