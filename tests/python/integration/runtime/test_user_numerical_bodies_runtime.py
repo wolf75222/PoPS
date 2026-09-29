@@ -133,8 +133,9 @@ def _case(width, *, layout_kind="uniform", invalid=None, pulse=False, dt=DT):
         transfer = AMRTransfer()
         for block in blocks:
             transfer.state(block[state], StateTransfer())
+        tag_threshold = case.param(RuntimeParam("refinement_threshold", default=1000.))
         layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=1, ratios=()),
-            tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[0][state])[state.components[0]] > 1000.),
+            tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[0][state])[state.components[0]] > case.value(tag_threshold)),
                                      Buffer(cells=1)),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS),

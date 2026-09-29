@@ -64,7 +64,11 @@ def test_principal_amr_joint_faces_preserve_composite_components_and_rebind(
         before = _snapshot(runtime,widths,levels,world)
         boxes = tuple(runtime.patch_boxes())
         def check_initial():
-            assert {int(row[0]) for row in boxes} == set(range(levels))
+            assert runtime.n_levels() == levels
+            # patch_boxes exposes refined patches; the complete coarse domain
+            # is the native level-zero array, checked separately below.
+            assert {int(row[0]) for row in boxes} == set(range(1,levels))
+            assert before[0].shape == (sum(widths),CELLS,CELLS)
             order = tuple(reversed(range(sum(widths)))) if reverse else tuple(range(sum(widths)))
             for level,value in enumerate(before):
                 n = CELLS*2**level
