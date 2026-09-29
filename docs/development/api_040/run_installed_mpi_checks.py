@@ -24,17 +24,17 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def worker(output: Path, ranks: int, tests: list[str]) -> int:
+def worker(output: Path, ranks: int, dimension: int, tests: list[str]) -> int:
     import pops
     from pops._native_selector import select_native_dimension
     from pops._native_collectives import require_world, allgather_value
 
-    native = select_native_dimension(2)
+    native = select_native_dimension(dimension)
     world = require_world(native.mpi_world())
     if world.size != ranks:
         raise RuntimeError(f"expected {ranks} actual native MPI ranks, got {world.size}")
     before = json.loads((output / "before/identity.json").read_text())
-    observed = {"rank": world.rank, "ranks": world.size,
+    observed = {"rank": world.rank, "ranks": world.size, "dimension": dimension,
                 "package_file": str(Path(pops.__file__).resolve()),
                 "native_file": str(Path(native.__file__).resolve()),
                 "native_sha256": digest(Path(native.__file__))}
@@ -61,6 +61,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--ranks", type=int, default=2)
+    parser.add_argument("--dimension", type=int, choices=(1, 2, 3), default=2)
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=1800.)
     parser.add_argument("--test", action="append", required=True, dest="tests")
@@ -72,11 +73,11 @@ def main() -> int:
         parser.error("ranks >= 2, threads >= 1 and positive timeout are required")
     output = args.output.resolve()
     if args.worker:
-        return worker(output, args.ranks, args.tests)
+        return worker(output, args.ranks, args.dimension, args.tests)
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         parser.error("output must be empty to exclude stale rank receipts")
-    environment = dict(os.environ, PYTHONNOUSERSITE="1", POPS_NATIVE_DIM="2",
+    environment = dict(os.environ, PYTHONNOUSERSITE="1", POPS_NATIVE_DIM=str(args.dimension),
                        POPS_REQUIRE_NATIVE_TESTS="1", OMP_NUM_THREADS=str(args.threads),
                        POPS_THREADS=str(args.threads), OMP_PROC_BIND="false")
     identity_runner = Path(__file__).with_name("run_installed_checks.py")
@@ -96,7 +97,8 @@ def main() -> int:
     if not launcher.is_file():
         parser.error(f"MPI launcher absent from active environment: {launcher}")
     command = [str(launcher), "-n", str(args.ranks), sys.executable, str(Path(__file__).resolve()),
-               "--worker", "--output", str(output), "--ranks", str(args.ranks)]
+               "--worker", "--output", str(output), "--ranks", str(args.ranks),
+               "--dimension", str(args.dimension)]
     for test in args.tests:
         command.extend(("--test", test))
     started = time.monotonic()
@@ -142,9 +144,10 @@ def main() -> int:
                 for row in rank_results)
     passed = (code == 0 and before_code == after_code == 0 and unchanged
               and same_installation and rank_parity and clean)
-    receipt = {"schema_version": 1, "status": "passed" if passed else "failed",
+    receipt = {"schema_version": 2, "status": "passed" if passed else "failed",
                "command": command, "returncode": code, "timeout": timed_out,
                "seconds": elapsed, "ranks": args.ranks, "threads": args.threads,
+               "dimension": args.dimension,
                "authentication_before": before_code, "authentication_after": after_code,
                "same_installation": same_installation, "test_sources_unchanged": unchanged,
                "rank_test_parity": rank_parity, "rank_results": rank_results,
