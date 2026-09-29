@@ -47,7 +47,7 @@ def call_with_bindings(handle, target, bindings, **kwargs):
         model.declaration_index().authenticate(physical)
         if not isinstance(value, ProgramValue) or value.vtype != "state" or value.space != physical.space:
             raise ValueError("rate binding value does not carry its exact physical StateSpace")
-        if quantity.is_instance and quantity.block_ref != value.block:
+        if quantity.is_instance and quantity.block_ref._resolved() != value.block._resolved():
             raise ValueError("rate binding value belongs to another block instance")
         if physical.space in supplied:
             raise ValueError("rate bindings repeat a physical StateSpace")

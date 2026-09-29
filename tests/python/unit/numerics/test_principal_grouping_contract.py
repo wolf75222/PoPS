@@ -103,3 +103,23 @@ def test_resolved_principal_group_has_every_physical_row_and_exact_instance(size
     assert group.component_counts == (1,) * size
     assert group.states == tuple(case.resolve(block[state]) for block, state in zip(blocks, states, strict=True))
     assert group.rates == tuple(case.resolve(rate, block=block) for block, rate in zip(blocks, rates, strict=True))
+
+
+def test_resolved_binding_keys_authenticate_the_exact_authoring_block():
+    case, _, states, rates, blocks, _, evaluations = _principal_case(2)
+    inputs = evaluations[0].inputs
+    bindings = {case.resolve(block[state]): value
+                for block, state, value in zip(blocks, states, inputs, strict=True)}
+    assert rates[0](inputs[0], bindings=bindings).op == "principal_rate"
+
+
+def test_resolved_binding_key_from_another_instance_is_not_interchangeable():
+    case, model, states, rates, blocks, _, evaluations = _principal_case(2)
+    inputs = evaluations[0].inputs
+    clone = case.block("clone", model, states=(states[0],))
+    bindings = {case.resolve(block[state]): value
+                for block, state, value in zip(blocks, states, inputs, strict=True)}
+    del bindings[case.resolve(blocks[0][states[0]])]
+    bindings[case.resolve(clone[states[0]])] = inputs[0]
+    with pytest.raises(ValueError, match="another block instance"):
+        rates[0](inputs[0], bindings=bindings)

@@ -113,17 +113,30 @@ def emit_principal_helper(entry):
 
 
 def principal_dt_bounds(program, authority):
-    """Use the same reconstructed faces for the beginning-of-step group CFL bound."""
-    from .program_lowerability import all_ops
+    """Bound only unconditional evaluations of the actual beginning-of-step state.
+
+    A prescribed step needs no speculative evaluation. Conditional bodies and
+    calculated stages retain their face-frequency check at the active RHS site;
+    they must never be replayed with unrelated current-state inputs here.
+    """
+    from .program_lowerability import all_ops_with_ancestry
     from .program_models import model_for_node
     from .principal_lowering import principal_for_value
+    from pops.time import ExternalTimeGrid, FixedDt
+
+    if isinstance(program._step_strategy, (FixedDt, ExternalTimeGrid)):
+        return []
     lines, seen = [], set()
+    required = set()
     block_indices = program._block_indices()
-    for value in all_ops(program):
+    for value, ancestry in all_ops_with_ancestry(program):
         if value.op != "principal_rate":
             continue
         entry = principal_for_value(model_for_node(authority, value), value)
         group = entry["group"]
+        required.add(group.identity.token)
+        if ancestry or any(item.op != "state" for item in value.inputs):
+            continue
         if group.identity.token in seen:
             continue
         seen.add(group.identity.token)
@@ -139,6 +152,10 @@ def principal_dt_bounds(program, authority):
                       (prefix,entry["cpp_name"],value.id,prefix,len(indices),",".join(map(str,indices))),
                       "const pops::Real %s_frequency=%s_resource.explicit_frequency();" % (prefix,prefix),
                       "pops_program_dt_bound_value=std::min(pops_program_dt_bound_value,%s_frequency>0 ? cfl/%s_frequency : std::numeric_limits<pops::Real>::infinity());" % (prefix,prefix)])
+    if required - seen and program._dt_bound is None:
+        raise NotImplementedError(
+            "adaptive principal groups evaluated only under a guard or on a calculated stage "
+            "require an authored Program.dt_bound; their active face stability is checked at RHS")
     return lines
 
 

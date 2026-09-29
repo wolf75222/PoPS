@@ -9,8 +9,8 @@ def _lower(case, model, program):
     from pops.codegen.program_models import ProgramModelGraph
     from pops.layouts import Uniform
     from pops.mesh import CartesianGrid, PeriodicAxes
-    from pops.time import FixedDt
-    program.step_strategy(FixedDt(.001))
+    from pops.time import AdaptiveCFL
+    program.step_strategy(AdaptiveCFL(.3))
     layout = Uniform(CartesianGrid(frame=model.frame, cells=(8, 8),
                                    periodic=PeriodicAxes(model.frame.axes)))
     resolved = pops.resolve(pops.validate(case), layout=layout)

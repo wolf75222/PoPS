@@ -436,7 +436,7 @@ def _emit_system_install(target: str, prelude: str, body: str, provider_plan_ins
 
 
 def _emit_dt_bound_entry(target: str, body: str, value_name: str | None = None) -> str:
-    """Emit one allocation-free facade-typed dt-bound ABI."""
+    """Emit one facade-typed dt-bound ABI with collectively prepared resources."""
     if target == "amr_system":
         symbol = "pops_program_dt_bound_amr"
         facade = "pops::AmrSystem<pops::kNativeDimension>"
@@ -521,7 +521,7 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     """Lower the optional dt bound (spec s18 / ADC-417) to ``(has, body, value)``.
 
     ``has`` is the bool literal ``pops_program_has_dt_bound`` returns. ``body`` is the
-    allocation-free scalar evaluation. ``value`` names the computed bound, or ``None``
+    prepared scalar/spatial evaluation. ``value`` names the computed bound, or ``None``
     when the function only returns the +inf sentinel. On ``amr_system`` the entry
     evaluates that scalar on every live level and keeps the minimum. ADC-426: a
     multi-block dt bound may read several blocks' states, so each op resolves its
