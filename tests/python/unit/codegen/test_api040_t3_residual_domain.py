@@ -169,7 +169,7 @@ def compiled_residuals(tmp_path_factory):
     source.write_text(code)
     completed = subprocess.run([compiler, "-std=c++20", "-shared", "-fPIC", "-O3",
                                 "-fno-fast-math", "-ffp-contract=off",
-                                "-I", str(Path(__file__).resolve().parents[3] / "include"), str(source),
+                                "-I", str(Path(__file__).resolve().parents[4] / "include"), str(source),
                                 "-o", str(library)], capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr
     compiled = ctypes.CDLL(str(library))

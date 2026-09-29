@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from scipy.linalg import expm
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "examples/migration/scientific"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "examples/migration/scientific"))
 import structural_cattaneo_oracle as oracle
 
 

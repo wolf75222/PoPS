@@ -36,3 +36,13 @@ quadrature consistency plus missing runtime-parameter discovery; Sol found the
 unrestricted integral omission. The primary corrected the path mechanism and
 the independent tests were retained. Reports distinguish source-only checks
 from installed/native runs.
+
+Current bounded follow-ups (same actual GPT-6/high workers):
+
+- Astra Protocols implements condensation failure propagation and equilibrated local inversion; Astra Semantics independently compiled 465 extreme-scale checks, including ASan/UBSan.
+- Sol Reference implements M08 current field-state provenance and the two-state scientific case; Astra Semantics counter-tested the frontier and found/fixed a non-discriminating stale-field reception threshold.
+- Sol Native authors the supplied HyQMOM B.1 axial/oblique cases; Astra Semantics independently reviews the mathematical formulas and classifications.
+- Astra Protocols audits original-residual acceptance in LocalNewton; Sol Native audits real restart/regrid history atomicity; Sol Reference prepares exact M09 source/spatial variants without modifying the core.
+- Primary freezes shipped sources, rebuilds/authenticates the actual installed MPI/OpenMP package, registers tests in existing suites, and runs native reception.
+
+The tool calls selected `gpt-6-astra` and `gpt-6-sol` with `high`; follow-up tasks reuse those agents. No textual claim of hidden routing metadata substitutes for the observable invocation parameters.

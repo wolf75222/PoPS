@@ -81,7 +81,7 @@ def test_public_source_division_keeps_evaluated_domain_and_lazy_branch(tmp_path)
     source_file.write_text(code)
     result = subprocess.run(["c++", "-std=c++20", "-shared", "-fPIC", "-O3",
                              "-fno-fast-math", "-ffp-contract=off", "-I",
-                             str(Path(__file__).resolve().parents[3]/"include"),
+                             str(Path(__file__).resolve().parents[4]/"include"),
                              str(source_file), "-o", str(library)],
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

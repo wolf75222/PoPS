@@ -1,6 +1,6 @@
 # Contre-revue indépendante — block_inverse / block_apply_inverse
 
-Agent Astra Semantics, checkout isolé PoPS-resource-lifetime. Aucun cœur modifié par le relecteur. Fichier indépendant autorisé par Astra Protocols : `tests/cpp/unit/numerics/test_block_inverse_extreme_review.cpp`, exécutable host autonome avec main.
+Agent Astra Semantics, checkout isolé PoPS-resource-lifetime. Aucun cœur modifié par le relecteur. Fichier indépendant autorisé par Astra Protocols : `docs/development/api_040/evidence/block_inverse_extreme_review.cpp`, exécutable host autonome avec main.
 
 ## Résultats
 
@@ -11,9 +11,9 @@ Agent Astra Semantics, checkout isolé PoPS-resource-lifetime. Aucun cœur modif
 Commandes reproductibles depuis ce checkout :
 
 ```
-rtk proxy /usr/bin/clang++ -std=c++20 -O2 -Iinclude tests/cpp/unit/numerics/test_block_inverse_extreme_review.cpp -o /tmp/pops-block-inverse-extreme-review
+rtk proxy /usr/bin/clang++ -std=c++20 -O2 -Iinclude docs/development/api_040/evidence/block_inverse_extreme_review.cpp -o /tmp/pops-block-inverse-extreme-review
 rtk proxy /tmp/pops-block-inverse-extreme-review
-rtk proxy /usr/bin/clang++ -std=c++20 -O2 -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude tests/cpp/unit/numerics/test_block_inverse_extreme_review.cpp -o /tmp/pops-block-inverse-extreme-review-sanitized
+rtk proxy /usr/bin/clang++ -std=c++20 -O2 -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude docs/development/api_040/evidence/block_inverse_extreme_review.cpp -o /tmp/pops-block-inverse-extreme-review-sanitized
 rtk proxy /tmp/pops-block-inverse-extreme-review-sanitized
 ```
 

@@ -56,7 +56,7 @@ def test_public_condensation_checks_inverse_before_using_output(tmp_path, diagon
     compiler = shutil.which("clang++")
     if compiler is None:
         pytest.skip("clang is needed to pin automatic-storage initialization in this witness")
-    include = Path(__file__).resolve().parents[3] / "include"
+    include = Path(__file__).resolve().parents[4] / "include"
     cpp = tmp_path / "singular.cpp"
     cpp.write_text("""#include <pops/numerics/linalg/block_inverse.hpp>
 #include <cmath>
@@ -144,7 +144,7 @@ int main() {
          "if (status != 0 || output[0] != 3/(1-DIAGONAL) || output[1] != 5/(1-DIAGONAL)) return 2;"
          .replace("DIAGONAL", "(" + str(diagonal) + ")")) + "\n}\n")
     binary = tmp_path / "apply"
-    include = Path(__file__).resolve().parents[3] / "include"
+    include = Path(__file__).resolve().parents[4] / "include"
     subprocess.run([compiler, "-std=c++20", "-O2", "-ftrivial-auto-var-init=zero",
                     "-I" + str(include), str(cpp), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

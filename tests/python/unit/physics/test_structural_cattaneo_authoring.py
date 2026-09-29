@@ -6,7 +6,7 @@ import pops
 import pytest
 from pops.params import Positive, RuntimeParam
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "examples/migration/scientific"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "examples/migration/scientific"))
 from structural_cattaneo import build_case
 
 

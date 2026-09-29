@@ -33,6 +33,7 @@ CASES = {
                    {"POPS_API040_M04_DIFFUSION": "x_only", "POPS_API040_M04_METHOD": "ssprk2"}),
     "m17": ("api040_m17_fan_li.py", "reverse/result.json", {}),
     "m06": ("api040_m06_enthalpy.py", "result.json", {}),
+    "m08": ("api040_m08_guiding_center.py", "receipt.json", {}),
     "m13": ("api040_m13_reaction_chain.py", "result.json", {}),
     "cattaneo": ("structural_cattaneo.py", "result.json", {}),
 }
