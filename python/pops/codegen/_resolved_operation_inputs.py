@@ -25,6 +25,10 @@ _LEGACY_ROUTES = {
 
 def native_route(module: Any, operator: Any) -> tuple[str | None, str | None]:
     """Current checked adapter vocabulary; no capability follows from a type name alone."""
+    if operator.lowering.get("principal_balance") or (
+            operator.kind == "grid_operator" and
+            sum(space.kind == "state" for space in operator.signature.inputs) > 1):
+        return "program:principal_finite_volume", None
     from pops._ir.balance import source_balance_supported
     if source_balance_supported(operator.lowering.get("physical_balance")):
         return "program:source_balance", None

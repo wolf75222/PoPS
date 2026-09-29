@@ -31,6 +31,7 @@ def _formula_carrier(model: Any) -> Any:
 
 
 _MODEL_PARAM_OPS = frozenset({
+    "principal_rate", "principal_capture",
     "source", "apply", "local_transform", "affine_moment_update", "solve_local_linear", "rhs", "diffusive_rhs",
     "solve_local_nonlinear",
 })
@@ -65,7 +66,14 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     lin = getattr(impl, "_linear_sources", {}) or {}
     flux = getattr(impl, "_flux_terms", {}) or {}
     transforms = getattr(impl, "_local_transforms", {}) or {}
-    if v.op == "rhs" and v.attrs.get("path_conservative", False):
+    if v.op == "principal_capture":
+        out.extend(v.attrs["principal_expressions"])
+    elif v.op == "principal_rate":
+        from .principal_lowering import principal_for_value
+        entry = principal_for_value(impl, v)
+        out.extend(value for body in entry["fluxes"] for row in body.values() for value in row)
+        out.extend(value for row in entry["waves"].values() for value in row)
+    elif v.op == "rhs" and v.attrs.get("path_conservative", False):
         path = impl._path_conservative
         out.extend(path["kernel"].get("parameter_expressions", ()))
         out.extend(value for row in path["covectors"] for value in row)
@@ -169,6 +177,21 @@ def _qualified_param_identity(ref: Any, block: Any, *, graph_aware: bool) -> tup
     return owner, handle.qualified_id
 
 
+def _parameter_read_sites(program, model):
+    """Each group flux and bound reads the exact parameter table of every sampled block."""
+    from types import SimpleNamespace
+    for value in _all_program_ops(program):
+        if value.op != "principal_rate":
+            yield value
+            continue
+        impl = _formula_carrier(model_for_node(model, value))
+        expressions = _op_model_exprs(impl, value)
+        blocks = dict.fromkeys(item.block for item in value.inputs)
+        for block in blocks:
+            yield SimpleNamespace(op="principal_capture", block=block, name=value.name,
+                attrs={"principal_expressions": expressions})
+
+
 def program_param_entries(program: Any, model: Any) -> list:
     """Per (PROGRAM block, runtime parameter) entries the .so exports + Python routes (ADC-510).
 
@@ -190,7 +213,7 @@ def program_param_entries(program: Any, model: Any) -> list:
     emitted_names = {}
     model_params = {}
     entries = []
-    for v in _all_program_ops(program):
+    for v in _parameter_read_sites(program, model):
         if v.op not in _MODEL_PARAM_OPS:
             continue
         emit_model = model_for_node(model, v)

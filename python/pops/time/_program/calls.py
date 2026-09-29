@@ -30,7 +30,8 @@ else:
 class _ProgramCall(_ProgramBase):
     """Private typed operator-call lowering used by callable operator handles."""
 
-    def _call(self, operator: Any, *args: Any, name: Any = None, schedule: Any = None) -> Any:
+    def _call(self, operator: Any, *args: Any, name: Any = None, schedule: Any = None,
+              _sampling: Any = None) -> Any:
         """Resolve, type-check and lower one exact operator handle."""
         from pops.model import OperatorHandle
         if not isinstance(operator, OperatorHandle):
@@ -49,7 +50,13 @@ class _ProgramCall(_ProgramBase):
         self._validate_scheduled_reads(args, consumer="operator %r" % op.name)
         if schedule is not None:
             self._validate_schedule(op, schedule, args)
-        result = self._lower_call(op, operator_handle, operator_name, args, name)
+        if _sampling is not None:
+            from .principal import lower_principal_rate
+            if schedule is not None:
+                raise ValueError("principal grouped evaluation requires a common unscheduled stage")
+            result = lower_principal_rate(self, op, args, name, _sampling)
+        else:
+            result = self._lower_call(op, operator_handle, operator_name, args, name)
         from .native_flux import physical_rate_native_functions
         native_calls = physical_rate_native_functions(op, args)
         # A coupled_rate has no single output ProgramValue (it returns a _CoupledResult): its per-block
@@ -189,6 +196,11 @@ class _ProgramCall(_ProgramBase):
 
     def _lower_rate(self, op: Any, _operator_handle: Any, operator_name: Any,
                     args: Any, name: Any) -> Any:
+        if op.lowering.get("principal_balance") or (
+                op.kind == "grid_operator" and len(op.signature.inputs) > 1 and
+                all(space.kind == "state" for space in op.signature.inputs)):
+            from .principal import lower_principal_rate
+            return lower_principal_rate(self, op, args, name)
         if op.lowering.get("joint_balance"):
             from .interactions import lower_joint_balance
             return lower_joint_balance(self, op, args, name)

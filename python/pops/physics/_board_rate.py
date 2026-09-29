@@ -89,6 +89,10 @@ class _RateAuthoringMixin(_BoardModel):
             for space in operator.signature.inputs:
                 if getattr(space, "kind", None) == "state":
                     if space != state.space:
+                        if kind == "flux" and self._multi_module is not None:
+                            if space not in inputs:
+                                inputs.append(space)
+                            continue
                         # The sole board state is an explicit alias of the DSL's
                         # U storage. Authenticate every physical metadata field;
                         # neither a reused name nor an equal array shape suffices.
@@ -116,7 +120,10 @@ class _RateAuthoringMixin(_BoardModel):
         # An unsupported equation remains scientific IR. In particular it is never
         # encoded as flux=False or an empty source list to make old codegen accept it.
         result = RateHandle(handle, view, model=self)
-        if reason is None:
+        from ._principal_dependencies import principal_balance
+        registry = (self._multi_module.operator_registry() if self._multi_module is not None
+                    else self._dsl._m.operator_registry())
+        if reason is None and not principal_balance(view, registry):
             result = self._register_legacy_rate(reg, state, flux, sources, view)
         else:
             registry = (self._multi_module.operator_registry() if self._multi_module is not None
@@ -195,8 +202,10 @@ class _RateAuthoringMixin(_BoardModel):
         install_nonconservative_products(self, module)
         for handle, view in getattr(self, "_retained_rates", {}).items():
             reason = view.legacy_incompatibility()
+            from ._principal_dependencies import principal_balance
+            principal = principal_balance(view, registry)
             storage = {}
-            if self.frame is not None and source_balance_supported(view):
+            if self.frame is not None and (source_balance_supported(view) or principal):
                 storage = {"storage_axes": tuple(axis.name for axis in self.frame.axes),
                            "storage_frame": self.frame.canonical_id}
             if handle.registered_operator_name in registry.names():
@@ -210,6 +219,8 @@ class _RateAuthoringMixin(_BoardModel):
                 operator.lowering = lowering
             else:
                 lowering = {"physical_balance": view}
+                if principal:
+                    lowering["principal_balance"] = True
                 requirements = {}
                 if any(term.kind == "nonconservative" for term in view.occurrences):
                     # The path rate reads the union of its exact physical operands.
@@ -223,7 +234,7 @@ class _RateAuthoringMixin(_BoardModel):
                         requirements["aux"] = tuple(sorted(auxiliary_reads))
                 if joint_balance_supported(view):
                     lowering["joint_balance"] = True
-                elif reason is not None and not source_balance_supported(view):
+                elif reason is not None and not source_balance_supported(view) and not principal:
                     lowering["native_unsupported"] = {
                         "code": "unsupported_balance_realization", "phase": "resolve",
                         "reason": reason,

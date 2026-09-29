@@ -564,6 +564,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # listed state so a downstream rhs(state, fields) reads the refreshed shared aux like any
         # solve_fields result (the FieldContext carries no readable buffer of its own).
         var[v.id] = var[v.inputs[0].id]
+    elif v.op == "principal_rate":
+        from .program_emit_principal import emit_principal_rate
+        emit_principal_rate(v, var, lines, node_model, block_idx, target)
     elif v.op == "coupled_rate":
         # A coupled rate (collisions / ionization, Spec 3 criterion 27, ADC-457): ONE multi-state
         # for_each_cell kernel fills the per-block rate scratch of EVERY participating block at

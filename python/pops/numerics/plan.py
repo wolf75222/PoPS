@@ -343,6 +343,7 @@ class ResolvedDiscretizationPlan:
     boundaries: tuple[Any, ...]
     sources: tuple[ResolvedNumericalBinding, ...]
     interfaces: tuple[Any, ...]
+    principal_groups: tuple[Any, ...] = ()
     identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -374,6 +375,7 @@ class ResolvedDiscretizationPlan:
             "boundaries": [_callable_projection(row, "resolved boundary") for row in self.boundaries],
             "sources": [row.to_data() for row in self.sources],
             "interfaces": [_callable_projection(row, "resolved interface") for row in self.interfaces],
+            "principal_groups": [group.to_data() for group in self.principal_groups],
         }
 
     def to_data(self) -> dict[str, Any]:
@@ -531,6 +533,8 @@ class DiscretizationPlan(Descriptor):
             root_kind = value.owner_path.nodes[0].kind
             if root_kind in (OwnerKind.CASE, OwnerKind.SHARED):
                 return case.resolve(value)
+            if value.kind == "state" and value not in states:
+                return case.resolve(value)
             return case.resolve(value, block=block)
 
         rates = []
@@ -624,6 +628,7 @@ class DiscretizationPlan(Descriptor):
             (resolve_interface(value) for value in self.interfaces.values()),
             key=lambda value: _projection_sort_key(value, "resolved interfaces"),
         ))
+        from .principal import resolve_principal_groups
         return ResolvedDiscretizationPlan(
             resolved_block,
             resolved_rates,
@@ -634,6 +639,7 @@ class DiscretizationPlan(Descriptor):
             )),
             resolve_pairs(self.sources.items(), "sources"),
             resolved_interfaces,
+            resolve_principal_groups(case, block),
         )
 
     def inspect(self) -> dict[str, Any]:

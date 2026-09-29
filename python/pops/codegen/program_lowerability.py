@@ -9,6 +9,7 @@ from pops.codegen.program_emit_kernels import ProgramValue
 _MODEL_OWNER_SENSITIVE_OPS = frozenset(
     {
         "rhs",
+        "principal_rate",
         "implicit_source",
         "source",
         "apply",

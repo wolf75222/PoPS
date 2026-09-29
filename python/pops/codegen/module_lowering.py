@@ -227,6 +227,19 @@ def _module_to_model(module: Any, state_space: Any = None,
                       if getattr(item, "kind", None) == "state")
             or state in op.signature.inputs)
     }
+    principal_rates = tuple(op for op in applicable_rates if op.lowering.get("principal_balance"))
+    principal_fluxes = {term.payload.reg_name for op in principal_rates
+                        for term in op.lowering["physical_balance"].occurrences}
+    if principal_rates:
+        frames = {(tuple(op.capabilities.get("storage_axes", ())),
+                   op.capabilities.get("storage_frame")) for op in principal_rates}
+        if len(frames) != 1:
+            raise ValueError("principal state storage requires one exact physical frame")
+        axes, frame = next(iter(frames))
+        if not axes or frame != state.frame:
+            raise ValueError("principal state storage requires its authored StateSpace frame")
+        object.__setattr__(m._m, "_program_only_storage_axes", axes)
+        applicable_grid_names -= principal_fluxes
     if not applicable_grid_names and any(op.lowering.get("joint_balance") for op in applicable_rates):
         # Geometry comes from the captured physical frame, never an invented transport law.
         joint_storage = {(tuple(op.capabilities.get("storage_axes", ())),
@@ -358,6 +371,9 @@ def _module_to_model(module: Any, state_space: Any = None,
                 source, "documentary"))
             continue
         refusal = op.lowering.get("native_unsupported")
+        if op.lowering.get("principal_balance") or op.name in principal_fluxes:
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:principal_finite_volume",)))
+            continue
         from pops.numerics.diffusion import diffusion_balance_supported
         from pops.numerics.scharfetter_gummel import fitted_balance_supported
         diffusion_view = op.lowering.get("physical_balance")
@@ -474,7 +490,7 @@ def _module_to_model(module: Any, state_space: Any = None,
     # physical flux axes.  A Module deliberately stores those two declarations
     # independently, so materialize all grid operators before attaching the
     # exact-ranked eigenvalue provider.
-    if module._eigenvalues is not None:
+    if module._eigenvalues is not None and not principal_rates:
         m.eigenvalues(**{
             axis: _body_for_state(values)
             for axis, values in module._eigenvalues.items()
@@ -594,6 +610,8 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
             from pops.codegen.user_reconstruction_lowering import prepare_user_reconstruction_carrier
 
             prepare_user_reconstruction_carrier(emit_model, numerics)
+            from pops.codegen.principal_lowering import prepare_principal_carrier
+            prepare_principal_carrier(emit_model, lowering.source_module, numerics)
             emit_model.check()
             return emit_model, lowering.source_module
         if resolved_operations is not None:

@@ -61,6 +61,10 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         if path is not None:
             out.extend(path["kernel"].get("parameter_expressions", ()))
             out.extend(value for row in path["covectors"] for value in row)
+        for principal in getattr(self, "_principal_groups", ()):
+            out.extend(_wrap(value) for body in principal["fluxes"]
+                       for row in body.values() for value in row)
+            out.extend(_wrap(value) for row in principal["waves"].values() for value in row)
         if self.cons_from is not None:
             out += list(self.cons_from)
         if self._elliptic is not None:

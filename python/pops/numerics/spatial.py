@@ -101,6 +101,7 @@ class FiniteVolume(Descriptor):
         reconstruction: Any,
         riemann: Any,
         positivity_floor: Any = None,
+        sampling: Any = (),
     ) -> None:
         from pops.model import Handle
 
@@ -142,6 +143,21 @@ class FiniteVolume(Descriptor):
                 raise ValueError("FiniteVolume.positivity_floor must be >= 0")
         self.positivity_floor = positivity_floor
         state = self.variables.options.get("state")
+        if isinstance(sampling, (str, bytes, Handle)):
+            raise TypeError("FiniteVolume.sampling requires a tuple of typed state handles")
+        self.sampling = tuple(sampling)
+        if any(not isinstance(item, Handle) or item.kind != "state" for item in self.sampling):
+            raise TypeError("FiniteVolume.sampling requires typed state handles")
+        if len(set(self.sampling)) != len(self.sampling) or state in self.sampling:
+            raise ValueError("FiniteVolume.sampling must not duplicate the target or another state")
+        if any(item.owner_path != flux_owner for item in self.sampling):
+            # Resolved instances may occupy different blocks of the same Model.
+            def declaration_owner(item):
+                return (item.declaration_ref or item).owner_path
+            flux_item = flux[0] if isinstance(flux, tuple) else flux
+            if any(declaration_owner(item) != declaration_owner(flux_item)
+                   for item in self.sampling):
+                raise ValueError("FiniteVolume.sampling contains a foreign Model state")
         if state is not None and state.owner_path != flux_owner:
             raise ValueError("FiniteVolume variables and physical flux belong to different Models")
         velocity = self.riemann.options.get("velocity")
@@ -155,6 +171,7 @@ class FiniteVolume(Descriptor):
             "reconstruction": self.reconstruction,
             "riemann": self.riemann,
             "positivity_floor": self.positivity_floor,
+            "sampling": self.sampling,
         }
 
     @property
@@ -257,13 +274,14 @@ class FiniteVolume(Descriptor):
             reconstruction=_resolved_brick(self.reconstruction, resolver),
             riemann=_resolved_brick(self.riemann, resolver),
             positivity_floor=self.positivity_floor,
+            sampling=tuple(resolver(item) for item in self.sampling),
         )
 
     def to_data(self) -> dict[str, Any]:
         fluxes = self.flux if isinstance(self.flux, tuple) else (self.flux,)
         if any(not item.is_resolved for item in fluxes):
             raise ValueError("FiniteVolume.to_data requires resolved physical handles")
-        return {
+        result = {
             "schema_version": 1,
             "method": "finite_volume",
             "flux": (
@@ -278,6 +296,13 @@ class FiniteVolume(Descriptor):
             "ghost_depth": self.ghost_depth,
             "positivity_floor": self.positivity_floor,
         }
+        if self.sampling:
+            result["sampling"] = [item.canonical_identity() for item in self.sampling]
+        return result
+
+    def runtime_storage_requirements(self):
+        """Grouped transport owns its native face evaluation; installation supplies storage."""
+        return {"ghost_depth": self.ghost_depth} if self.sampling else None
 
     def runtime_configuration(self) -> dict[str, Any]:
         """Return the exact per-block native method identity, excluding physical ownership.

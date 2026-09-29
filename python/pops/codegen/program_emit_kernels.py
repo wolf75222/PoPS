@@ -38,7 +38,7 @@ from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 # Ops the Phase-4b codegen lowers ONLY when a physical model is supplied (they read the model's
 # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
 _MODEL_OPS = (
-    "diffusive_rhs", "input_fields", "source",
+    "diffusive_rhs", "principal_rate", "input_fields", "source",
     "apply",
     "local_transform",
     "affine_moment_update",
@@ -55,6 +55,7 @@ _ALLOWED_OPS = frozenset(
         "solve_fields",
         "solve_fields_from_blocks",
         "rhs",
+        "principal_rate",
         "implicit_source",
         "solve_implicit_source",
         "linear_combine",
@@ -412,6 +413,9 @@ def _block_inverse_include(program: Any) -> str:
         result += "#include <pops/runtime/program/prepared_spatial_residual.hpp>\n"
     if any(v.op == "affine_moment_update" for v in program._values):
         result += "#include <pops/numerics/moments/affine_velocity.hpp>\n"
+    from .program_lowerability import all_ops
+    if any(v.op == "principal_rate" for v in all_ops(program)):
+        result += "#include <pops/runtime/program/prepared_principal_flux.hpp>\n"
     return result
 
 

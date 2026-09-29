@@ -775,6 +775,11 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 )
         if self._multi_module is not None:
             from pops.model import Rate, Signature
+            from ._principal_dependencies import flux_state_inputs
+
+            expr = {axis: [self._to_expr(value) for value in values]
+                    for axis, values in axis_values.items()}
+            inputs = flux_state_inputs(self, state, (expr, wave_values))
 
             if name in self._fluxes:
                 raise ValueError("flux %r is already declared" % name)
@@ -790,9 +795,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 target = module.operator(
                     name=route,
                     kind="grid_operator",
-                    signature=Signature((state.space,), Rate(state.space)),
-                    expr={axis: [self._to_expr(value) for value in values]
-                          for axis, values in axis_values.items()},
+                    signature=Signature(inputs, Rate(state.space)),
+                    expr=expr,
                 )
                 if wave_values is not None:
                     proposed = {

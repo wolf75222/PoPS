@@ -102,6 +102,7 @@ class _ProgramConstants:
     )
 
     _SCRATCH_OPS = frozenset({
+        "principal_rate",
         "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "local_transform", "affine_moment_update", "linear_combine", "pointwise_expression",
         "linear_source", "solve_local_linear",
         "solve_local_nonlinear", "solve_coupled_implicit", "solve_implicit_source", "solve_spatial_nonlinear",
@@ -109,6 +110,7 @@ class _ProgramConstants:
     })
 
     _PERCELL_KERNEL_OPS = frozenset({
+        "principal_rate",
         "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "linear_combine", "linear_source",
         "solve_local_linear",
         "solve_local_nonlinear", "solve_coupled_implicit", "cell_compare", "where", "coupled_rate",

@@ -406,7 +406,8 @@ def _emit_program_model_helpers(program: Any, authority: Any) -> str:
         expressions.extend(declaration["expressions"])
         expressions.append(declaration["valid_if"])
     lines = _eig_witness_helpers(_collect_eig_witnesses(expressions), indent="")
-    return ("\n".join(lines) + "\n") if lines else ""
+    from .program_emit_principal import emit_principal_models
+    return (("\n".join(lines) + "\n") if lines else "") + emit_principal_models(program, authority)
 
 
 def _emit_system_install(target: str, prelude: str, body: str, provider_plan_install: str) -> str:
@@ -526,9 +527,11 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     multi-block dt bound may read several blocks' states, so each op resolves its
     own block index. No commit lives in a dt bound (empty committed_ids).
     """
-    if program._dt_bound is None:
+    from .program_emit_principal import principal_dt_bounds
+    principal = principal_dt_bounds(program, model)
+    if program._dt_bound is None and not principal:
         return "false", "    return std::numeric_limits<pops::Real>::infinity();", None
-    sub, result = program._dt_bound
+    sub, result = ((), None) if program._dt_bound is None else program._dt_bound
     block_idx = program._block_indices()
     bases = {}
     for v in sub:
@@ -539,7 +542,9 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     for v in sub:
         _emit_op(program, v, bases.get(v.block), frozenset(), var, model, lines, None, block_idx)
     value_name = "pops_program_dt_bound_value"
-    lines.append("const pops::Real %s = %s;" % (value_name, var[result.id]))
+    lines.append("pops::Real %s = %s;" % (value_name,
+                 "std::numeric_limits<pops::Real>::infinity()" if result is None else var[result.id]))
+    lines.extend(principal)
     body = "\n".join("    " + ln for ln in lines)
     return "true", body, value_name
 

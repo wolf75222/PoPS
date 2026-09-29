@@ -271,6 +271,14 @@ class RateHandle(OperatorHandle):
     def balance(self) -> Any:
         return self.view.balance
 
+    def __call__(self, *args: Any, bindings: Any = None, **kwargs: Any) -> Any:
+        if bindings is None:
+            return super().__call__(*args, **kwargs)
+        if len(args) != 1:
+            raise TypeError("rate(bindings=) requires exactly one positional target state")
+        from pops.time._program.principal import call_with_bindings
+        return call_with_bindings(self, args[0], bindings, **kwargs)
+
     @property
     def occurrences(self) -> Any:
         return self.view.occurrences
