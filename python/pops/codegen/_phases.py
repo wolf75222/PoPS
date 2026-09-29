@@ -257,6 +257,7 @@ def resolve(
             AMRLayoutResolver,
             AMRResolutionContext,
             ResolvedAMRAuthorities,
+            ResolvedAMRStateStorage,
         )
 
         from pops.codegen._layout_amr_authorities import ResolvedLayoutAMRAuthorities
@@ -284,6 +285,14 @@ def resolve(
                 numerics=tuple(block.numerics for block in blocks
                                if block.numerics is not None
                                and block_layouts[block.name] == layout_id),
+                state_storage=tuple(
+                    ResolvedAMRStateStorage(block, subject)
+                    for block in blocks
+                    if block_layouts[block.name] == layout_id
+                    and block.numerics is None
+                    for subject in subjects
+                    if block.state_identities == (subject.qualified_id,)
+                ),
                 initials=problem.initials.for_subjects(subjects),
                 program=resolved_time,
                 resolve=resolve_amr_handle,

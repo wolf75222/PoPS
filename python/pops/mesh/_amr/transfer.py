@@ -455,12 +455,21 @@ class AMRTransfer:
         return max(orders), tuple(ghost for _ in range(dimension))
 
     def resolve(
-        self, layout_plan: LayoutPlan, numerics: tuple[Any, ...] = ()
+        self, layout_plan: LayoutPlan, numerics: tuple[Any, ...] = (), *,
+        state_storage: tuple[Any, ...] = (),
     ) -> ResolvedAMRTransfer:
         if not (self._states or self._faces or self._nodes):
             raise ValueError("AMRTransfer requires at least one typed physical policy")
         resolver = AMRTransferBuilder(layout_plan)
         owner = layout_plan.owner
+        from pops.amr._resolution import ResolvedAMRStateStorage
+
+        storage = tuple(state_storage)
+        if any(type(row) is not ResolvedAMRStateStorage for row in storage):
+            raise TypeError("AMR transfer requires exact local state storage authorities")
+        storage_by_state = {row.subject.qualified_id: row for row in storage}
+        if len(storage_by_state) != len(storage):
+            raise ValueError("AMR transfer has duplicate local storage subjects")
 
         def provider_handle(subjects: tuple[Any, ...], route: str, kind: str) -> Handle:
             token = make_identity(
@@ -485,10 +494,16 @@ class AMRTransfer:
             spatial_accuracy = self._resolved_spatial_accuracy(
                 subject, tuple(numerics), dimension
             )
-            if numerics and spatial_accuracy is None:
+            local_storage = storage_by_state.get(subject.qualified_id)
+            if local_storage is not None:
+                if spatial_accuracy is not None:
+                    raise ValueError("AMR state has competing spatial and local storage authorities")
+                spatial_accuracy = (1, (local_storage.ghost_depth,) * dimension)
+            if (numerics or storage) and spatial_accuracy is None:
                 raise ValueError(
-                    "AMR cell state %s has no exact resolved spatial method; coarse/fine "
-                    "accuracy cannot be lowered by default" % subject.qualified_id
+                    "AMR cell state %s has no exact resolved spatial or local storage "
+                    "authority; coarse/fine accuracy cannot be lowered by default"
+                    % subject.qualified_id
                 )
             for attribute, operation in operations:
                 kernels = _kernel_candidates(

@@ -139,6 +139,30 @@ class ResolvedTaggingAuthority:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedAMRStateStorage:
+    """One exact, flux-free block state admitted to an adaptive layout."""
+
+    block: Any
+    subject: Handle
+
+    def __post_init__(self) -> None:
+        from pops.codegen._plans import ResolvedBlock
+        from pops.numerics import StateStorage
+
+        if type(self.block) is not ResolvedBlock or self.block.numerics is not None \
+                or type(self.block.spatial) is not StateStorage:
+            raise TypeError("AMR local state requires exact flux-free ResolvedBlock storage")
+        if (not isinstance(self.subject, Handle) or self.subject.kind != "state"
+                or not self.subject.is_resolved
+                or self.block.state_identities != (self.subject.qualified_id,)):
+            raise ValueError("AMR local storage must match its exact resolved block state")
+
+    @property
+    def ghost_depth(self) -> int:
+        return self.block.spatial.ghost_depth
+
+
+@dataclass(frozen=True, slots=True)
 class AMRTaggingResolutionContext:
     """Small context offered to semantic AMR indicator implementations."""
 
@@ -146,6 +170,7 @@ class AMRTaggingResolutionContext:
     layout_plan: Any
     numerics: tuple[Any, ...]
     resolve: Callable[[Handle], Handle]
+    state_storage: tuple[ResolvedAMRStateStorage, ...] = ()
 
     def __post_init__(self) -> None:
         from pops.mesh import LayoutPlan
@@ -154,13 +179,19 @@ class AMRTaggingResolutionContext:
         if type(self.layout_plan) is not LayoutPlan:
             raise TypeError("AMR tagging requires an exact LayoutPlan")
         rows = tuple(self.numerics)
-        if not rows:
-            raise ValueError("AMR tagging requires at least one resolved numerical plan")
+        storage = tuple(self.state_storage)
+        if not rows and not storage:
+            raise ValueError("AMR tagging requires resolved numerics or exact local state storage")
         if any(not hasattr(row, "rates") or not hasattr(row, "identity") for row in rows):
             raise TypeError("AMR tagging numerical plans do not implement the resolved protocol")
+        if any(type(row) is not ResolvedAMRStateStorage for row in storage):
+            raise TypeError("AMR tagging local states require exact storage authorities")
+        if len({row.subject.qualified_id for row in storage}) != len(storage):
+            raise ValueError("AMR tagging has duplicate local storage subjects")
         if not callable(self.resolve):
             raise TypeError("AMR tagging resolve must be callable")
         object.__setattr__(self, "numerics", rows)
+        object.__setattr__(self, "state_storage", storage)
 
     def _indicator_layout(self, state: Handle) -> Any:
         layout = self.layout_plan.layout_for(state)
@@ -416,6 +447,7 @@ class AMRResolutionContext:
     program: Any
     resolve: Callable[[Handle], Handle]
     components: tuple[Any, ...] = ()
+    state_storage: tuple[ResolvedAMRStateStorage, ...] = ()
 
     def __post_init__(self) -> None:
         from pops.mesh import LayoutPlan
@@ -425,9 +457,19 @@ class AMRResolutionContext:
         if type(self.layout_plan) is not LayoutPlan:
             raise TypeError("AMR resolution requires an exact LayoutPlan")
         rows = tuple(self.numerics)
-        if not rows:
-            raise ValueError("AMR resolution requires resolved numerics")
+        storage = tuple(self.state_storage)
+        if not rows and not storage:
+            raise ValueError("AMR resolution requires resolved numerics or exact local state storage")
+        if any(type(row) is not ResolvedAMRStateStorage for row in storage):
+            raise TypeError("AMR resolution local states require exact storage authorities")
+        if len({row.subject.qualified_id for row in storage}) != len(storage):
+            raise ValueError("AMR resolution has duplicate local storage subjects")
+        for row in storage:
+            if row.subject.owner_path.nodes[0] != self.owner.nodes[0]:
+                raise ValueError("AMR local storage belongs to another Case owner")
+            self.layout_plan.layout_for(row.subject)
         object.__setattr__(self, "numerics", rows)
+        object.__setattr__(self, "state_storage", storage)
         if not callable(getattr(self.initials, "resolve_amr", None)):
             raise TypeError("AMR initials authority must implement resolve_amr(...)")
         if type(self.program) is not Program:
@@ -508,6 +550,22 @@ def _hierarchy(
             owner=context.owner, dimension=dimension
         )
         for row in context.numerics
+    )
+    stencil_sources += tuple(
+        NestingRequirementSource(
+            Handle(
+                "stencil_%s" % make_identity("amr-state-storage-stencil", {
+                    "state": row.subject.canonical_identity(),
+                    "storage": row.block.spatial.to_data(),
+                    "dimension": dimension,
+                }).token,
+                kind="amr_stencil_requirement",
+                owner=context.owner,
+            ),
+            (row.ghost_depth,) * dimension,
+            0,
+        )
+        for row in context.state_storage
     )
     reflux_sources = tuple(
         _protocol(row, "amr_reflux_requirement", where="resolved numerics")(
@@ -699,13 +757,14 @@ def resolve_amr_authorities(
     resolved_providers = tuple(
         value.resolve_references(context.resolve) for value in providers)
     resolved_transfer = transfer.resolve_references(context.resolve).resolve(
-        context.layout_plan, context.numerics
+        context.layout_plan, context.numerics, state_storage=context.state_storage
     )
     tagging_context = AMRTaggingResolutionContext(
         context.owner,
         context.layout_plan,
         context.numerics,
         context.resolve,
+        context.state_storage,
     )
     resolved_tagging = resolve_tagging(tagging, tagging_context)
     from pops.amr.providers import (
@@ -770,6 +829,7 @@ __all__ = [
     "AMRLayoutResolver",
     "AMRResolutionContext",
     "AMRTaggingResolutionContext",
+    "ResolvedAMRStateStorage",
     "ResolvedAMRAuthorities",
     "ResolvedTaggingAuthority",
     "resolve_amr_authorities",
