@@ -3,7 +3,57 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Latest executed package: eac92bb, native 6b5f452e; next build in progress
+## Latest reception: SDK 242e849c; corrected package ABI6 rebuilding
+
+The source through `c659dd2` integrates the exact local State storage carrier
+(`ef5e756/34cd0ab`), the typed prepared physical-boundary route (`31d83dd`,
+generated System package ABI 5→6) and the collective C38 exception propagation
+(`a6d2ca0`). Independent Astra/Sol reviews are integrated; twenty source storage
+tests pass again in the independent worktree. The new Dim1 build has completed;
+Dim2 is building against the same SDK. Native reception of these fixes remains
+pending. The coordinator owns builds and final integration; workers use real
+GPT-6 Astra/high and GPT-6 Sol/high. No GPU, remote CI or external HPC execution
+is claimed. The available installed Kokkos headers identify version 5.2.0.
+
+The preceding actual installed Dim1/Dim2 package authenticates 1,084 shipped
+files with SDK `242e849c6aadb2526d1ada0f54276c7db6be411de012f728a0817867fb155ea2`.
+Its receipts and failures are now versioned in `evidence/native-5d11268/`:
+
+- Three coordinated-face native tests pass, including component permutation,
+  runtime-parameter rebind and an asymmetric nonintegrable independent oracle.
+- Eight local product/H05 tests fail before JIT on absent storage axes. The
+  integrated fix obtains axes from the exact authored cell State/frame, without
+  adding physical fluxes or guessing from the installed dimension.
+- The corrected Path witnesses pass three native tests. The two-face frequency
+  9.44 admits dt=.1 and refuses dt=.2 under a unit budget. No production stability
+  threshold was changed.
+- Five true Dim1 HyQMOM B.1 tests pass, including three invalid-state injections
+  preserving state and clock. Full N32/64/128 and MPI2 campaigns remain pending.
+- M07 fails at bind on legacy-only boundary authority admission; the new typed
+  Path route requires its actual prepared callback and preserves legacy checks.
+- C++ reception has 79 passes, one MPI aggregate failure and two single-rank
+  skips. Serial three-level AND9 rollback/retry passes. MPI loses the injected
+  refresh cause in a generic exception wrapper; the preserved diagnostic rerun
+  identifies this precisely. The integrated helper broadcasts the original
+  reason collectively; new C++/MPI execution is required.
+
+The frozen T2 benchmark v1.2 executes successfully, with receipts in
+`evidence/performance-t2-v1-2/`: median duration for the complete twelve-step run
+is .0531579375 s baseline versus .0519979795 s candidate, ratio .9781790255.
+Numerical equivalence passes. This compares only 3d06cab against cf6dace, not the
+current migration. The historical `step_median_s` key is a whole-run duration.
+The resource v1.2 collector fails before profiling on duplicate cache creation;
+v1.3 separates preflight/profiling roots and passes six independently rerun
+driver tests, but has no resource campaign receipt yet. Earlier failures and
+protocol versions remain intact; missing counters are not zero.
+
+Next: receive both rebuilt dimensions, rerun local products/H05 and M07, build
+the five affected C++ targets and test C38 MPI rejection/rollback/retry; run M15,
+the corrected M08 stage oracle and H05 scientific campaigns. Execute resource
+v1.3 in an agreed quiet CPU window. The T3 physical-operator extension is active
+in the Astra semantics worker; broader corpus and T3/T5 obligations remain open.
+
+## Previous reception: eac92bb, native 6b5f452e (historical)
 
 The next coherent source includes generic coordinated faces (`df8817b/cee8d66`),
 named LocalResidual products (`6f2a49a/44b6894`) and retained pending AMR-history

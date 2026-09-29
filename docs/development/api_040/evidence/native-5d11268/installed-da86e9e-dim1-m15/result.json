@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(1); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim1/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='f2b66e8e06cf9f004e9bae7af151fe50482b7be5adbd3cf809e2ab56d11d03bf'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-da86e9e-dim1-m15/pytest.xml",
+    "tests/python/integration/runtime/test_m15_axial_b1_runtime.py"
+  ],
+  "returncode": 0,
+  "duration_seconds": 200.9299677500967,
+  "counts": {
+    "tests": 5,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "ac83a2e7590192e5da4089bc74fc3b54f1156eb548f9b70f73cf1c73a6401d18",
+  "log_sha256": "cf236bf807dc152139f99ff4b1d62632484ce42113c78ec4deff4dd04cc3bca7"
+}

@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_benchmark_v1_1.py", line 522, in <module>
+    main()
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_benchmark_v1_1.py", line 512, in main
+    _worker(args)
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_benchmark_v1_1.py", line 316, in _worker
+    "abi_environment": _abi_environment(str(artifact.abi_key)),
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_benchmark_v1_1.py", line 46, in _abi_environment
+    raise ValueError("compiled artifact ABI omits comparable compiler/runtime fields")
+ValueError: compiled artifact ABI omits comparable compiler/runtime fields

@@ -1,0 +1,46 @@
+{
+  "benchmark_script_sha256": "d8d96c302079da07420c9acc7352d6b59db2fc8fca69de025ea10cb906fd0afd",
+  "budgets_s": {
+    "cold_compile_each": 600,
+    "runtime_worker_each": 180
+  },
+  "host": {
+    "cpu_count": 8,
+    "platform": "macOS-26.5-arm64-arm-64bit",
+    "python": "3.12.13 | packaged by conda-forge | (main, Mar  5 2026, 17:06:14) [Clang 19.1.7 ]"
+  },
+  "identities": {
+    "baseline": {
+      "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
+      "source_commit": "3d06cabee9db4a31c4d07fa4e00dc5a40d164155"
+    },
+    "candidate": {
+      "native_sha256": "4b458dabd54357b8aa3a4659cee8363a9a4510e55aaa81706bfe03a445d27037",
+      "source_commit": "cf6daceaa028df1343a303751ec9ae8f9f5ce6b3"
+    }
+  },
+  "sampling": {
+    "timed_samples_per_worker": 5,
+    "warmups_per_worker": 2,
+    "worker_order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ]
+  },
+  "scenario": {
+    "N": 48,
+    "dt": 0.0001,
+    "physics": "linear advection x=.7 y=-.4; scalar User slope=.2; Rusanov",
+    "steps": 12,
+    "tolerances": {
+      "atol": 1e-12,
+      "mass_atol": 1e-10,
+      "rtol": 1e-12
+    },
+    "width": 5
+  },
+  "schema": "pops.api040.joint-reconstruction-comparison.v1.2",
+  "status": "running"
+}

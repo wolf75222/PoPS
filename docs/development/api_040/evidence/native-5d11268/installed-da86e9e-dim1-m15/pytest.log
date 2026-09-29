@@ -1,0 +1,15 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 5 items
+
+tests/python/integration/runtime/test_m15_axial_b1_runtime.py::test_axial_b1_native_hll_two_steps_match_independent_oracle[order0] PASSED [ 20%]
+tests/python/integration/runtime/test_m15_axial_b1_runtime.py::test_axial_b1_native_hll_two_steps_match_independent_oracle[order1] PASSED [ 40%]
+tests/python/integration/runtime/test_m15_axial_b1_runtime.py::test_axial_b1_inadmissible_initial_state_is_refused_without_publication[negative_density] PASSED [ 60%]
+tests/python/integration/runtime/test_m15_axial_b1_runtime.py::test_axial_b1_inadmissible_initial_state_is_refused_without_publication[zero_variance] PASSED [ 80%]
+tests/python/integration/runtime/test_m15_axial_b1_runtime.py::test_axial_b1_inadmissible_initial_state_is_refused_without_publication[negative_hankel] PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-da86e9e-dim1-m15/pytest.xml -
+======================== 5 passed in 200.52s (0:03:20) =========================

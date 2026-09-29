@@ -1,0 +1,98 @@
+Test project /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi
+    Start 1359: test_amr_synthetic_program_loader_transaction_np2
+1/1 Test #1359: test_amr_synthetic_program_loader_transaction_np2 ...***Failed   29.97 sec
+Note: Google Test filter = test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh:test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack:test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements:test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication:test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage:test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes:test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart:test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh
+Note: Google Test filter = test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh:test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack:test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements:test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication:test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage:test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes:test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart:test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh
+[       OK ] test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh (2599 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack
+[       OK ] test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh (2599 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack
+[       OK ] test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack (2532 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage
+[       OK ] test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack (2532 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage (5351 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage (5351 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes (3686 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes (3686 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback (2102 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback (2103 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart (2049 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart (2049 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority (1844 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority (1844 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp:1433: Failure
+Expected: (second_publication_failure.find("injected history resource refresh")) != (std::string::npos), actual: 18446744073709551615 vs 18446744073709551615
+rank 0: AMR restart regrid failed on at least one MPI rank
+
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp:1433: Failure
+Expected: (second_publication_failure.find("injected history resource refresh")) != (std::string::npos), actual: 18446744073709551615 vs 18446744073709551615
+rank 1: AMR restart regrid failed on at least one MPI rank
+
+[  FAILED  ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements (2554 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication
+[  FAILED  ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements (2554 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication
+scheduled-history-remap rank=0 retry=0 fine=1296->2304 epoch=1->2 generation=1->2 C=0->1 regrids=1->2 histories=4 initialized=4 fill=1 step=1 time=0.125
+scheduled-history-remap rank=1 retry=0 fine=1296->2304 epoch=1->2 generation=1->2 C=0->1 regrids=1->2 histories=4 initialized=4 fill=1 step=1 time=0.125
+scheduled-history-remap rank=0 refused=AMR Program completion failed collectively; rank 0: AMR Program hierarchy-state publication failed collectively; rank 0: fixture resource publication failed; rank 0: injected history resource refresh
+scheduled-history-remap rank=1 refused=AMR Program completion failed collectively; rank 0: AMR Program hierarchy-state publication failed collectively; rank 0: fixture resource publication failed; rank 0: injected history resource refresh
+scheduled-history-remap rank=0 retry=1 fine=1296->2304 epoch=1->2 generation=1->2 C=0->2 regrids=1->2 histories=4 initialized=4 fill=1 step=1 time=0.125
+scheduled-history-remap rank=1 retry=1 fine=1296->2304 epoch=1->2 generation=1->2 C=0->2 regrids=1->2 histories=4 initialized=4 fill=1 step=1 time=0.125
+[       OK ] test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication (3381 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback
+[       OK ] test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication (3381 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback
+[       OK ] test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback (3303 ms)
+[----------] 10 tests from test_amr_synthetic_program_loader_transaction (29407 ms total)
+
+[----------] Global test environment tear-down
+[       OK ] test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback (3303 ms)
+[----------] 10 tests from test_amr_synthetic_program_loader_transaction (29407 ms total)
+
+[----------] Global test environment tear-down
+[==========] 10 tests from 1 test suite ran. (29407 ms total)
+[  PASSED  ] 9 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+
+ 1 FAILED TEST
+[==========] 10 tests from 1 test suite ran. (29407 ms total)
+[  PASSED  ] 9 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+
+ 1 FAILED TEST
+
+
+0% tests passed, 1 tests failed out of 1
+
+Label Time Summary:
+backend                                                     =  59.94 sec*proc (1 test)
+cpp-target:test_amr_synthetic_program_loader_transaction    =  59.94 sec*proc (1 test)
+medium                                                      =  59.94 sec*proc (1 test)
+mpi                                                         =  59.94 sec*proc (1 test)
+
+Total Test time (real) =  30.02 sec
+
+The following tests FAILED:
+	1359 - test_amr_synthetic_program_loader_transaction_np2 (Failed) backend cpp-target:test_amr_synthetic_program_loader_transaction medium mpi
+Errors while running CTest

@@ -1,0 +1,148 @@
+{
+  "schema": "pops.api040.native-reception-evidence/v1",
+  "production_source": "5d11268",
+  "raw_root": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs",
+  "scope": "SDK 242e849c before local-storage and physical-boundary fixes. Actual Dim1/Dim2 OpenMP MPI-enabled package; serial Python and C++ MPI2 receipts with failures retained. Not complete API0.4 acceptance.",
+  "receipts": [
+    {
+      "id": "installed-5d11268-dim2-face-products",
+      "status": "failed",
+      "counts": {
+        "tests": 19,
+        "failures": 10,
+        "errors": 0,
+        "skipped": 0
+      },
+      "native_sha256": "73b3bfaa9a6c22380a3eb500e216b97c1978725a36476dd4f4a573dddf87a5a2",
+      "source_commit": "5d1126811ff72fbe54d8686682ff2eb1ca6254d1"
+    },
+    {
+      "id": "installed-da86e9e-path-reviewed",
+      "status": "passed",
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "native_sha256": "73b3bfaa9a6c22380a3eb500e216b97c1978725a36476dd4f4a573dddf87a5a2",
+      "source_commit": "da86e9e8691573ec5c4c3a45a59988be3248501a"
+    },
+    {
+      "id": "installed-da86e9e-dim1-m15",
+      "status": "passed",
+      "counts": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "native_sha256": "f2b66e8e06cf9f004e9bae7af151fe50482b7be5adbd3cf809e2ab56d11d03bf",
+      "source_commit": "da86e9e8691573ec5c4c3a45a59988be3248501a"
+    },
+    {
+      "id": "m07-5d11268-dim1-openmp1",
+      "status": "failed",
+      "counts": null,
+      "native_sha256": "f2b66e8e06cf9f004e9bae7af151fe50482b7be5adbd3cf809e2ab56d11d03bf",
+      "source_commit": "5d1126811ff72fbe54d8686682ff2eb1ca6254d1"
+    }
+  ],
+  "files": [
+    {
+      "path": "installed-5d11268-dim2-face-products/result.json",
+      "bytes": 1754,
+      "sha256": "a92626b39a73c0f27d37033be5b176a11c3f789b1058dd0ca0b26653232047cb"
+    },
+    {
+      "path": "installed-5d11268-dim2-face-products/identity.json",
+      "bytes": 2724,
+      "sha256": "8b7f12e1527ccf910d6251666104fb31caf468afb6ed8b352af9a09d5363b106"
+    },
+    {
+      "path": "installed-5d11268-dim2-face-products/pytest.xml",
+      "bytes": 12202,
+      "sha256": "54f3931fe2408829ec55dc6e8fa5d317e67143078fd7d5d712b58a86602cc6d1"
+    },
+    {
+      "path": "installed-5d11268-dim2-face-products/pytest.log",
+      "bytes": 18010,
+      "sha256": "5aceda607608c8429e690b98461db4cd05921dca89af2d232114f105452c3384"
+    },
+    {
+      "path": "installed-da86e9e-path-reviewed/result.json",
+      "bytes": 1798,
+      "sha256": "3bbf860e15cda00d1ef04201dfa65258d46d64c6cd737d0bb7ef056acd5fc8b0"
+    },
+    {
+      "path": "installed-da86e9e-path-reviewed/identity.json",
+      "bytes": 2724,
+      "sha256": "d0ac1f160e73abb2d989f0fee09cef2fc193a6313fb123df149df8a6facdd410"
+    },
+    {
+      "path": "installed-da86e9e-path-reviewed/pytest.xml",
+      "bytes": 808,
+      "sha256": "dbf7ff02480a88f22a12fbd5bc2d69f11f0c3d4393821e86ee02e09c0128faa7"
+    },
+    {
+      "path": "installed-da86e9e-path-reviewed/pytest.log",
+      "bytes": 1085,
+      "sha256": "f70113c1d7a8a233fc44a8e5cecfc9168e31d8e812051e6c231d7df18c69f5e3"
+    },
+    {
+      "path": "installed-da86e9e-dim1-m15/result.json",
+      "bytes": 1407,
+      "sha256": "f0bdf7ae0a69e4f0e8e808e3f5a5d69154aaf41861e9a087362ae59513fc40e2"
+    },
+    {
+      "path": "installed-da86e9e-dim1-m15/identity.json",
+      "bytes": 2724,
+      "sha256": "ac83a2e7590192e5da4089bc74fc3b54f1156eb548f9b70f73cf1c73a6401d18"
+    },
+    {
+      "path": "installed-da86e9e-dim1-m15/pytest.xml",
+      "bytes": 1175,
+      "sha256": "45d8d06579f54f8eb778f7c593985f898e34adc9b7368a3a8ec1dbd74a2688b7"
+    },
+    {
+      "path": "installed-da86e9e-dim1-m15/pytest.log",
+      "bytes": 1392,
+      "sha256": "cf236bf807dc152139f99ff4b1d62632484ce42113c78ec4deff4dd04cc3bca7"
+    },
+    {
+      "path": "m07-5d11268-dim1-openmp1/result.json",
+      "bytes": 1108,
+      "sha256": "52f0a7cbe4749850a6a9c2929e277fdc9af550a6b21bd57bd7cdb2c2d35d219c"
+    },
+    {
+      "path": "m07-5d11268-dim1-openmp1/before/identity.json",
+      "bytes": 2724,
+      "sha256": "ecb9f0eef1629065d24876c6521f206f6f193414564b3b1ff931feb1f4626629"
+    },
+    {
+      "path": "m07-5d11268-dim1-openmp1/after/identity.json",
+      "bytes": 2724,
+      "sha256": "ecb9f0eef1629065d24876c6521f206f6f193414564b3b1ff931feb1f4626629"
+    },
+    {
+      "path": "m07-5d11268-dim1-openmp1/run.log",
+      "bytes": 2176,
+      "sha256": "2cca57ff805ca1f5acf190320730aacb0f196439ac4e6cf1d3f3a5bedc4f0cbb"
+    },
+    {
+      "path": "native-and9-coordinated.xml",
+      "bytes": 98557,
+      "sha256": "90251b57e8e566b82b70e49d806b7f70e95e15d4bed6b35117c4f2fc55b12c03"
+    },
+    {
+      "path": "native-and9-second-refresh-diagnostic.xml",
+      "bytes": 11089,
+      "sha256": "a942117066e1f977968cd247f699300f0a4101b8f28a3a19fa3c66526428f2a8"
+    },
+    {
+      "path": "native-and9-second-refresh-diagnostic-ctest.log",
+      "bytes": 11366,
+      "sha256": "b5e984a12684a78148c57be53ea62546e839700b7dfd26275248b11ea28a8370"
+    }
+  ]
+}
