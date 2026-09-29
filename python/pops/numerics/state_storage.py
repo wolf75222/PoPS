@@ -18,7 +18,11 @@ class StateStorage(Descriptor):
     category = "state_storage"
     native_id = "pops::prepare_generated_system_block"
     formal_order = 1
-    ghost_depth = 1
+    def __init__(self, *, ghost_depth: int = 1):
+        if type(ghost_depth) is not int or ghost_depth < 1:
+            raise ValueError("StateStorage ghost_depth must be a positive integer")
+        self.ghost_depth = ghost_depth
+
 
     def validate_rate_contract(self, contract: Any) -> bool:
         if not isinstance(contract, Mapping) or "state" not in contract:
@@ -35,7 +39,7 @@ class StateStorage(Descriptor):
     def resolve_references(self, resolver: Any) -> StateStorage:
         if not callable(resolver):
             raise TypeError("StateStorage.resolve_references requires a resolver")
-        return type(self)()
+        return type(self)(ghost_depth=self.ghost_depth)
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -55,7 +59,7 @@ class StateStorage(Descriptor):
     def runtime_spatial(self) -> Any:
         from pops.runtime._state_storage import StateStorageSpatial
 
-        return StateStorageSpatial()
+        return StateStorageSpatial(ghost_depth=self.ghost_depth)
 
 
 __all__ = ["StateStorage"]

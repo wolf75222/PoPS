@@ -14,7 +14,8 @@
 
 namespace pops::runtime::program {
 
-template <int Dim, int Components>
+template <int Dim, int Components,
+          nd::ReconstructionVariables Variables = nd::ReconstructionVariables::Conservative>
 class PreparedPrincipalFlux {
   using Field = MultiFab<Dim>;
   using Metric = PreparedMappedMetricProvider<CartesianCoordinateMap<Dim>>;
@@ -68,7 +69,7 @@ class PreparedPrincipalFlux {
       const auto flux = flux_[local].view().template axis<Axis>();
       const auto bound = bound_[local].view().template axis<Axis>();
       for_each_face<Axis>(input.box(local), [=] POPS_HD(const FaceIndex<Dim, Axis>& face) {
-        const auto pair = nd::reconstruct_face_pair<Axis>(model, state, face, reconstruction);
+        const auto pair = nd::reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
         const Real invalid = std::numeric_limits<Real>::quiet_NaN();
         Real speed = invalid;
         typename Model::State integrated{};

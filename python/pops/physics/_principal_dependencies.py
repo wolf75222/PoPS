@@ -14,6 +14,24 @@ def flux_state_inputs(model, target, expressions):
     module = model._multi_module
     if module is None:
         return (target.space,)
+    authenticated = set()
+    def authenticate(value):
+        if id(value) in authenticated:
+            return
+        authenticated.add(id(value))
+        if isinstance(value, Var) and value.kind == "prim" and not any(
+                value is owned for owned in model._primitive_vars.values()):
+            raise ValueError("physical flux reads a primitive from another physical model")
+        if isinstance(value, Expr):
+            for child in _children(value):
+                authenticate(child)
+        elif isinstance(value, Mapping):
+            for child in value.values():
+                authenticate(child)
+        elif isinstance(value, (tuple, list)):
+            for child in value:
+                authenticate(child)
+    authenticate(expressions)
     spaces = module.state_spaces()
     body = expand_primitive_recipes(expressions, module.primitive_recipes())
     selected = {target.space.name}

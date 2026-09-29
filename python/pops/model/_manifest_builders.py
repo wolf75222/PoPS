@@ -210,6 +210,7 @@ def build_module_manifest(module: Any) -> ModuleManifest:
     expressions = {
         "operators": {operator.name: body_identity(expression_data(operator.body)) for operator in registry},
         "primitives": canonical_hash_data(expression_data(module.primitive_recipes())),
+        "primitive_coordinates": {str(i): row.to_data() for i,row in enumerate(module.primitive_coordinates())},
     }
     return ModuleManifest(
         name=module.name,

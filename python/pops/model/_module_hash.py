@@ -98,6 +98,7 @@ def module_content_hash(module: Any) -> str:
         },
         "wave_speed_provider": module._wave_speed_provider,
         "constitutive": module._constitutive,
+        "primitive_coordinates": [row.to_data() for row in module.primitive_coordinates()],
         "primitive_recipes": {
             name: body_identity(recipe)
             for name, recipe in sorted(module._primitive_recipes.items())

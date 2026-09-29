@@ -1,10 +1,11 @@
 """Emit a shared native face evaluation and exact principal rate projections."""
 
 
-def _checked(roots, count, indent="      "):
+def _checked(roots, count, indent="      ", *, primitive=False):
     from pops._ir import _wrap
     from pops.codegen.cpp_writer import _cse_emit
-    bindings = {"pops_principal_%d" % i: "u[%d]" % i for i in range(count)}
+    bindings = {("pops_principal_p%d" if primitive else "pops_principal_%d") % i:
+                ("p[%d]" if primitive else "u[%d]") % i for i in range(count)}
     lines, values, observed = _cse_emit(tuple(_wrap(root) for root in roots), "pops::Real", indent,
         materialize_all=True, return_names=True, scalar_bindings=bindings)
     invalid = " || ".join("!Kokkos::isfinite(%s)" % item for item in observed) or "false"
@@ -24,11 +25,7 @@ def emit_principal_model(entry):
         "  POPS_HD static State invalid_state() { State result{};",
         "    for (int i=0; i<n_vars; ++i) result[i]=std::numeric_limits<pops::Real>::quiet_NaN();",
         "    return result; }",
-        "  POPS_HD pops::nd::StateConversionStatus admissibility(const State& u) const {",
-        "    for(int i=0;i<n_vars;++i) if(!Kokkos::isfinite(u[i])) return pops::nd::StateConversionStatus::NonFiniteState;",
-        "    return pops::nd::StateConversionStatus::Success; }",
-        "  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& u) const { return {u,admissibility(u)}; }",
-        "  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& u) const { return {u,admissibility(u)}; }",
+        *_emit_principal_conversions(entry),
         "  template<int Axis> POPS_HD State flux(const State& u) const {",
         "    static_assert(Axis>=0 && Axis<dimension); State result{};"]
     for axis_index, axis in enumerate(entry["axes"]):
@@ -90,7 +87,8 @@ def emit_principal_helper(entry):
         "  auto& packed=ctx.scalar_scratch(node,0,*inputs[0],%d,%d);" % (
             group.component_count,max(method.ghost_depth for method in group.methods)),
         "  const auto geometry=ctx.geometry(); const auto& lane=ctx.prepared_execution_lane();",
-        "  auto& resource=ctx.template prepared_resource<pops::runtime::program::PreparedPrincipalFlux<pops::kNativeDimension,%d>>(" % group.component_count,
+        "  auto& resource=ctx.template prepared_resource<pops::runtime::program::PreparedPrincipalFlux<pops::kNativeDimension,%d%s>>(" % (group.component_count,
+            ",pops::nd::ReconstructionVariables::Primitive" if group.methods[0].variables.scheme == "primitive" else ""),
         "    node,blocks[0],[&](const auto& previous){return previous.matches_preparation(geometry,lane,packed);},ctx,packed);",
         "  %s model;" % name,
         "  for (int i=0;i<%d;++i) model.parameter_sets[i]=ctx.program_params(blocks[i]);" % size,
@@ -218,3 +216,48 @@ def _attach_principal_faces(value, lines, group, row, resource, output, block_in
     lines.append("ctx.attach_principal_flux(%d,%s,%d,%s.component_faces(%d,%d),%s);" % (
         block_indices[value.block], output, value.id, resource, first,
         group.component_counts[row], json.dumps(_rhs_flux_temporal_family(value))))
+
+
+def _emit_principal_conversions(entry):
+    count = entry["group"].component_count
+    conversion = entry.get("conversion")
+    if conversion is None:
+        return [
+            "  POPS_HD pops::nd::StateConversionStatus admissibility(const State& u) const {",
+            "    for(int i=0;i<n_vars;++i) if(!Kokkos::isfinite(u[i])) return pops::nd::StateConversionStatus::NonFiniteState;",
+            "    return pops::nd::StateConversionStatus::Success; }",
+            "  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& u) const { return {u,admissibility(u)}; }",
+            "  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& p) const { return {p,admissibility(p)}; }"]
+    lines = ["  POPS_HD bool primitive_domain(const Primitive& p) const {"]
+    for row, predicates in enumerate(conversion["constraints"]):
+        lines += ["    {", "      const auto params=parameter_sets[%d];" % row]
+        declarations, values, invalid = _checked(predicates,count,primitive=True)
+        lines.extend(declarations)
+        condition = " || ".join("!(%s)" % value for value in values)
+        lines.append("      if (%s%s) return false;" % (invalid," || "+condition if condition else ""))
+        lines.append("    }")
+    lines += ["    return true;", "  }"]
+    for direction, target, function, source in (
+            ("forward","Primitive","recover","State& u"),
+            ("inverse","State","make_conservative","Primitive& p")):
+        primitive = direction == "inverse"
+        letter = "p" if primitive else "u"
+        lines += ["  POPS_HD pops::nd::StateConversion<%s> %s(const %s) const {" % (target,function,source),
+                  "    pops::nd::StateConversion<%s> result{};" % target,
+                  "    for(int i=0;i<n_vars;++i) if(!Kokkos::isfinite(%s[i])) return result;" % letter]
+        if primitive:
+            lines.append("    if(!primitive_domain(p)) { result.status=pops::nd::StateConversionStatus::InvalidEquationOfState; return result; }")
+        offset = 0
+        for row, roots in enumerate(conversion[direction]):
+            lines += ["    {", "      const auto params=parameter_sets[%d];" % row]
+            declarations, values, invalid = _checked(roots,count,primitive=primitive)
+            lines.extend(declarations)
+            lines.append("      if(%s) return result;" % invalid)
+            lines.extend("      result.value[%d]=%s;" % (offset+i,value) for i,value in enumerate(values))
+            offset += len(roots)
+            lines.append("    }")
+        if not primitive:
+            lines.append("    if(!primitive_domain(result.value)) { result.status=pops::nd::StateConversionStatus::InvalidEquationOfState; return result; }")
+        lines += ["    result.status=pops::nd::StateConversionStatus::Success; return result;", "  }"]
+    lines += ["  POPS_HD pops::nd::StateConversionStatus admissibility(const State& u) const { return recover(u).status; }"]
+    return lines

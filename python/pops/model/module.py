@@ -55,6 +55,7 @@ class Module(ModuleFreezable):
         self._eigenvalues = None
         self._constitutive = None
         self._primitive_recipes = MappingProxyType({})
+        self._primitive_coordinates = ()
         self._application_sequence = 0
         # Canonical detached source of the signed pair consumed by HLL.  This is metadata, not a
         # numerics selection: Einfeldt/Davis remain Riemann-provider strategies and are therefore
@@ -335,9 +336,28 @@ class Module(ModuleFreezable):
             raise ValueError("primitive recipes are already declared on this Module")
         self._primitive_recipes = validated
 
+    def primitive_coordinates(self) -> tuple:
+        """Immutable authored joint coordinate maps, independent of runtime storage."""
+        return self._primitive_coordinates
+
+    def _set_primitive_coordinates(self, records: tuple) -> None:
+        self._guard_mutable("declare joint primitive coordinates")
+        from .primitive_coordinates import PrimitiveCoordinates
+        if any(not isinstance(row, PrimitiveCoordinates) for row in records):
+            raise TypeError("primitive coordinates require typed immutable declarations")
+        self._primitive_coordinates = tuple(records)
+
     def primitive_recipes(self) -> Any:
         """The immutable expression recipes; absence leaves opaque recovery explicit."""
-        return self._primitive_recipes
+        if not self._primitive_coordinates:
+            return self._primitive_recipes
+        from pops._ir import Var
+        recipes = dict(self._primitive_recipes)
+        for row in self._primitive_coordinates:
+            for coordinate, body in zip(row.coordinates, row.forward, strict=True):
+                if isinstance(coordinate, Var) and coordinate.kind == "prim":
+                    recipes.setdefault(coordinate.name, body)
+        return MappingProxyType(recipes)
 
     def apply(self, operator: Any, *arguments: Any, context: Any = None) -> Any:
         """Instantiate a captured expression operator and retain one joint application identity."""

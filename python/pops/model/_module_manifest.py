@@ -24,7 +24,7 @@ from .ownership import OwnerPath
 from .provider_pack import ProviderPack
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 _WAVE_SPEED_PROVIDERS = frozenset({"explicit_pair", "jacobian", "pressure_derived"})
 
@@ -245,9 +245,9 @@ class ModuleManifest:
         _validate_declaration_rows(params, owner=owner, kind="parameter", where="module params")
         _validate_declaration_rows(aux, owner=owner, kind="aux", where="module aux")
         if expressions is None:
-            expressions = {"operators": {}, "primitives": {}}
-        if not isinstance(expressions, Mapping) or set(expressions) != {"operators", "primitives"}:
-            raise TypeError("ModuleManifest expressions require operators and primitives mappings")
+            expressions = {"operators": {}, "primitives": {}, "primitive_coordinates": {}}
+        if not isinstance(expressions, Mapping) or set(expressions) != {"operators", "primitives", "primitive_coordinates"}:
+            raise TypeError("ModuleManifest expressions require operators, primitives and primitive_coordinates mappings")
         if any(not isinstance(value, Mapping) for value in expressions.values()):
             raise TypeError("ModuleManifest expression tables must be mappings")
         provider_pack = ProviderPack.from_data(provider_pack).to_data()

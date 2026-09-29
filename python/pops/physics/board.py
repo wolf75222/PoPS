@@ -446,7 +446,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         return value
 
     def primitive_state(
-        self, *components: Any, conservative: Any, roles: Any = None,
+        self, *components: Any, conservative: Any, roles: Any = None, states: Any = None,
     ) -> None:
         """Declare one explicit primitive coordinate system and its conservative inverse.
 
@@ -461,14 +461,21 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         ownership, and all expressions are validated before the lower-level model is mutated, and a
         builder failure restores the previous identity coordinate system installed by
         :meth:`state`.
+
+        For multiple states, ``states=(...)`` gives the exact ordered physical group
+        (omission selects declaration order). Coordinates and inverse cover the sum of
+        its component counts. This immutable map belongs to the physics definition;
+        ``variables.Primitive`` selects its use in a principal FV reconstruction.
+        It does not replace the declared conservative balance or invent an inverse.
         """
         if not self._states:
             raise ValueError("primitive_state requires one state() declaration first")
-        if len(self._states) != 1 or self._species or self._multi_module is not None:
-            raise ValueError(
-                "primitive_state currently applies to one state() coordinate system; "
-                "multi-species coordinates must be declared by their model provider"
-            )
+        if self._multi_module is not None:
+            from pops.model.primitive_coordinates import declare_joint_coordinates
+            declare_joint_coordinates(self, components, conservative, states, roles)
+            return
+        if states is not None and tuple(states) != tuple(self._states.values()):
+            raise ValueError("primitive_state states must name the exact conservative declarations")
         if self._primitive_state_authored:
             raise ValueError("primitive_state is already declared for this physics model")
 
@@ -544,19 +551,21 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._dsl._invalidate_authoring_views()
         self._invalidate_authoring_views()
 
-    def recovery_admissibility(self, **constraints: Any) -> None:
+    def recovery_admissibility(self, *, states: Any = None, **constraints: Any) -> None:
         """Declare physical constraints for native primitive-recovery candidates.
 
         Each keyword names a component of the model's primitive coordinate system and maps it to a
-        symbolic Boolean expression over that coordinate system.  The single-state native route
-        compiles these predicates into the prepared recovery plan; multi-state recovery policies
-        require a species-qualified provider and are therefore rejected here.
+        symbolic Boolean expression over that coordinate system. For a joint map,
+        ``states=(...)`` selects its exact physical declaration, independently of block
+        storage and layout. The native conversion checks these predicates before
+        publishing a recovered or reconstructed conservative candidate.
         """
         if self._multi_module is not None:
-            raise ValueError(
-                "recovery_admissibility requires a single-state model; multi-species policies "
-                "must be supplied by a species-qualified recovery provider"
-            )
+            from pops.model.primitive_coordinates import declare_joint_admissibility
+            declare_joint_admissibility(self, constraints, states)
+            return
+        if states is not None and tuple(states) != tuple(self._states.values()):
+            raise ValueError("recovery admissibility states differ from the coordinate declaration")
         from pops._ir.quantity import QuantityRef
         self._dsl._m._declare_recovery_admissibility(
             {name: self._to_expr(predicate) for name, predicate in constraints.items()},

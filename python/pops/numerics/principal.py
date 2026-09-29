@@ -113,6 +113,12 @@ def resolve_principal_groups(case, block):
                 operator = registry.get(occurrence.payload.reg_name)
                 if any(space not in spaces for space in operator.signature.inputs):
                     raise ValueError("principal sampling omits a physical flux dependency")
+        if method.variables.scheme == "primitive":
+            declarations = tuple(model.module.state_handle(space) for space in spaces)
+            candidates = [row for row in model.module.primitive_coordinates()
+                          if len(row.states) == len(declarations) and set(row.states) == set(declarations)]
+            if len(candidates) != 1:
+                raise ValueError("principal Primitive requires an explicit joint primitive_state and conservative inverse")
         first = spaces[0]
         if any((space.frame, space.support, space.sampling) !=
                (first.frame, first.support, first.sampling) for space in spaces):

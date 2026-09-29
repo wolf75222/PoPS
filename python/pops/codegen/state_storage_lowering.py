@@ -21,6 +21,11 @@ def prepare_state_storage_requirements(
 
         emitter = native_formula_view(emitter, module)
         impl = getattr(emitter, "_m", emitter)
+    # Primitive conversion at a sampled offset reads the complete conservative group,
+    # even when the requesting row alone owns the wider reconstruction stencil.
+    depth = max((depth, *(method.ghost_depth
+                 for entry in getattr(impl, "_principal_groups", ())
+                 if entry["conversion"] is not None for method in entry["group"].methods)))
     object.__setattr__(impl, "_program_state_ghost_depth", depth)
     return emitter
 

@@ -7,13 +7,18 @@ def principal_row_expressions(entry):
     from pops._ir import _wrap
     waves = tuple(value for values in entry["waves"].values() for value in values)
     rows = []
-    for body, method in zip(entry["fluxes"], entry["group"].methods, strict=True):
+    for row, (body, method) in enumerate(zip(entry["fluxes"], entry["group"].methods, strict=True)):
         roots = [_wrap(value) for values in body.values() for value in values]
         roots.extend(_wrap(value) for value in waves)
         if method.reconstruction.scheme == "source_stencil":
             roots.append(method.reconstruction.expression)
         if method.riemann.scheme == "source_face":
             roots.extend(method.riemann.expression)
+        conversion = entry.get("conversion")
+        if conversion is not None:
+            roots.extend(conversion["forward"][row])
+            roots.extend(conversion["inverse"][row])
+            roots.extend(conversion["constraints"][row])
         rows.append(tuple(roots))
     return tuple(rows)
 
@@ -73,8 +78,20 @@ def prepare_principal_carrier(emitter, module, numerics):
                 bindings[handle, component] = Var("pops_principal_%d" % (offset + component), "cons")
             offset += count
 
+        declarations = tuple(module.state_handle((state.declaration_ref or state).space)
+                             for state in group.states)
+        matches = [row for row in module.primitive_coordinates()
+                   if len(row.states) == len(declarations) and set(row.states) == set(declarations)]
+        if len(matches) > 1:
+            raise ValueError("principal reconstruction has ambiguous physical coordinate maps")
+        coordinates = matches[0] if matches else None
+        recipes = dict(module.primitive_recipes())
+        if coordinates is not None:
+            recipes.update({value.name: body for value,body in zip(coordinates.coordinates,coordinates.forward)
+                            if isinstance(value,Var) and value.kind == "prim"})
+
         def native(body):
-            return substitute_quantities(expand_primitive_recipes(body, module.primitive_recipes()), bindings)
+            return substitute_quantities(expand_primitive_recipes(body, recipes), bindings)
 
         flux_rows = []
         axes = None
@@ -98,10 +115,39 @@ def prepare_principal_carrier(emitter, module, numerics):
         if tuple(waves) != axes:
             raise ValueError("principal bound and physical flux axes disagree")
         method = group.methods[0]
-        if method.variables.scheme != "conservative":
-            raise NotImplementedError("principal primitive reconstruction requires a joint authored variable map")
+        if method.variables.scheme == "primitive" and coordinates is None:
+            raise ValueError("principal primitive reconstruction requires explicit joint primitive_state coordinates and inverse")
+        conversion = None
+        if coordinates is not None:
+            from pops._ir.quantity import QuantityRef
+            source_offsets, total = {}, 0
+            for state in coordinates.states:
+                source_offsets[state] = total
+                total += len(state.space.components)
+            primitive_bindings, expression_bindings, indices = {}, {}, []
+            for state,count in zip(declarations,group.component_counts):
+                indices.extend(range(source_offsets[state],source_offsets[state]+count))
+            for target, source in enumerate(indices):
+                coordinate = coordinates.coordinates[source]
+                replacement = Var("pops_principal_p%d" % target,"cons")
+                if isinstance(coordinate,QuantityRef):
+                    primitive_bindings[coordinate.handle,coordinate.index] = replacement
+                else:
+                    expression_bindings[id(coordinate)] = replacement
+            def in_primitive(body):
+                return substitute_quantities(body,primitive_bindings,expression_bindings=expression_bindings)
+            forward = native(coordinates.forward)
+            inverse = in_primitive(coordinates.inverse)
+            predicates = {index: in_primitive(body) for index,body in coordinates.constraints}
+            conversion = {"forward": [], "inverse": [], "constraints": []}
+            for state,count in zip(declarations,group.component_counts):
+                selected = range(source_offsets[state],source_offsets[state]+count)
+                conversion["forward"].append(tuple(forward[i] for i in selected))
+                conversion["inverse"].append(tuple(inverse[i] for i in selected))
+                conversion["constraints"].append(tuple(predicates[i] for i in selected if i in predicates))
+            conversion = MappingProxyType({key:tuple(rows) for key,rows in conversion.items()})
         entry = {"group": group, "fluxes": tuple(flux_rows),
-            "waves": waves, "axes": axes,
+            "waves": waves, "axes": axes, "conversion": conversion,
             "cpp_name": "PoPSPrincipal_" + group.identity.token.split(":")[-1][:24]}
         entry["row_expressions"] = principal_row_expressions(entry)
         prepared.append(MappingProxyType(entry))
