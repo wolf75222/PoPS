@@ -103,7 +103,11 @@ def test_uniform_path_adaptive_cfl_without_max_dt_matches_two_step_oracle(
 def test_uniform_path_refusal_preserves_accepted_state_and_clock(
         isolated_native_cache, native_cxx, kokkos_root, hot_stage):
     del isolated_native_cache, native_cxx, kokkos_root
-    dt = 1.e-4 if hot_stage else .1
+    # Only x has a nonzero authored speed. The incident-face frequency is
+    # 2*N*(0.5 + 0.3**2) = 9.44, so dt=0.1 is admissible at unit budget.
+    dt = 1.e-4 if hot_stage else .2
+    if not hot_stage:
+        assert dt * 2 * N * (.5 + .3**2) > 1.
     strategy = AdaptiveCFL(cfl=.25, max_dt=dt) if hot_stage else FixedDt(dt)
     runtime, initial = _bind(strategy, hot_stage=hot_stage)
     # A serial invalid_argument maps to ValueError; collective refusals and the
@@ -119,7 +123,8 @@ def test_uniform_path_refusal_preserves_accepted_state_and_clock(
 def test_uniform_path_fixed_dt_uses_unit_numerical_budget(
         isolated_native_cache, native_cxx, kokkos_root):
     del isolated_native_cache, native_cxx, kokkos_root
-    dt = 1.e-4
+    dt = .1
+    assert .25 < dt * 2 * N * (.5 + .3**2) < 1.
     runtime, initial = _bind(FixedDt(dt))
     assert pops.run(runtime, t_end=dt, max_steps=1).accepted_steps == 1
     actual = np.asarray(runtime.state_global("transport")).reshape(initial.shape)
@@ -136,7 +141,7 @@ def test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_st
     # Same artifact on both sides of the actual numerical bound. The diagnostic
     # has no state update at all, despite evaluating the same nonzero path RHS.
     trials = ((1., True), (200., consumer == "diagnostic")) if consumer != "guarded" else (
-        (1.e-4, True), (.1, False))
+        (1.e-4, True), (.1, True), (.2, False))
     for dt, accepted in trials:
         runtime = pops.bind(artifact, initial_state={"transport": initial},
                             resources={"execution_context": context})
