@@ -245,8 +245,9 @@ void import_accepted_state_(bool force) const {
         pending.prior_topology_epoch + 1 != pending.published_topology_epoch ||
         pending.prior_materialization_generation + 1 !=
             pending.published_materialization_generation ||
-        pending.consumed || pending.published_topology_epoch != runtime_->topology_epoch() ||
-        pending.published_materialization_generation != runtime_->materialization_generation() ||
+        pending.consumed || !checkpoint_detail::pending_qualification_valid(
+            pending, runtime_->topology_epoch(), runtime_->materialization_generation()) ||
+        runtime_state().hist_.slot_sample.at(pending.key).at(1) != pending.source_sample ||
         pending.temporal_denominator != 1 ||
         (pending.temporal_numerator != 1 && pending.temporal_numerator != 2) ||
         !(pending.source_dt > 0.0) || !(pending.target_dt > 0.0) ||
@@ -372,6 +373,29 @@ void refresh_accepted_hierarchy_state_after_remap_(
         if (!active_attempt_states_.empty())
           throw std::logic_error("AMR Program accepted history remap crossed an active attempt");
         RemapCandidate staged{pending_history_remaps_, {}};
+        if (descriptor.prior_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
+            descriptor.prior_materialization_generation == std::numeric_limits<std::uint64_t>::max() ||
+            descriptor.prior_topology_epoch + 1 != descriptor.published_topology_epoch ||
+            descriptor.prior_materialization_generation + 1 != descriptor.published_materialization_generation ||
+            descriptor.published_topology_epoch != runtime_->topology_epoch() ||
+            descriptor.published_materialization_generation != runtime_->materialization_generation())
+          throw std::runtime_error("AMR Program history remap has a stale publication edge");
+        // This is live metadata of the native-prepared image, not the facade's old accepted
+        // getter (which intentionally refuses an image after topology publication).
+        const auto metadata = checkpoint_detail::history_metadata(
+            runtime_state().hist_, facade_->program_block_map(), runtime_->hierarchy().num_levels());
+        const auto ring_contract = [&](const std::string& key) {
+          const auto decoded = decode_history_key_(key);
+          if (!decoded)
+            throw std::runtime_error("AMR Program pending history remap has an invalid ring key");
+          return checkpoint_detail::pending_ring_contract(
+              metadata.histories, metadata.history_slots, decoded->second, decoded->first,
+              {decoded->first, static_cast<std::int64_t>(facade_->macro_step()), {0, 1}, facade_->time()});
+        };
+        for (auto& [key, marker] : staged.pending)
+          checkpoint_detail::requalify_retained_pending_history(
+              marker, key, descriptor, ring_contract(key),
+              runtime_state().hist_.slot_sample.at(key).at(1), runtime_state().hist_.store_pending.at(key));
         if (descriptor.child_physical_layout_changed && descriptor.child_published &&
             (descriptor.temporal_numerator == 1 || descriptor.temporal_numerator == 2) &&
             descriptor.temporal_denominator == 1 && descriptor.integral_only) {
@@ -397,19 +421,25 @@ void refresh_accepted_hierarchy_state_after_remap_(
               throw std::runtime_error(
                   "AMR Program deferred history remap would supersede a pending lag");
             const double source_dt = static_cast<double>(dts[1]);
-            staged.pending.emplace(
-                key,
-                AmrProgramPendingHistoryRemap{
+            AmrProgramPendingHistoryRemap marker{
                     key, descriptor.parent_level, descriptor.child_level,
                     descriptor.prior_topology_epoch, descriptor.prior_materialization_generation,
                     descriptor.published_topology_epoch,
                     descriptor.published_materialization_generation, descriptor.accepted_macro_step,
                     descriptor.temporal_numerator, descriptor.temporal_denominator, source_dt,
-                    source_dt / static_cast<double>(descriptor.temporal_numerator), false});
+                    source_dt / static_cast<double>(descriptor.temporal_numerator), false};
+            marker.qualified_topology_epoch = descriptor.published_topology_epoch;
+            marker.qualified_materialization_generation = descriptor.published_materialization_generation;
+            marker.source_sample = runtime_state().hist_.slot_sample.at(key).at(1);
+            if (marker.source_sample.kind != HistorySampleKind::Publication)
+              throw std::runtime_error("AMR Program deferred remap requires an earned source sample identity");
+            marker.retained_ring_contract = ring_contract(key);
+            staged.pending.emplace(key, std::move(marker));
           }
         }
         ExactContractBuilder contract;
-        contract.text("pops.amr.accepted-history-remap.v2")
+        contract.text("pops.amr.accepted-history-remap.v3")
+            .bytes(descriptor.operation_identity)
             .scalar(descriptor.source_topology_epoch)
             .scalar(descriptor.source_materialization_generation)
             .scalar(descriptor.parent_level)
@@ -428,12 +458,25 @@ void refresh_accepted_hierarchy_state_after_remap_(
             .scalar(static_cast<std::uint64_t>(staged.pending.size()));
         for (const AmrProgramHistoryRemapEntry& entry : descriptor.history_plan)
           contract.bytes(entry.key).bytes(entry.parent_key).scalar(entry.source);
-        for (const auto& [key, marker] : staged.pending)
+        for (const auto& [key, marker] : staged.pending) {
           contract.bytes(key)
               .scalar(marker.parent_level)
               .scalar(marker.child_level)
+              .scalar(marker.prior_topology_epoch)
+              .scalar(marker.prior_materialization_generation)
+              .scalar(marker.published_topology_epoch)
+              .scalar(marker.published_materialization_generation)
+              .scalar(marker.qualified_topology_epoch)
+              .scalar(marker.qualified_materialization_generation)
+              .scalar(marker.accepted_macro_step)
+              .scalar(marker.temporal_numerator)
+              .scalar(marker.temporal_denominator)
+              .scalar(marker.consumed)
               .scalar(std::bit_cast<std::uint64_t>(marker.source_dt))
-              .scalar(std::bit_cast<std::uint64_t>(marker.target_dt));
+              .scalar(std::bit_cast<std::uint64_t>(marker.target_dt))
+              .bytes(marker.retained_ring_contract);
+          marker.source_sample.append_contract(contract);
+        }
         staged.exact_contract = std::move(contract).release();
         return staged;
       },

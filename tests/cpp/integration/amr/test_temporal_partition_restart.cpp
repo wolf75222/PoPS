@@ -54,6 +54,122 @@ void prove_exact_ranked_round_trip() {
   EXPECT_EQ(program::serialize_amr_program_accepted_state(decoded), encoded);
 }
 
+program::AmrProgramAcceptedState<2> pending_history_state() {
+  program::AmrProgramAcceptedState<2> state;
+  state.spatial_contract = "tests.pending-remap.qualification";
+  state.topology_epoch = 11;
+  state.materialization_generation = 21;
+  state.level_clocks = {{0, 3, {0, 1}, .75}, {1, 3, {0, 1}, .75}, {2, 3, {0, 1}, .75}};
+  state.logical_clock_ticks = {{"clock", 3}};
+  state.histories = {{"prior", 0, "state", "cell", "clock", "linear", 2, 1}};
+  program::HistorySampleIdentity sample{std::bit_cast<std::uint64_t>(.5),
+      std::bit_cast<std::uint64_t>(.25), 17, program::HistorySampleKind::Publication};
+  for (int level = 0; level < 3; ++level)
+    for (int slot = 0; slot < 2; ++slot)
+      state.history_slots.push_back({"prior", level, slot, .25, true, 2, sample});
+  program::AmrProgramPendingHistoryRemap marker{
+      "pops.amr.level-history.v1/1/5:prior", 0, 1, 10, 20, 11, 21, 3, 2, 1, .25, .125, false};
+  marker.qualified_topology_epoch = 11;
+  marker.qualified_materialization_generation = 21;
+  marker.source_sample = sample;
+  marker.retained_ring_contract = program::checkpoint_detail::pending_ring_contract(
+      state.histories, state.history_slots, "prior", 1, state.level_clocks[1]);
+  state.pending_history_remaps = {marker};
+  state.flux_budget_contract = "empty-flux";
+  state.coupling_contract = "no-coupling";
+  return state;
+}
+
+TEST(test_temporal_partition_restart, PendingRemapKeepsOriginAcrossTwoUnchangedQualifications) {
+  auto state = pending_history_state();
+  const auto origin = state.pending_history_remaps.front();
+  for (std::uint64_t epoch : {12u, 13u}) {
+    program::AmrProgramHistoryRemapDescriptor descriptor;
+    descriptor.parent_level = 1;
+    descriptor.child_level = 2;
+    descriptor.prior_topology_epoch = epoch-1;
+    descriptor.prior_materialization_generation = epoch+9;
+    descriptor.published_topology_epoch = epoch;
+    descriptor.published_materialization_generation = epoch+10;
+    auto& marker = state.pending_history_remaps.front();
+    program::checkpoint_detail::requalify_retained_pending_history(
+        marker, marker.key, descriptor, marker.retained_ring_contract, marker.source_sample, false);
+    state.topology_epoch = epoch;
+    state.materialization_generation = epoch+10;
+    EXPECT_EQ(marker.prior_topology_epoch, origin.prior_topology_epoch);
+    EXPECT_EQ(marker.published_topology_epoch, origin.published_topology_epoch);
+    EXPECT_EQ(marker.prior_materialization_generation, origin.prior_materialization_generation);
+    EXPECT_EQ(marker.published_materialization_generation, origin.published_materialization_generation);
+    EXPECT_EQ(marker.source_sample, origin.source_sample);
+    EXPECT_EQ(marker.retained_ring_contract, origin.retained_ring_contract);
+    const auto bytes = program::serialize_amr_program_accepted_state(state);
+    EXPECT_EQ(bytes[7], '9');
+    EXPECT_EQ(program::serialized_amr_program_accepted_state_size(state), bytes.size());
+    EXPECT_EQ(program::deserialize_amr_program_accepted_state<2>(bytes).pending_history_remaps,
+              state.pending_history_remaps);
+  }
+  auto bytes = program::serialize_amr_program_accepted_state(state);
+  bytes[7] = '8';
+  EXPECT_THROW((void)program::deserialize_amr_program_accepted_state<2>(bytes), std::runtime_error);
+  program::AmrProgramAcceptedStateCapacity<2> capacity;
+  capacity.spatial_contract_characters = state.spatial_contract.size();
+  capacity.level_count = state.level_clocks.size();
+  capacity.logical_clock_identities = {"clock"};
+  capacity.histories = state.histories;
+  capacity.temporal_provider_identity = state.temporal_partition.provider_identity;
+  capacity.pending_history_remap_count = 1;
+  capacity.pending_history_remap_key_characters = origin.key.size();
+  capacity.flux_budget_contract_characters = state.flux_budget_contract.size();
+  capacity.coupling_contract_characters = state.coupling_contract.size();
+  EXPECT_EQ(program::serialized_amr_program_accepted_state_capacity(capacity),
+            bytes.size() + 32 + state.spatial_contract.size());
+}
+
+TEST(test_temporal_partition_restart, PendingRemapRefusesForgedQualificationAndChangedSample) {
+  const auto accepted = pending_history_state();
+  const auto bytes = program::serialize_amr_program_accepted_state(accepted);
+  for (int failure = 0; failure < 5; ++failure) {
+    auto forged = accepted;
+    auto& marker = forged.pending_history_remaps.front();
+    if (failure == 0) ++marker.qualified_topology_epoch;
+    if (failure == 1) --marker.qualified_materialization_generation;
+    if (failure == 2) ++marker.source_sample.ordinal;
+    if (failure == 3) forged.history_slots[3].sample.ordinal += 1;
+    if (failure == 4) marker.retained_ring_contract.back() ^= 1;
+    EXPECT_THROW((void)program::serialize_amr_program_accepted_state(forged), std::invalid_argument);
+    EXPECT_EQ(program::serialize_amr_program_accepted_state(accepted), bytes);
+  }
+}
+
+TEST(test_temporal_partition_restart, PendingRemapRejectedSecondTransitionDoesNotMutateCandidate) {
+  const auto accepted = pending_history_state();
+  const auto origin = accepted.pending_history_remaps.front();
+  for (int failure = 0; failure < 8; ++failure) {
+    auto candidate = origin;
+    program::AmrProgramHistoryRemapDescriptor descriptor;
+    descriptor.parent_level = 1;
+    descriptor.child_level = 2;
+    descriptor.prior_topology_epoch = 11;
+    descriptor.prior_materialization_generation = 21;
+    descriptor.published_topology_epoch = 12;
+    descriptor.published_materialization_generation = 22;
+    auto sample = origin.source_sample;
+    auto contract = origin.retained_ring_contract;
+    bool stored = false;
+    if (failure == 0) descriptor.parent_level = 0;
+    if (failure == 1) descriptor.history_plan.push_back({origin.key, {}, program::AmrProgramHistoryRemapSource::RetainedChild});
+    if (failure == 2) descriptor.history_plan.push_back({origin.key, "parent", program::AmrProgramHistoryRemapSource::ParentDeferred});
+    if (failure == 3) ++descriptor.prior_topology_epoch;
+    if (failure == 4) ++descriptor.published_materialization_generation;
+    if (failure == 5) ++sample.ordinal;
+    if (failure == 6) contract.back() ^= 1;
+    if (failure == 7) stored = true;
+    EXPECT_THROW(program::checkpoint_detail::requalify_retained_pending_history(
+        candidate, candidate.key, descriptor, contract, sample, stored), std::runtime_error);
+    EXPECT_EQ(candidate, origin);
+  }
+}
+
 TEST(test_temporal_partition_restart, BatchedAttemptCommitRollbackAndCheckpointAreExact) {
   const auto accepted = cell_local_state();
   program::BatchedCellTemporalPartition partition(accepted);

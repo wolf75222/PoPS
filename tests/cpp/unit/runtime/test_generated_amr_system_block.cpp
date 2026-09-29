@@ -3114,16 +3114,16 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       }
     EXPECT_THROW(pops::runtime::program::serialize_amr_program_accepted_state(unearned_lag),
                  std::invalid_argument);
-    // Cursor-walk the authenticated AND8 layout to its pending section. The history key also
+    // Cursor-walk the authenticated AND9 layout to its pending section. The history key also
     // occurs in earlier slot payloads, so raw searching could mutate the wrong record.
     const std::string& pending_key = pending_after_regrid.pending_history_remaps.front().key;
-    constexpr std::array<std::uint8_t, 8> expected_magic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '8'};
+    constexpr std::array<std::uint8_t, 8> expected_magic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '9'};
     ASSERT_GE(pending_bytes.size(), expected_magic.size());
     ASSERT_TRUE(std::equal(expected_magic.begin(), expected_magic.end(), pending_bytes.begin()));
     const auto advance = [&](std::size_t& position, std::uint64_t count, std::size_t width = 1) {
       if (position > pending_bytes.size() || width == 0 ||
           count > (pending_bytes.size() - position) / width)
-        throw std::out_of_range("AND8 test cursor exceeds the checkpoint payload");
+        throw std::out_of_range("AND9 test cursor exceeds the checkpoint payload");
       position += static_cast<std::size_t>(count) * width;
     };
     const auto read_word = [&](std::size_t& position) {
@@ -3142,7 +3142,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       const auto count = read_word(position);
       if (minimum_record_bytes == 0 ||
           count > (pending_bytes.size() - position) / minimum_record_bytes)
-        throw std::out_of_range("AND8 test record count exceeds the checkpoint payload");
+        throw std::out_of_range("AND9 test record count exceeds the checkpoint payload");
       return count;
     };
     std::size_t cursor = expected_magic.size();
@@ -3167,7 +3167,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       advance(cursor, 72);  // five legacy words plus four exact sample-identity words
     }
     const std::size_t pending_count_offset = cursor;
-    ASSERT_EQ(read_count(cursor, 104), 1u);
+    ASSERT_EQ(read_count(cursor, 160), 1u);
     const auto pending_key_length = read_word(cursor);
     const std::size_t key_offset = cursor;
     ASSERT_EQ(pending_key_length, pending_key.size());
@@ -3175,7 +3175,8 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     ASSERT_TRUE(std::equal(pending_key.begin(), pending_key.end(),
                            pending_bytes.begin() + static_cast<std::ptrdiff_t>(key_offset)));
     const std::size_t after_key = cursor;
-    advance(cursor, 96);
+    advance(cursor, 144);
+    skip_string(cursor);  // immutable retained-ring contract
     const auto write_word = [](std::vector<std::uint8_t>& bytes, std::size_t offset,
                                std::uint64_t value) {
       ASSERT_LE(offset, bytes.size());
@@ -3188,7 +3189,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       SCOPED_TRACE(label);
       try {
         system.restore_checkpoint_accepted_state(corrupt);
-        ADD_FAILURE() << "corrupt POPSAND8 accepted state was accepted";
+        ADD_FAILURE() << "corrupt POPSAND9 accepted state was accepted";
       } catch (const std::exception& exception) {
         EXPECT_NE(std::string_view(exception.what()).find(diagnostic_class), std::string_view::npos)
             << exception.what();

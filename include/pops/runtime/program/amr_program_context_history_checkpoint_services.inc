@@ -283,8 +283,10 @@ field_type& deferred_history_lag_(const std::string& key,
           throw std::logic_error("AMR Program deferred history lag has no pending remap");
         const auto& marker = pending->second;
         if (marker.consumed || ring.size() != 2 || marker.child_level != active_level_ ||
-            marker.published_topology_epoch != runtime_->topology_epoch() ||
-            marker.published_materialization_generation != runtime_->materialization_generation() ||
+            !checkpoint_detail::pending_qualification_valid(
+                marker, runtime_->topology_epoch(), runtime_->materialization_generation()) ||
+            manager.slot_sample.at(key).size() != 2 ||
+            manager.slot_sample.at(key)[1] != marker.source_sample ||
             !manager.store_pending.at(key) || manager.slot_dt.at(key).size() != 2 ||
             static_cast<double>(manager.slot_dt.at(key)[0]) != current_dt_ ||
             static_cast<double>(manager.slot_dt.at(key)[1]) != marker.source_dt ||

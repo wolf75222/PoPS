@@ -199,11 +199,11 @@ def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], 
         return payload[nonlocal_cursor : nonlocal_cursor + size].decode("utf-8")
 
     version = payload[:8]
-    assert version in (b"POPSAND7", b"POPSAND8")
+    assert version in (b"POPSAND7", b"POPSAND8", b"POPSAND9")
     cursor = 8 + 8
     skip(read_u64())  # spatial contract
     skip(16)  # topology epoch, materialization generation
-    if version == b"POPSAND8":
+    if version in (b"POPSAND8", b"POPSAND9"):
         read_u64()  # committed attempt, independent of face-ledger contents
     for _ in range(read_u64()):
         skip(40)
@@ -221,6 +221,9 @@ def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], 
     for _ in range(read_u64()):
         read_string()
         skip(12 * 8)
+        if version == b"POPSAND9":
+            skip(6 * 8)
+            skip(read_u64())
     history_flux_size = read_u64()
     history_flux_offset = cursor
     skip(history_flux_size)
