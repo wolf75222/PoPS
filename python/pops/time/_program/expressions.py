@@ -11,7 +11,7 @@ def is_pointwise_expression(value):
 
 class _ProgramExpressions:
     @atomic_authoring
-    def _pointwise_expression(self, name, expression, *, at=None):
+    def _pointwise_expression(self, name, expression, *, at=None, finite_support=None):
         if isinstance(expression, ProgramExpression):
             expressions = expression.components
             template = expression.template
@@ -28,7 +28,20 @@ class _ProgramExpressions:
             raise TypeError("pointwise materialization currently requires a typed State template")
         if len(expressions) != len(component_names(template)):
             raise ValueError("pointwise output component count must match its StateSpace")
-        for value in inputs:
+        attrs = {"expressions": encoded, "expression_nodes": nodes}
+        if finite_support is not None:
+            from pops.linalg.finite import FiniteSupport
+            if not isinstance(finite_support, FiniteSupport) or finite_support.dofs != component_names(template):
+                raise ValueError("finite materialization requires its exact output support")
+            if all(value is not template for value in inputs):
+                inputs = (*inputs, template)
+            attrs["finite_support_v1"] = finite_support.contract
+            attrs["finite_template_index"] = next(i for i, value in enumerate(inputs) if value is template)
+            for value in inputs:
+                for attribute in ("layout", "centering", "support", "sampling", "frame", "clock"):
+                    if getattr(value.space, attribute) != getattr(template.space, attribute):
+                        raise ValueError("finite materialization co-location obligation: different " + attribute)
+        for value in (() if finite_support is not None else inputs):
             if value.block != template.block:
                 raise ValueError("pointwise inputs require the same block support; use an explicit map")
             require_compatible_spaces(template.space, value.space, "pointwise expression", typed_pair=True)
@@ -37,6 +50,6 @@ class _ProgramExpressions:
         for value in inputs:
             context = merge_field_provenance(context, value.field_context)
         return self._new("state", "pointwise_expression", inputs,
-                         {"expressions": encoded, "expression_nodes": nodes}, name, template.block,
+                         attrs, name, template.block,
                          space=template.space, point=template.point if at is None else at,
                          field_context=context, state_ref=template.state_ref)

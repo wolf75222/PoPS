@@ -141,6 +141,7 @@ api pops/numerics/fv/numerical_flux.hpp
 api pops/numerics/fv/reconstruction.hpp
 api pops/numerics/fv/spatial_discretisation.hpp
 api pops/numerics/linalg/block_inverse.hpp
+api pops/numerics/linalg/finite_linear.hpp
 api pops/numerics/linalg/dense_eig.hpp
 api pops/numerics/nonlinear/local_nonlinear_collective.hpp
 api pops/numerics/nonlinear/newton_options.hpp

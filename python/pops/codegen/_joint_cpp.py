@@ -2,19 +2,32 @@
 from __future__ import annotations
 
 from pops._ir.application import ApplicationProjection, OperatorApplication
+from pops._ir.finite_linear import FiniteApplication, FiniteProjection
 from pops._ir.native_call import NativeCall, NativeProjection
 
 
 def joint_kind(expression):
-    return isinstance(expression, (OperatorApplication, NativeCall))
+    return isinstance(expression, (OperatorApplication, NativeCall, FiniteApplication))
 
 
 def joint_neutral(expression, real):
-    width = sum(len(values) for values in expression.outputs.values())
+    width = (expression.width if isinstance(expression, FiniteApplication) else
+             sum(len(values) for values in expression.outputs.values()))
     return "Kokkos::Array<%s, %d>{}" % (real, width)
 
 
 def joint_expand(expression, render):
+    if isinstance(expression, FiniteProjection):
+        return "%s[%d]" % (render(expression.application), expression.index)
+    if isinstance(expression, FiniteApplication):
+        from pops.identity.scalar import scalar_literal
+        n, m = len(expression.source[1]), len(expression.target[1])
+        coefficients = ", ".join("pops::Real(%s)" % scalar_literal(x).to_cpp()
+                                 for row in expression.coefficients for x in row)
+        inputs = ", ".join(render(x) for x in expression.inputs)
+        return ("pops::detail::finite_linear_%s<%d, %d>(Kokkos::Array<pops::Real, %d>{%s}, "
+                "Kokkos::Array<pops::Real, %d>{%s})" %
+                (expression.operation, m, n, m*n, coefficients, len(expression.inputs), inputs))
     if isinstance(expression, ApplicationProjection):
         offset = 0
         for name, values in expression.application.outputs.items():

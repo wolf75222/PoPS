@@ -414,6 +414,9 @@ def _block_inverse_include(program: Any) -> str:
     if any(v.op == "affine_moment_update" for v in program._values):
         result += "#include <pops/numerics/moments/affine_velocity.hpp>\n"
     from .program_lowerability import all_ops
+    if any(any(node[0] == "finite_linear_v1" for node in v.attrs.get("expression_nodes", ()))
+           for v in all_ops(program)):
+        result += "#include <pops/numerics/linalg/finite_linear.hpp>\n"
     if any(v.op == "principal_rate" for v in all_ops(program)):
         result += "#include <pops/runtime/program/prepared_principal_flux.hpp>\n"
     return result

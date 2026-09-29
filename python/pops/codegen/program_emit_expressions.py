@@ -35,6 +35,16 @@ def checked_pointwise_rows(value, inputs):
     for original, row in zip(value.inputs, inputs, strict=True):
         if len(row) != len(component_names(original)):
             raise ValueError("pointwise expression component Space changed")
+    if "finite_support_v1" in value.attrs:
+        from pops.linalg.finite import FiniteSupport
+        support = FiniteSupport(*value.attrs["finite_support_v1"])
+        index = value.attrs.get("finite_template_index")
+        if (type(index) is not int or not 0 <= index < len(value.inputs)
+                or support.dofs != component_names(value)
+                or support.dofs != component_names(value.inputs[index])
+                or value.inputs[index].block != value.block
+                or value.inputs[index].state_ref != value.state_ref):
+            raise ValueError("finite materialization output authority changed")
     expressions = value.attrs["expressions"]
     if len(expressions) != len(component_names(value)):
         raise ValueError("pointwise expression output Space changed")
@@ -60,6 +70,20 @@ def checked_expression_dag(expressions, nodes, inputs):
             name = "expression_leaf_%d_" % index
             bindings[name] = expression_cpp(node, inputs)
             restored.append(ir.Var(name, "program_expression"))
+            continue
+        if operation in ("finite_linear_v1", "finite_projection_v1"):
+            from pops._ir.finite_linear import FiniteApplication, FiniteProjection
+            if operation == "finite_linear_v1" and len(node) == 6:
+                children = node[5]
+                if any(type(child) is not int or not 0 <= child < index for child in children):
+                    raise ValueError("finite map DAG must reference earlier inputs")
+                restored.append(FiniteApplication(*node[1:5], tuple(restored[c] for c in children)))
+            elif operation == "finite_projection_v1" and len(node) == 3:
+                if type(node[1]) is not int or not 0 <= node[1] < index:
+                    raise ValueError("finite projection must reference an earlier map")
+                restored.append(FiniteProjection(restored[node[1]], node[2]))
+            else:
+                raise ValueError("invalid finite map DAG arity")
             continue
         children = node[2:] if operation == "compare" else node[1:]
         arity = (3 if operation == "where" else 2 if operation == "compare"
@@ -88,11 +112,12 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
     from pops.codegen.program_emit_kernels import _kernel_open, _kernel_close
     from pops.time.expressions import component_names
     names = [variables[item.id] for item in value.inputs]
-    body = _kernel_open(output, names[0])
+    template_name = names[value.attrs.get("finite_template_index", 0)]
+    body = _kernel_open(output, template_name)
     index = next(i for i, line in enumerate(body) if "pops::for_each_cell" in line)
     views = []
-    for name in dict.fromkeys(names[1:]):
-        if name != names[0]:
+    for name in dict.fromkeys(names):
+        if name != template_name:
             views.append("  const auto %sA = std::as_const(%s).fab(li).view();" % (name, name))
     mask = "expression_active_%d" % value.id
     body.insert(0, "const auto* %s = ctx.pointwise_active_mask(%d, %s);"
@@ -110,9 +135,18 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
     temporaries, rendered, invalid = checked_pointwise_rows(value, rows)
     body.append("    if (expression_has_mask_ && !(expression_mask_(index, 0) >= pops::Real(0.5))) {")
     for c in range(len(rendered)):
-        body.append("      outA(index, %d) = %sA(index, %d);" % (c, names[0], c))
+        body.append("      outA(index, %d) = %sA(index, %d);" % (c, template_name, c))
     body.extend(["      expression_status_(index, 0) = pops::Real(0);", "      return;", "    }"])
     body.extend("    " + line for line in temporaries)
     body.append("    expression_status_(index, 0) = (%s) ? pops::Real(1) : pops::Real(0);" % invalid)
     body.extend("    outA(index, %d) = %s;" % (c, expr) for c, expr in enumerate(rendered))
+    if "finite_support_v1" in value.attrs:
+        vote = ["{", "long finite_layout_error_ = 0;"]
+        for name in dict.fromkeys(names):
+            vote.append("finite_layout_error_ |= (%s.layout() != %s.layout() || "
+                        "%s.distribution() != %s.distribution() || %s.local_rank() != %s.local_rank());"
+                        % (name, output, name, output, name, output))
+        vote += ["if (pops::all_reduce_max(finite_layout_error_, ctx.prepared_execution_lane()))",
+                 '  throw std::runtime_error("finite materialization requires co-located layouts, distributions and ranks");']
+        return vote + body + _kernel_close() + ["}"]
     return body + _kernel_close()

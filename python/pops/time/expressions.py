@@ -151,6 +151,7 @@ _UNARY = {ir.Neg: "neg", ir.Sqrt: "sqrt", ir.Exp: "exp", ir.Abs: "abs", ir.Sign:
 def encode_expressions(expressions, program):
     """Capture exact reads and bounded scalar operations, without simplification."""
     from pops.time._program.value_validation import require_owned
+    from pops._ir.finite_linear import FiniteApplication, FiniteProjection
     inputs = []
     by_id = {}
     nodes = []
@@ -170,6 +171,11 @@ def encode_expressions(expressions, program):
             encoded = ("literal", node.literal)
         elif type(node) is CoefficientExpression:
             encoded = ("coefficient", node.polynomial)
+        elif type(node) is FiniteApplication:
+            encoded = ("finite_linear_v1", node.operation, node.source, node.target,
+                       node.coefficients, tuple(encode(x) for x in node.inputs))
+        elif type(node) is FiniteProjection:
+            encoded = ("finite_projection_v1", encode(node.application), node.index)
         elif type(node) is Where:
             encoded = ("where", encode(node.test), encode(node.yes), encode(node.no))
         elif type(node) is ir.Compare:
