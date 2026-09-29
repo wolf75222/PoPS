@@ -12,13 +12,15 @@ from pops.solvers.nonlinear import LocalNewton
 from pops.time import LocalResidual, FixedDt, FailRun
 
 
-def make_case(widths=(2, 3), *, reverse=False, derived=False):
+def make_case(widths=(2, 3), *, reverse=False, derived=False, return_parameters=False):
     frame = Rectangle("local_operators_box", (0., 0.), (1., 1.)).frame(Cartesian2D())
-    models, states, sources, operators = [], [], [], []
+    models, states, sources, operators, parameters = [], [], [], [], []
     for i, width in enumerate(widths):
         model = pops.Model("physics_%d" % i, frame=frame)
         state = model.state("U", components=tuple("v%d" % c for c in range(width)))
-        gain = model.value(model.param(RuntimeParam("gain", default=.5 + .25*i)))
+        parameter = model.param(RuntimeParam("gain", default=.5 + .25*i))
+        parameters.append(parameter)
+        gain = model.value(parameter)
         model.source("quadratic", on=state,
                      value=tuple(gain*state[c]*state[c] for c in range(width)))
         operators.append(model.operator("diagonal", returns=model.local_linear_operator(
@@ -62,4 +64,6 @@ def make_case(widths=(2, 3), *, reverse=False, derived=False):
         case.initials.add(InitialCondition(state=subject, value=BindArray(),
                                           projection=ConservativeCellAverage()))
     layout = Uniform(CartesianGrid(frame=frame, cells=(4, 4), periodic=PeriodicAxes(frame.axes)))
+    if return_parameters:
+        return case, layout, subjects, tuple(blocks[i][p] for i, p in enumerate(parameters))
     return case, layout, subjects
