@@ -1305,6 +1305,10 @@ class AmrSystem {
   /// Forces the lazy build (ensure_built) like n_patches()/mass()/density().
   int coarse_local_boxes();
   int coarse_total_boxes();
+  /// V1 rank-local level-0 ownership snapshot: valid-cell boxes in native axis order,
+  /// with inclusive C++ corners. Read between steps; query again after regrid/restart.
+  /// The Python binding projects upper corners to exclusive indices.
+  std::vector<Box<Dim>> coarse_local_box_bounds();
 
   /// AMR CHECKPOINT / RESTART (ADC-65 single-block single-rank; ADC-509 multi-block + np>1):
   /// per-level STATE accessors + hierarchy imposition for a BIT-IDENTICAL resumption (cf.

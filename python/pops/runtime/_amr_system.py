@@ -32,6 +32,7 @@ from pops.runtime._private_config_compat import private_constructor_config
 _LANE_FREE_AMR_INSPECT = frozenset({
     "block_names",
     "coarse_local_boxes",
+    "coarse_local_box_bounds",
     "coarse_total_boxes",
     "has_package_assembly_lane",
     "n_levels",
@@ -282,6 +283,14 @@ class AmrSystem(
         Triggers the lazy build like n_patches().
         """
         return self._s.coarse_local_boxes()
+
+    def coarse_local_box_bounds(self) -> Any:
+        """V1 current rank-owned level-0 valid boxes, half-open in native axis order.
+
+        Read between steps. The result is a snapshot of current hierarchy ownership;
+        query again after any regrid, restart or layout transfer.
+        """
+        return self._s.coarse_local_box_bounds()
 
     def coarse_total_boxes(self) -> Any:
         """Total number of coarse (base) boxes across all ranks (ADC-319 diagnostic).

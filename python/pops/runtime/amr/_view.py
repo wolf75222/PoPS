@@ -69,6 +69,27 @@ class AmrRuntimeView:
                 return (None, None)
             raise
 
+    def coarse_local_box_bounds(self) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
+        """V1 rank-local level-0 valid boxes, half-open in native axis order.
+
+        This read-only snapshot reflects the current hierarchy epoch. Query it again
+        after regrid or restart; it is not a persisted ownership map.
+        """
+        rows = self._sim.coarse_local_box_bounds()
+        dimension = len(self._sim._shape)
+        result = []
+        for raw in rows:
+            bounds = tuple(tuple(axis for axis in corner) for corner in raw)
+            if len(bounds) != 2 or any(len(corner) != dimension for corner in bounds):
+                raise TypeError("native AMR local box has the wrong spatial rank")
+            lower, upper = bounds
+            if any(type(axis) is not int for corner in bounds for axis in corner):
+                raise TypeError("native AMR local box corners require exact integers")
+            if any(hi <= lo for lo, hi in zip(lower, upper, strict=True)):
+                raise ValueError("native AMR local box must have positive extent")
+            result.append((lower, upper))
+        return tuple(result)
+
     def _block_names(self) -> Any:
         try:
             return list(self._sim._s.block_names())

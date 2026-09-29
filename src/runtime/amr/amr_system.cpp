@@ -19406,6 +19406,17 @@ int AmrSystem<Dim>::coarse_total_boxes() {
 }
 
 template <int Dim>
+std::vector<Box<Dim>> AmrSystem<Dim>::coarse_local_box_bounds() {
+  p_->require_inspectable_hierarchy();
+  const auto& state = p_->engine->hierarchy().state(0);
+  std::vector<Box<Dim>> result;
+  result.reserve(state.local_size());
+  for (std::size_t local = 0; local < state.local_size(); ++local)
+    result.push_back(state.box(local));
+  return result;
+}
+
+template <int Dim>
 std::vector<double> AmrSystem<Dim>::level_state(int level) {
   return level_state_global(level);
 }
@@ -22641,6 +22652,8 @@ template std::vector<AmrPatch<kNativeDimension>>
 AmrSystem<kNativeDimension>::output_geometry_boxes();
 template int AmrSystem<kNativeDimension>::coarse_local_boxes();
 template int AmrSystem<kNativeDimension>::coarse_total_boxes();
+template std::vector<Box<kNativeDimension>>
+AmrSystem<kNativeDimension>::coarse_local_box_bounds();
 template std::vector<double> AmrSystem<kNativeDimension>::level_state(int);
 template std::vector<double> AmrSystem<kNativeDimension>::level_state_global(int);
 template void AmrSystem<kNativeDimension>::set_level_state(int, const std::vector<double>&);

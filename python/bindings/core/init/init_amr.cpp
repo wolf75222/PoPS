@@ -1278,6 +1278,9 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // coarse transport); replicated / single-box -> local == total. Query between steps, no hot cost.
       .def("coarse_local_boxes", &AmrSystem::coarse_local_boxes)
       .def("coarse_total_boxes", &AmrSystem::coarse_total_boxes)
+      .def("coarse_local_box_bounds", [](AmrSystem& s) {
+        return ranked_boxes_to_python(s.coarse_local_box_bounds());
+      })
       // mass / density: overload by BLOCK NAME (multi-block; empty name -> 1st block, mono-block
       // compat or cosmetic name). The name INDEXES the block in multi-block (each block has its mass /
       // density, conserved PER BLOCK at reflux). Without argument -> 1st block (mono-block back-compat).
