@@ -133,8 +133,10 @@ def main():
             bound = np.asarray(simulation.state_global("material"))
             report = pops.run(simulation, t_end=t_end, max_steps=16)
             gathered = np.asarray(simulation.state_global("material"))
-            gathered_t = np.asarray(simulation.history_global("M06_temperature", 0))
-            gathered_f = np.asarray(simulation.history_global("M06_liquid_fraction", 0))
+            # The accepted step rotates the stored sample from the working slot 0
+            # into slot 1; slot 0 then holds the recycled prior sample.
+            gathered_t = np.asarray(simulation.history_global("M06_temperature", 1))
+            gathered_f = np.asarray(simulation.history_global("M06_liquid_fraction", 1))
             failure = b""
             if world.rank == 0:
                 try:
