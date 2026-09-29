@@ -1334,10 +1334,15 @@ TEST(test_amr_synthetic_program_loader_transaction,
   std::vector<int> owners;
   std::vector<std::vector<double>> states;
   for (int level = 0; level < 3; ++level) {
-    const auto level_owners = system.level_owner_ranks(level);
-    owners.insert(owners.end(), level_owners.begin(), level_owners.end());
+    // patch_boxes/rebuild_hierarchy describe refined patches only; level zero remains
+    // the already authenticated coarse distribution, outside this parallel array.
+    if (level > 0) {
+      const auto level_owners = system.level_owner_ranks(level);
+      owners.insert(owners.end(), level_owners.begin(), level_owners.end());
+    }
     states.push_back(system.block_level_state_global(kBlock, level));
   }
+  ASSERT_EQ(owners.size(), old_boxes.size());
   struct HistoryImage {
     std::string name;
     int level;
