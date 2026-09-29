@@ -127,7 +127,7 @@ def main():
                         ("discrete_error","inventory_error","initial_error","time_error"))
                         and metrics["minimum_energy"] >= CRITERIA["minimum_energy"]
                         and report.accepted_steps == count and report.rejected_steps == 0)
-                    runs.append({"reverse":reverse,"steps":count,"metrics":metrics,"accepted":accepted,
+                    runs.append({"reverse":reverse,"steps":count,"mpi_ranks":world.size,"metrics":metrics,"accepted":accepted,
                         "state_file":path.name,"state_sha256":hashlib.sha256(path.read_bytes()).hexdigest(),
                         "run_report":report.to_data(),"execution_context":context.to_data(),
                         "semantic_identity":artifact.semantic_identity.token})
