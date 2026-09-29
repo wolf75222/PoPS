@@ -28,6 +28,14 @@ def build_case(cells: int = 16):
     frame = CartesianDomain("axial_b1_interval", (0.,), (1.,)).frame(Cartesian1D())
     model = pops.Model("hyqmom_b1_axial_order4", frame=frame)
     state = model.state("M", components=("M0", "M1", "M2", "M3", "M4"))
+    # The B.1 formula divides by density and variance. Its admissible truncated
+    # moment domain is not implied by finite fluxes or real characteristic roots.
+    rho, m1, m2, m3, m4 = state
+    hankel2 = rho * m2 - m1 * m1
+    hankel3 = (rho * (m2 * m4 - m3 * m3)
+               - m1 * (m1 * m4 - m2 * m3) + m2 * (m1 * m3 - m2 * m2))
+    model.primitive_state(*state, conservative=tuple(state))
+    model.recovery_admissibility(M0=rho > 0, M2=hankel2 > 0, M4=hankel3 >= 0)
     flux = model.flux(
         "axial_b1_transport", frame=frame, state=state,
         components={frame.axes[0]: hyqmom_b1_axial_flux(state)},

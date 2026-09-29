@@ -1,10 +1,14 @@
-"""M16: full Appendix B.1 HyQMOM15 and its correlated oblique obstruction.
+"""M16 MATH witness: full Appendix B.1 transport and its oblique obstruction.
 
 The source model uses the public 2V moment generator. The diagnostic
 differentiate its actual public symbolic flux body by complex step at a
 strictly realizable correlated Gaussian. The exact polynomial is the pinned
-rational witness from HYQMOM15_LIMITATION.md. No real-part projection, covariance
-floor, Gaussian fifth-moment replacement, or invented speed bound is applied.
+rational witness from HYQMOM15_LIMITATION.md. The witness applies no real-part projection, covariance
+floor, Gaussian fifth-moment replacement, or invented speed bound. It classifies
+the unmodified B.1 constitutive relation, not every HyQMOM correction. The
+source-only build_case is not a magnetic evolution or a native realizability
+qualification; the model factory's optional state projector is not executed by
+this diagnostic.
 """
 from __future__ import annotations
 
@@ -22,6 +26,8 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.time import AdaptiveCFL
 
+
+CLASSIFICATION = "MATH"
 
 # q-outer order through total degree four, as in the pinned source audit.
 CORRELATED_GAUSSIAN = np.array(
@@ -64,6 +70,7 @@ def oblique_witness():
     discriminant = (bb * bb * cc * cc - 4 * aa * cc**3 - 4 * bb**3 * dd
                     - 27 * aa * aa * dd * dd + 18 * aa * bb * cc * dd)
     return {
+        "classification": CLASSIFICATION,
         "jx": jx, "jy": jy, "oblique": a,
         "polynomial": np.poly(a), "expected_polynomial": EXPECTED_POLYNOMIAL.copy(),
         "discriminant": discriminant,
@@ -100,4 +107,4 @@ def build_case(cells: int = 8):
     return case, layout, state
 
 
-__all__ = ["CORRELATED_GAUSSIAN", "EXPECTED_POLYNOMIAL", "build_case", "oblique_witness"]
+__all__ = ["CLASSIFICATION", "CORRELATED_GAUSSIAN", "EXPECTED_POLYNOMIAL", "build_case", "oblique_witness"]
