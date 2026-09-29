@@ -316,6 +316,12 @@ class FiniteVolume(Descriptor):
 
     def runtime_spatial(self) -> Any:
         """Lower at the native boundary to the existing optimized runtime value."""
+        if self.sampling:
+            from pops.runtime._state_storage import StateStorageSpatial
+
+            # The shared Program operator owns every group face. Installing a
+            # per-row flux would disagree with the generated storage-only model.
+            return StateStorageSpatial(ghost_depth=self.ghost_depth)
         from pops.runtime._bricks_scheme import Spatial
 
         return Spatial(
