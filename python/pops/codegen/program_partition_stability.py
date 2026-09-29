@@ -84,10 +84,21 @@ def explicit_update_consumers(program):
                 updates.add(node.id)
             for child in node.inputs:
                 walk(child)
+        elif node.op == "principal_rate":
+            # Coupled groups may sample a predictor from another block while
+            # advancing the target block; each sampled explicit stage matters.
+            for sampled in node.inputs:
+                walk(sampled)
         elif _is_rate(node):
             index = node.attrs.get("target_input", 0)
             if type(index) is int and 0 <= index < len(node.inputs):
                 walk(node.inputs[index])
+        elif node.op in {"while", "range"}:
+            walk(node.inputs[0])
+            body = node.attrs.get("body")
+            if body is None or not hasattr(body, "op"):
+                raise ValueError("explicit loop has no authenticated body result")
+            walk(body)
         elif node.op == "branch":
             for key in ("true_result", "false_result"):
                 child = node.attrs.get(key)

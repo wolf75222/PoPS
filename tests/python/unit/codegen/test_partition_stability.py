@@ -80,6 +80,22 @@ def test_user_face_guard_follows_explicit_predictor_but_not_implicit_residual():
     assert explicit_update_consumers(SimpleNamespace(_commits={"state": implicit})) == frozenset()
 
 
+def test_coupled_rate_and_loop_result_retain_every_explicit_predictor_budget():
+    first, second = _state(0), _state(1)
+    first_rate = _rate(10, "rhs", first)
+    predictor = _combine(20, (first, {0: 1}), (first_rate, {1: 1}))
+    group_rate = SimpleNamespace(id=11, op="principal_rate", vtype="rhs",
+                                 inputs=(second, predictor), attrs={"target_input": 0},
+                                 block=second.block, point=1)
+    accepted = _combine(21, (second, {0: 1}), (group_rate, {1: 1}))
+    assert explicit_update_consumers(SimpleNamespace(_commits={"state": accepted})) == \
+        frozenset({20, 21})
+    loop = SimpleNamespace(id=30, op="range", vtype="state", inputs=(first,),
+                           attrs={"body": predictor}, block=first.block, point=1)
+    assert explicit_update_consumers(SimpleNamespace(_commits={"state": loop})) == \
+        frozenset({20})
+
+
 def test_convex_stage_budgets_do_not_accumulate_predictor_ancestry():
     initial = _state(0)
     first_transport, first_diffusion = _pair(initial)
