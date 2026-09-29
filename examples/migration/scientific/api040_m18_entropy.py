@@ -45,7 +45,8 @@ def target_moments(multipliers: np.ndarray) -> np.ndarray:
     return np.einsum("cn,nxy->cxy", matrix, population)
 
 
-def make_case(*, cells=(4, 5)):
+def make_case(*, cells=(5, 4)):
+    # CartesianGrid counts (x, y); BindArray stores (component, y, x).
     frame = Rectangle("entropy_box", (0., 0.), (1., 1.)).frame(Cartesian2D())
     dual = pops.Model("entropy_dual", frame=frame)
     lam = dual.state("multipliers", components=("lambda_0", "lambda_1", "lambda_2"))

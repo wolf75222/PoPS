@@ -41,6 +41,17 @@ def test_twenty_moderate_targets_are_interior_and_minimize_entropy():
             assert entropy(varied) > baseline + 1.e-7
 
 
+def test_rectangular_grid_matches_component_major_bind_arrays():
+    _, layout, _ = make_case()
+    multipliers = moderate_multipliers()
+    targets = target_moments(multipliers)
+    # Mesh cells are (nx, ny); BindArray is (components, ny, nx).
+    assert layout.mesh.cells == (5, 4)
+    expected = (QUADRATURE.moment_count, layout.mesh.cells[1], layout.mesh.cells[0])
+    assert multipliers.shape == targets.shape == expected
+    assert targets.shape[1] * targets.shape[2] == 20
+
+
 def test_outside_and_boundary_are_distinct_from_interior():
     inside = target_from_multiplier((.1, -.2, .15))
     boundary = ORACLE_BASIS[:, -1]  # only the v=1 population can realize this ray

@@ -11,8 +11,11 @@ for
 
 The public example `examples/migration/scientific/api040_m18_entropy.py` fixes
 five nodes `(-1,-.5,0,.5,1)`, weights `(.1,.2,.4,.2,.1)` and basis
-`(1,v,v²)`. It specifies 20 moderate, strictly interior target cells. Two
-state blocks give `LocalResidual` one three-component dual unknown and an exact
+`(1,v,v²)`. It specifies 20 moderate, strictly interior target cells.
+The rectangular `CartesianGrid` declares `cells=(nx,ny)=(5,4)`; the exact
+`BindArray` inputs have component-major shape `(3,ny,nx)=(3,4,5)`. This is
+an explicit axis-order match, not a transpose during bind or execution.
+Two state blocks give `LocalResidual` one three-component dual unknown and an exact
 read-only target capture. The target is initialized on its own State block and
 is never projected from the solve or committed again. `LocalNewton` has 12 iterations, backtracking and an
 original-residual tolerance of `2e-11`. A failed solve is consumed through
