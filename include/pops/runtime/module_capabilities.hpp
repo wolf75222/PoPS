@@ -37,7 +37,7 @@ namespace pops {
 /// older .so (pops_compiled_manifest) can be told apart from a newer module at load time. Distinct from
 /// the textual pops::abi_key() (compiler / std / header signature): that detects a toolchain ABI break,
 /// this versions the capability *vocabulary*.
-inline constexpr int kAbiVersion = 3;
+inline constexpr int kAbiVersion = 4;
 static_assert(kAbiVersion == release_contract::kReleaseNativeAbiVersion,
               "native ABI and generated release contract drifted");
 
