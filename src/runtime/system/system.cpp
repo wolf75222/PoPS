@@ -58,8 +58,12 @@ void System<Dim>::step(double dt) {
   p_->program_.require_step_installed("System::step");
   runtime::program::ProfileScope scope(p_->program_.profiler_, "step");
   p_->program_.profiler_.count("steps");
-  p_->execute_step_transaction(
-      [&] { p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System"); });
+  const auto communicator = prepared_boundary_execution_lane_
+                                ? prepared_boundary_execution_lane_->communicator()
+                                : world_communicator_view();
+  p_->execute_step_transaction(communicator, [&] {
+    p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System", communicator);
+  });
 }
 
 template <int Dim>
@@ -74,8 +78,10 @@ std::string System<Dim>::advance_program_region(double dt) {
     runtime::program::collective_step_rejection_phase(
         lane.communicator(),
         {"pops.program-region.rejection.v1", "pops.program-region.rejection", false, false},
-        "System Program region failed collectively",
-        [&] { port = p_->program_.advance_cadence_region(p_->t, p_->macro_step_, dt, "System"); });
+        "System Program region failed collectively", [&] {
+          port = p_->program_.advance_cadence_region(p_->t, p_->macro_step_, dt, "System",
+                                                     lane.communicator());
+        });
   } catch (...) {
     p_->program_.cancel_cadence_continuation();
     throw;
@@ -533,8 +539,10 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
   const double prior_courant = p_->active_program_step_courant_;
   p_->active_program_step_courant_ = cfl;
   try {
-    p_->execute_step_transaction(
-        [&] { p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System"); });
+    p_->execute_step_transaction(lane.communicator(), [&] {
+      p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System",
+                                         lane.communicator());
+    });
   } catch (...) {
     p_->active_program_step_courant_ = prior_courant;
     throw;

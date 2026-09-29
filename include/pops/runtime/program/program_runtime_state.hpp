@@ -60,6 +60,7 @@
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
 #include <pops/runtime/program/accepted_exchange.hpp>
+#include <pops/runtime/program/collective_step_rejection.hpp>
 #include <pops/runtime/program/cache_manager.hpp>    // CacheManager (held-node scheduler cache)
 #include <pops/runtime/program/prepared_resource_lifetime.hpp>
 #include <pops/runtime/program/module_metadata.hpp>  // frozen checkpoint-shape metadata

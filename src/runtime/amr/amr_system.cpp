@@ -17677,8 +17677,13 @@ void AmrSystem<Dim>::step(double dt) {
       p_->program.accepted_exchanges_.clear();
       p_->program.begin_step_projection_report();
     }
-    p_->program.dispatch_cadence_step(p_->accepted_time, p_->macro_step, dt, "AmrSystem");
-    complete_program_step_();
+    const auto& lane = p_->require_prepared_engine_lane("AMR Program step");
+    p_->program.dispatch_cadence_step(p_->accepted_time, p_->macro_step, dt, "AmrSystem",
+                                      lane.communicator());
+    runtime::program::collective_step_rejection_phase(
+        lane.communicator(),
+        {"pops.program-step-complete.v1", "pops.program-step-complete", false, false},
+        "AMR Program completion failed collectively", [&] { complete_program_step_(); });
   });
   p_->discard_level_evaluations();
 }
@@ -17738,7 +17743,7 @@ std::string AmrSystem<Dim>::advance_program_region(double dt) {
         "AMR Program region failed collectively", [&] {
           p_->program.require_step_installed("AmrSystem::advance_program_region");
           port = p_->program.advance_cadence_region(p_->accepted_time, p_->macro_step, dt,
-                                                    "AmrSystem");
+                                                    "AmrSystem", lane.communicator());
         });
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("amr-program-region-port"), port}}, lane))

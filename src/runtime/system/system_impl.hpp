@@ -855,16 +855,30 @@ struct System<Dim>::Impl {
   }
 
   template <class Function>
-  decltype(auto) execute_step_transaction(Function&& function) {
-    AcceptedSnapshot snapshot(*this);
-    if (!external_step_transaction_) {
-      program_.accepted_exchanges_.clear();
-      program_.begin_step_projection_report();
-    }
+  void execute_step_transaction(const CommunicatorView& communicator, Function&& function) {
+    std::unique_ptr<AcceptedSnapshot> snapshot;
+    runtime::program::collective_step_rejection_phase(
+        communicator, {"pops.system-step-snapshot.v1", "pops.system-step-snapshot", false, false},
+        "System step snapshot failed collectively",
+        [&] { snapshot = std::make_unique<AcceptedSnapshot>(*this); });
     try {
-      return std::forward<Function>(function)();
+      runtime::program::collective_step_rejection_phase(
+          communicator, {"pops.system-step-result.v1", "pops.system-step-result", false, false},
+          "System step failed collectively",
+          [&] {
+            if (!external_step_transaction_) {
+              program_.accepted_exchanges_.clear();
+              program_.begin_step_projection_report();
+            }
+            std::forward<Function>(function)();
+          },
+          [&] { program_.drain_resource_work(); });
     } catch (...) {
-      snapshot.restore(*this);
+      // Every rank takes this branch, including peers whose local work succeeded.
+      program_.reject_resource_work();
+      runtime::program::collective_step_rejection_phase(
+          communicator, {"pops.system-step-restore.v1", "pops.system-step-restore", false, false},
+          "System step rollback failed collectively", [&] { snapshot->restore(*this); });
       throw;
     }
   }

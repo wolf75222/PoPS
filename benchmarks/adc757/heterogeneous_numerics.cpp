@@ -7,6 +7,7 @@
 
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/accelerator/prepared_stream_executor.hpp>
+#include <pops/runtime/program/collective_step_rejection.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -207,11 +208,18 @@ struct UpdateKernel {
 };
 
 void reset_workspaces(ResourceCache& cache, Executor& executor, double value = 1.0) {
-  cache.finish_attempt();
-  (void)cache.begin_attempt();
-  for (std::size_t lane = 0; lane < executor.size(); ++lane)
-    Kokkos::deep_copy(executor.instance(lane), executor.workspace(lane), value);
-  executor.fence_all();
+  const auto communicator = pops::world_communicator_view();
+  pops::runtime::program::collective_step_rejection_phase(
+      communicator, {"pops.adc757.workspace-reset.v1", "pops.adc757.workspace-reset", false, false},
+      "ADC-757 previous native attempt failed collectively", [&] { cache.finish_attempt(); });
+  (void)cache.begin_attempt(communicator);
+  pops::runtime::program::collective_step_rejection_phase(
+      communicator, {"pops.adc757.workspace-fill.v1", "pops.adc757.workspace-fill", false, false},
+      "ADC-757 workspace initialization failed collectively", [&] {
+        for (std::size_t lane = 0; lane < executor.size(); ++lane)
+          Kokkos::deep_copy(executor.instance(lane), executor.workspace(lane), value);
+        executor.fence_all();
+      });
 }
 
 void launch_update(ResourceCache& cache, const ExecutorLease& executor_lease, Executor& executor,

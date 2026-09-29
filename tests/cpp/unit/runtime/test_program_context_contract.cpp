@@ -2388,7 +2388,8 @@ TEST(ProgramContextContract, AmrProgramSingleCarrierTopologyRejectsMultipleBlock
 // This crosses the real System accepted transaction: rank zero fails after submitting
 // actual Kokkos work; other ranks return normally, then collective rollback revokes
 // every exact attempt before the accepted carriers are rewritten.
-TEST(ProgramContextContract, PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt) {
+namespace {
+void check_prepared_task_collective_rollback(bool cancel_task, bool typed_rejection) {
   ensure_kokkos();
   comm_init();
   NativeSystem sim(native_config(4));
@@ -2408,18 +2409,33 @@ TEST(ProgramContextContract, PreparedTaskRollbackRevokesEveryRankAndRetryUsesNew
   Task task;
   runtime::program::PreparedResourceAttempt attempt;
   bool fail = true;
+  int calls = 0;
   context.install([&](double dt) {
+    ++calls;
     context.begin_step(dt);
     attempt = context.resource_attempt();
     double* raw = executor->workspace_data(0);
     task = context.submit_prepared_for(
         executor, 0, "context-lifetime-write", 8, KOKKOS_LAMBDA(std::int64_t i) { raw[i] = 42; });
     context.state(0).set_val(Real(7));
-    if (fail && context.prepared_execution_lane().rank() == 0)
-      throw std::runtime_error("injected rank-local rejection after native submission");
+    if (fail && context.prepared_execution_lane().rank() == 0) {
+      if (cancel_task)
+        task.request_cancel();
+      else if (typed_rejection)
+        throw runtime::program::StepAttemptRejected(SolveStatus::kInvalidEvaluation,
+                                                    "prepared_task",
+                                                    "injected retry after native submission");
+      else
+        throw std::runtime_error("injected rank-local rejection after native submission");
+    }
   });
   sim.set_program_block_map({0});
-  EXPECT_THROW(sim.step(0.1), std::runtime_error);
+  sim.set_program_cadence(2, 1);
+  if (typed_rejection)
+    EXPECT_THROW(sim.step(0.1), runtime::program::StepAttemptRejected);
+  else
+    EXPECT_THROW(sim.step(0.1), std::runtime_error);
+  EXPECT_EQ(calls, 1);  // No peer enters substep two after rank-zero failure.
   EXPECT_EQ(sim.get_state("gas"), accepted);
   EXPECT_DOUBLE_EQ(sim.time(), 0.0);
   EXPECT_EQ(sim.macro_step(), 0);
@@ -2430,12 +2446,27 @@ TEST(ProgramContextContract, PreparedTaskRollbackRevokesEveryRankAndRetryUsesNew
   const auto rejected_ordinal = attempt.ordinal();
   fail = false;
   EXPECT_NO_THROW(sim.step(0.1));
+  EXPECT_EQ(calls, 3);
   EXPECT_GT(attempt.ordinal(), rejected_ordinal);
   EXPECT_TRUE(attempt.visible());
   EXPECT_TRUE(task.physically_complete());
   EXPECT_NO_THROW(task.require_consumable(attempt));
   EXPECT_DOUBLE_EQ(executor->workspace_data(0)[7], 42);
   EXPECT_DOUBLE_EQ(sim.time(), 0.1);
+}
+
+}  // namespace
+
+TEST(ProgramContextContract, PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt) {
+  check_prepared_task_collective_rollback(false, false);
+}
+
+TEST(ProgramContextContract, CancelledNativeTaskFailsCollectivelyBeforeNextSubstep) {
+  check_prepared_task_collective_rollback(true, false);
+}
+
+TEST(ProgramContextContract, PreparedTaskTypedRejectionRemainsCollectiveAndRetryable) {
+  check_prepared_task_collective_rollback(false, true);
 }
 
 TEST(ProgramContextContract,

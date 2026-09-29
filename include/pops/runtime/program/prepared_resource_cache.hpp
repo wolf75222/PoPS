@@ -161,6 +161,9 @@ class PreparedResourceCache {
   }
   /// Every rank enters before a Program body can perform collective work.
   PreparedResourceAttempt begin_attempt(const ExecutionLane& lane) {
+    return begin_attempt(lane.communicator());
+  }
+  PreparedResourceAttempt begin_attempt(const CommunicatorView& communicator) {
     PreparedResourceAttempt attempt;
     std::exception_ptr error;
     try {
@@ -168,7 +171,7 @@ class PreparedResourceCache {
     } catch (...) {
       error = std::current_exception();
     }
-    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (all_reduce_max(error ? 1L : 0L, communicator) != 0) {
       reject_attempt();
       drain();
       if (error)
