@@ -530,11 +530,139 @@ def main():
             (historical_root / diagnostics["repaired_fixture_real_failure"]).read_text()
             and diagnostics["status"] == "failed",
             "4bb0639 qualified-parameter diagnostic overstated")
+    periodic_registry = corpus["supplemental_receptions"]["after_7b35ffd_periodic"]
+    periodic_root = (HERE / periodic_registry["manifest"]).parent
+    periodic = read_json(periodic_root / "manifest.json")
+    require(periodic["schema"] == "pops.api040.post-7b35ffd-scoped-evidence/v1"
+            and len(periodic["files"]) == 78
+            and set(periodic["statuses"]) == set(periodic_registry["statuses"]),
+            "post-7b35ffd bundle inventory changed")
+    periodic_files = {item["path"]: item for item in periodic["files"]}
+    require(len(periodic_files) == len(periodic["files"]),
+            "duplicate post-7b35ffd copied file")
+    for relative, item in periodic_files.items():
+        path = periodic_root / relative
+        require(path.is_file() and path.stat().st_size == item["bytes"]
+                and hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"],
+                f"post-7b35ffd copied bytes changed: {relative}")
+    checksum_lines = (periodic_root / "SHA256SUMS").read_text().splitlines()
+    checksums = dict(line.split("  ", 1)[::-1] for line in checksum_lines)
+    require(len(checksum_lines) == len(periodic_files) + 3
+            and set(checksums) == set(periodic_files) |
+            {"README.md", "manifest.json", "recomputed_m15_metrics.json"},
+            "post-7b35ffd checksum inventory changed")
+    for relative, digest_value in checksums.items():
+        require(hashlib.sha256((periodic_root / relative).read_bytes()).hexdigest()
+                == digest_value, f"post-7b35ffd checksum changed: {relative}")
+    native_dim1 = "cd45279c320533825f10a82433f6039fe4003c547f52546542bf314e176d8b01"
+    native_dim2 = "00b38fe09ba42678a5a2beda64a3767be9aa130455ecdfcf864a7182fc519cc9"
+    sdk_header = "02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e"
+    counts = {
+        "installed-7b35ffd-integrated-unit": (95, 0, "passed"),
+        "installed-fc0d6f4c-native-smoke": (4, 1, "failed"),
+        "installed-readonly-m11-m18-reception": (9, 1, "failed"),
+        "installed-affine-consumers-native": (8, 2, "failed"),
+        "installed-m18-rectangular-repaired": (6, 0, "passed"),
+    }
+    for name, (tests, failures, status) in counts.items():
+        record = read_json(periodic_root / name / "result.json")
+        identity_path = periodic_root / name / "identity.json"
+        identity = read_json(identity_path)
+        expected_counts = {"tests": tests, "failures": failures,
+                           "errors": 0, "skipped": 0}
+        require(record["status"] == periodic_registry["statuses"][name] == status
+                and record["counts"] == pytest_counts(periodic_root / name / "pytest.xml")
+                == expected_counts
+                and record["identity_sha256"]
+                == hashlib.sha256(identity_path.read_bytes()).hexdigest()
+                and identity["source_commit"] == periodic["statuses"][name]["source_commit"]
+                and identity["native_sha256"] == native_dim2
+                and periodic["statuses"][name]["sdk_header_sha256"] == sdk_header,
+                f"post-7b35ffd installed scope changed: {name}")
+    readonly_cases = list(ET.parse(periodic_root /
+                          "installed-readonly-m11-m18-reception/pytest.xml")
+                          .getroot().iter("testcase"))
+    require(sum("test_m11_w10_constrained_runtime" in case.get("classname", "")
+                and case.find("failure") is None for case in readonly_cases) == 2
+            and sum("test_m18_discrete_entropy_runtime" in case.get("classname", "")
+                    and case.find("failure") is not None for case in readonly_cases) == 1,
+            "M11/W10 pass or historical M18 shape failure changed")
+    m18_cases = list(ET.parse(periodic_root /
+                     "installed-m18-rectangular-repaired/pytest.xml")
+                     .getroot().iter("testcase"))
+    require(sum("test_m18_discrete_entropy_runtime" in case.get("classname", "")
+                and case.find("failure") is None for case in m18_cases) == 1,
+            "M18 repaired fixture native witness changed")
+    ctest = ET.parse(periodic_root / "native-periodic-core-ctest.xml").getroot()
+    require({key: int(ctest.get(key)) for key in ("tests", "failures", "skipped")}
+            == periodic["ctest"] == {"tests": 95, "failures": 0, "skipped": 3}
+            and "redefinition of 'selected'" in
+            (periodic_root / "build-m15-periodic-core-dim1.log").read_text(),
+            "periodic core CTest or prior red build changed")
+    for name, dimension, native_hash, tests_per_rank in (
+        ("installed-7b35ffd-dim1-m15-refusal-mpi2", 1, native_dim1, 1),
+        ("installed-c22-frontier-mpi2", 2, native_dim2, 1),
+    ):
+        record = read_json(periodic_root / name / "result.json")
+        before = read_json(periodic_root / name / "before/identity.json")
+        after = read_json(periodic_root / name / "after/identity.json")
+        require(record["status"] == periodic_registry["statuses"][name] == "passed"
+                and record["dimension"] == dimension and record["ranks"] == 2
+                and record["authentication_before"] == record["authentication_after"] == 0
+                and record["rank_test_parity"] is True
+                and before["native_sha256"] == after["native_sha256"]
+                == record["native_sha256"] == native_hash,
+                f"post-7b35ffd MPI provenance changed: {name}")
+        for rank, row in enumerate(record["rank_results"]):
+            xml = periodic_root / name / f"rank{rank}.xml"
+            require(row["rank"] == rank and row["counts"]
+                    == pytest_counts(xml)
+                    == {"tests": tests_per_rank, "failures": 0, "errors": 0,
+                        "skipped": 0}
+                    and row["xml_sha256"] == hashlib.sha256(xml.read_bytes()).hexdigest(),
+                    f"post-7b35ffd MPI rank result changed: {name}/{rank}")
+    m15_name = "m15-periodic-core-dim1-mpi2"
+    m15 = read_json(periodic_root / m15_name / "result.json")
+    m15_receipt_path = periodic_root / m15_name / "states/receipt.json"
+    m15_receipt = read_json(m15_receipt_path)
+    m15_metrics = read_json(periodic_root / "recomputed_m15_metrics.json")
+    require(m15["status"] == periodic_registry["statuses"][m15_name] == "passed"
+            and m15["dimension"] == 1 and m15["ranks"] == 2
+            and m15["authentication_before"] == m15["authentication_after"] == 0
+            and all(m15[key] is True for key in
+                    ("same_native", "same_shipped_sources",
+                     "example_sources_unchanged", "correct_backend"))
+            and m15["native_sha256"] == m15_receipt["native_sha256"] == native_dim1
+            and m15["scientific_receipt_sha256"]
+            == hashlib.sha256(m15_receipt_path.read_bytes()).hexdigest()
+            and len(m15_receipt["records"]) == len(m15_metrics["records"]) == 6
+            and len(m15_receipt["inadmissible_initial_rejections"]) == 6
+            and m15_receipt["resolutions"] == [32, 64, 128]
+            and m15_receipt["t_end"] == 0.02,
+            "M15 six-run scientific receipt changed")
+    for record, metrics in zip(m15_receipt["records"], m15_metrics["records"]):
+        saved = periodic_root / m15_name / "states" / record["saved_state"]
+        with zipfile.ZipFile(saved) as archive:
+            require(archive.testzip() is None
+                    and {"initial.npy", "final.npy", "oracle.npy", "order.npy",
+                         "time.npy", "dt.npy", "cells.npy"} == set(archive.namelist()),
+                    "M15 saved NPZ changed")
+        require(record["saved_state_sha256"] == metrics["npz_sha256"]
+                == hashlib.sha256(saved.read_bytes()).hexdigest()
+                and record["cells"] == [metrics["cells"]]
+                and record["order"] == metrics["order"]
+                and record["accepted_steps"] == 2 * metrics["cells"]
+                and record["mpi_ranks"] == 2
+                and all(abs(record[key] - metrics[key]) <= 1e-18 for key in
+                        ("state_max_error", "moment_integral_error",
+                         "time_error", "permutation_max_error")),
+                "M15 saved-state metric provenance changed")
     total_scoped = sum(len(read_json(HERE / data["manifest"])["receipts"])
                        for scope, data in corpus["scoped_receptions"].items()
                        if scope in expected_scopes)
     print(f"40 contracts, 28 models, 12 witnesses; {len(manifest['receipts'])} historical, "
-          f"{total_scoped} earlier scoped, 5 cfef849 and 3 final-4bb0639 "
+          f"{total_scoped} earlier scoped, 5 cfef849, 3 final-4bb0639 "
+          "and 8 post-7b35ffd "
           "selected receipt snapshots consistent")
     print("No corpus-wide native, numerical, MPI, or global acceptance implied.")
 

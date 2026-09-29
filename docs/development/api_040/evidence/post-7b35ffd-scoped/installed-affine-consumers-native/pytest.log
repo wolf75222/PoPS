@@ -1,0 +1,152 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 8 items
+
+tests/python/integration/runtime/test_affine_push_forward_runtime.py::test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[False-1-6] PASSED [ 12%]
+tests/python/integration/runtime/test_affine_push_forward_runtime.py::test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[False-2-5] PASSED [ 25%]
+tests/python/integration/runtime/test_affine_push_forward_runtime.py::test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[True-1-6] PASSED [ 37%]
+tests/python/integration/runtime/test_affine_push_forward_runtime.py::test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[True-2-5] PASSED [ 50%]
+tests/python/integration/runtime/test_conditional_consumers_runtime.py::test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[diffusion] FAILED [ 62%]
+tests/python/integration/runtime/test_conditional_consumers_runtime.py::test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine] FAILED [ 75%]
+tests/python/integration/runtime/test_conditional_consumers_runtime.py::test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine_library] PASSED [ 87%]
+tests/python/integration/runtime/test_conditional_consumers_runtime.py::test_native_affine_library_consumer_matches_particles_and_retained_recipe PASSED [100%]
+
+=================================== FAILURES ===================================
+_ test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[diffusion] _
+tests/python/integration/runtime/test_conditional_consumers_runtime.py:117: in test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch
+    assert all(error is not None and error[0] == "RuntimeError" for error in errors), errors
+E   AssertionError: (('StepAttemptRejected', 'step attempt rejected during native_evaluation: solve status=invalid_evaluation (attempt_action=reject, reason_code=501, diffusive_face_evaluation block=0 evaluation=1 reason_code=501)'),)
+E   assert False
+E    +  where False = all(<generator object test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch.<locals>.<genexpr> at 0x1242eae90>)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] conditional-consumer-diffusion: compile and publish start
+[rank 0] conditional-consumer-diffusion: compile and publish done
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : conditional_consumer
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : matter
+  numerics matter     : diffusion, formal_order=2, ghost_depth=1
+  layout 0            : Uniform; 4 x 4 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.0001)
+  interval            : 0 -> 0.0001 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 07d010eaaa20a8b1
+  run identity        : 4e881cef2d15b593
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.0001 / 1
+  elapsed             : 0.000987 s
+  run identity        : 4e881cef2d15b593
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : conditional_consumer
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : matter
+  numerics matter     : diffusion, formal_order=2, ghost_depth=1
+  layout 0            : Uniform; 4 x 4 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.0001)
+  interval            : 0 -> 0.0001 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 07d010eaaa20a8b1
+  run identity        : 54db931b53f37517
+================================================================
+----------------------------------------------------------------
+----------------------------- Captured stderr call -----------------------------
+PoPS run failed after 0 accepted step(s) at t=0 (0.000711 s)
+  StepAttemptRejected: step attempt rejected during native_evaluation: solve status=invalid_evaluation (attempt_action=reject, reason_code=501, diffusive_face_evaluation block=0 evaluation=1 reason_code=501)
+_ test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine] _
+tests/python/integration/runtime/test_conditional_consumers_runtime.py:117: in test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch
+    assert all(error is not None and error[0] == "RuntimeError" for error in errors), errors
+E   AssertionError: (('StepAttemptRejected', "step attempt rejected during affine_moment_update: solve status=invalid_evaluation (attempt_action=reject, reason_code=0, transform 'affine_moment_update' rejected a non-finite or out-of-domain state)"),)
+E   assert False
+E    +  where False = all(<generator object test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch.<locals>.<genexpr> at 0x1242ea330>)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] conditional-consumer-affine: compile and publish start
+[rank 0] conditional-consumer-affine: compile and publish done
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : conditional_consumer
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : matter
+  numerics matter     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 4 x 4 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.0001)
+  interval            : 0 -> 0.0001 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 14193304152b5a09
+  run identity        : 20de28af918cf587
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.0001 / 1
+  elapsed             : 0.000885 s
+  run identity        : 20de28af918cf587
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : conditional_consumer
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : matter
+  numerics matter     : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 4 x 4 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.0001)
+  interval            : 0 -> 0.0001 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 14193304152b5a09
+  run identity        : aed5a2f3f638c375
+================================================================
+----------------------------------------------------------------
+----------------------------- Captured stderr call -----------------------------
+PoPS run failed after 0 accepted step(s) at t=0 (0.000635 s)
+  StepAttemptRejected: step attempt rejected during affine_moment_update: solve status=invalid_evaluation (attempt_action=reject, reason_code=0, transform 'affine_moment_update' rejected a non-finite or out-of-domain state)
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-affine-consumers-native/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_conditional_consumers_runtime.py::test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[diffusion]
+FAILED tests/python/integration/runtime/test_conditional_consumers_runtime.py::test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine]
+=================== 2 failed, 6 passed in 180.34s (0:03:00) ====================

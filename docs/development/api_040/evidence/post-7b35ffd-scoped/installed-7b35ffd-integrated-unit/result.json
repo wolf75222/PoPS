@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='00b38fe09ba42678a5a2beda64a3767be9aa130455ecdfcf864a7182fc519cc9'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-7b35ffd-integrated-unit/pytest.xml",
+    "tests/python/unit/codegen/test_qualified_parameter_inspection.py",
+    "tests/python/unit/codegen/test_qualified_parameter_inspection_review.py",
+    "tests/python/unit/codegen/test_resolved_local_storage_authority.py",
+    "tests/python/unit/codegen/test_resolved_local_storage_independent_review.py",
+    "tests/python/unit/codegen/test_local_product_readonly_capture.py",
+    "tests/python/unit/codegen/test_symbolic_exp_local_residual.py",
+    "tests/python/unit/moments/test_affine_push_forward.py",
+    "tests/python/unit/moments/test_affine_push_forward_host.py",
+    "tests/python/unit/moments/test_affine_push_forward_order_depth_review.py",
+    "tests/python/unit/moments/test_m18_discrete_entropy.py",
+    "tests/python/unit/moments/test_m18_entropy_host.py",
+    "tests/python/unit/moments/test_exp_entropy_independent_review.py",
+    "tests/python/unit/physics/test_m11_w10_constrained.py",
+    "tests/python/unit/runtime/test_runtime_planning.py"
+  ],
+  "returncode": 0,
+  "duration_seconds": 25.123549416894093,
+  "counts": {
+    "tests": 95,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "f05ede10f67a7d11cc9387a88a25fbfe9f1c5a7c66fe144b33963896dc68b23b",
+  "log_sha256": "07fe51c1239927369c7c89ff29d9f831d42e3f8d4bee7bef9fbe966eb8416670"
+}

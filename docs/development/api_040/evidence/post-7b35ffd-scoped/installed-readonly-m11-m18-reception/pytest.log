@@ -1,0 +1,58 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 9 items
+
+tests/python/unit/codegen/test_readonly_control_input_review.py::test_nested_branch_and_dt_bound_readonly_inputs_do_not_become_publications PASSED [ 11%]
+tests/python/unit/codegen/test_local_product_readonly_capture.py::test_one_unknown_product_already_accepts_frozen_foreign_block_capture PASSED [ 22%]
+tests/python/unit/codegen/test_local_product_readonly_capture.py::test_readonly_captured_state_remains_an_exact_required_bind_input[False] PASSED [ 33%]
+tests/python/unit/codegen/test_local_product_readonly_capture.py::test_readonly_captured_state_remains_an_exact_required_bind_input[True] PASSED [ 44%]
+tests/python/integration/runtime/test_local_product_readonly_runtime.py::test_readonly_capture_binds_without_becoming_an_unknown_or_commit[False] PASSED [ 55%]
+tests/python/integration/runtime/test_local_product_readonly_runtime.py::test_readonly_capture_binds_without_becoming_an_unknown_or_commit[True] PASSED [ 66%]
+tests/python/integration/runtime/test_m11_w10_constrained_runtime.py::test_augmented_product_preserves_original_friction_and_refuses_incompatible_force[False] PASSED [ 77%]
+tests/python/integration/runtime/test_m11_w10_constrained_runtime.py::test_augmented_product_preserves_original_friction_and_refuses_incompatible_force[True] PASSED [ 88%]
+tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py::test_twenty_interior_targets_and_outside_cone_refusal FAILED [100%]
+
+=================================== FAILURES ===================================
+____________ test_twenty_interior_targets_and_outside_cone_refusal _____________
+tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py:60: in test_twenty_interior_targets_and_outside_cone_refusal
+    accepted = bound(targets)
+               ^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py:55: in bound
+    return pops.bind(artifact,
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:627: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:642: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:22: in install_plan
+    run_bind_gates(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_validation.py:755: in run_bind_gates
+    raise ValueError(message)
+E   ValueError: pops.bind: 2 refusal(s) before the native artifact is loaded:
+E     [initial-values] typed initial value for block 'dual' has shape (3, 4, 5); BindArray requires the complete state with shape [(3, 5, 4)]
+E     [initial-values] typed initial value for block 'target' has shape (3, 4, 5); BindArray requires the complete state with shape [(3, 5, 4)]
+----------------------------- Captured stdout call -----------------------------
+[rank 0] m18-five-node-entropy: compile and publish start
+[rank 0] m18-five-node-entropy: compile and publish done
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_m11_w10_constrained_runtime.py::test_augmented_product_preserves_original_friction_and_refuses_incompatible_force[False]
+tests/python/integration/runtime/test_m11_w10_constrained_runtime.py::test_augmented_product_preserves_original_friction_and_refuses_incompatible_force[True]
+  tests/python/integration/runtime/test_m11_w10_constrained_runtime.py:48: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("permuted", (False, True))
+
+tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py::test_twenty_interior_targets_and_outside_cone_refusal
+  tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py:45: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    def test_twenty_interior_targets_and_outside_cone_refusal(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-readonly-m11-m18-reception/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py::test_twenty_interior_targets_and_outside_cone_refusal
+============== 1 failed, 8 passed, 3 warnings in 91.24s (0:01:31) ==============

@@ -1,0 +1,68 @@
+{
+  "schema_version": 2,
+  "status": "passed",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-c22-frontier-mpi2",
+    "--ranks",
+    "2",
+    "--dimension",
+    "2",
+    "--test",
+    "tests/python/integration/runtime/test_external_grid_frontier_runtime.py"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 18.664816541830078,
+  "ranks": 2,
+  "threads": 1,
+  "dimension": 2,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_external_grid_frontier_runtime",
+          "test_native_external_grid_frontier_and_rank_local_landing_rollback"
+        ]
+      ],
+      "xml_sha256": "2d2667dac9b05c32a1c550aa5d41524eddc9078ac3889f49cba0ae2c1061b98e",
+      "log_sha256": "12c248387e35e2f0e39f2ea8d52a02baebfddba73ec1f32322131a2b662c7807"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_external_grid_frontier_runtime",
+          "test_native_external_grid_frontier_and_rank_local_landing_rollback"
+        ]
+      ],
+      "xml_sha256": "5cb4aa8c9b122ad080baea73a1d21c4c2ef9c8c783eb8005a84b93d32633e81b",
+      "log_sha256": "de502fa85aa0ee5fa2193c9737e2bcf5b7a2fc495cabf15f51ef42009363e3f7"
+    }
+  ],
+  "native_sha256": "00b38fe09ba42678a5a2beda64a3767be9aa130455ecdfcf864a7182fc519cc9"
+}

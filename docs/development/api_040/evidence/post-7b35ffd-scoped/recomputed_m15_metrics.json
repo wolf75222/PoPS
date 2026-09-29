@@ -1,0 +1,152 @@
+{
+  "schema": "pops.api040.m15-recomputed-saved-states/v1",
+  "source_receipt": "m15-periodic-core-dim1-mpi2/states/receipt.json",
+  "criteria": {
+    "initial_max_error": 2e-14,
+    "state_max_error": 3e-11,
+    "moment_integral_error": 2e-12,
+    "time_error": 2e-14,
+    "permutation_max_error": 3e-12,
+    "spectral_imaginary_tolerance": 2e-11,
+    "preflight_face_courant_max": 0.1
+  },
+  "records": [
+    {
+      "cells": 32,
+      "order": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "state_max_error": 1.1102230246251565e-16,
+      "moment_integral_error": 3.469446951953614e-18,
+      "time_error": 0.0,
+      "permutation_max_error": 0.0,
+      "domain_minima": [
+        0.9090243850930126,
+        0.45834185634825475,
+        0.17820670802012686
+      ],
+      "npz_sha256": "53ffb9f98c1c2d9b9571cf5758a05b1f30f5f1b61064b7c74ef70c5b82b47644",
+      "accepted_steps": 64
+    },
+    {
+      "cells": 64,
+      "order": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "state_max_error": 2.220446049250313e-16,
+      "moment_integral_error": 7.806255641895632e-17,
+      "time_error": 0.0,
+      "permutation_max_error": 0.0,
+      "domain_minima": [
+        0.907968855286714,
+        0.4574664880973607,
+        0.17772881409843277
+      ],
+      "npz_sha256": "5bd9ddb2e14d2f842bf89b485512b2a8c4b43e173123f4f337dacf922271b259",
+      "accepted_steps": 128
+    },
+    {
+      "cells": 128,
+      "order": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "state_max_error": 4.440892098500626e-16,
+      "moment_integral_error": 5.2909066017292616e-17,
+      "time_error": 0.0,
+      "permutation_max_error": 0.0,
+      "domain_minima": [
+        0.9075207685881015,
+        0.45697861460678224,
+        0.1774473584317789
+      ],
+      "npz_sha256": "11796a0e60052e129ab433ad3e5230d914946f0067da353d287427f37be247ae",
+      "accepted_steps": 256
+    },
+    {
+      "cells": 32,
+      "order": [
+        4,
+        1,
+        3,
+        0,
+        2
+      ],
+      "state_max_error": 2.220446049250313e-16,
+      "moment_integral_error": 3.122502256758253e-17,
+      "time_error": 0.0,
+      "permutation_max_error": 2.220446049250313e-16,
+      "domain_minima": [
+        0.9090243850930126,
+        0.45834185634825475,
+        0.17820670802012686
+      ],
+      "npz_sha256": "e3928ad45e621ab42355ebb385f8761ba9587e53ce4f6ec298d4f506b1d85189",
+      "accepted_steps": 64
+    },
+    {
+      "cells": 64,
+      "order": [
+        4,
+        1,
+        3,
+        0,
+        2
+      ],
+      "state_max_error": 3.3306690738754696e-16,
+      "moment_integral_error": 7.28583859910259e-17,
+      "time_error": 0.0,
+      "permutation_max_error": 2.220446049250313e-16,
+      "domain_minima": [
+        0.907968855286714,
+        0.4574664880973608,
+        0.1777288140984328
+      ],
+      "npz_sha256": "216b83755670db7a6f1ba1e3fe14c0d02414f201532c5f6d5b501c6144d4c5c2",
+      "accepted_steps": 128
+    },
+    {
+      "cells": 128,
+      "order": [
+        4,
+        1,
+        3,
+        0,
+        2
+      ],
+      "state_max_error": 4.440892098500626e-16,
+      "moment_integral_error": 5.4643789493269423e-17,
+      "time_error": 0.0,
+      "permutation_max_error": 2.220446049250313e-16,
+      "domain_minima": [
+        0.9075207685881015,
+        0.45697861460678224,
+        0.1774473584317789
+      ],
+      "npz_sha256": "b9c1579a2fe65dbea02cc5e2fbdfdfffc8baf66ab5430f094b7a564e3453de62",
+      "accepted_steps": 256
+    }
+  ],
+  "global_maxima": {
+    "state_max_error": 4.440892098500626e-16,
+    "moment_integral_error": 7.806255641895632e-17,
+    "time_error": 0.0,
+    "permutation_max_error": 2.220446049250313e-16
+  },
+  "global_domain_minima": [
+    0.9075207685881015,
+    0.45697861460678224,
+    0.1774473584317789
+  ]
+}

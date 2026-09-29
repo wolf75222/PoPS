@@ -334,15 +334,16 @@
       "reference_limit": "Récurrences héritées seulement. Hiérarchies HyQMOM 1D de plusieurs ordres non assemblées ici.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/moments/closures/hyqmom_axial_b1.py;examples/migration/scientific/api040_m15_hyqmom_axial_b1.py",
-      "production_status": "scoped_native_axial_b1_pass",
-      "qualification": "Six installed native Dim1 axial B.1 order-four runs N32/64/128 to T=0.02 in two component orders pass independent FV/HLL oracle; six invalid initial states refuse. This is five-moment 1V axial only.",
-      "assessment_kind": "scoped_scientific_receipt_after_388c323",
-      "remaining_gap": "Multiorder Fox-Laurent hierarchy, higher moments and general HyQMOM remain unqualified. Historical 4bb0639 MPI2 attempt hung after one canonical N32 state and was interrupted without scientific receipt; it does not extend the earlier serial qualification.",
+      "production_status": "scoped_native_axial_b1_serial_and_mpi2_pass",
+      "qualification": "Earlier genuine Dim1 serial six-run axial B.1 order-four receipt remains valid. The new cd45279c installed Dim1 MPI2 receipt passes six saved trajectories at N32/64/128, T=0.02 in two component orders, plus six inadmissible-state refusals; an independent NPZ recomputation verifies the receipt metrics. A separate generated periodic-face collective refusal test passes on both MPI ranks.",
+      "assessment_kind": "scoped_scientific_serial_and_mpi2_axial_b1",
+      "remaining_gap": "The historical 4bb0639 MPI2 hang remains archived as a failure before repair. The new receipt closes only the selected axial B.1 five-moment 1V periodic FirstOrder/HLL/ForwardEuler case; multiorder Fox-Laurent hierarchy, higher moments and general HyQMOM remain unqualified.",
       "production_evidence": [
         "evidence/83b2b12/installed-38faddb-unit",
         "evidence/83b2b12/source-reviews/astra-m15-m16-independent-review.md",
         "evidence/native-388c323-and-t2-v1-3/manifest.json",
-        "evidence/4bb0639-scoped/manifest.json"
+        "evidence/4bb0639-scoped/manifest.json",
+        "evidence/post-7b35ffd-scoped/manifest.json"
       ]
     },
     {
@@ -410,10 +411,13 @@
       "reference_limit": "Newton public disponible; fermeture entropique complète sur quadrature paramétrable non construite.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/moments/closures/protocol.py;python/pops/time/_program/local.py:solve",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established",
-      "assessment_kind": "prior_mapping_retained_without_new_requalification",
-      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+      "production_status": "scoped_native_entropy_twenty_targets_pass",
+      "qualification": "The first installed readonly/M11/M18 selection retained an M18 rectangular fixture shape failure. The later 2f7c8806 fixture repair passes five source/host checks and one installed Dim2 native twenty-interior-target/outside-cone-refusal test, including repeated refusal and rollback on native 00b38fe0.",
+      "assessment_kind": "scoped_native_entropy_receipt_after_fixture_repair",
+      "remaining_gap": "This selects a five-node, three-moment discrete entropy closure and twenty moderate targets; it does not establish general quadratures or a distinct native diagnostic classification for boundary versus infeasible targets. The earlier rectangular-shape failure remains historical.",
+      "production_evidence": [
+        "evidence/post-7b35ffd-scoped/manifest.json"
+      ]
     },
     {
       "id": "M19",
@@ -627,13 +631,14 @@
       "title": "Flux principal entre deux blocs",
       "related_model": "M12",
       "production_candidate_symbols": "python/pops/_ir/balance.py:BalanceView",
-      "production_status": "partial_with_native_failures",
-      "qualification": "Generic group integrated;31 unit044fade source checks pass. Corrected critical83:6 Primitive native passes;6 AMRgroup and1 Primitive/User generated compilation failures. This does not close W03.",
-      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception.",
+      "production_status": "scoped_native_amr_routes_pass_with_historical_failures",
+      "qualification": "Generic principal grouping source and selected native AMR routes are integrated. Earlier seven generated compilation failures remain historical; later seven selected User/principal AMR routes pass on the authenticated native 6b5f452e receipt already linked by C11/C23.",
+      "remaining_gap": "This closes only the selected grouped AMR routes, not arbitrary state counts, regions, boundaries, or the full original W03 matrix.",
       "production_evidence": [
         "evidence/83b2b12/installed-38faddb-unit",
         "evidence/83b2b12/installed-83b2b12-critical",
-        "evidence/83b2b12/installed-83b2b12-critical-pde"
+        "evidence/83b2b12/installed-83b2b12-critical-pde",
+        "evidence/eac92bb/manifest.json"
       ]
     },
     {
@@ -714,9 +719,12 @@
       "title": "Contrainte collective de mélange",
       "related_model": "M11",
       "production_candidate_symbols": "python/pops/physics/diffusion.py",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "No new complete production witness receipt located in this audit.",
-      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
+      "production_status": "scoped_native_two_variants_pass",
+      "qualification": "The installed readonly/M11/M18 XML has two passing native M11/W10 constrained-product variants; the augmented product retains the original friction and rejects incompatible forcing. The nine-test suite as a whole remains failed because of an unrelated M18 rectangular fixture.",
+      "remaining_gap": "Selected constraint/product witness only; no general collective mixture theorem or broader M11 campaign is inferred.",
+      "production_evidence": [
+        "evidence/post-7b35ffd-scoped/manifest.json"
+      ]
     },
     {
       "id": "W11",
@@ -855,6 +863,27 @@
       ],
       "excluded_later_evidence": [
         "M15 MPI2 result on rebuilt native cd45279c belongs to the next evidence window"
+      ]
+    },
+    "after_7b35ffd_periodic": {
+      "manifest": "evidence/post-7b35ffd-scoped/manifest.json",
+      "statuses": {
+        "installed-7b35ffd-integrated-unit": "passed",
+        "installed-7b35ffd-dim1-m15-refusal-mpi2": "passed",
+        "m15-periodic-core-dim1-mpi2": "passed",
+        "installed-fc0d6f4c-native-smoke": "failed",
+        "installed-readonly-m11-m18-reception": "failed",
+        "installed-c22-frontier-mpi2": "passed",
+        "installed-affine-consumers-native": "failed",
+        "installed-m18-rectangular-repaired": "passed"
+      },
+      "limits": "M15 axial B.1 six Dim1 MPI2 trajectories and six invalid states pass, with saved NPZ metrics recomputed; C22 one test per Dim2 rank passes; selected source/host unit 95/95; CTest 92 run/pass plus three guard skips. Readonly smoke 3/4, readonly M11/M18 8/9 and affine 6/8 remain failed. No corpus-wide acceptance. The later M18 corrected fixture passes 6/6 selected cases; earlier 8/9 remains archived.",
+      "pending": [
+        "general M15 Fox-Laurent multiorder and M10 spatial campaign",
+        "general M18 quadrature/target campaigns"
+      ],
+      "excluded_live_campaigns": [
+        "later affine fixture repair or other campaigns after these archived receipts"
       ]
     }
   }

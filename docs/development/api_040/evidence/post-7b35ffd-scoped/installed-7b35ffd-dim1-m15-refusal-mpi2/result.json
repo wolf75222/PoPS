@@ -1,0 +1,68 @@
+{
+  "schema_version": 2,
+  "status": "passed",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-7b35ffd-dim1-m15-refusal-mpi2",
+    "--ranks",
+    "2",
+    "--dimension",
+    "1",
+    "--test",
+    "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 46.001309167128056,
+  "ranks": 2,
+  "threads": 1,
+  "dimension": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_m15_mpi_collective_rejection",
+          "test_periodic_generated_face_refusal_is_collective_before_retry_envelope"
+        ]
+      ],
+      "xml_sha256": "7d6548ac9a549a7184388f8d3728b9a96334265414687bea9addffdea6d90c32",
+      "log_sha256": "d469e5c535c7235a42848ee1e595a9ddb62fcf493e7c38b3c3e346cd77e3e7fc"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_m15_mpi_collective_rejection",
+          "test_periodic_generated_face_refusal_is_collective_before_retry_envelope"
+        ]
+      ],
+      "xml_sha256": "64e86a765e89cc0d372dae327bef05fb8df8c670991c38ed5e15eec37ae924d5",
+      "log_sha256": "af979d8ce9080ccabfe76c91904dc4eb67c13d84c3467863fb5553dff50312ef"
+    }
+  ],
+  "native_sha256": "cd45279c320533825f10a82433f6039fe4003c547f52546542bf314e176d8b01"
+}
