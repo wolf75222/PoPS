@@ -18515,11 +18515,8 @@ void AmrSystem<Dim>::regrid_on_restart() {
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::runtime_error("AMR restart regrid lost its prepared hierarchy lane");
   const ExecutionLane& published_lane = *p_->prepared_hierarchy->lane;
-  if (all_reduce_max(regrid_error ? 1L : 0L, published_lane) != 0) {
-    if (published_lane.size() == 1 && regrid_error)
-      std::rethrow_exception(regrid_error);
-    throw std::runtime_error("AMR restart regrid failed on at least one MPI rank");
-  }
+  collectively_rethrow_exception(regrid_error, published_lane,
+                                 "AMR restart regrid failed collectively");
   if (p_->restart_history_replacement_pending) {
     p_->restart_history_authority.swap(transformed_history_authority);
     p_->restart_history_restored_slots.swap(transformed_history_slots);
