@@ -755,7 +755,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             coefficient_boundary = "field_coeff_boundary_A%d_%d" % (apply_id, w.id)
             session_dynamic.append((coefficient_boundary, "ctx_owner->prepare_mesh_boundary_session("
                 "*session_%s, ctx_owner->prepared_execution_lane())" % frozen))
-        general_fields[w.id] = (frozen, unknown, boundary, coefficient_boundary, int(w.attrs["ncomp"]), int(w.inputs[2].attrs["ncomp"]))
+        general_fields[w.id] = (frozen, unknown, boundary, coefficient_boundary,
+                                int(w.attrs["ncomp"]), int(w.inputs[2].attrs["ncomp"]),
+                                w.attrs.get("coefficient_admissibility"))
     var[("operator_prepare_refresh", apply_id)] = tuple(prepare_refresh)
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
     body = ["const pops::Real dt = *%s;" % apply_dt]
@@ -802,7 +804,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                            boundary, point_arg))
         elif w.op == "field_problem_apply":
             o, i, _coefficients = w.inputs
-            frozen, unknown, boundary, _coefficient_boundary, _width, coefficient_width = general_fields[w.id]
+            frozen, unknown, boundary, _coefficient_boundary, _width, coefficient_width, _admission = general_fields[w.id]
             sub[w.id] = sub[o.id]
             output = "out" if sub[o.id] == "out" else "*%s" % sub[o.id]
             ncomp = int(w.attrs["ncomp"])
@@ -1043,9 +1045,13 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         local = "session_%s" % name
         prelude.append("  auto %s = %s;" % (local, expression))
         session_capture_initializers.append("%s = %s" % (name, local))
-    for frozen, _unknown, _boundary, boundary, width, coefficient_width in general_fields.values():
-        session_refresh.append("pops::elliptic::nd::prepare_general_field_coefficients<pops::kNativeDimension, %d, %d>(*%s, *%s);"
-                               % (width, coefficient_width, frozen, boundary))
+    for frozen, _unknown, _boundary, boundary, width, coefficient_width, admission in general_fields.values():
+        template = "pops::kNativeDimension, %d, %d" % (width, coefficient_width)
+        if admission == "finite_general":
+            template += ", false"
+        session_refresh.append(
+            "pops::elliptic::nd::prepare_general_field_coefficients<%s>(*%s, *%s);"
+            % (template, frozen, boundary))
     if tensor_boundary is not None:
         session_refresh.append(
             "%s->refresh_point(*%s);" % (tensor_boundary, tensor_point)

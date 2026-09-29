@@ -1208,6 +1208,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.codegen.program_emit_field_problem import emit_field_problem_value
 
         emit_field_problem_value(v, var, lines, prelude, target=target)
+    elif v.op == "field_state_cell_mean":
+        from pops.fields._observation_contract import validate_field_state_cell_mean
+
+        source = validate_field_state_cell_mean(v)
+        if target != "system":
+            raise NotImplementedError("field cell-mean State projection requires the qualified Uniform System route")
+        var[v.id] = var[source.id]
     elif v.op == "scalar_field":
         # Qualified AMR scalars bind current-attempt storage; uniform and unqualified scalars
         # retain their layout-bound install lifetime. Matrix-free apply sub-blocks manage their

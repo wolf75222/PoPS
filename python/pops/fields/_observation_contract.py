@@ -64,3 +64,44 @@ def validate_field_gradient(value: Any) -> tuple[int, Any]:
             or value.attrs.get("sampling") != "cell":
         raise ValueError("field gradient has no realized differentiation and sampling rule")
     return dimension, solve
+
+
+def validate_field_state_cell_mean(value: Any) -> Any:
+    """Recheck the exact solved observation and the cell-mean State witness."""
+    from pops.model import StateSpace
+    from pops.time.references import canonical_handle
+
+    if value.op != "field_state_cell_mean" or value.vtype != "scalar_field" \
+            or len(value.inputs) != 1 or value.attrs.get("projection_version") != 1 \
+            or value.attrs.get("ncomp") != 1 or value.attrs.get("sampling") != "cell_average" \
+            or value.attrs.get("measure") != "cell_volume":
+        raise ValueError("field-to-State projection has no exact cell-mean contract")
+    source = value.inputs[0]
+    width, selected, solve = validate_field_observation(source)
+    if width < 1 or selected >= width or value.prog is not source.prog \
+            or value.point != source.point or value.region != source.region \
+            or value.attrs.get("field_problem_identity") != source.attrs.get("field_problem_identity") \
+            or value.attrs.get("field_unknown") != source.attrs.get("field_unknown"):
+        raise ValueError("field-to-State projection changes its consumed observation")
+    space = value.space
+    if not isinstance(space, StateSpace) or len(space.components) != 1 \
+            or space.representation != "conservative" or space.centering != "cell" \
+            or space.sampling != "cell_average" or space.support is None \
+            or value.state_ref is None or value.block is None \
+            or value.attrs.get("target_state") != value.state_ref:
+        raise ValueError("field-to-State projection has no qualified cell-mean target")
+    load = solve.inputs[1]
+    if load.op != "field_problem_load" or not load.inputs \
+            or any(item.state_ref != value.state_ref or item.block != value.block
+                   or item.space != space for item in load.inputs) \
+            or value.attrs.get("source_state") != load.inputs[0].state_ref:
+        raise ValueError("field-to-State projection changes its exact load support")
+    applies = tuple(node for node in solve.inputs[0].attrs.get("apply_block", ())
+                    if node.op == "field_problem_apply")
+    if len(applies) != 1 or applies[0].inputs[2].attrs.get("field_dependencies"):
+        raise ValueError("field-to-State projection has no constant-coefficient cell-mean stencil")
+    # Both handles must survive detachment as the same canonical State identity;
+    # no block name or component spelling resolves authority here.
+    if canonical_handle(value.state_ref) != canonical_handle(load.inputs[0].state_ref):
+        raise ValueError("field-to-State projection changed State identity")
+    return source

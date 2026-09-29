@@ -115,14 +115,15 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
     from pops.time._program.value_validation import require_top_level
     from pops.identity.scalar import scalar_literal
     from ._program_expression import encode_field_expression, field_expression_dependencies
-    from .methods import CellCenteredSecondOrder
+    from .methods import CellCenteredGeneralCoupled, CellCenteredSecondOrder
     from .operator import FieldOperator
 
     problem = registration.operator
     if type(problem) is not FieldProblem or isinstance(problem, FieldOperator):
         raise TypeError("general field binding requires FieldProblem; scalar provider adapters retain their existing field solve route")
-    if type(registration.discretization.method) is not CellCenteredSecondOrder:
-        raise FieldProblemError("field.native.method", "general field native realization requires CellCenteredSecondOrder")
+    method = registration.discretization.method
+    if type(method) not in (CellCenteredSecondOrder, CellCenteredGeneralCoupled):
+        raise FieldProblemError("field.native.method", "general field native realization requires a cell-centred second-order method")
     if registration.discretization.preconditioner is not None or registration.discretization.nonlinear is not None:
         raise FieldProblemError("field.native.numerics", "general field numerical options must be realized explicitly by the selected linear solver")
     if registration.discretization.boundaries or registration.discretization.gauge is not None or registration.discretization.nullspace is not None:
@@ -153,7 +154,14 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
     states = tuple(states)
     physical_boundary = _physical_boundary(problem)
     diffusion, reaction = _physical_coefficients(problem)
-    properties = _resolved_linear_properties(problem, reaction)
+    general_coupled = type(method) is CellCenteredGeneralCoupled
+    if general_coupled and problem.gauge is not None:
+        raise FieldProblemError("field.native.kernel", "general coupled fields require an explicit nonsymmetric nullspace contract before a gauge can be used")
+    if general_coupled:
+        from pops.linalg import LinearOperatorProperties
+        properties = LinearOperatorProperties.general()
+    else:
+        properties = _resolved_linear_properties(problem, reaction)
     selected_solver = registration.discretization.solver if solver is None else solver
     scope_protocol = getattr(selected_solver, "field_problem_scope", None)
     from pops.solvers.scopes import Hierarchy, Level, solve_scope_id
@@ -163,7 +171,10 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
     size = len(problem.unknowns)
     common = {"ncomp": size, "field_problem_identity": problem.identity.token,
               "field_dependencies": tuple(_identity(row) for row in dependencies),
-              "field_handle": field.canonical_identity(), "physical_boundary": physical_boundary, "scope": scope}
+              "field_handle": field.canonical_identity(), "physical_boundary": physical_boundary,
+              "scope": scope}
+    if general_coupled:
+        common["coefficient_admissibility"] = "finite_general"
     rhs_expressions = tuple(encode_field_expression(eq.rhs, states) for eq in problem.equations)
     coefficient_expressions = tuple(encode_field_expression(eq, states) for eq in diffusion)
     rhs_dependencies = field_expression_dependencies(rhs_expressions, states)
@@ -221,6 +232,66 @@ class FieldSolution:
              "field_unknown": self.unknowns[matches[0]], "stencil_access": StencilAccess.pointwise()},
             unknown.local_id + "_value", None, point=self.packed.point, inherit_state_ref=False)
 
+    def cell_mean_state(self, unknown: Handle, *, target: Any) -> ProgramValue:
+        """Project one solved cell mean to an exact one-component State endpoint.
+
+        The v1 identity is available only when the field stencil has constant
+        coefficients, its load witnesses the same StateSpace, and that State
+        declares cell-volume averages on an explicit physical support. Other
+        samplings and support transfers need their own physical map.
+        """
+        from pops.time._authoring import authoring_transaction
+        from pops.time.handles import StateEndpointHandle
+        from pops.time._program.value_validation import require_top_level
+        from pops.model import StateSpace
+        from .methods import CellCenteredGeneralCoupled, CellCenteredSecondOrder
+
+        program = self.packed.prog
+        with authoring_transaction(program):
+            program._guard_mutable("project a solved field to State")
+            if not isinstance(target, StateEndpointHandle):
+                raise TypeError("field cell-mean projection requires an exact State endpoint")
+            target = program._require_endpoint(target, "field cell-mean projection")
+            if _identity(unknown) not in self.unknowns:
+                raise FieldProblemError("field.projection.unknown", "projection selects a foreign field unknown")
+            space = target.space
+            if not isinstance(space, StateSpace) or len(space.components) != 1 \
+                    or space.representation != "conservative" or space.centering != "cell" \
+                    or space.sampling != "cell_average" or space.support is None:
+                raise FieldProblemError("field.projection.representation", "target must declare one conservative cell-volume mean on an explicit support")
+            registry = getattr(self.field, "_field_registry", None)
+            if registry is None:
+                raise FieldProblemError("field.projection.authority", "projection requires registered field authority")
+            registration = registry.resolved_registration(self.field)
+            if type(registration.discretization.method) not in (CellCenteredSecondOrder, CellCenteredGeneralCoupled):
+                raise FieldProblemError("field.projection.method", "projection requires the native cell-centred finite-volume stencil")
+            solve = self.packed.inputs[0].inputs[0]
+            load = solve.inputs[1]
+            applies = tuple(node for node in solve.inputs[0].attrs.get("apply_block", ())
+                            if node.op == "field_problem_apply")
+            if len(applies) != 1 or applies[0].inputs[2].attrs.get("field_dependencies"):
+                raise FieldProblemError("field.projection.coefficients", "cell-mean identity requires constant field coefficients")
+            if load.op != "field_problem_load" or not load.inputs \
+                    or any(value.state_ref != target.state or value.block != target.block
+                           or value.space != space for value in load.inputs):
+                raise FieldProblemError("field.projection.support", "field load does not witness the target State's exact support, representation and measure")
+            if self.packed.point != target.point:
+                raise FieldProblemError("field.projection.point", "solved field and target State have different evaluation points")
+            require_top_level(program, self.packed, "field cell-mean projection")
+            selected = self[unknown]
+            projected = program._new("scalar_field", "field_state_cell_mean", (selected,),
+                {"projection_version": 1, "sampling": "cell_average",
+                 "measure": "cell_volume", "ncomp": 1,
+                 "field_problem_identity": self.problem_identity,
+                 "field_unknown": _identity(unknown),
+                 "source_state": load.inputs[0].state_ref,
+                 "target_state": target.state},
+                unknown.local_id + "_cell_mean", target.block,
+                space=space, state_ref=target.state, point=target.point)
+            from ._observation_contract import validate_field_state_cell_mean
+            validate_field_state_cell_mean(projected)
+            return projected
+
     def gradient(self, unknown: Handle, *, dimension: int) -> ProgramValue:
         if type(dimension) is not int or dimension not in (1, 2, 3):
             raise TypeError("field gradient requires an explicit physical dimension")
@@ -276,8 +347,11 @@ def validate_field_apply(node: Any) -> None:
         raise FieldProblemError("field.native.apply", "field coefficient matrix changes its exact unknown width")
     if coefficient.op != "field_problem_coefficients" or any(
             coefficient.attrs.get(key) != node.attrs.get(key) for key in
-            ("field_problem_identity", "field_dependencies", "field_handle", "physical_boundary")):
+            ("field_problem_identity", "field_dependencies", "field_handle", "physical_boundary",
+             "coefficient_admissibility")):
         raise FieldProblemError("field.native.apply", "field apply coefficient authority differs from its physical problem")
+    if node.attrs.get("coefficient_admissibility") not in (None, "finite_general"):
+        raise FieldProblemError("field.native.apply", "field apply has no supported coefficient admission")
     if node.attrs.get("physical_boundary") not in ("periodic", "homogeneous_neumann"):
         raise FieldProblemError("field.native.boundary", "field apply has no supported physical boundary")
     reaction = node.attrs.get("reaction")

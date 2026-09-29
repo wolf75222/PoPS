@@ -83,4 +83,16 @@ class CellCenteredSecondOrder(Descriptor):
         return cell_centered_second_order_field_lowering_provider(), {}
 
 
-__all__ = ["CellCenteredSecondOrder", "PreparedFieldMethod"]
+class CellCenteredGeneralCoupled(CellCenteredSecondOrder):
+    """Cell-centred matrix-free stencil with finite, possibly nonsymmetric coupling.
+
+    This realization uses a general Krylov method.  It carries no SPD/energy
+    certificate and does not alter the default positive-definite field route.
+    """
+
+    def options(self) -> dict[str, Any]:
+        return {"method": "cell_centered_second_order",
+                "coefficient_admissibility": "finite_general"}
+
+
+__all__ = ["CellCenteredSecondOrder", "CellCenteredGeneralCoupled", "PreparedFieldMethod"]
