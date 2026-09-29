@@ -139,3 +139,16 @@ Verdict: favorable within this source and mathematical scope, with the two
 initial defects retained above. No native build, JIT compilation, installed
 run, GPU or AMR qualification was performed by this review; an authenticated
 Dim1 installed run remains necessary for runtime qualification.
+
+Follow-up `7ab9f572` removes an unnecessary coefficient-one/single-occurrence
+restriction. Five further independent source cases cover weights `(1,2)`,
+`(2,1)`, `(.5,1.5)`, `(.5,)`, and rejection of `(2,-.5)` despite its positive
+total. Each SSPRK2 stage scales its shared RHS by the sum exactly once, while
+its accepted face publication retains each occurrence ordinal and its own
+physical coefficient separately from the temporal half-dt quadrature. The
+tests verify distinct per-stage receivers and forbid duplicate ordinals; no
+collapsed sum substitutes for the accepted exchange identities. Final replay
+on 7ab9f572: **24/24 source/math tests passed in 5.35 s**, Ruff clean. Initial
+test parsing assumed decimal half-dt and Real-wrapped float literals; it was
+corrected to the emitter's exact rational half-dt and native floating literals,
+without changing any production code or mathematical expectation.
