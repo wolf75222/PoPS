@@ -18,6 +18,7 @@ from pops.layouts import Uniform
 from pops.numerics import (CoordinatedFace, CoordinatedFiniteVolume,
                            DiscretizationPlan, FaceBalance)
 from pops.time import FixedDt
+from tests.python.support.api040_coordinated_face_oracle_independent import face as oracle_face
 
 
 def _case(order=("c", "p", "r"), *, beta=.7, gamma=-.4, dimension=1):
@@ -117,3 +118,23 @@ def test_public_two_dimensional_extrusion_emits_zero_transverse_face():
     assert "coordinated_face_contract_version = 1" in brick
     assert "else if constexpr (Axis == 1)" in brick
     assert "result.right_ncp.values[2]" in brick
+
+
+@pytest.mark.parametrize("order", (("c", "p", "r"), ("r", "c", "p")))
+def test_authored_face_expr_matches_separate_three_state_oracle(order):
+    import numpy as np
+    _, _, authored = _case(order)
+    left = np.array((.23, -.11, .32))[[ ("c", "p", "r").index(name) for name in order]]
+    right = np.array((.19, -.06, .27))[[ ("c", "p", "r").index(name) for name in order]]
+    values = {symbol.name: float(value)
+              for symbols, data in ((authored.left_symbols, left),
+                                    (authored.right_symbols, right))
+              for symbol, value in zip(symbols, data, strict=True)}
+    row = authored.balances[0]
+    actual = (np.array([entry.eval(values) for entry in row.flux]),
+              np.array([entry.eval(values) for entry in row.left]),
+              np.array([entry.eval(values) for entry in row.right]),
+              row.stability.eval(values))
+    expected = oracle_face(left, right, beta=.7, gamma=-.4, order=order)
+    for observed, reference in zip(actual, expected, strict=True):
+        np.testing.assert_allclose(observed, reference, rtol=0., atol=2.e-15)
