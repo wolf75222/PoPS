@@ -169,10 +169,13 @@ def _emit_block_inverse(body: Any, impl: Any, jblock: Any, th_dt_cpp: Any, inden
     block_inverse computes the inverse once per cell; the caller reuses it for the full tensor."""
     n = _emit_block_M(body, impl, jblock, th_dt_cpp, indent, provider_binding, extra_roots)
     body.append("%spops::Real Mi_[%d][%d];" % (indent, n, n))
-    # block_inverse returns false on a singular M; we do not branch in the device kernel (no throw on
-    # device). M = I - th_dt*J is invertible for a well-posed eliminable source (Lorentz: det = 1 + w^2
-    # > 0); a singular authored block yields a non-finite result surfacing downstream, not a wrong one.
-    body.append("%spops::detail::block_inverse<%d>(M_, Mi_);" % (indent, n))
+    # A failed inverse leaves its destination unwritten. Return a device status
+    # before reading it; the enclosing reduction converges this status natively.
+    body.append("%sif (!pops::detail::block_inverse<%d>(M_, Mi_)) return pops::Real(1);"
+                % (indent, n))
+    body.append("%sfor (int r = 0; r < %d; ++r) for (int c = 0; c < %d; ++c)"
+                % (indent, n, n))
+    body.append("%s  if (!std::isfinite(Mi_[r][c])) return pops::Real(2);" % indent)
     return n
 
 
@@ -197,7 +200,10 @@ def _emit_apply_minv(
         % (indent, n, ", ".join(input_components))
     )
     body.append("%spops::Real cond_mv_[%d];" % (indent, n))
-    body.append("%spops::detail::block_apply_inverse<%d>(M_, cond_v_, cond_mv_);" % (indent, n))
+    body.append("%sif (!pops::detail::block_apply_inverse<%d>(M_, cond_v_, cond_mv_)) return pops::Real(1);"
+                % (indent, n))
+    body.append("%sfor (int component = 0; component < %d; ++component)" % (indent, n))
+    body.append("%s  if (!std::isfinite(cond_mv_[component])) return pops::Real(2);" % indent)
     for component, output_name in enumerate(output_names):
         body.append(
             "%sconst pops::Real %s = cond_mv_[%d];"
@@ -261,6 +267,7 @@ def _emit_condensed_coeffs_kernel(
     body += [
         "pops::MultiFab<pops::kNativeDimension>& %s = %s;"
         % (tensor_write, tensor),
+        "pops::Real cond%s_coeff_status = 0;" % uid,
         "for (int li = 0; li < %s.local_size(); ++li) {" % tensor_write,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> tensorA = "
         "%s.fab(li).view();" % tensor_write,
@@ -269,8 +276,8 @@ def _emit_condensed_coeffs_kernel(
         "  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
         % (provider_binding["count"], json.dumps(provider_binding["qid"]), program_block),
         "  const pops::RuntimeParams params = ctx.program_params(%d);" % program_block,
-        "  pops::for_each_cell(%s, [=] POPS_HD("
-        "const pops::CellIndex<pops::kNativeDimension>& index) {" % iteration_box,
+        "  cond%s_coeff_status = std::max(cond%s_coeff_status, pops::for_each_cell_reduce_max(%s, [=] POPS_HD("
+        "const pops::CellIndex<pops::kNativeDimension>& index) {" % (uid, uid, iteration_box),
         "    const pops::Real rho = stateA(index, %d);" % int(c_rho),
     ]
     _emit_block_inverse(body, impl, jblock, th_dt_cpp, "    ", provider_binding, map_roots)
@@ -290,7 +297,11 @@ def _emit_condensed_coeffs_kernel(
                 "    tensorA(index, %d) = %s + cr * %s;"
                 % (row * dimension + column, identity, inverse_entry)
             )
-    body += ["  });", "}"]
+            body.append("    if (!std::isfinite(tensorA(index, %d))) return pops::Real(2);"
+                        % (row * dimension + column))
+    body += ["    return pops::Real(0);", "  }));", "}",
+             'ctx.consume_pointwise_evaluation_status(%d, %d, cond%s_coeff_status, "condensed_coefficient_inverse", 701);'
+             % (program_block, uid, uid)]
     return body
 
 
@@ -306,6 +317,7 @@ def _emit_condensed_flux_kernel(body: Any, uid: Any, impl: Any, jblock: Any, th_
                json.dumps(provider_binding["qid"])))
     iteration_box = "%s.fab(li).grown_box()" % fx_var if target == "amr_system" else "%s.box(li)" % fx_var
     body += _prepare_provider_values(provider_binding, program_block, state_var) + [
+        "pops::Real cond%s_flux_status = 0;" % uid,
         "for (int li = 0; li < %s.local_size(); ++li) {" % fx_var,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> fA = "
         "%s.fab(li).view();" % fx_var,
@@ -314,8 +326,8 @@ def _emit_condensed_flux_kernel(body: Any, uid: Any, impl: Any, jblock: Any, th_
         "  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
         % (provider_binding["count"], json.dumps(provider_binding["qid"]), program_block),
         "  const pops::RuntimeParams params = ctx.program_params(%d);" % program_block,
-        "  pops::for_each_cell(%s, [=] POPS_HD("
-        "const pops::CellIndex<pops::kNativeDimension>& index) {" % iteration_box,
+        "  cond%s_flux_status = std::max(cond%s_flux_status, pops::for_each_cell_reduce_max(%s, [=] POPS_HD("
+        "const pops::CellIndex<pops::kNativeDimension>& index) {" % (uid, uid, iteration_box),
     ]
     n = _emit_block_M(body, impl, jblock, th_dt_cpp, "    ", provider_binding, extra_roots)
     inputs = ["stateA(index, %d)" % int(component) for component in subset]
@@ -326,7 +338,10 @@ def _emit_condensed_flux_kernel(body: Any, uid: Any, impl: Any, jblock: Any, th_
             output = " + ".join("%s * %s" % (_matrix_entry(gradient, axis, component), outputs[axis])
                                 for axis in range(len(subset)))
         body.append("    fA(index, %d) = %s;" % (component, output))
-    body += ["  });", "}"]
+        body.append("    if (!std::isfinite(fA(index, %d))) return pops::Real(2);" % component)
+    body += ["    return pops::Real(0);", "  }));", "}",
+             'ctx.consume_pointwise_evaluation_status(%d, %d, cond%s_flux_status, "condensed_flux_inverse", 702);'
+             % (program_block, uid, uid)]
 
 
 def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any, th_dt: Any,
@@ -480,6 +495,7 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
         ("ctx.fill_condensed_potential(%d, %s);" % (program_block, phi_read) if gradient is not None
          else "ctx.fill_boundary(%s);" % phi_read),
         "const pops::Geometry<pops::kNativeDimension> cond%s_geometry = ctx.geometry();" % uid,
+        "pops::Real cond%s_reconstruct_status = 0;" % uid,
         "for (int li = 0; li < %s.local_size(); ++li) {" % state,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> stateA = "
         "%s.fab(li).view();" % state,
@@ -488,8 +504,8 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
         "  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
         % (provider_binding["count"], json.dumps(provider_binding["qid"]), program_block),
         "  const pops::RuntimeParams params = ctx.program_params(%d);" % program_block,
-        "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
-        "const pops::CellIndex<pops::kNativeDimension>& index) {" % state,
+        "  cond%s_reconstruct_status = std::max(cond%s_reconstruct_status, pops::for_each_cell_reduce_max(%s.box(li), [=] POPS_HD("
+        "const pops::CellIndex<pops::kNativeDimension>& index) {" % (uid, uid, state),
         "    const pops::Real rho = stateA(index, %d);" % int(c_rho),
         "    const pops::Real inv_rho = rho != pops::Real(0) ? pops::Real(1) / rho : pops::Real(0);",
         "    const int cond_components_[%d] = {%s};" % (
@@ -526,9 +542,14 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
             "    stateA(index, cond_components_[%d]) = rho * %s;"
             % (component, output)
         )
+        body.append("    if (!std::isfinite(stateA(index, cond_components_[%d]))) return pops::Real(2);"
+                    % component)
     body += [
-        "  });",
+        "    return pops::Real(0);",
+        "  }));",
         "}",
+        'ctx.consume_pointwise_evaluation_status(%d, %d, cond%s_reconstruct_status, "condensed_reconstruction_inverse", 703);'
+        % (program_block, uid, uid),
     ]
     return body
 
