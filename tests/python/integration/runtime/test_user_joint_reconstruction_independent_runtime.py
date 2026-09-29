@@ -124,7 +124,7 @@ def _case(permutation, *, guarded=False, primitive=False, mixed=False):
     return case, layout, subjects, handles, matrices, calls
 
 
-def _oracle(initial, matrices, alpha, beta, *, primitive=False):
+def _oracle(initial, matrices, alpha, beta, *, primitive=False, mixed=False):
     result = initial.copy()
     sampled = initial.copy()
     if primitive:
@@ -143,11 +143,14 @@ def _oracle(initial, matrices, alpha, beta, *, primitive=False):
         def trace(right):
             q0, qm1, qp1 = sample(0, right=right), sample(-1, right=right), sample(1, right=right)
             qp2, qp3 = sample(2, right=right), sample(3, right=right)
-            return np.stack((q0[0] + alpha * (qp3[4] - qm1[4]),
-                             q0[1] - alpha * (qp1[2] - sample(-2, right=right)[0]),
-                             q0[2] + beta * (qp1[1] - qm1[1]),
-                             q0[3] + beta * (qp1[4] - qm1[4]),
-                             q0[4] + beta * (qp2[0] - qm1[0])))
+            first = (q0[0] + alpha * (qp3[4] - qm1[4]),
+                     q0[1] - alpha * (qp1[2] - sample(-2, right=right)[0]))
+            second = (tuple(q0[k] + .1 * (qp1[k] - qm1[k]) for k in range(2, 5))
+                      if mixed else
+                      (q0[2] + beta * (qp1[1] - qm1[1]),
+                       q0[3] + beta * (qp1[4] - qm1[4]),
+                       q0[4] + beta * (qp2[0] - qm1[0])))
+            return np.stack((*first, *second))
         left, right = conservative(trace(False)), conservative(trace(True))
         speed = float(np.max(np.sum(np.abs(matrix), axis=1)))
         face = .5 * np.einsum("ij,jyx->iyx", matrix, left + right) - .5 * speed * (right - left)
@@ -190,11 +193,13 @@ def test_joint_cross_row_storage_halo_covers_every_sampled_component(primitive, 
         assert model._program_state_ghost_depth >= 4
 
 
-@pytest.mark.parametrize("permutation,primitive", ((tuple(range(5)), False),
-                                                   ((4, 2, 0, 3, 1), True)))
+@pytest.mark.parametrize("permutation,primitive,mixed", ((tuple(range(5)), False, False),
+                                                         ((4, 2, 0, 3, 1), True, False),
+                                                         (tuple(range(5)), False, True)))
 def test_joint_native_face_matches_cross_component_oracle_and_live_rebind(
-        isolated_native_cache, native_cxx, kokkos_root, permutation, primitive):
-    case, layout, subjects, handles, matrices, calls = _case(permutation, primitive=primitive)
+        isolated_native_cache, native_cxx, kokkos_root, permutation, primitive, mixed):
+    case, layout, subjects, handles, matrices, calls = _case(
+        permutation, primitive=primitive, mixed=mixed)
     artifact, world = _compile(case, layout, "joint-user-cross-component")
     authoring_calls = tuple(calls)
     initial = _initial(permutation)
@@ -204,7 +209,7 @@ def test_joint_native_face_matches_cross_component_oracle_and_live_rebind(
         pops.run(runtime, t_end=DT, max_steps=1, console=False)
         actual = _gather(runtime, world)
         def check():
-            expected = _oracle(initial, matrices, alpha, beta, primitive=primitive)
+            expected = _oracle(initial, matrices, alpha, beta, primitive=primitive, mixed=mixed)
             np.testing.assert_allclose(actual, expected, rtol=4e-12, atol=4e-12)
             np.testing.assert_allclose(actual.sum(axis=(1, 2)), initial.sum(axis=(1, 2)),
                                        rtol=0, atol=5e-11)
