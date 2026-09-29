@@ -26,7 +26,9 @@ from pops.output._consumer_contracts import (
     SkipSampleReported,
 )
 from ._consumer_planning import next_consumer_deadline, plan_accepted_side_effects
-from ._consumer_transaction import ConsumerTransaction, ConsumerTransactionReport
+from ._consumer_transaction import (
+    ConsumerCursorAuthority, ConsumerTransaction, ConsumerTransactionReport,
+)
 from ._output_publisher import preflight_consumer_publication
 from ._runtime_component_manifests import component_manifests_for_install
 from ._runtime_consumers import (
@@ -444,6 +446,7 @@ class RuntimeInstance:
         "_executor",
         "_checkpoint_resource_budget",
         "_consumer_cursors",
+        "_consumer_cursor_authority",
         "_consumer_reports",
         "_consumer_finalize_pending",
         "_consumer_recoveries",
@@ -497,6 +500,7 @@ class RuntimeInstance:
         # restart or checkpoint seam may install, infer or replace it later.
         self._checkpoint_resource_budget = resource_budget
         self._consumer_cursors = ConsumerCursorSet()
+        self._consumer_cursor_authority = ConsumerCursorAuthority(self._consumer_cursors)
         self._consumer_reports = ()
         self._consumer_finalize_pending: tuple[_PendingConsumerFinalization, ...] = ()
         self._consumer_recoveries: dict[str, _ConsumerRecoveryOwner] = {}
@@ -1023,9 +1027,10 @@ class RuntimeInstance:
         at_start: bool = False,
         at_end: bool = False,
     ) -> tuple[ConsumerTransaction, ...]:
+        cursor_snapshot = self._consumer_cursor_authority.cursors
         plans = tuple(
             plan_accepted_side_effects(
-                self._runtime_plan, self._consumer_graph, moment, self._consumer_cursors
+                self._runtime_plan, self._consumer_graph, moment, cursor_snapshot
             )
             for moment in self._moments(at_start=at_start, at_end=at_end)
         )
@@ -1050,7 +1055,7 @@ class RuntimeInstance:
                     "a checkpoint transaction cannot predict restart cursors when another "
                     "effect may skip its sample"
                 )
-            predicted = self._consumer_cursors
+            predicted = cursor_snapshot
             for effect in all_effects:
                 predicted = predicted.replace(effect.cursor_after)
             self._checkpoint_cursor_override = predicted
@@ -1058,7 +1063,9 @@ class RuntimeInstance:
         staged = []
         try:
             for plan in plans:
-                staged.append(ConsumerTransaction(plan, self._consumer_cursors, self._publisher))
+                staged.append(ConsumerTransaction(
+                    plan, cursor_snapshot, self._publisher,
+                    self._consumer_cursor_authority))
         except BaseException as error:
             cleanup_error = self._abort_consumers(tuple(staged))
             if cleanup_error is not None:
@@ -1145,10 +1152,7 @@ class RuntimeInstance:
         transactions: tuple[ConsumerTransaction, ...],
     ) -> tuple[tuple[Any, ...], ConsumerCursorSet, tuple[Any, ...]]:
         reports = tuple(transaction.accept() for transaction in transactions)
-        cursors = self._consumer_cursors
-        for transaction in transactions:
-            for cursor in transaction.cursor_updates:
-                cursors = cursors.replace(cursor)
+        cursors = self._consumer_cursor_authority.cursors
         return reports, cursors, self._consumer_reports + reports
 
     @staticmethod
@@ -1250,7 +1254,7 @@ class RuntimeInstance:
                 raise cleanup_error from error
             raise
         sealed_reports = self._seal_consumer_reports(transactions, reports)
-        self._consumer_cursors = cursors
+        self._consumer_cursors = self._consumer_cursor_authority.cursors
         report_offset = len(self._consumer_reports)
         self._consumer_reports = self._consumer_reports + sealed_reports
         self._retry_consumer_finalizers()
@@ -1290,8 +1294,11 @@ class RuntimeInstance:
     def _restore_step_envelope(self, snapshot: dict[str, Any]) -> None:
         native = self._executor
         self._attempt = snapshot["attempt"]
-        self._consumer_cursors = snapshot["consumer_cursors"]
-        self._consumer_reports = snapshot["consumer_reports"]
+        # Each compensated root restores only its own reserved cursor. A disjoint
+        # accepted root may have advanced since this step snapshot was taken.
+        self._consumer_cursors = self._consumer_cursor_authority.cursors
+        # The failing step has not appended its reports yet. Keep reports from
+        # disjoint accepted roots and finalizer retries that ran meanwhile.
         self._checkpoint_cursor_override = snapshot["checkpoint_cursor_override"]
         if hasattr(native, "_temporal_restart_state"):
             restored_temporal = snapshot["temporal_restart_state"]
@@ -1458,7 +1465,7 @@ class RuntimeInstance:
             native_active = False
             phase = "native_finalized"
             sealed_reports = self._seal_consumer_reports(transactions, reports)
-            self._consumer_cursors = cursors
+            self._consumer_cursors = self._consumer_cursor_authority.cursors
             self._consumer_reports = self._consumer_reports + sealed_reports
             self._retry_consumer_finalizers()
             return result
@@ -1489,8 +1496,8 @@ class RuntimeInstance:
                         )
                     except BaseException:
                         pass
-                self._consumer_cursors = cursors
-                self._consumer_reports = snapshot["consumer_reports"] + tuple(accepted_reports)
+                self._consumer_cursors = self._consumer_cursor_authority.cursors
+                self._consumer_reports = self._consumer_reports + tuple(accepted_reports)
                 return result
             failure_report = getattr(native, "_last_step_transaction_report", None)
             cleanup_error = self._abort_consumers(transactions)
@@ -2385,12 +2392,14 @@ class RuntimeInstance:
             geometry_cache = getattr(self._snapshot_builder, "_geometry_cache", None)
             if not isinstance(geometry_cache, dict):
                 raise TypeError("RuntimeInstance restart requires an exact mutable geometry cache")
+            cursor_snapshot, cursor_revision = self._consumer_cursor_authority.snapshot()
             prepared_snapshot = {
                 "hierarchy_mode": selected_hierarchy_mode,
                 "source_run_identity": source_run_identity,
                 "restore_run_identity": restore_run_identity,
                 "canonical_diagnostics": canonical_diagnostics,
-                "consumer_cursors": self._consumer_cursors,
+                "consumer_cursors": cursor_snapshot,
+                "cursor_revision": cursor_revision,
                 "diagnostics": self._publisher.diagnostic_restart_state(),
                 "geometry_cache_owner": geometry_cache,
                 "geometry_cache": dict(geometry_cache),
@@ -2435,8 +2444,10 @@ class RuntimeInstance:
                         "regrid_receipt": _regrid_receipt_identity_data(receipt),
                     },
                 )
+            outer_snapshot["cursor_published_revision"] = self._consumer_cursor_authority.reset(
+                cursors, expected_revision=outer_snapshot["cursor_revision"])
             self._snapshot_builder.invalidate_geometry_cache()
-            self._consumer_cursors = cursors
+            self._consumer_cursors = self._consumer_cursor_authority.cursors
             self._publisher.restore_diagnostic_restart_state(
                 outer_snapshot["canonical_diagnostics"]
             )
@@ -2445,7 +2456,14 @@ class RuntimeInstance:
         def rollback_outer_state() -> None:
             failures = []
             try:
-                self._consumer_cursors = outer_snapshot["consumer_cursors"]
+                published_revision = outer_snapshot.get("cursor_published_revision")
+                if published_revision is not None:
+                    self._consumer_cursor_authority.reset(
+                        outer_snapshot["consumer_cursors"],
+                        expected_revision=published_revision)
+                elif self._consumer_cursor_authority.revision != outer_snapshot["cursor_revision"]:
+                    raise RuntimeError("publication cursor changed during checkpoint restoration")
+                self._consumer_cursors = self._consumer_cursor_authority.cursors
                 geometry_cache = outer_snapshot["geometry_cache_owner"]
                 geometry_cache.clear()
                 geometry_cache.update(outer_snapshot["geometry_cache"])

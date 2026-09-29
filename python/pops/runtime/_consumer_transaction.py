@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Any
 
 from pops.identity import Identity, make_identity
@@ -15,6 +16,115 @@ from pops.output._consumer_contracts import (
     SkipSampleReported,
 )
 from ._consumer_effects import AcceptedSideEffect, EffectPlan
+
+
+class ConsumerCursorAuthority:
+    """Serialize conflicting publication roots without blocking disjoint consumers."""
+
+    __slots__ = ("_cursors", "_held", "_committed", "_terminal", "_epoch", "_revision", "_lock")
+
+    def __init__(self, cursors: ConsumerCursorSet) -> None:
+        if type(cursors) is not ConsumerCursorSet:
+            raise TypeError("ConsumerCursorAuthority requires exact ConsumerCursorSet")
+        self._cursors = cursors
+        self._held: dict[str, object] = {}
+        self._committed: dict[object, tuple[AcceptedSideEffect, ...]] = {}
+        self._terminal: set[str] = set()
+        self._epoch = 0
+        self._revision = 0
+        self._lock = RLock()
+
+    @property
+    def cursors(self) -> ConsumerCursorSet:
+        with self._lock:
+            return self._cursors
+
+    @property
+    def epoch(self) -> int:
+        with self._lock:
+            return self._epoch
+
+    @property
+    def revision(self) -> int:
+        with self._lock:
+            return self._revision
+
+    def snapshot(self) -> tuple[ConsumerCursorSet, int]:
+        with self._lock:
+            return self._cursors, self._revision
+
+    def reset(self, cursors: ConsumerCursorSet, *, expected_revision: int | None = None) -> int:
+        """Restore a controller checkpoint only after its publications were resolved."""
+        if type(cursors) is not ConsumerCursorSet:
+            raise TypeError("cursor reset requires exact ConsumerCursorSet")
+        with self._lock:
+            if self._terminal:
+                raise RuntimeError("incomplete consumer compensation; recover artifacts and recreate RuntimeInstance")
+            if expected_revision is not None and expected_revision != self._revision:
+                raise RuntimeError("publication cursor changed during checkpoint restoration")
+            if self._held:
+                raise RuntimeError("cannot reset cursors while publication roots are reserved")
+            self._cursors = cursors
+            self._epoch += 1
+            self._revision += 1
+            return self._revision
+
+    def mark_terminal(self, effects: tuple[AcceptedSideEffect, ...]) -> None:
+        with self._lock:
+            self._terminal.update(effect.consumer_id for effect in effects)
+
+    def reserve(self, owner: object, effects: tuple[AcceptedSideEffect, ...], epoch: int) -> None:
+        with self._lock:
+            if epoch != self._epoch:
+                raise ValueError("publication root belongs to a stale cursor incarnation")
+            ids = tuple(effect.consumer_id for effect in effects)
+            if len(set(ids)) != len(ids):
+                raise ValueError("publication root repeats a consumer cursor")
+            for effect in effects:
+                if effect.consumer_id in self._terminal:
+                    raise ValueError(
+                        "incomplete consumer compensation; recover artifacts and recreate RuntimeInstance")
+                if effect.consumer_id in self._held:
+                    raise ValueError("consumer cursor is reserved by another publication root")
+                if self._cursors.for_consumer(effect.consumer_id) != effect.cursor_before:
+                    raise ValueError("EffectPlan cursor snapshot is stale for %s" % effect.consumer_id)
+            for consumer_id in ids:
+                self._held[consumer_id] = owner
+
+    def commit(self, owner: object, effects: tuple[AcceptedSideEffect, ...]) -> ConsumerCursorSet:
+        with self._lock:
+            if any(self._held.get(effect.consumer_id) is not owner for effect in effects):
+                raise RuntimeError("publication root lost its cursor reservation")
+            if owner in self._committed:
+                raise RuntimeError("publication root already committed its cursors")
+            cursors = self._cursors
+            for effect in effects:
+                if cursors.for_consumer(effect.consumer_id) != effect.cursor_before:
+                    raise RuntimeError("reserved consumer cursor changed before commit")
+                cursors = cursors.replace(effect.cursor_after)
+            self._cursors = cursors
+            if effects:
+                self._revision += 1
+            self._committed[owner] = effects
+            return cursors
+
+    def release(self, owner: object, *, rollback: bool = False) -> ConsumerCursorSet:
+        with self._lock:
+            committed = self._committed.get(owner, ())
+            if rollback:
+                cursors = self._cursors
+                for effect in committed:
+                    if cursors.for_consumer(effect.consumer_id) != effect.cursor_after:
+                        raise RuntimeError("accepted cursor changed before compensation")
+                    cursors = cursors.replace(effect.cursor_before)
+                self._cursors = cursors
+                if committed:
+                    self._revision += 1
+            self._committed.pop(owner, None)
+            for consumer_id, held_owner in tuple(self._held.items()):
+                if held_owner is owner:
+                    del self._held[consumer_id]
+            return self._cursors
 
 
 def _text(value: Any, where: str) -> str:
@@ -210,7 +320,7 @@ class ConsumerTransaction:
     """Own temporaries until a step controller explicitly accepts or rejects the attempt."""
 
     __slots__ = (
-        "_plan", "_publisher", "_initial_cursors", "_prepared", "_accepted",
+        "_plan", "_publisher", "_authority", "_authority_epoch", "_initial_cursors", "_prepared", "_accepted",
         "_cursor_updates", "_skipped", "_state", "_finalize_pending", "_recoveries",
     )
 
@@ -219,6 +329,7 @@ class ConsumerTransaction:
         plan: EffectPlan,
         cursors: ConsumerCursorSet,
         publisher: ConsumerPublisher,
+        authority: ConsumerCursorAuthority,
     ) -> None:
         if type(plan) is not EffectPlan:
             raise TypeError("ConsumerTransaction requires an exact EffectPlan")
@@ -226,11 +337,15 @@ class ConsumerTransaction:
             raise TypeError("ConsumerTransaction requires an exact ConsumerCursorSet")
         if not isinstance(publisher, ConsumerPublisher):
             raise TypeError("ConsumerTransaction publisher must implement ConsumerPublisher")
+        if type(authority) is not ConsumerCursorAuthority:
+            raise TypeError("ConsumerTransaction requires an exact ConsumerCursorAuthority")
         for effect in plan.effects:
             if cursors.for_consumer(effect.consumer_id) != effect.cursor_before:
                 raise ValueError("EffectPlan cursor snapshot is stale for %s" % effect.consumer_id)
         self._plan = plan
         self._publisher = publisher
+        self._authority = authority
+        self._authority_epoch = authority.epoch
         self._initial_cursors = cursors
         self._prepared: list[tuple[AcceptedSideEffect, PreparedPublication, int]] = []
         self._accepted: list[
@@ -345,6 +460,10 @@ class ConsumerTransaction:
         rolled_back: tuple[str, ...] = (),
     ) -> ConsumerPublicationError:
         staged_rollback, cleanup = self._discard_staged()
+        if not diagnostics and not cleanup:
+            self._authority.release(self)
+        else:
+            self._authority.mark_terminal(self._plan.effects)
         report = ConsumerTransactionReport(
             "failed",
             cursors,
@@ -396,8 +515,14 @@ class ConsumerTransaction:
     def accept(self) -> ConsumerTransactionReport:
         if self._state != "staged":
             raise RuntimeError("ConsumerTransaction is already resolved")
-        cursors, published = self._initial_cursors, []
+        published = []
         pending = list(self._prepared)
+        try:
+            self._authority.reserve(
+                self, tuple(effect for effect, _, _ in pending), self._authority_epoch)
+        except ValueError as error:
+            effect = pending[0][0] if pending else self._plan.effects[0]
+            raise self._failed(effect, error, cursors=self._authority.cursors) from error
         self._prepared.clear()
         while pending:
             effect, prepared, attempts = pending.pop(0)
@@ -431,7 +556,7 @@ class ConsumerTransaction:
                         self._prepared.extend(pending)
                         accepted_rollback, accepted_cleanup = self._rollback_accepted()
                         raise self._failed(
-                            effect, error, cursors=self._initial_cursors,
+                            effect, error, cursors=self._authority.cursors,
                             diagnostics=(cleanup,) + accepted_cleanup,
                             rolled_back=accepted_rollback,
                         ) from error
@@ -440,13 +565,25 @@ class ConsumerTransaction:
                 accepted_rollback, accepted_cleanup = self._rollback_accepted()
                 diagnostics = ((cleanup,) if cleanup is not None else ()) + accepted_cleanup
                 raise self._failed(
-                    effect, error, cursors=self._initial_cursors,
+                    effect, error, cursors=self._authority.cursors,
                     diagnostics=diagnostics,
                     rolled_back=rolled_back + accepted_rollback,
                 ) from error
             published.append(receipt)
             self._accepted.append((effect, prepared, receipt))
-            cursors = cursors.replace(effect.cursor_after)
+        try:
+            cursors = self._authority.commit(
+                self, tuple(effect for effect, _, _ in self._accepted))
+        except Exception as error:
+            rolled_back, cleanup = self._rollback_accepted()
+            if not self._plan.effects:
+                if not cleanup:
+                    self._authority.release(self)
+                self._state = "failed"
+                raise RuntimeError("empty publication root failed cursor commit") from error
+            raise self._failed(
+                self._plan.effects[0], error, cursors=self._authority.cursors,
+                diagnostics=cleanup, rolled_back=rolled_back) from error
         self._state = "accepted"
         self._cursor_updates = tuple(effect.cursor_after for effect, _, _ in self._accepted)
         return ConsumerTransactionReport(
@@ -477,10 +614,14 @@ class ConsumerTransaction:
         if self._state != "accepted":
             raise RuntimeError("ConsumerTransaction has no accepted publication to roll back")
         rolled_back, diagnostics = self._rollback_accepted()
+        if not diagnostics:
+            self._authority.release(self, rollback=True)
+        else:
+            self._authority.mark_terminal(self._plan.effects)
         self._state = "rejected" if not diagnostics else "failed"
         report = ConsumerTransactionReport(
             self._state,
-            self._initial_cursors,
+            self._authority.cursors,
             tuple(value.identity.token for value in self._plan.effects),
             skipped=tuple(self._skipped),
             rolled_back_effects=rolled_back,
@@ -499,6 +640,7 @@ class ConsumerTransaction:
             # This transition precedes every release attempt: a finalizer is never allowed to
             # reopen compensation after the enclosing native transaction has committed.
             self._state = "sealed"
+            self._authority.release(self)
         elif self._state != "sealed":
             raise RuntimeError("only an accepted ConsumerTransaction can be sealed")
         failures = []
@@ -529,7 +671,7 @@ class ConsumerTransaction:
 
 
 __all__ = [
-    "ConsumerPublicationError", "ConsumerPublisher", "ConsumerTransaction",
+    "ConsumerCursorAuthority", "ConsumerPublicationError", "ConsumerPublisher", "ConsumerTransaction",
     "ConsumerTransactionReport", "PreparedPublication", "PublicationReceipt",
     "SkippedSampleReport",
 ]
