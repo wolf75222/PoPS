@@ -1,6 +1,7 @@
 """C22: authored binary64 grid points are distinct temporal frontiers."""
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -85,3 +86,49 @@ def test_wrong_reached_clock_rolls_back_the_real_publication_envelope(wrong_cloc
     np.testing.assert_array_equal(runtime.state_global("fluid"), before)
     assert executor._temporal_restart_state.to_data() == temporal
     assert runtime._publisher.post_commit_reports == ()
+
+
+@pytest.mark.parametrize("local_bad", (False, True))
+def test_preflight_converges_rank_local_entry_error_before_any_step(monkeypatch, local_bad):
+    from pops import _native_collectives
+    from pops.runtime import _step_strategy
+
+    native = _Native()
+    if local_bad:
+        native.t = math.ulp(0.)
+    votes = []
+
+    def world(_engine, *, preparing=False):
+        assert preparing
+        return SimpleNamespace(rank=0, size=2)
+
+    def gather(_world, envelope):
+        votes.append(envelope)
+        peer = {"contract": None, "error": "peer current time is not a declared grid point"}
+        return (envelope, peer)
+
+    monkeypatch.setattr(_step_strategy, "_attempt_world", world)
+    monkeypatch.setattr(_native_collectives, "allgather_value", gather)
+    with pytest.raises(RuntimeError, match="collective ExternalTimeGrid preparation failed"):
+        _prepared((0., .1)).run_step(native, t_end=.1)
+    assert len(votes) == 1 and native.calls == []
+
+
+@pytest.mark.parametrize("field", range(7))
+def test_preflight_compares_every_exact_interval_authority(monkeypatch, field):
+    from pops import _native_collectives
+    from pops.runtime import _step_strategy
+
+    native = _Native()
+
+    def gather(_world, envelope):
+        peer = list(envelope["contract"])
+        peer[field] = "different exact authority"
+        return (envelope, {"contract": tuple(peer), "error": None})
+
+    monkeypatch.setattr(_step_strategy, "_attempt_world",
+                        lambda _engine, **_kwargs: SimpleNamespace(rank=0, size=2))
+    monkeypatch.setattr(_native_collectives, "allgather_value", gather)
+    with pytest.raises(RuntimeError, match="preparation differs between ranks"):
+        _prepared((0., .1)).run_step(native, t_end=.1)
+    assert native.calls == []

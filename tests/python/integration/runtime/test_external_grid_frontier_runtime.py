@@ -53,6 +53,32 @@ def test_native_external_grid_frontier_and_rank_local_landing_rollback(
     raw = executor._native_step_target()
     temporal_before = executor._temporal_restart_state.to_data()
 
+    class WrongEntry:
+        calls = 0
+
+        def time(self):
+            value = raw.time()
+            if rank == (1 if size > 1 else 0):
+                return math.nextafter(value, math.inf)
+            return value
+
+        def macro_step(self):
+            return raw.macro_step()
+
+        def step(self, dt):
+            self.calls += 1
+            return raw.step(dt)
+
+    wrong_entry = WrongEntry()
+    with monkeypatch.context() as patch:
+        patch.setattr(executor, "_native_step_target", lambda: wrong_entry)
+        with pytest.raises(RuntimeError, match="current time is not a declared grid point"):
+            pops.run(failed, t_end=.1, max_steps=1, console=False, time_grid=(0., .1))
+    assert wrong_entry.calls == 0
+    assert failed.time() == 0. and failed.macro_step() == 0
+    np.testing.assert_array_equal(failed.state_global("material"), before)
+    assert executor._temporal_restart_state.to_data() == temporal_before
+
     class WrongLanding:
         """Fault only the observation after the genuine native step has mutated fields."""
         stepped = False

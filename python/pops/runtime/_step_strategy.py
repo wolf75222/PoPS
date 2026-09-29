@@ -126,9 +126,9 @@ def _control_identity(controls: Mapping[str, Any] | None) -> tuple[tuple[str, An
     ))
 
 
-def _attempt_world(engine: Any) -> Any:
+def _attempt_world(engine: Any, *, preparing: bool = False) -> Any:
     """Return the authenticated MPI world for one installed engine, if distributed."""
-    if getattr(engine, "_collective_step_envelope_active", False) is not True:
+    if not preparing and getattr(engine, "_collective_step_envelope_active", False) is not True:
         return None
     context = getattr(engine, "_execution_context", None)
     resource = getattr(context, "communicator", None)
@@ -693,22 +693,47 @@ class ExternalTimeGridController(StepController[ExternalTimeGrid]):
     def prepare_attempts(
         self, engine: Any, native: Any, *, t_end: float,
     ) -> _PreparedStepAttempts:
-        now = float(native.time())
-        step = int(native.macro_step())
-        index = bisect.bisect_left(self.grid, now)
-        # These are authored binary64 points, not approximate samples of another clock.
-        # A tolerance here can skip a distinct nearby point or cross the run frontier.
-        if index == len(self.grid) or self.grid[index] != now:
-            raise RuntimeError("ExternalTimeGrid current time is not a declared grid point")
-        if index + 1 >= len(self.grid):
-            raise RuntimeError("ExternalTimeGrid is exhausted")
-        next_time = self.grid[index + 1]
-        if next_time > t_end:
-            raise RuntimeError("ExternalTimeGrid final time is not a declared grid point")
-        dt = next_time - now
-        if not math.isfinite(dt) or not dt > 0.0 or now + dt != next_time:
-            raise RuntimeError("ExternalTimeGrid has no representable native interval to its next point")
+        local_error = None
+        contract = None
+        try:
+            now = float(native.time())
+            step = int(native.macro_step())
+            index = bisect.bisect_left(self.grid, now)
+            # These are authored binary64 points, not approximate samples of another clock.
+            # A tolerance here can skip a distinct nearby point or cross the run frontier.
+            if index == len(self.grid) or self.grid[index] != now:
+                raise RuntimeError("ExternalTimeGrid current time is not a declared grid point")
+            if index + 1 >= len(self.grid):
+                raise RuntimeError("ExternalTimeGrid is exhausted")
+            next_time = self.grid[index + 1]
+            if next_time > t_end:
+                raise RuntimeError("ExternalTimeGrid final time is not a declared grid point")
+            dt = next_time - now
+            if not math.isfinite(dt) or not dt > 0.0 or now + dt != next_time:
+                raise RuntimeError("ExternalTimeGrid has no representable native interval to its next point")
+            contract = (self.controls, now.hex(), step, index, next_time.hex(), dt.hex(),
+                        float(t_end).hex())
+        except BaseException as error:
+            local_error = error
+        # Preparation runs before RuntimeInstance opens its attempt envelope. Use the
+        # same authenticated communicator explicitly, never an implicit world fallback.
+        world = _attempt_world(engine, preparing=True)
+        if world is not None and int(world.size) > 1:
+            from pops._native_collectives import allgather_value
 
+            rows = allgather_value(world, {
+                "contract": contract,
+                "error": None if local_error is None else str(local_error),
+            })
+            failures = [(rank, row["error"]) for rank, row in enumerate(rows)
+                        if row["error"] is not None]
+            if failures:
+                raise RuntimeError("collective ExternalTimeGrid preparation failed: " + "; ".join(
+                    "rank %d: %s" % (rank, message) for rank, message in failures))
+            if any(row["contract"] != contract for row in rows):
+                raise RuntimeError("collective ExternalTimeGrid preparation differs between ranks")
+        if local_error is not None:
+            raise local_error
         def advance() -> None:
             native.step(dt)
             if float(native.time()) != next_time or int(native.macro_step()) != step + 1:

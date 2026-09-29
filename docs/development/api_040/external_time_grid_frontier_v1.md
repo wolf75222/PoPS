@@ -37,6 +37,17 @@ extra native rollback and is not advertised as a replacement transaction owner.
 An invalid future frontier may be detected after earlier valid grid points have
 already been committed; this change does not make an entire run atomic.
 
+Independent review found that interval preparation precedes the transaction
+envelope: a rank-local bad entry could throw while its peers started a native
+collective. The follow-up captures preparation errors and compares the exact
+controls, entry time/macro-step, grid index, next point, dt and run frontier on
+the already authenticated execution communicator before returning a prepared
+attempt. A local error or any disagreement refuses every rank before native
+execution. `_attempt_world(..., preparing=True)` opens only this explicit
+preparation use; normal attempt calls keep their existing active-envelope guard.
+There is no implicit communicator fallback. This does not qualify failures in
+earlier arbitrary run setup or malformed controls before controller construction.
+
 No output-schedule tolerance, FixedDt rounding rule, native kernel, numerical
 method or scientific threshold changes. Existing every_dt handling of `.1,.2,.3`
 continues to pass.
@@ -46,11 +57,13 @@ continues to pass.
 With source from this checkout and the installed Dim2 extension used only for the
 existing Python test fixtures:
 
-- 15 new unit cases pass: tiny/subnormal/ordinary/large/adjacent grid points,
+- 24 new unit cases pass: tiny/subnormal/ordinary/large/adjacent grid points,
   undeclared entry, overshoot, nonrepresentable interval, and wrong native
   time/macro-step through the actual Python publication envelope with a test
   executor. The latter restores state, time, temporal envelope and publication.
-- 78 total targeted cases pass: the new file, all `test_step_strategy.py`, and
+  Nine synthetic-collective cases verify local/peer preflight errors and each
+  exact contract field; they are source tests, not MPI execution evidence.
+- 87 total targeted cases pass: the new file, all `test_step_strategy.py`, and
   the four existing ExternalTimeGrid/every_dt cases.
 - The native integration test is collected, not executed. Ruff passes.
 
@@ -64,7 +77,8 @@ Central native reception target:
 Run serial and MPI2 with the runner's timeout. It compiles a public generic
 source-balance Program, refuses a tiny undeclared frontier without mutation,
 checks `.1,.2,.3` against a forward-Euler cell oracle, then injects a wrong clock
-observation only on rank 1 (rank 0 in serial) **after a genuine native step**.
+observation only on rank 1 (rank 0 in serial), first before any native step, then
+**after a genuine native step**. The first fault must refuse with zero step calls.
 All ranks must reject, restore native state/time and the temporal envelope, and
 successfully retry with the original target. The injected observation is a fault
 seam, not a second solver or a claim that the native backend normally mislands.
