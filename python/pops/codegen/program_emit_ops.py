@@ -947,7 +947,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             family_suffix = ", " + json.dumps(family) if target == "amr_system" else ""
             from pops.codegen.program_transport_quadrature import declare_transport_faces
             faces = declare_transport_faces(v, node_model, var, lines)
-            authored_face = getattr(_model_impl(node_model), "_user_face", None)
+            authored_face = (getattr(_model_impl(node_model), "_user_face", None)
+                             if node_model is not None else None)
             user_face_frequency = None
             if authored_face is not None:
                 from pops.numerics.riemann.user import authenticated_user_face

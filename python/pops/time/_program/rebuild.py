@@ -28,9 +28,10 @@ def rebuild_program(
     transformation: str = "normalize",
 ) -> Any:
     """Clone this Program into a fresh one keeping the flat nodes for which ``keep(v)`` is true,
-    renumbering surviving ids to a contiguous 0.. range in original order. Sub-blocks are cloned
-    wholesale (never filtered). The clone reproduces the IR identity of an equivalent hand-built
-    Program (same serialization), so it is byte-identical when nothing was dropped.
+    renumbering surviving ids to a contiguous 0.. range when nodes are removed or aliased.
+    A no-drop, no-alias clone preserves the original ids, including gaps left by temporary
+    authoring regions. Sub-blocks are cloned wholesale (never filtered). A lossless clone must
+    preserve the original serialization even when the original ids are not contiguous.
 
     @p alias (optional) maps a DROPPED node id -> the kept representative node id it should be
     replaced by (the CSE / redundant-solve passes use it to rewire every use of a duplicate onto its
@@ -349,8 +350,8 @@ def rebuild_program(
         # own clone).
         for w in deps(v):
             clone(w)
-        vid = out._next_id
-        out._next_id += 1
+        vid = v.id if preserve_value_ids else out._next_id
+        out._next_id = max(out._next_id, vid + 1)
         # Reserve the owning node's region before clone_attrs recursively maps branch/sub-block
         # regions. Parent-first allocation is part of exact rebuild identity for nested branches.
         node_region = mapped_region(v.region)
@@ -380,10 +381,15 @@ def rebuild_program(
         idmap[v.id] = nv
         return nv
 
-    # Clone all surviving flat nodes (and, transitively, their sub-block ops and any later-created
-    # sub-block ops) in ascending original id, so the contiguous renumbering matches the original
-    # build order exactly -- a no-op clone is byte-for-byte identical.
+    # Temporary authoring regions can consume ids without becoming executable nodes (for
+    # example a local product encodes its placeholders as argument roles). Their gaps are part
+    # of the existing IR identity; detachment is not an optimization that may renumber it.
+    # Actual elimination/aliasing retains the existing compact numbering behavior.
     kept = sorted((v for v in self._values if keep(v)), key=lambda v: v.id)
+    preserve_value_ids = (len(kept) == len(self._values)
+                          and all(source == target for source, target in alias.items()))
+    if preserve_value_ids:
+        out._next_id = self._next_id
     for v in kept:
         clone(v)
     out._values = [idmap[v.id] for v in kept]
