@@ -115,7 +115,7 @@ def test_flat_plan_still_requires_a_matching_resolved_state_method():
     plan, _, states = _layout()
     authored = AMRTransfer()
     authored.state(states[0], StateTransfer())
-    with pytest.raises(ValueError, match="no exact resolved spatial method"):
+    with pytest.raises(ValueError, match="no exact resolved spatial or local storage authority"):
         authored.resolve(plan, (SimpleNamespace(rates=()),))
 
 
