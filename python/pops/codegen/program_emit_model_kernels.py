@@ -361,7 +361,7 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     coefficient_cpp = scalar_cpp(coefficient)
     all_inputs = tuple(by_block.values()) if all_inputs is None else tuple(all_inputs)
     lines = ["{"]
-    lines.append("int product_layout_error_ = 0;")
+    lines.append("long product_layout_error_ = 0;")
     for state in all_inputs:
         token = var[state.id]
         lines.append(
