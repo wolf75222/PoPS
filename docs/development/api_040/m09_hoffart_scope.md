@@ -1,5 +1,17 @@
 # M09 Hoffart: finite source witness and disk PDE
 
+The direct finite-support gap identified in the historical preflight below is
+now implemented and received. Native monolithic/condensed 8+4 DOF equations,
+permutations, rebound captures, singular chosen pivot and owner-only invalid
+evaluation pass ten tests in serial and on each of two MPI ranks. The
+[converged reception](finite_amr_converged_reception.md) archives the exact
+SDK396719/Dim2aed8 sources, failures and 32 actual saved states; independent
+NumPy recomputation satisfies the unchanged 1e-11 original-equation criterion.
+This resolves that finite incidence-map witness, without qualifying a global
+meshed mixed PDE or extending the separate Hoffart disk campaign.
+
+## Historical preflight before the finite-support extension
+
 This decision is fixed before a new M09 native run. The v0.4.0 corpus M09
 specifies the **finite** source witness in
 `PoPS_Codex_handoff_0.4.0/reference/PoPS_API_v0.4.0/legacy/v0.2.0/examples/coupled_native.py`:
