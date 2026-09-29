@@ -11,7 +11,8 @@ from pops.codegen.program_models import ProgramModelGraph
 from pops.mesh._amr._transfer_contracts import COARSE_FINE_FILL
 from pops.numerics import StateStorage
 from tests.python.support.affine_push_forward_amr_case import (
-    affine_amr_case, expected_level_cell_averages, mapped_particle_moments,
+    CELLS, affine_amr_case, expected_level_cell_averages, mapped_particle_moments,
+    raw_particle_moments,
 )
 
 
@@ -68,11 +69,18 @@ def test_impossible_original_residual_still_resolves_and_emits():
 
 def test_independent_particle_oracle_has_exact_amr_cell_axes():
     mapped = mapped_particle_moments()
-    for level, width in ((0, 8), (1, 16)):
+    for level in (0, 1):
+        width = CELLS * 2**level
         expected = expected_level_cell_averages(mapped, level)
         assert expected.shape == (len(mapped), width, width)
         assert expected[0, 0, 0] == pytest.approx(1.0 + .6 * .5 / width)
         assert expected[0, -1, -1] == pytest.approx(1.0 + .6 * (width - .5) / width)
+
+
+def test_authored_density_tag_selects_only_half_the_coarse_columns():
+    initial = expected_level_cell_averages(raw_particle_moments(), 0)
+    tagged_columns = tuple(value > 1.3 for value in initial[0, 0])
+    assert tagged_columns == (False,) * (CELLS // 2) + (True,) * (CELLS // 2)
 
 
 def test_transfer_does_not_reduce_a_deeper_exact_storage_halo():

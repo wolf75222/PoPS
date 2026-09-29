@@ -26,7 +26,10 @@ from pops.solvers.nonlinear import LocalNewton
 from pops.time import FailRun, FixedDt, LocalResidual
 
 
-CELLS, DT = 8, .01
+# The native patch generator rounded the former 8x8 witness to full fine
+# coverage. Sixteen coarse cells leave a real coarse/fine interface for the
+# x > 1/2 tag while retaining the same physical profile and step duration.
+CELLS, DT = 16, .01
 INDICES = tuple(index for index in itertools.product(range(3), repeat=2)
                 if sum(index) <= 2)
 PARTICLES = np.asarray(((-.4, .2), (-.1, -.3), (.25, .45), (.6, -.15)), dtype=float)

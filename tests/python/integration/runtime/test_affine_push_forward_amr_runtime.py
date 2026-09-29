@@ -82,6 +82,12 @@ def test_impossible_local_residual_rejects_without_amr_publication(
     before = _states(runtime, 2, world)
     with collective_check(world):
         boxes = tuple(runtime.patch_boxes())
+
+    def check_partial_refinement():
+        valid = level_valid_mask(runtime, 1, refinement_ratio=2)
+        assert 0 < valid.sum() < valid.size, "rollback must cover a real coarse/fine interface"
+
+    _root_check(world, check_partial_refinement)
     for _ in range(2):
         _, failures = collective_attempt(
             world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))

@@ -19,12 +19,15 @@ public body applies a fixed affine velocity map; a distinct 1.1-times seed
 solves its original residual against a captured mapped stage. The state has
 exact linear-in-x cell averages. At one and two AMR levels, the test checks
 initial and accepted moments against independently moved particles on every
-valid cell; the two-level case requires partial fine coverage. The acceptance
-limit is absolute `3e-12`, relative zero, chosen before native execution. A
+valid cell. The coarse grid has 16 cells per axis so that the half-domain
+density tag is not rounded into full fine coverage by the native patch
+generator; the two-level case requires partial fine coverage at bind. The
+acceptance limit is absolute `3e-12`, relative zero, chosen before native
+execution. A
 separate impossible first residual tests collective refusal, unchanged levels,
 patches, time and bitwise states on two attempts.
 
-Source reception: six tests in `test_local_state_storage_amr.py` pass
+Source reception: seven tests in `test_local_state_storage_amr.py` pass
 validate/resolve/Program emission, exact storage and nesting checks. The three
 installed variants are collected but have **not** been executed by this
 worktree; native compilation, MPI and rollback qualification belong to the
