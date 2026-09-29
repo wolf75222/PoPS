@@ -90,6 +90,22 @@ def test_homonymous_foreign_capture_refuses_atomically():
     assert program._ir_hash() == before
 
 
+def test_every_projection_retains_captured_field_provenance():
+    from typed_program_support import typed_field
+    from pops.time.field_context import FieldContext
+    program, _ = product_case()
+    a,b = program._values[:2]
+    context = FieldContext(typed_field(program, "phi"), ((a.block,a.id),), ("phi",))
+    captured = program._new("state", "state", (), {}, "with_field", a.block,
+        space=a.space, state_ref=a.state_ref, point=a.point, field_context=context)
+    def residual(P,z,old):
+        return {"a": (z["a"][0]-old[0],z["a"][1]-old[1]),
+                "b": tuple(z["b"][i] for i in range(3))}
+    result = program.solve(time.LocalResidual(residual, {"a":a,"b":b},
+        captures={"old":captured}), solver=LocalNewton()).consume(action=time.FailRun())
+    assert result[a.block].field_context == result[b.block].field_context == context
+
+
 @pytest.mark.parametrize("reverse", [False, True])
 def test_public_case_resolves_and_emits_detached_product(reverse):
     import pops
