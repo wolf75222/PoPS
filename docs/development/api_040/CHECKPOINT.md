@@ -21,14 +21,24 @@ standalone User AMR and six principal AMR cases, including partial refinement,
 independent flux oracle, real clock advancement and rejection rollback. This is
 single-rank evidence on the authenticated OpenMP/MPI-capable Dim2 package.
 
-The next MPI2 rank-one-owned failure injection completed without timeout but
-failed its expected-diagnostic assertion on both ranks. The package and test
-sources remained unchanged, and both ranks ran the same test. The initial test
-did not print the collected exceptions, so this receipt does not yet establish
-the cause or qualify rollback. 797b94b adds those actual exceptions to the
-failure message without changing the expected diagnostic or rollback assertions.
-Raw failure: `outputs/installed-eac92bb-rank-one-amr-mpi2/`; a new receipt is
-required rather than replacing that evidence.
+The MPI2 rank-one-owned failure injection now passes on both ranks (46.42 s),
+with unchanged installed sources/native image and exact test parity. The first
+two receipts are retained failures: their oracle incorrectly expected the
+principal RHS-group diagnostic, whereas this standalone User route rejects at
+`generated AMR flux/residual materialization failed collectively`. 797b94b
+exposed the actual exceptions; reviewed correction 90da6e8 changes only the
+expected route. The rerun reaches all checks: unchanged time/step, bitwise states
+of both blocks, and unchanged flux ledger. It is one test on two ranks, not two
+independent tests. Receipts are now copied with hashes into
+`evidence/eac92bb/`, alongside the seven installed passes and C++ reception.
+
+The three rebuilt C++ targets completed 73 rows in 59.97 s: 69 passed, two failed,
+two single-rank guards skipped. The owners-array correction now reaches the real
+three-level restart regrid. Its remaining failure is native: the second parent
+replacement invalidates an earlier pending history remap's topology generation.
+The same scenario fails in the MPI2 aggregate. Astra is implementing a versioned
+qualification record that preserves the original transfer generations; the
+checkpoint validators must stay strict. No fix or native rerun is claimed yet.
 
 The T2/C38 C++ rebuild completed and ran 193 CTest rows in 68.24 s: **187 passed,
 two failed, four single-rank guards skipped**. WENO/vector and both repaired
@@ -40,18 +50,20 @@ owners 1–2 and asserts exact array lengths, retaining all state/history checks
 a085890 records Sol's independent review. Its final native execution is pending.
 Raw evidence: `outputs/native-t2-c38-repaired{.xml,-ctest.log,-receipt.json}`.
 
-Currently rebuilding the C++ targets
-`test_generated_amr_system_block`, `test_amr_synthetic_program_loader_transaction`
-and `test_amr_history_ring`; run their labelled CTest rows/MPI variants, then
-repeat the installed rank-one-owned AMR failure test with diagnostics. Build true Dim1 with the existing
+Currently running the complete M17 canonical/permuted trajectory and M06 phase
+crossing on the installed Dim2 artifact. Production and scientific sources stay
+frozen during these receipts. Build true Dim1 with the existing
 `scripts/build_python.sh --dim 1 --mpi` only when no installed tests are active;
 the script preserves compatible Dim2 variants. M15/M17 and the other scientific
 campaigns remain pending. M07 coordinated-face implementation and its asymmetric
 non-integrable counterexample remain isolated agent work, not integrated code.
-The paired performance v1 plan is ready but unmeasured. Its separate resource
-profiling companion is integrated in d64fd26, independently reviewed in adedca0,
-with four unit checks and nine independent counter-tests. No native resource
-counts have yet been measured, and absent counters must not be reported as zero.
+The paired performance v1 stopped before measurements because its metadata
+reader called the `layout_program_paths` mapping property as a function. Its
+script and failed output `outputs/performance-t2-run/` are preserved. v1.1 is
+integrated in 6d7013a and independently reviewed in d556353: only the metadata
+access, explicit version and companion hash pin change; the case, calendar,
+thresholds and ABBA order are identical. Both timings and resource counts remain
+unmeasured. Missing counters must not be reported as zero.
 
 ## Previous reception: T2 source 3bd6ea9, native 4b458dab (historical)
 
