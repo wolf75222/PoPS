@@ -468,8 +468,8 @@ def validate_amr_authorities(plan: Any) -> None:
                 )
             coarse_fine_capabilities[subject] = selected
     for block in plan.blocks:
-        from pops.numerics.nonconservative import PathConservativeFiniteVolume
-        path_transport = any(type(row.method) is PathConservativeFiniteVolume
+        from pops.numerics.nonconservative import PathConservativeFiniteVolume, CoordinatedFiniteVolume
+        path_transport = any(type(row.method) in (PathConservativeFiniteVolume, CoordinatedFiniteVolume)
                              for row in getattr(block.numerics, "rates", ()))
         if path_transport and execution.mode != "synchronous":
             raise NotImplementedError("path-conservative AMR requires synchronous hierarchy execution")

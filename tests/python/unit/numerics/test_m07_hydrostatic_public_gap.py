@@ -1,4 +1,4 @@
-"""Actual public gap plus frozen scientific reference; no native acceptance claim."""
+"""Historical route refusals and frozen reference; no native acceptance claim."""
 import importlib.util
 from pathlib import Path
 import numpy as np
@@ -58,10 +58,23 @@ def test_two_distinct_face_contributions_and_nontrivial_off_equilibrium_response
 
 
 @pytest.mark.parametrize("order", oracle.ORDERS)
-def test_required_hydrostatic_face_output_is_not_publicly_expressible(order):
-    # This passing negative test records an OPEN EXPR gap, never a native success.
+def test_legacy_user_does_not_silently_accept_a_coordinated_face_output(order):
+    # The new CoordinatedFace contract does not reinterpret old User output.
     with pytest.raises(TypeError, match="one Expr per state component"):
         example.unavailable_hydrostatic_method(order)
+
+
+@pytest.mark.parametrize("n", oracle.RESOLUTIONS)
+@pytest.mark.parametrize("order", oracle.ORDERS)
+def test_each_native_mirror_boundary_reproduces_its_exact_equilibrium_ghost(n, order):
+    dx = 2./n
+    permutation = [oracle.ORDERS[0].index(name) for name in order]
+    initial = oracle.initial_averages(n)[permutation]
+    ghosts = oracle.equilibrium_averages([-1.-dx, -1., 1., 1.+dx])[permutation]
+    values = example.equilibrium_boundary_values(n, order=order)
+    for side, cell, ghost in ((0, 0, 0), (1, -1, -1)):
+        np.testing.assert_allclose(2*np.array(values[side])-initial[:, cell],
+                                   ghosts[:, ghost], rtol=0., atol=2.e-16)
 
 
 @pytest.mark.parametrize("order", oracle.ORDERS)

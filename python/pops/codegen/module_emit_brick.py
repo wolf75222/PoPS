@@ -515,7 +515,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, mws_drv))
         if path_conservative:
             from pops.codegen.module_emit_path import emit_path_proposal_speed
-            S += emit_path_proposal_speed()
+            S += emit_path_proposal_speed(model)
         elif model._eig:
             for ordinal, axis in enumerate(axes):
                 S.append(axis_branch(ordinal))

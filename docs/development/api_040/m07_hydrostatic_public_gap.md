@@ -1,4 +1,10 @@
-# M07: frozen lake-at-rest reception and open coordinated-face gap
+# M07: frozen lake-at-rest reception and historical coordinated-face gap
+
+The counterexample below is preserved at commit `68c6958`. The subsequent
+[coordinated-face version-one implementation](coordinated_face_v1.md) adds a
+distinct public construction and installed reception script. The old User/path
+refusals remain tested, but are no longer evidence that the new construction is
+inexpressible. No native M07 result is inferred from source implementation.
 
 Base examined: `3bd6ea9`. This delivery is a physical declaration, public API
 counterexample, and independent NumPy preflight. **No native M07 trajectory is
@@ -78,11 +84,11 @@ From the checkout, source tests (explicit source import, not installed proof):
 rtk proxy env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops-api040-c11/bin/python -m pytest -q -o pythonpath=python tests/python/unit/numerics/test_m07_hydrostatic_public_gap.py
 ```
 
-Against an installed package with this API, the plain example is the minimal
-failing authoring command; it does not invoke a compiler or runtime:
+Against the historical installed API, call the preserved minimal failing
+authoring function; it does not invoke a compiler or runtime:
 
 ```sh
-rtk proxy env -u PYTHONPATH python examples/migration/scientific/api040_m07_saint_venant.py
+rtk proxy env -u PYTHONPATH python -c 'import runpy; runpy.run_path("examples/migration/scientific/api040_m07_saint_venant.py")["unavailable_hydrostatic_method"]()'
 ```
 
 Observed receipt on 2026-09-29: source suite **10 passed in 0.44 s**. The actual
@@ -92,8 +98,8 @@ also exited 1 on this example, with the TypeError above from its
 authoring refusal in the installed package; no native dimension was selected,
 and there was no compile or simulation. The NumPy trajectories gave normalized
 errors 3.33e-17 for all three grids, with maximum face Courant .1. Their results
-do not qualify the PoPS PDE runtime. The preserved standalone example remains
-red until the missing generic contract is implemented.
+do not qualify the PoPS PDE runtime. This old authoring function remains red;
+the standalone example now uses the separately versioned public construction.
 
 Independent GPT-6 Sol review reran these 10 tests and its separately implemented
 7-test oracle suite. The two reference trajectories agree within 2.22e-16 on

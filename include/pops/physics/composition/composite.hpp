@@ -254,6 +254,17 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
   // A composite has exactly one transport brick. Keep its path authority on
   // that brick; source and elliptic members do not create a transport clone.
   static constexpr bool path_conservative = path_conservative_model<Hyperbolic>;
+  static constexpr int coordinated_face_contract_version = [] {
+    if constexpr (requires { Hyperbolic::coordinated_face_contract_version; })
+      return Hyperbolic::coordinated_face_contract_version;
+    return 0;
+  }();
+  template <int Axis>
+  POPS_HD auto coordinated_face(const State& left, const State& right) const
+    requires(coordinated_face_contract_version == 1)
+  {
+    return hyp.template coordinated_face<Axis>(left, right);
+  }
   static constexpr std::string_view path_operator_identity()
     requires(path_conservative)
   {

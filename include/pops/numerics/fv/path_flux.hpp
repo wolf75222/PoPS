@@ -95,9 +95,53 @@ struct PathRusanovFlux {
   }
 };
 
+template <class Model>
+inline constexpr bool coordinated_face_model = [] {
+  if constexpr (requires { Model::coordinated_face_contract_version; }) {
+    static_assert(Model::coordinated_face_contract_version == 0 ||
+                  Model::coordinated_face_contract_version == 1,
+                  "unsupported coordinated face interface contract");
+    return Model::coordinated_face_contract_version == 1;
+  }
+  return false;
+}();
+
+/// Version-one authored shared flux and signed incident-cell residuals.
+/// Both stored traces refer to the same positive coordinate direction. The
+/// model returns the complete tuple; no Rusanov split is applied to it.
+template <int N>
+struct CoordinatedFaceFlux {
+  template <int Axis, class Model>
+  POPS_HD PathInterfaceResult<N> evaluate_path(
+      const Model& model, const typename Model::State& left,
+      const BoundFluxProviders<Model>&, const typename Model::State& right,
+      const BoundFluxProviders<Model>&) const {
+    static_assert(coordinated_face_model<Model> && path_conservative_model<Model>);
+    static_assert(Model::n_vars == N && Axis >= 0 && Axis < Model::dimension);
+    static_assert(flux_provider_count<Model> == 0,
+                  "coordinated face v1 needs explicit realization for auxiliary traces");
+    return model.template coordinated_face<Axis>(left, right);
+  }
+};
+
+template <class Model>
+using ModelPathFlux = std::conditional_t<coordinated_face_model<Model>,
+    CoordinatedFaceFlux<Model::n_vars>, PathRusanovFlux<Model::n_vars>>;
+
 template <int Axis, int N, class Model, int Dim, class LeftStorage, class RightStorage>
 POPS_HD PathInterfaceResult<N> evaluate_path_at(
     const PathRusanovFlux<N>& numerical, const Model& model, const typename Model::State& left,
+    const LeftStorage& left_providers, const Index<Dim>& left_index,
+    const typename Model::State& right, const RightStorage& right_providers,
+    const Index<Dim>& right_index) {
+  return numerical.template evaluate_path<Axis>(
+      model, left, bind_flux_providers_at<Model>(left_providers, left_index), right,
+      bind_flux_providers_at<Model>(right_providers, right_index));
+}
+
+template <int Axis, int N, class Model, int Dim, class LeftStorage, class RightStorage>
+POPS_HD PathInterfaceResult<N> evaluate_path_at(
+    const CoordinatedFaceFlux<N>& numerical, const Model& model, const typename Model::State& left,
     const LeftStorage& left_providers, const Index<Dim>& left_index,
     const typename Model::State& right, const RightStorage& right_providers,
     const Index<Dim>& right_index) {

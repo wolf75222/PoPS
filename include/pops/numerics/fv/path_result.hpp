@@ -15,7 +15,9 @@ enum class PathStatus : unsigned char {
   IntegralFailure,
   NonFiniteResult,
   /// Floating intervals cannot prove the exact raw covariance strictly SPD.
-  IndeterminateCovariance
+  IndeterminateCovariance,
+  /// Authored coordinated-face model domain refused an input state.
+  DomainFailure
 };
 
 template <int N>

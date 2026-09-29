@@ -333,6 +333,14 @@ class Spatial:
 
             self.source_riemann = authenticated_user_face(flux)
             flux_tok = "source_face:" + self.source_riemann.options["source_identity"]
+        elif getattr(flux, "scheme", None) == "coordinated_face":
+            options = flux.options
+            if (flux.native_id != "pops::CoordinatedFaceFlux"
+                    or options.get("interface_contract") != 1
+                    or not isinstance(options.get("operator_identity"), str)
+                    or not options["operator_identity"]):
+                raise ValueError("coordinated face requires its complete resolved operator identity")
+            flux_tok = "coordinated_face:v1:" + options["operator_identity"]
         else:
             flux_tok = _lower_selector(
                 flux,
@@ -502,6 +510,10 @@ class Spatial:
                 return {"family": "riemann", "id": slot_route,
                         "source_compiled": True,
                         "requirements": list(self.riemann_capability_contract.required_capabilities)}
+            if isinstance(slot_route, str) and slot_route.startswith("coordinated_face:v1:"):
+                return {"family": "coordinated_face", "id": slot_route,
+                        "interface_contract": 1, "source_compiled": True,
+                        "publication": "atomic_shared_flux_two_sides_speed"}
             return {
                 "family": "riemann",
                 "id": "riemann.user",

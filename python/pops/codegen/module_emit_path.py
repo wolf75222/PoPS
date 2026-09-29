@@ -21,6 +21,9 @@ def emit_path_members(model, *, cse, aux_locals):
     elif kernel["kind"] == "symbolic_path":
         from .module_emit_symbolic_path import emit_symbolic_path_members
         lines += emit_symbolic_path_members(model)
+    elif kernel["kind"] == "coordinated_face":
+        from .module_emit_coordinated_face import emit_coordinated_face_members
+        lines += emit_coordinated_face_members(model)
     else:
         raise NotImplementedError("no native lowering for the declared numerical path kernel")
     lines += [
@@ -68,12 +71,18 @@ def emit_path_members(model, *, cse, aux_locals):
     return lines
 
 
-def emit_path_proposal_speed():
+def emit_path_proposal_speed(model=None):
     # The current-state speed proposes a step. The hierarchy RHS barrier separately checks
     # actual source-transformed/predictor common-face and canonical subface speeds.
     # This adapter consumes only U and the provider pack a. Do not inject named
     # scientific locals here: the path methods own those bindings, and a state
     # component named a/g/result is unrelated to these private adapter variables.
+    if model is not None and model._path_conservative["kernel"]["kind"] == "coordinated_face":
+        return [
+            "    const auto result = coordinated_face<Axis>(U, U);",
+            "    return result.succeeded() ? result.speed_bound : std::numeric_limits<pops::Real>::quiet_NaN();",
+            "  }", "",
+        ]
     return [
         "    const auto g = path_covector<Axis>(a);",
         "    const auto result = path_integral(U, U, g);",

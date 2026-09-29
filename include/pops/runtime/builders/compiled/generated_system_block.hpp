@@ -1151,12 +1151,15 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
   static_assert(PhysicalStateFor<Model, Dim>);
   if constexpr (path_conservative_model<Model>) {
-    if (request.routes.limiter != "none" || request.routes.riemann != "rusanov" ||
+    const std::string expected_face = coordinated_face_model<Model>
+        ? std::string("coordinated_face:v1:") + std::string(Model::path_operator_identity())
+        : std::string("rusanov");
+    if (request.routes.limiter != "none" || request.routes.riemann != expected_face ||
         request.routes.reconstruction != "conservative" ||
         !std::isfinite(request.routes.positivity_floor) ||
         request.routes.positivity_floor != Real(0) || Model::path_operator_identity().empty())
       throw std::invalid_argument(
-          "Uniform path transport requires exact first-order conservative PathRusanov authority");
+          "Uniform path transport requires exact first-order conservative face authority");
   } else {
     if (request.routes.limiter != "state_storage" || request.routes.riemann != "unavailable" ||
         request.routes.reconstruction != "conservative")
@@ -1240,9 +1243,9 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
   if constexpr (path_conservative_model<Model>) {
     const auto spatial = nd::prepare_cartesian_operator<
-        Dim, Model, NoSlope, PathRusanovFlux<Model::n_vars>,
+        Dim, Model, NoSlope, ModelPathFlux<Model>,
         nd::ReconstructionVariables::Conservative>(
-        geometry, model, NoSlope{}, PathRusanovFlux<Model::n_vars>{});
+        geometry, model, NoSlope{}, ModelPathFlux<Model>{});
     const auto provider_storage_owner = request.provider_storage;
     const auto provider_plan_owner = request.provider_plan;
     const auto* provider_storage = provider_storage_owner.get();

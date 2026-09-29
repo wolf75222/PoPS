@@ -7,6 +7,7 @@ from typing import Any, TYPE_CHECKING
 from pops.model import Handle
 from .spatial import FiniteVolume, _brick_data, _resolved_brick
 from .symbolic_path import SymbolicPath
+from .coordinated_face import CoordinatedFace, FaceBalance
 
 if TYPE_CHECKING:
     from pops._ir.expr import Expr
@@ -259,4 +260,56 @@ class PathConservativeFiniteVolume(FiniteVolume):
                 "nonconservative_interfaces": "canonical_fine_subface_side_contributions"}
 
 
-__all__ = ["FanLi15RawMomentPath", "SymbolicPath", "PathConservativeFiniteVolume"]
+class CoordinatedFiniteVolume(PathConservativeFiniteVolume):
+    """Complete flux/product realization with an atomic authored face tuple.
+
+    This first-order method samples the two adjacent stored cell averages.
+    It uses the existing path residual/flux-register authority, but a distinct
+    numerical interface contract, body identity and native policy.
+    """
+    category = "coordinated_finite_volume"
+
+    def __init__(self, *, face):
+        from pops.descriptors import BrickDescriptor
+        from . import reconstruction, variables
+        if type(face) is not CoordinatedFace:
+            raise TypeError("CoordinatedFiniteVolume requires an exact CoordinatedFace")
+        numerical = BrickDescriptor("coordinated_face", "generated", category="riemann",
+            native_id="pops::CoordinatedFaceFlux", scheme="coordinated_face",
+            options={"interface_contract": 1},
+            requirements={"capabilities": ("physical_flux", "provider_pack", "stability_bound")},
+            capabilities={"shared_flux_two_signed_sources": True, "atomic_publication": True})
+        FiniteVolume.__init__(self, flux=face.flux,
+            variables=variables.Conservative(face.product.state),
+            reconstruction=reconstruction.FirstOrder(), riemann=numerical)
+        self.path = face
+        self.zero_measure_faces = ()
+
+    @property
+    def face(self):
+        return self.path
+
+    def to_data(self):
+        data = super().to_data()
+        data.update(method="coordinated_finite_volume", interface_contract=1)
+        return data
+
+    def native_identity(self):
+        from pops.identity.digest import make_identity
+        from pops.identity.semantic import semantic_value
+        return make_identity("numerics.coordinated-face.v1", semantic_value({
+            "method": self.to_data(), "physical_law": self.path.product.law.to_data(),
+        }, where="complete numerical path operator")).token
+
+    def runtime_spatial(self):
+        from copy import copy
+        from pops.runtime._bricks_scheme import Spatial
+        numerical = copy(self.riemann)
+        object.__setattr__(numerical, "options", {
+            "interface_contract": 1, "operator_identity": self.native_identity()})
+        return Spatial(limiter=self.reconstruction, flux=numerical,
+                       recon=self.variables, positivity_floor=None)
+
+
+__all__ = ["FanLi15RawMomentPath", "SymbolicPath", "PathConservativeFiniteVolume",
+           "CoordinatedFace", "FaceBalance", "CoordinatedFiniteVolume"]

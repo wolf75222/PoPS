@@ -380,7 +380,7 @@ struct MaterializePathFace {
     const auto left = load_state<Model>(state, left_cell),
                right = load_state<Model>(state, right_cell);
     const auto evaluation =
-        evaluate_path_at<Axis>(PathRusanovFlux<Model::n_vars>{}, model, left, providers, left_cell,
+        evaluate_path_at<Axis>(ModelPathFlux<Model>{}, model, left, providers, left_cell,
                                right, providers, right_cell);
     if (!evaluation.succeeded()) {
       clear(face, Real(1024) + static_cast<Real>(evaluation.status));
@@ -1054,11 +1054,11 @@ class PreparedCartesianOperator {
   {
     if constexpr (!std::is_same_v<Reconstruction, NoSlope> ||
                   Variables != ReconstructionVariables::Conservative ||
-                  !std::is_same_v<NumericalFlux, PathRusanovFlux<Model::n_vars>> ||
+                  !std::is_same_v<NumericalFlux, ModelPathFlux<Model>> ||
                   DiffusiveModel<Model>)
       throw std::invalid_argument(
           "Path transport requires first-order conservative "
-          "PathRusanovFlux without diffusion");
+          "authenticated path interface policy without diffusion");
     if (!std::isfinite(positivity_floor_) || positivity_floor_ != Real(0))
       throw std::invalid_argument("Path transport does not permit a positivity floor");
     if (Model::path_operator_identity().empty())
