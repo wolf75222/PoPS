@@ -1,0 +1,23 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 13 items
+
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_flat_adaptive_transfer_keeps_exact_subjects_and_only_level_zero_initialization PASSED [  7%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_flat_bootstrap_still_requires_exact_initial_subject_coverage PASSED [ 15%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_uniform_layout_cannot_authorize_empty_amr_transfers PASSED [ 23%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_flat_layout_normalization_rejects_inconsistent_capability_evidence[level_count] PASSED [ 30%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_flat_layout_normalization_rejects_inconsistent_capability_evidence[missing_transition] PASSED [ 38%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_flat_layout_normalization_rejects_inconsistent_capability_evidence[dimension] PASSED [ 46%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_flat_explicit_layout_does_not_admit_a_foreign_physical_subject PASSED [ 53%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_flat_plan_still_requires_a_matching_resolved_state_method PASSED [ 61%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_flat_plan_rejects_incompatible_provider_dimension_and_unknown_policy PASSED [ 69%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_empty_manifest_needs_explicit_flat_layout_and_physical_authority PASSED [ 76%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_flat_layout_authority_is_immutable_and_content_authenticates_geometry PASSED [ 84%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_refined_transfer_canonical_schema_and_requirements_are_unchanged PASSED [ 92%]
+tests/python/unit/mesh/amr/test_flat_transfer_contract.py::test_public_flat_hierarchy_resolves_without_coarse_fine_authority PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-amr-flat-authority-repaired/pytest.xml -
+============================== 13 passed in 4.77s ==============================
