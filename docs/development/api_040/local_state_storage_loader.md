@@ -24,6 +24,17 @@ Its initial source run failed at `emit_cpp_brick: call set_flux(...) first`.
 After this fix the nine cases pass; together with the existing source-storage
 and joint-reconstruction-storage tests, **16/16 pass in 10.58 seconds**.
 
+Independent review found an additional genuine boundary error in `3009947`:
+multi-StateSpace lowering passes the selection as a name, whereas the new
+helper initially treated it as an object. The follow-up resolves that name
+through the exact Module registry. An object selection must be that registry's
+actual StateSpace, not a structurally equal foreign descriptor. The new
+regression reproduced `AttributeError: str.frame` before the repair. Afterward,
+complete loaders for electrons/ions/electrons in dimensions 1/2/3 preserve the
+frozen Module hash and produce widths 1/2/1; the two electron sources match
+exactly. Unknown names and foreign descriptors are rejected without publishing
+storage axes. The expanded affected suite passes **20/20 in 10.19 seconds**.
+
 ```sh
 env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops-api040-c11/bin/python -m pytest -q --tb=short -o pythonpath=python tests/python/unit/codegen/test_local_state_storage_loader.py tests/python/unit/codegen/test_source_state_storage.py tests/python/unit/codegen/test_user_joint_reconstruction_storage.py
 ```

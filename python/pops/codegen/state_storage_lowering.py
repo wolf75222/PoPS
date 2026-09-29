@@ -18,6 +18,12 @@ def prepare_local_state_storage_carrier(emitter, module, frame, *, state_space=N
         if len(states) != 1:
             return
         state_space = next(iter(states.values()))
+    elif isinstance(state_space, str):
+        if state_space not in states:
+            raise ValueError("local State storage requires an exact registered StateSpace name")
+        state_space = states[state_space]
+    elif not any(state_space is registered for registered in states.values()):
+        raise ValueError("local State storage requires the exact registered StateSpace")
     for operator in module.operator_registry():
         state_inputs = tuple(space for space in operator.signature.inputs
                              if getattr(space, "kind", None) == "state")
