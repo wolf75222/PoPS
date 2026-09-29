@@ -15,7 +15,8 @@ from pops.lib.initial import BindArray
 from pops.projection import ConservativeCellAverage
 
 
-def hall_case(*, hall=.3, dimension=1, components=("transverse_a", "transverse_b")):
+def hall_case(*, hall=.3, dimension=1, components=("transverse_a", "transverse_b"),
+              weights=(1,)):
     frame = CartesianDomain(
         "periodic", lower=(0.,) * dimension, upper=(6.283185307179586,) * dimension
     ).frame((Cartesian1D, Cartesian2D)[dimension - 1]())
@@ -26,7 +27,10 @@ def hall_case(*, hall=.3, dimension=1, components=("transverse_a", "transverse_b
         dissipative=((0., 0.), (0., 0.)),
         reversible=((0., -hall), (hall, 0.)),
     )
-    rate = model.rate("balance", equation=math.ddt(state) == math.div(flux))
+    rhs = weights[0] * math.div(flux)
+    for weight in weights[1:]:
+        rhs += weight * math.div(flux)
+    rate = model.rate("balance", equation=math.ddt(state) == rhs)
     case = pops.Case("hall_fourier")
     block = case.block("hall", model, states=(state,))
     numerics = DiscretizationPlan()
@@ -39,14 +43,14 @@ def hall_case(*, hall=.3, dimension=1, components=("transverse_a", "transverse_b
         state=block[state], value=BindArray(), projection=ConservativeCellAverage()))
     layout = Uniform(CartesianGrid(
         frame=frame, cells=(32,) * dimension, periodic=PeriodicAxes(frame.axes)))
-    return model, case, layout, flux
+    return model, case, layout, flux, rate
 
 
 def test_hall_source_has_separate_physical_parts_and_native_provider():
     from pops.codegen.module_lowering import lower_and_validate
     from pops.codegen.module_codegen import _emit_bricks
     from pops.codegen.program_codegen import emit_cpp_program
-    model, case, layout, flux = hall_case()
+    model, case, layout, flux, _ = hall_case()
     assert flux.kind == "coupled_gradient_flux"
     assert flux.law.to_data()["reversible_components"] == ((0., -.3), (.3, 0.))
     with pytest.raises(TypeError, match="exact constitutive"):
@@ -61,6 +65,34 @@ def test_hall_source_has_separate_physical_parts_and_native_provider():
     assert "DiffusiveLawResult<pops::kNativeDimension, 2, true>" in code
     assert ".stage_accepted_exchanges(" in code
     assert "program_state_ghost_depth = 2;" in _emit_bricks(emitter._m)[1]
+
+
+def test_repeated_weighted_exact_flux_keeps_rhs_sum_and_each_accepted_occurrence():
+    from pops.codegen.module_lowering import lower_and_validate
+    from pops.codegen.program_codegen import emit_cpp_program
+    model, case, layout, flux, rate = hall_case(weights=(1, 2))
+    assert tuple(row.coefficient for row in rate.occurrences) == (1, 2)
+    assert all(row.payload == flux for row in rate.occurrences)
+    resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production())
+    plan = next(iter(resolved.resolved_operations.values()))
+    code = emit_cpp_program(
+        resolved.time, model=lower_and_validate(model, resolved_operations=plan)[0])
+    scale = next(line for line in code.splitlines()
+                 if "pops::scale(diffusive_rhs_" in line)
+    assert "pops::Real(3)" in scale
+    exchanges = [line for line in code.splitlines()
+                 if ".stage_accepted_exchanges(" in line]
+    assert len(exchanges) == 2
+    assert "/occurrence:0" in exchanges[0] and exchanges[0].endswith("*pops::Real(1));")
+    assert "/occurrence:1" in exchanges[1] and exchanges[1].endswith("*pops::Real(2));")
+
+
+def test_single_positive_nonunit_weight_is_admitted_but_nonpositive_weight_is_not():
+    _, case, layout, _, _ = hall_case(weights=(.5,))
+    assert pops.resolve(pops.validate(case), layout=layout, backend=Production())
+    _, bad, _, _, _ = hall_case(weights=(-.5,))
+    with pytest.raises(Exception, match="positive uses of one exact physical flux"):
+        pops.validate(bad)
 
 
 def test_hall_zero_and_component_names_do_not_change_scientific_sign():

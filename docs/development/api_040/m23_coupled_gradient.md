@@ -34,6 +34,10 @@ stages, and transport composition remain implementation obligations, not
 restrictions on the underlying physical equation. These routes refuse before
 native publication. Every accepted face occurrence is recorded in the same
 conservative stage ledger as other spatial fluxes.
+Positive, repeated occurrences of the *same exact* flux are admitted: the
+constitutive face is prepared once, the RHS uses the sum of coefficients, and
+the accepted ledger retains one occurrence identity and temporal weight per
+use. Nonpositive or foreign-law uses are refused.
 
 For a periodic grid of spacing \(h=2\pi/N\), the native semidiscrete Fourier
 symbol is \(-4\sin^2(kh/2)/h^2\). The skew part contributes zero to the

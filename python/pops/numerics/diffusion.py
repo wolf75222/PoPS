@@ -218,8 +218,8 @@ class CoupledGradient(Diffusion):
         if not diffusion_balance_supported(view):
             raise ValueError("coupled gradient requires a retained gradient balance")
         rows = tuple(row for row in view.occurrences if row.kind == "coupled_gradient")
-        if len(rows) != 1 or rows[0].payload != self.flux or rows[0].coefficient != 1:
-            raise ValueError("coupled gradient requires one positive exact physical flux")
+        if not rows or any(row.payload != self.flux or row.coefficient <= 0 for row in rows):
+            raise ValueError("coupled gradient requires positive uses of one exact physical flux")
         if any(row.kind not in {"coupled_gradient", "source"} for row in view.occurrences):
             raise ValueError("first coupled gradient realization does not compose transport")
         return self.validate()
