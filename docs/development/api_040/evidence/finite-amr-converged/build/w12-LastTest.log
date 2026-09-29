@@ -1,0 +1,141 @@
+Start testing: Sep 29 09:51 CEST
+----------------------------------------------------------
+1206/1376 Testing: ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+1206/1376 Test: ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+Command: "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_runtime" "--gtest_filter=ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" start time: Sep 29 09:51 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (17 ms)
+[----------] 1 test from ProgramRuntime (17 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (17 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   4.07 sec
+----------------------------------------------------------
+Test Passed.
+"ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" end time: Sep 29 09:52 CEST
+"ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" time elapsed: 00:00:04
+----------------------------------------------------------
+
+1207/1376 Testing: ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+1207/1376 Test: ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+Command: "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_runtime" "--gtest_filter=ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" start time: Sep 29 09:52 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.58 sec
+----------------------------------------------------------
+Test Passed.
+"ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" end time: Sep 29 09:52 CEST
+"ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" time elapsed: 00:00:00
+----------------------------------------------------------
+
+1364/1376 Testing: test_program_runtime_np2
+1364/1376 Test: test_program_runtime_np2
+Command: "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec" "-n" "2" "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_runtime" "--gtest_output=xml:/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/test-results/gtest/test_program_runtime_np2.xml" "--gtest_filter=ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"test_program_runtime_np2" start time: Sep 29 09:52 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+Note: Google Test filter = ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+[       OK ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource[       OK ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource (13 ms)
+[ RUN      ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep
+ (13 ms)
+[ RUN      ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep
+[       OK ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep (0 ms)
+[ RUN      ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication
+[       OK ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep (0 ms)
+[ RUN      ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication
+[       OK ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication (0 ms)
+[ RUN      ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption
+[       OK ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication (0 ms)
+[ RUN      ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption
+[       OK ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption (1 ms)
+[ RUN      ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[       OK ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption (1 ms)
+[ RUN      ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[       OK ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching (0 ms)
+[ RUN      ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional
+[       OK ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching (0 ms)
+[ RUN      ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional
+[       OK ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional (0 ms)
+[ RUN      ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal
+[       OK ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional (0 ms)
+[ RUN      ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal
+[       OK ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal (2 ms)
+[ RUN      ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally
+[       OK ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal (2 ms)
+[ RUN      ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally
+[       OK ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally (5 ms)
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally (5 ms)
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (0 ms)
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (0 ms)
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (1 ms)
+[----------] 10 tests from ProgramRuntime (29 ms total)
+
+[----------] Global test environment tear-down
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (1 ms)
+[----------] 10 tests from ProgramRuntime (29 ms total)
+
+[----------] Global test environment tear-down
+[==========] 10 tests from 1 test suite ran. (29 ms total)
+[  PASSED  ] 10 tests.
+[==========] 10 tests from 1 test suite ran. (29 ms total)
+[  PASSED  ] 10 tests.
+<end of output>
+Test time =   0.62 sec
+----------------------------------------------------------
+Test Passed.
+"test_program_runtime_np2" end time: Sep 29 09:52 CEST
+"test_program_runtime_np2" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Sep 29 09:52 CEST
+
+backend =   1.24 sec*proc
+
+cpp-target:test_program_runtime =   5.89 sec*proc
+
+integration =   4.65 sec*proc
+
+medium =   5.89 sec*proc
+
+mpi =   1.24 sec*proc
+
+runtime =   4.65 sec*proc
+

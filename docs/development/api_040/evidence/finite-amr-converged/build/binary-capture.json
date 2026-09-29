@@ -1,0 +1,13 @@
+{
+  "captured_utc": "2026-09-29T07:56:18.246598+00:00",
+  "cmake_cache_sha256": "75e3a60558a1a89224f51f1756517a585f328ef5fce4eec489939a496f43d464",
+  "mtime_ns": 1790668203794107462,
+  "omitted_binary": true,
+  "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_runtime",
+  "production_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema_version": 1,
+  "scope": "Hash of actual existing CTest executable; no new build or execution.",
+  "sha256": "87c96448ae2ca84693bfbbdd86f55198e767325512ba2b9a0f5f51d7c5d916e7",
+  "size": 383415176,
+  "source_head_at_capture": "03e25b14b5c8d13f0005ff3f1f3479313edd3e64"
+}

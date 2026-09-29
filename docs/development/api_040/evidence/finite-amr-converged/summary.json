@@ -1,0 +1,80 @@
+{
+  "amr_evidence_boundary": "Assertions in exact versioned native tests and raw XML/logs, not a reopened NPZ archive.",
+  "amr_repaired_mpi_tests_per_rank": 3,
+  "amr_repaired_serial_tests": 3,
+  "amr_saved_state_archives": 0,
+  "m09_mpi_tests_per_rank": 10,
+  "m09_serial_tests": 10,
+  "native_sha256": "aed8c1582c3344bd5afb19ab784adec260bcdbd4bf944b26a29242b53889c862",
+  "npz_counts": {
+    "installed-affine-amr-interface-mpi2": 0,
+    "installed-affine-amr-interface-serial": 0,
+    "installed-finite-amr-repaired-serial": 16,
+    "installed-finite-m09-mpi2": 16
+  },
+  "retained_failures": [
+    "raw/installed-finite-amr-repaired-serial/pytest.xml",
+    "raw/native-w12-reviewed-ctest.xml"
+  ],
+  "schema_version": 1,
+  "scope": "Local CPU Kokkos/OpenMP Dim2 with MPI2; finite 8+4 M09 DOFs, AMR local affine state storage, W12 rollback fixture. No GPU/HPC/meshed M09/M14 qualification.",
+  "sdk_headers": "396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c",
+  "w12_ctest_rows": 3,
+  "w12_mpi_gtest_cases_per_rank": 10,
+  "xml_counts": {
+    "raw/installed-affine-amr-interface-mpi2/rank0.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 3
+    },
+    "raw/installed-affine-amr-interface-mpi2/rank1.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 3
+    },
+    "raw/installed-affine-amr-interface-serial/pytest.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 3
+    },
+    "raw/installed-finite-amr-repaired-serial/pytest.xml": {
+      "errors": 0,
+      "failures": 2,
+      "skipped": 0,
+      "tests": 13
+    },
+    "raw/installed-finite-amr-repaired-unit/pytest.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 21
+    },
+    "raw/installed-finite-m09-mpi2/rank0.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 10
+    },
+    "raw/installed-finite-m09-mpi2/rank1.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 10
+    },
+    "raw/native-w12-reviewed-ctest.xml": {
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "tests": 3
+    },
+    "raw/native-w12-snapshot-repaired-ctest.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 3
+    }
+  }
+}

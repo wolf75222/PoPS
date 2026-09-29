@@ -1,0 +1,41 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 10 items
+
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-False] PASSED [ 10%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-True] PASSED [ 20%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-False] PASSED [ 30%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-True] PASSED [ 40%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[False] PASSED [ 50%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[True] PASSED [ 60%]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0-False] PASSED [ 70%]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0-True] PASSED [ 80%]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0.375-False] PASSED [ 90%]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0.375-True] PASSED [100%]
+
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-False]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-True]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-False]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-True]
+  tests/python/integration/runtime/test_finite_m09_runtime.py:23: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("condensed",(False,True))
+
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[False]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[True]
+  tests/python/integration/runtime/test_finite_m09_runtime.py:63: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("condensed",(False,True))
+
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0-False]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0-True]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0.375-False]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0.375-True]
+  tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py:24: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("condensed",(False,True))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-m09-mpi2/rank0.xml -
+================= 10 passed, 10 warnings in 194.64s (0:03:14) ==================

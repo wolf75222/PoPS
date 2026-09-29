@@ -1,0 +1,88 @@
+{
+  "schema_version": 2,
+  "status": "passed",
+  "pytest_base_temps": [
+    "rank0-tmp",
+    "rank1-tmp"
+  ],
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-affine-amr-interface-mpi2",
+    "--ranks",
+    "2",
+    "--dimension",
+    "2",
+    "--test",
+    "tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 82.0808832088951,
+  "ranks": 2,
+  "threads": 1,
+  "dimension": 2,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_affine_push_forward_amr_runtime",
+          "test_public_affine_body_and_local_solve_match_particles_on_amr[1]"
+        ],
+        [
+          "tests.python.integration.runtime.test_affine_push_forward_amr_runtime",
+          "test_public_affine_body_and_local_solve_match_particles_on_amr[2]"
+        ],
+        [
+          "tests.python.integration.runtime.test_affine_push_forward_amr_runtime",
+          "test_impossible_local_residual_rejects_without_amr_publication"
+        ]
+      ],
+      "xml_sha256": "bbc39d04217b82eeb087a8132687d341692c905a185cc8a1a407730d3b3b3713",
+      "log_sha256": "effebd347902e42b7818ad6fa2d6eee3456d19906fc0928918ac67809fb24602"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_affine_push_forward_amr_runtime",
+          "test_public_affine_body_and_local_solve_match_particles_on_amr[1]"
+        ],
+        [
+          "tests.python.integration.runtime.test_affine_push_forward_amr_runtime",
+          "test_public_affine_body_and_local_solve_match_particles_on_amr[2]"
+        ],
+        [
+          "tests.python.integration.runtime.test_affine_push_forward_amr_runtime",
+          "test_impossible_local_residual_rejects_without_amr_publication"
+        ]
+      ],
+      "xml_sha256": "2c3b2cba5097808e7001d71640a8a3cea5ccb717daf232640547771dd2528533",
+      "log_sha256": "97631c1bda23f94c2702cf756e207b2b15747ac2a6060570316cc9a1ecf1db83"
+    }
+  ],
+  "native_sha256": "aed8c1582c3344bd5afb19ab784adec260bcdbd4bf944b26a29242b53889c862"
+}

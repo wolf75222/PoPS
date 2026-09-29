@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="3"
+	failures="1"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="5"
+	timestamp="2026-09-29T09:42:55"
+	>
+	<testcase name="ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" classname="ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" time="4.07075" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (17 ms)
+[----------] 1 test from ProgramRuntime (17 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (17 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" classname="ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" time="0.596379" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_program_runtime_np2" classname="test_program_runtime_np2" time="0.639631" status="fail">
+		<failure message="Failed"/>
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_program_runtime;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+Note: Google Test filter = ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+[       OK ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource (19 ms)
+[ RUN      ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep
+[       OK ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource (19 ms)
+[ RUN      ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep
+[       OK ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep (0 ms)
+[ RUN      ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication
+[       OK ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep (0 ms)
+[ RUN      ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication
+[       OK ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication (1 ms)
+[ RUN      ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption
+[       OK ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication (1 ms)
+[ RUN      ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption
+[       OK ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption (1 ms)
+[ RUN      ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[       OK ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption (1 ms)
+[ RUN      ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[       OK ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching (0 ms)
+[ RUN      ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional
+[       OK ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching (0 ms)
+[ RUN      ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional
+[       OK ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional (0 ms)
+[ RUN      ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal
+[       OK ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional (0 ms)
+[ RUN      ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal
+[       OK ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal (3 ms)
+[ RUN      ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally
+[       OK ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal (3 ms)
+[ RUN      ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally
+[       OK ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally (6 ms)
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally (6 ms)
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (0 ms)
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (0 ms)
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/runtime/test_program_runtime.cpp:2767: Failure
+Expected equality of these values:
+  sim.history_global("gas.U", 1)
+    Which is: { 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, ... }
+  child_state
+    Which is: {}
+
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/runtime/test_program_runtime.cpp:2768: Failure
+Expected equality of these values:
+  sim.program_cache_global(node)
+    Which is: { 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, 1.09, ... }
+  child_state
+    Which is: {}
+
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/runtime/test_program_runtime.cpp:2814: Failure
+Expected equality of these values:
+  sim.history_global("gas.U", 1)
+    Which is: { 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, ... }
+  retried_state
+    Which is: {}
+
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (1 ms)
+[----------] 10 tests from ProgramRuntime (37 ms total)
+
+[----------] Global test environment tear-down
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/runtime/test_program_runtime.cpp:2815: Failure
+Expected equality of these values:
+  sim.program_cache_global(node)
+    Which is: { 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, 1.165, ... }
+  retried_state
+    Which is: {}
+
+[  FAILED  ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (1 ms)
+[----------] 10 tests from ProgramRuntime (37 ms total)
+
+[----------] Global test environment tear-down
+[==========] 10 tests from 1 test suite ran. (37 ms total)
+[  PASSED  ] 10 tests.
+[==========] 10 tests from 1 test suite ran. (37 ms total)
+[  PASSED  ] 9 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+
+ 1 FAILED TEST
+</system-out>
+	</testcase>
+</testsuite>
