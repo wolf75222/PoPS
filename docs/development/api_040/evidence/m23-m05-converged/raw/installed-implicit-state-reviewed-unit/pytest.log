@@ -1,0 +1,43 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 33 items
+
+tests/python/unit/codegen/test_implicit_state_bind_inspection.py::test_composed_tensor_program_emits_and_inspects_only_exact_bind_state[explicit] PASSED [  3%]
+tests/python/unit/codegen/test_implicit_state_bind_inspection.py::test_composed_tensor_program_emits_and_inspects_only_exact_bind_state[implicit] PASSED [  6%]
+tests/python/unit/codegen/test_implicit_state_bind_inspection.py::test_anonymous_state_cannot_imitate_the_owned_spatial_iterate PASSED [  9%]
+tests/python/unit/codegen/test_local_product_readonly_capture.py::test_one_unknown_product_already_accepts_frozen_foreign_block_capture PASSED [ 12%]
+tests/python/unit/codegen/test_local_product_readonly_capture.py::test_readonly_captured_state_remains_an_exact_required_bind_input[False] PASSED [ 15%]
+tests/python/unit/codegen/test_local_product_readonly_capture.py::test_readonly_captured_state_remains_an_exact_required_bind_input[True] PASSED [ 18%]
+tests/python/unit/codegen/test_readonly_control_input_review.py::test_nested_branch_and_dt_bound_readonly_inputs_do_not_become_publications PASSED [ 21%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_hall_source_has_separate_physical_parts_and_native_provider PASSED [ 24%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_repeated_weighted_exact_flux_keeps_rhs_sum_and_each_accepted_occurrence PASSED [ 27%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_single_positive_nonunit_weight_is_admitted_but_nonpositive_weight_is_not PASSED [ 30%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_hall_zero_and_component_names_do_not_change_scientific_sign PASSED [ 33%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_physical_law_general_but_v1_realization_rejects_second_axis PASSED [ 36%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_non_skew_reversible_matrix_is_rejected[matrix0] PASSED [ 39%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_non_skew_reversible_matrix_is_rejected[matrix1] PASSED [ 42%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_three_component_coupling_is_generic_and_keeps_two_physical_parts PASSED [ 45%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_negative_symmetric_part_is_not_relabelled_reversible PASSED [ 48%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_exact_rank_one_dissipation_is_admitted_without_changing_coefficients PASSED [ 51%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_exact_negative_dissipation_modes_are_rejected[matrix0] PASSED [ 54%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_exact_negative_dissipation_modes_are_rejected[matrix1] PASSED [ 57%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_hall_oracle_distinguishes_continuous_phase_spatial_symbol_and_ssprk2_norm PASSED [ 60%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_scientific_variants_resolve_without_spd_substitution[0.3-order0] PASSED [ 63%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_scientific_variants_resolve_without_spd_substitution[0.3-order1] PASSED [ 66%]
+tests/python/unit/numerics/test_coupled_gradient_hall_source.py::test_scientific_variants_resolve_without_spd_substitution[0.0-order2] PASSED [ 69%]
+tests/python/unit/numerics/test_m23_ledger_stage_oracle.py::test_stage_oracle_is_independent_of_record_insertion_order PASSED [ 72%]
+tests/python/unit/numerics/test_m23_ledger_stage_oracle.py::test_missing_duplicate_or_unknown_stage_is_refused[contexts0] PASSED [ 75%]
+tests/python/unit/numerics/test_m23_ledger_stage_oracle.py::test_missing_duplicate_or_unknown_stage_is_refused[contexts1] PASSED [ 78%]
+tests/python/unit/numerics/test_m23_ledger_stage_oracle.py::test_missing_duplicate_or_unknown_stage_is_refused[contexts2] PASSED [ 81%]
+tests/python/unit/numerics/test_m23_ledger_stage_oracle.py::test_missing_duplicate_or_unknown_stage_is_refused[contexts3] PASSED [ 84%]
+tests/python/unit/runtime/test_finite_amr_converged_checker.py::test_archived_receipt_counts_and_failures_are_preserved PASSED [ 87%]
+tests/python/unit/runtime/test_finite_amr_converged_checker.py::test_corrupt_saved_state_is_refused PASSED [ 90%]
+tests/python/unit/runtime/test_finite_amr_converged_checker.py::test_missing_rank_receipt_is_refused PASSED [ 93%]
+tests/python/unit/runtime/test_finite_amr_converged_checker.py::test_removing_old_failure_cannot_be_hidden_by_rehashing PASSED [ 96%]
+tests/python/unit/runtime/test_finite_amr_converged_checker.py::test_unexpected_cache_binary_is_refused PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-implicit-state-reviewed-unit/pytest.xml -
+============================= 33 passed in 19.95s ==============================

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='1afb920397c7fca0d683444c8c21b3fbc908847bdd7e8906457e6dd384c44c27'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-implicit-state-reviewed-unit/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-implicit-state-reviewed-unit/pytest-tmp",
+    "tests/python/unit/codegen/test_implicit_state_bind_inspection.py",
+    "tests/python/unit/codegen/test_local_product_readonly_capture.py",
+    "tests/python/unit/codegen/test_readonly_control_input_review.py",
+    "tests/python/unit/numerics/test_coupled_gradient_hall_source.py",
+    "tests/python/unit/numerics/test_m23_ledger_stage_oracle.py",
+    "tests/python/unit/runtime/test_finite_amr_converged_checker.py"
+  ],
+  "returncode": 0,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 20.493196417111903,
+  "counts": {
+    "tests": 33,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "9300dd913ff370eb88e5028d229f4324b2facbb5fafc9aacac919c4383d97c2a",
+  "log_sha256": "b4978921fc153d113abfefde60a6f19c6b2c2b18fbe458e42f3f96d617be3acc"
+}

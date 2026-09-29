@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "status": "passed",
+  "pytest_base_temps": [
+    "rank0-tmp",
+    "rank1-tmp"
+  ],
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m05-reviewed-mpi2",
+    "--ranks",
+    "2",
+    "--dimension",
+    "1",
+    "--test",
+    "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 9.845094416989014,
+  "ranks": 2,
+  "threads": 1,
+  "dimension": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_api040_m05_periodic_shear_runtime",
+          "test_periodic_shear_three_grids_dissipation_and_accepted_ledger"
+        ]
+      ],
+      "xml_sha256": "cd166017d2ebc55f298900bcd1db56ecc5b52a075d915f3aba1e3255d7f92bf4",
+      "log_sha256": "180ddf498079c364ffc32176e36b6933de6bdb270383ee550b87919ba0d5429a"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_api040_m05_periodic_shear_runtime",
+          "test_periodic_shear_three_grids_dissipation_and_accepted_ledger"
+        ]
+      ],
+      "xml_sha256": "6479b1bfacb715a565bc8619fa0ad2fcab30594d0f9f1983cbc0c5db9631e6d6",
+      "log_sha256": "cfc7555626170dccef570125496233120905bd38a5e78a9179d9a7ce8230ea48"
+    }
+  ],
+  "native_sha256": "42436a0ccef7c5504273c9e459f4bd946652597aa6ee025bc484ac595ad7ca02"
+}

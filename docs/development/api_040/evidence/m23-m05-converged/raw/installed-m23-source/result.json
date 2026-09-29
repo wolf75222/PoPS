@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(1); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim1/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='42436a0ccef7c5504273c9e459f4bd946652597aa6ee025bc484ac595ad7ca02'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m23-source/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m23-source/pytest-tmp",
+    "tests/python/unit/numerics/test_coupled_gradient_hall_source.py",
+    "tests/python/unit/numerics/test_coupled_gradient_independent_review.py",
+    "tests/python/unit/numerics/test_hall_independent_oracle.py",
+    "tests/python/unit/codegen/test_m23_complete_program_syntax.py",
+    "tests/python/unit/codegen/test_diffusion_program.py",
+    "tests/python/unit/codegen/test_generic_diffusion.py",
+    "tests/python/unit/numerics/test_nonnegative_diagonal_diffusion.py"
+  ],
+  "returncode": 0,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 53.29575220798142,
+  "counts": {
+    "tests": 74,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "e94b9f8c32edc4d8e6241cc8177911800e6482195e6472b641440c364f94bf21",
+  "log_sha256": "4f606b5cab07fbec91ae35ac56a02c0c33819f2d42e60eeb89ae083243c5977c"
+}

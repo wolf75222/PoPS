@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='1afb920397c7fca0d683444c8c21b3fbc908847bdd7e8906457e6dd384c44c27'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-implicit-state-native-repaired/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-implicit-state-native-repaired/pytest-tmp",
+    "tests/python/integration/runtime/test_tensor_transport_composition.py",
+    "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_exchange_quadrature"
+  ],
+  "returncode": 0,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 178.68299162504263,
+  "counts": {
+    "tests": 5,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "9300dd913ff370eb88e5028d229f4324b2facbb5fafc9aacac919c4383d97c2a",
+  "log_sha256": "3b7cf0ca64348cc00cdbecc17cc5db6134cd9e9595ed17445ffab4cd97aa4e7a"
+}

@@ -1,0 +1,157 @@
+{
+  "headers": "62398f3c13c193eb48db07518735fe755e6d108821adffc37acccd8fcea290eb",
+  "native_sha256": {
+    "1": "42436a0ccef7c5504273c9e459f4bd946652597aa6ee025bc484ac595ad7ca02",
+    "2": "1afb920397c7fca0d683444c8c21b3fbc908847bdd7e8906457e6dd384c44c27"
+  },
+  "python_windows": {
+    "initial": "22ae84498d186a7d4f3e0b9bd10a0ee06377bd23",
+    "inspection_refresh": "0cd16d012b3932b64a01a43b942afc15debedd29"
+  },
+  "run_payloads": {
+    "installed-implicit-state-native-repaired": {
+      "ledger_json": 0,
+      "npz": 0,
+      "scientific_receipts": 0
+    },
+    "installed-implicit-state-reviewed-unit": {
+      "ledger_json": 0,
+      "npz": 0,
+      "scientific_receipts": 0
+    },
+    "installed-m05-periodic-shear": {
+      "ledger_json": 0,
+      "npz": 3,
+      "scientific_receipts": 1
+    },
+    "installed-m05-periodic-shear-mpi2": {
+      "ledger_json": 0,
+      "npz": 3,
+      "scientific_receipts": 1
+    },
+    "installed-m05-reviewed-mpi2": {
+      "ledger_json": 3,
+      "npz": 3,
+      "scientific_receipts": 1
+    },
+    "installed-m05-reviewed-serial": {
+      "ledger_json": 3,
+      "npz": 3,
+      "scientific_receipts": 1
+    },
+    "installed-m23-diffusion-nonregression": {
+      "ledger_json": 0,
+      "npz": 0,
+      "scientific_receipts": 0
+    },
+    "installed-m23-native-bind-repaired": {
+      "ledger_json": 2,
+      "npz": 7,
+      "scientific_receipts": 1
+    },
+    "installed-m23-native-mpi2": {
+      "ledger_json": 2,
+      "npz": 7,
+      "scientific_receipts": 1
+    },
+    "installed-m23-native-serial": {
+      "ledger_json": 0,
+      "npz": 0,
+      "scientific_receipts": 0
+    },
+    "installed-m23-source": {
+      "ledger_json": 0,
+      "npz": 0,
+      "scientific_receipts": 0
+    }
+  },
+  "schema_version": 1,
+  "scope": "Local CPU Kokkos/OpenMP: SDK62398f Dim1 M23 periodic component gradient and M05 scalar shear. Distinct Dim2 Python inspection refresh repairs the retained historical implicit failure. No full Navier-Stokes/thermal, AMR, GPU, HPC or general Hall-stability qualification.",
+  "source_members": 1089,
+  "xml_counts": {
+    "raw/installed-implicit-state-native-repaired/pytest.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 5
+    },
+    "raw/installed-implicit-state-reviewed-unit/pytest.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 33
+    },
+    "raw/installed-m05-periodic-shear-mpi2/rank0.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 1
+    },
+    "raw/installed-m05-periodic-shear-mpi2/rank1.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 1
+    },
+    "raw/installed-m05-periodic-shear/pytest.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 14
+    },
+    "raw/installed-m05-reviewed-mpi2/rank0.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 1
+    },
+    "raw/installed-m05-reviewed-mpi2/rank1.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 1
+    },
+    "raw/installed-m05-reviewed-serial/pytest.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 19
+    },
+    "raw/installed-m23-diffusion-nonregression/pytest.xml": {
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "tests": 5
+    },
+    "raw/installed-m23-native-bind-repaired/pytest.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 3
+    },
+    "raw/installed-m23-native-mpi2/rank0.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 3
+    },
+    "raw/installed-m23-native-mpi2/rank1.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 3
+    },
+    "raw/installed-m23-native-serial/pytest.xml": {
+      "errors": 0,
+      "failures": 3,
+      "skipped": 0,
+      "tests": 3
+    },
+    "raw/installed-m23-source/pytest.xml": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 74
+    }
+  }
+}

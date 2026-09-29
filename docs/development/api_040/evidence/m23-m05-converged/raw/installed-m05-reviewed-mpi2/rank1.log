@@ -1,0 +1,11 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 1 item
+
+tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py::test_periodic_shear_three_grids_dissipation_and_accepted_ledger PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m05-reviewed-mpi2/rank1.xml -
+============================== 1 passed in 9.34s ===============================

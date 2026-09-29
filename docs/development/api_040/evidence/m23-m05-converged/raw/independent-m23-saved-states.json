@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "script_sha256": "e9fb46f8568d28cabf5657742b44e0eb2dca6ea4424cbce9c813ea9ff6164a92",
+  "numpy_version": "2.5.1",
+  "serial": {
+    "hall": [
+      {
+        "path": "test_hall_fourier_signed_phase0/state_32_01_0.0.npz",
+        "sha256": "df57f3136a41dc079a293ccb5b56a1505c163d03cb0d85db6b2e0595ea3806c4",
+        "cells": 32,
+        "eta_h": 0.0,
+        "order": [
+          0,
+          1
+        ],
+        "initial_error": 0.0,
+        "discrete_error": 0.0,
+        "phase_error": 0.0,
+        "norm_error": 0.0,
+        "observed_signed_phase": 0.0,
+        "continuous_signed_phase": -0.0,
+        "continuous_phase_error": 0.0,
+        "continuous_norm_defect": 0.0
+      },
+      {
+        "path": "test_hall_fourier_signed_phase0/state_32_01_0.3.npz",
+        "sha256": "e53416371a5ee24e8a923cb41cc70f7cb567640344e75258a5d29cab05d41c2f",
+        "cells": 32,
+        "eta_h": 0.3,
+        "order": [
+          0,
+          1
+        ],
+        "initial_error": 0.0,
+        "discrete_error": 4.121872359214323e-15,
+        "phase_error": 1.4672263511113003e-16,
+        "norm_error": 3.9968028886505635e-15,
+        "observed_signed_phase": -0.23693178105901788,
+        "continuous_signed_phase": -0.24,
+        "continuous_phase_error": 0.0030682189409821387,
+        "continuous_norm_defect": 3.939140125197582e-10
+      },
+      {
+        "path": "test_hall_fourier_signed_phase0/state_32_10_0.3.npz",
+        "sha256": "b4a21bd89567995472bc8c2bee9f8d3e74588de0e256eb054f35ce7ccf6a6826",
+        "cells": 32,
+        "eta_h": 0.3,
+        "order": [
+          1,
+          0
+        ],
+        "initial_error": 0.0,
+        "discrete_error": 4.121872359214323e-15,
+        "phase_error": 1.4672263511113003e-16,
+        "norm_error": 3.9968028886505635e-15,
+        "observed_signed_phase": -0.23693178105901788,
+        "continuous_signed_phase": -0.24,
+        "continuous_phase_error": 0.0030682189409821387,
+        "continuous_norm_defect": 3.939140125197582e-10
+      },
+      {
+        "path": "test_hall_fourier_signed_phase0/state_64_01_0.3.npz",
+        "sha256": "a5a9ff7f59fe3cc6f4ad35a24ae6eb11b1a481fa41fe6ccbcc1797ad0aad1efd",
+        "cells": 64,
+        "eta_h": 0.3,
+        "order": [
+          0,
+          1
+        ],
+        "initial_error": 0.0,
+        "discrete_error": 3.2695373000351828e-15,
+        "phase_error": 1.7806573930340913e-16,
+        "norm_error": 2.6645352591003757e-15,
+        "observed_signed_phase": -0.23923015555969804,
+        "continuous_signed_phase": -0.24,
+        "continuous_phase_error": 0.0007698444403019874,
+        "continuous_norm_defect": 4.0942293999535195e-10
+      },
+      {
+        "path": "test_hall_fourier_signed_phase0/state_64_10_0.3.npz",
+        "sha256": "659911fce78ccb4bb477c97fab1760359e067707aa44f43661b8353d659e3c99",
+        "cells": 64,
+        "eta_h": 0.3,
+        "order": [
+          1,
+          0
+        ],
+        "initial_error": 0.0,
+        "discrete_error": 3.2695373000351828e-15,
+        "phase_error": 1.7806573930340913e-16,
+        "norm_error": 2.6645352591003757e-15,
+        "observed_signed_phase": -0.23923015555969804,
+        "continuous_signed_phase": -0.24,
+        "continuous_phase_error": 0.0007698444403019874,
+        "continuous_norm_defect": 4.0942293999535195e-10
+      }
+    ],
+    "matrix": [
+      {
+        "path": "test_matrix_flux_occurrences_a0/accepted_matrix.npz",
+        "sha256": "ecd092de225e84100fb0686ca98d260960b2f48d98eb1063cd3dbe7693f9a678",
+        "ledger_sha256": "37896e9c3e283acdb3c363fea5156f001b4e6b0cbe1f5ee4f7e3683b60c340c7",
+        "records": 384,
+        "state_error": 2.220446049250313e-16,
+        "flux_error": 2.3092638912203256e-14,
+        "ledger_update_error": 1.2734293329021151e-17,
+        "saved_ledger_error": 0.0
+      },
+      {
+        "path": "test_matrix_flux_occurrences_a1/accepted_matrix.npz",
+        "sha256": "083cb3fc26fbef2fed888d3d56643a6b51f3179b3e7ddd5d72075311f0fd01c7",
+        "ledger_sha256": "9ca8d17ce4b1983143c5633f52fab711c61ce5836f1195f77bd0710b37a7fc61",
+        "records": 384,
+        "state_error": 2.220446049250313e-16,
+        "flux_error": 1.4210854715202004e-14,
+        "ledger_update_error": 1.2751233987966237e-17,
+        "saved_ledger_error": 0.0
+      }
+    ]
+  },
+  "mpi2": {
+    "hall": [
+      {
+        "path": "test_hall_fourier_signed_phase0/state_32_01_0.0.npz",
+        "sha256": "df57f3136a41dc079a293ccb5b56a1505c163d03cb0d85db6b2e0595ea3806c4",
+        "cells": 32,
+        "eta_h": 0.0,
+        "order": [
+          0,
+          1
+        ],
+        "initial_error": 0.0,
+        "discrete_error": 0.0,
+        "phase_error": 0.0,
+        "norm_error": 0.0,
+        "observed_signed_phase": 0.0,
+        "continuous_signed_phase": -0.0,
+        "continuous_phase_error": 0.0,
+        "continuous_norm_defect": 0.0
+      },
+      {
+        "path": "test_hall_fourier_signed_phase0/state_32_01_0.3.npz",
+        "sha256": "e53416371a5ee24e8a923cb41cc70f7cb567640344e75258a5d29cab05d41c2f",
+        "cells": 32,
+        "eta_h": 0.3,
+        "order": [
+          0,
+          1
+        ],
+        "initial_error": 0.0,
+        "discrete_error": 4.121872359214323e-15,
+        "phase_error": 1.4672263511113003e-16,
+        "norm_error": 3.9968028886505635e-15,
+        "observed_signed_phase": -0.23693178105901788,
+        "continuous_signed_phase": -0.24,
+        "continuous_phase_error": 0.0030682189409821387,
+        "continuous_norm_defect": 3.939140125197582e-10
+      },
+      {
+        "path": "test_hall_fourier_signed_phase0/state_32_10_0.3.npz",
+        "sha256": "b4a21bd89567995472bc8c2bee9f8d3e74588de0e256eb054f35ce7ccf6a6826",
+        "cells": 32,
+        "eta_h": 0.3,
+        "order": [
+          1,
+          0
+        ],
+        "initial_error": 0.0,
+        "discrete_error": 4.121872359214323e-15,
+        "phase_error": 1.4672263511113003e-16,
+        "norm_error": 3.9968028886505635e-15,
+        "observed_signed_phase": -0.23693178105901788,
+        "continuous_signed_phase": -0.24,
+        "continuous_phase_error": 0.0030682189409821387,
+        "continuous_norm_defect": 3.939140125197582e-10
+      },
+      {
+        "path": "test_hall_fourier_signed_phase0/state_64_01_0.3.npz",
+        "sha256": "a5a9ff7f59fe3cc6f4ad35a24ae6eb11b1a481fa41fe6ccbcc1797ad0aad1efd",
+        "cells": 64,
+        "eta_h": 0.3,
+        "order": [
+          0,
+          1
+        ],
+        "initial_error": 0.0,
+        "discrete_error": 3.2695373000351828e-15,
+        "phase_error": 1.7806573930340913e-16,
+        "norm_error": 2.6645352591003757e-15,
+        "observed_signed_phase": -0.23923015555969804,
+        "continuous_signed_phase": -0.24,
+        "continuous_phase_error": 0.0007698444403019874,
+        "continuous_norm_defect": 4.0942293999535195e-10
+      },
+      {
+        "path": "test_hall_fourier_signed_phase0/state_64_10_0.3.npz",
+        "sha256": "659911fce78ccb4bb477c97fab1760359e067707aa44f43661b8353d659e3c99",
+        "cells": 64,
+        "eta_h": 0.3,
+        "order": [
+          1,
+          0
+        ],
+        "initial_error": 0.0,
+        "discrete_error": 3.2695373000351828e-15,
+        "phase_error": 1.7806573930340913e-16,
+        "norm_error": 2.6645352591003757e-15,
+        "observed_signed_phase": -0.23923015555969804,
+        "continuous_signed_phase": -0.24,
+        "continuous_phase_error": 0.0007698444403019874,
+        "continuous_norm_defect": 4.0942293999535195e-10
+      }
+    ],
+    "matrix": [
+      {
+        "path": "test_matrix_flux_occurrences_a0/accepted_matrix.npz",
+        "sha256": "ecd092de225e84100fb0686ca98d260960b2f48d98eb1063cd3dbe7693f9a678",
+        "ledger_sha256": "37896e9c3e283acdb3c363fea5156f001b4e6b0cbe1f5ee4f7e3683b60c340c7",
+        "records": 384,
+        "state_error": 2.220446049250313e-16,
+        "flux_error": 2.3092638912203256e-14,
+        "ledger_update_error": 1.2734293329021151e-17,
+        "saved_ledger_error": 0.0
+      },
+      {
+        "path": "test_matrix_flux_occurrences_a1/accepted_matrix.npz",
+        "sha256": "083cb3fc26fbef2fed888d3d56643a6b51f3179b3e7ddd5d72075311f0fd01c7",
+        "ledger_sha256": "9ca8d17ce4b1983143c5633f52fab711c61ce5836f1195f77bd0710b37a7fc61",
+        "records": 384,
+        "state_error": 2.220446049250313e-16,
+        "flux_error": 1.4210854715202004e-14,
+        "ledger_update_error": 1.2751233987966237e-17,
+        "saved_ledger_error": 0.0
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 5 items
+
+tests/python/integration/runtime/test_tensor_transport_composition.py::test_separate_transport_tensor_update_and_signed_ledgers[explicit] PASSED [ 20%]
+tests/python/integration/runtime/test_tensor_transport_composition.py::test_separate_transport_tensor_update_and_signed_ledgers[implicit] PASSED [ 40%]
+tests/python/integration/runtime/test_tensor_transport_composition.py::test_independent_bounds_do_not_admit_a_sum_exceeding_the_combined_bound PASSED [ 60%]
+tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_exchange_quadrature[euler] PASSED [ 80%]
+tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_exchange_quadrature[ssprk2] PASSED [100%]
+
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_tensor_transport_composition.py::test_separate_transport_tensor_update_and_signed_ledgers[explicit]
+tests/python/integration/runtime/test_tensor_transport_composition.py::test_separate_transport_tensor_update_and_signed_ledgers[implicit]
+  tests/python/integration/runtime/test_tensor_transport_composition.py:138: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("implicit", (False, True), ids=("explicit", "implicit"))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-implicit-state-native-repaired/pytest.xml -
+================== 5 passed, 2 warnings in 178.17s (0:02:58) ===================

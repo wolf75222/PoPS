@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="3" time="37.691" timestamp="2026-09-29T10:03:16.502493+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_m23_hall_fourier_runtime" name="test_hall_fourier_signed_phase_norm_permutations_and_zero_limit" time="11.973"><failure message="RuntimeError: bind: ValueError: InitialConditionPlan is the single layout initialization authority; initial_state cannot duplicate it">tests/python/integration/runtime/test_m23_hall_fourier_runtime.py:18: in test_hall_fourier_signed_phase_norm_permutations_and_zero_limit
+    records = witness.run_and_archive(tmp_path)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+examples/migration/scientific/api040_m23_hall_fourier.py:140: in run_and_archive
+    simulation = _collective_call(world, "bind", lambda artifact=artifact,
+examples/migration/scientific/api040_m23_hall_fourier.py:102: in _collective_call
+    raise RuntimeError("; ".join(row.decode() for row in failures if row))
+E   RuntimeError: bind: ValueError: InitialConditionPlan is the single layout initialization authority; initial_state cannot duplicate it</failure></testcase><testcase classname="tests.python.integration.runtime.test_coupled_gradient_exchange_runtime" name="test_matrix_flux_occurrences_and_rollback[order0]" time="12.498"><failure message="AssertionError: (('ValueError', 'InitialConditionPlan is the single layout initialization authority; initial_state cannot duplicate it', False),)">tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py:89: in test_matrix_flux_occurrences_and_rollback
+    runtime = bind(initial)
+              ^^^^^^^^^^^^^
+tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py:84: in bind
+    return collective_call(world, lambda: pops.bind(artifact,
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('ValueError', 'InitialConditionPlan is the single layout initialization authority; initial_state cannot duplicate it', False),)</failure></testcase><testcase classname="tests.python.integration.runtime.test_coupled_gradient_exchange_runtime" name="test_matrix_flux_occurrences_and_rollback[order1]" time="12.737"><failure message="AssertionError: (('ValueError', 'InitialConditionPlan is the single layout initialization authority; initial_state cannot duplicate it', False),)">tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py:89: in test_matrix_flux_occurrences_and_rollback
+    runtime = bind(initial)
+              ^^^^^^^^^^^^^
+tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py:84: in bind
+    return collective_call(world, lambda: pops.bind(artifact,
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('ValueError', 'InitialConditionPlan is the single layout initialization authority; initial_state cannot duplicate it', False),)</failure></testcase></testsuite></testsuites>
