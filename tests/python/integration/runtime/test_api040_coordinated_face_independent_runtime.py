@@ -38,5 +38,6 @@ def test_native_asymmetric_face_matches_independent_oracle_and_preserves_transve
     assert report.accepted_steps == steps
     actual = np.asarray(runtime.state_global("transport")).reshape(initial.shape)
     np.testing.assert_allclose(actual, expected, rtol=0., atol=4.e-13)
-    np.testing.assert_allclose(actual, actual[:, :1, :], rtol=0., atol=4.e-13)
+    np.testing.assert_allclose(actual,
+        np.broadcast_to(actual[:, :1, :], actual.shape), rtol=0., atol=4.e-13)
     assert np.max(np.abs(actual-initial)) > 1.e-5
