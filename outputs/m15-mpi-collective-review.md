@@ -31,7 +31,12 @@ pair of flux/full callbacks. The core then uses the existing
 face-materialization boundary. Blocks without these callbacks retain their
 unprepared route inside a per-block collective error boundary. The new installed
 MPI regression separates bind and step, requires the genuine native face
-rejection on every rank, and checks no state or clock publication.
+rejection on every rank, and checks no state or clock publication. The public
+`CartesianGrid.native_spatial_data()` declares one base box; the regression
+also reads `RuntimeInstance.local_boxes()` on every rank and verifies that the
+single `[0,8)` box has exactly one owner. Local clock observations are gathered
+before any collective state read, so a rank-local rollback failure cannot
+strand its peer in `state_global()` through a test assertion.
 
 Current verification: source-only Python syntax and `git diff --check` pass.
 The regression is intentionally unqualified until root rebuilds the native

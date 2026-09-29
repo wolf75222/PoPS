@@ -1,5 +1,6 @@
 """Owner-only M15 face refusal must converge before the Python attempt envelope."""
 import os
+import json
 
 import numpy as np
 import pops
@@ -8,6 +9,14 @@ import pytest
 from tests.python.unit.moments.test_m15_axial_reception import _load, oracle
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
+
+
+def _gather_local(world, callback):
+    try:
+        row = {"ok": True, "value": callback()}
+    except Exception as error:
+        row = {"ok": False, "error": type(error).__name__ + ": " + str(error)}
+    return tuple(json.loads(data) for data in world.allgather_bytes(json.dumps(row).encode()))
 
 
 def test_periodic_generated_face_refusal_is_collective_before_retry_envelope(
@@ -40,6 +49,12 @@ def test_periodic_generated_face_refusal_is_collective_before_retry_envelope(
     bind_reasons = world.allgather_bytes(bind_reason.encode())
     assert not any(bind_reasons), bind_reasons
     assert runtime is not None
+    # This Uniform fixture owns exactly one box; the other MPI rank has no local
+    # face to reject. Record the actual native distribution rather than inferring it.
+    ownership = _gather_local(world, lambda: runtime.local_boxes("moments"))
+    assert all(row["ok"] for row in ownership), ownership
+    boxes = [box for row in ownership for box in row["value"]]
+    assert boxes == [[[0], [8]]], ownership
 
     try:
         pops.run(runtime, t_end=1 / 800, max_steps=1, console=False)
@@ -49,7 +64,8 @@ def test_periodic_generated_face_refusal_is_collective_before_retry_envelope(
     step_reasons = world.allgather_bytes(step_reason.encode())
     assert all(b"prepared ND hyperbolic face evaluation refused publication status=1" in row
                for row in step_reasons), step_reasons
-    assert runtime.time() == 0 and runtime.macro_step() == 0
+    clocks = _gather_local(world, lambda: [float(runtime.time()), int(runtime.macro_step())])
+    assert all(row == {"ok": True, "value": [0.0, 0]} for row in clocks), clocks
     gathered = np.asarray(runtime.state_global("moments"))
     if world.rank == 0:
         np.testing.assert_array_equal(gathered.reshape(initial.shape), initial)
