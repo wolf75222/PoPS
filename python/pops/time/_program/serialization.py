@@ -147,7 +147,8 @@ class _ProgramSerialization(_ProgramBase):
                 ref = attrs.get(key)
                 attrs[key] = (_affine_ids(ref) if isinstance(ref, _Affine)
                               else (ref.id if isinstance(ref, ProgramValue) else None))
-        elif value.op in ("solve_local_nonlinear", "solve_spatial_nonlinear"):
+        elif value.op in ("solve_local_nonlinear", "solve_spatial_nonlinear") or (
+                value.op == "solve_coupled_implicit" and "residual_block" in attrs):
             attrs["residual_block"] = [
                 _ProgramSerialization._serialize_node(
                     node, include_provenance=include_provenance) for node in attrs["residual_block"]]

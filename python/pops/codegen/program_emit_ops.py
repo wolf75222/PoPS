@@ -657,11 +657,29 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         prototype = var[by_block[prototype_block].id]
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 11, 0);"
                      % (status, int(v.id), prototype))
+        environment, fab_setup = None, []
+        if product and v.attrs["product_version"] == 2:
+            from .program_emit_local_product import product_operator_environments
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            environment, fab_setup, preparations = product_operator_environments(
+                v, model, provider_plans, block_idx, var)
+            for operation, qid, physical_block, origin in preparations:
+                stage = evaluation_stage_fraction(operation,
+                    ark_partition="explicit" if operation.op == "source" else None)
+                lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+                lines.append("{")
+                _append_local_auxiliary_preparation(
+                    program, v, lines, provider_plans=provider_plans, consumer_qid=qid,
+                    block=physical_block, state=origin, label="local_product_%d" % operation.id)
+                lines.append("}")
+            stage = evaluation_stage_fraction(v, ark_partition="implicit")
+            lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
         lines += _emit_solve_coupled_implicit_kernel(
             components, by_block, var, scratch, status,
             controls=v.attrs, coefficient=v.attrs.get("coefficient", 1),
-            original_residual=product_residual_lines(v, var) if product else None,
-            all_inputs=v.inputs)
+            original_residual=product_residual_lines(v, var, environment) if product else None,
+            all_inputs=tuple(item for item in v.inputs if item.vtype == "state"),
+            fab_setup=fab_setup)
         report = "ci_report_%d" % v.id
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(

@@ -334,7 +334,7 @@ def _prepared_local_control_lines(attrs: Any, *, indent: str = "    ") -> list[s
 def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any,
                                         scratch: Any, status: str, *, controls: Any,
                                         coefficient: Any, original_residual=None,
-                                        all_inputs=None) -> list:
+                                        all_inputs=None, fab_setup=()) -> list:
     """Emit one fail-closed prepared nonlinear solve over a coupled ``RateBundle``.
 
     Every output block is an unknown; additional signed inputs are frozen catalysts.  Results land
@@ -391,6 +391,7 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
                 "  const pops::FieldView<const pops::Real, pops::kNativeDimension> %sA = "
                 "std::as_const(%s).fab(li).view();" % (token, token)
             )
+    lines.extend(fab_setup)
     lines.append(
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
         "const pops::CellIndex<pops::kNativeDimension>& index) {" % driver
@@ -693,25 +694,43 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
     # stack Ueval; the guess is the frozen Gval; source / apply lower to Exprs over the cons names.
     comps = {iterate_id: ["Ueval[%d]" % c for c in range(n)],
              guess_id: ["Gval[%d]" % c for c in range(n)]}
+    for w in block:
+        if w.op == "state" and "capture_index" in w.attrs:
+            slot = w.attrs["capture_index"]
+            if type(slot) is not int or not 0 <= slot < len(v.inputs) - 1:
+                raise ValueError("local residual capture index is not authenticated")
+            comps[w.id] = ["Cval%d[%d]" % (slot, c) for c in range(n)]
+    lines, comps = _emit_local_residual_nodes(block, comps, n, lambda w: (impl, []))
+    result = comps[v.attrs["residual"].id]
+    lines.extend("rout[%d] = %s;" % (c, result[c]) for c in range(n))
+    return lines
+
+
+def _emit_local_residual_nodes(block, initial_components, residual_width, physical_environment):
+    """Shared scalar/product walk: exact arguments, checked local physics, no field solve."""
+    from pops.time.expressions import component_names
+    comps = dict(initial_components)
     lines = []
     for w in block:
-        if w.op == "state":
-            if "capture_index" in w.attrs:
-                slot = w.attrs["capture_index"]
-                if type(slot) is not int or not 0 <= slot < len(v.inputs) - 1:
-                    raise ValueError("local residual capture index is not authenticated")
-                comps[w.id] = ["Cval%d[%d]" % (slot, c) for c in range(n)]
-            elif w.id not in comps:
-                raise ValueError("local residual contains an unbound State placeholder")
+        if w.id in comps:
             continue
+        if w.op == "linear_source":
+            continue  # immutable operator descriptor, consumed by typed apply
+        if w.op in ("state", "input_fields"):
+            raise ValueError("local residual contains an unbound argument")
+        n = len(component_names(w))
         if w.op in ("source", "apply"):
+            impl, setup = physical_environment(w)
             exprs = _residual_term_exprs(impl, w)
+            if len(exprs) != n:
+                raise ValueError("local residual operator output Space changed")
             # Bind the actual argument of every call, including frozen captures and
             # earlier derived values. Using Ueval unconditionally changes the equation.
             source = comps[w.inputs[0].id]
             target = "residual_value_%d" % w.id
             lines.append("pops::Real %s[%d];" % (target, n))
             lines.append("{")
+            lines.extend(setup)
             # Use the same checked evaluation policy as Program expressions. A
             # final finite residual alone cannot detect sqrt(-u) hidden by fmin.
             # Bind leaves, too: otherwise a non-finite captured argument could
@@ -726,7 +745,7 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
             invalid = " || ".join("!Kokkos::isfinite(%s)" % name
                                    for name in dict.fromkeys([*observed, *rendered])) or "false"
             lines.append("  if (%s) {" % invalid)
-            for c in range(n):
+            for c in range(residual_width):
                 lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
             lines.extend(["    return;", "  }"])
             for c, expression in enumerate(rendered):
@@ -741,7 +760,7 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
             lines.extend(["pops::Real %s[%d];" % (target, n), "{"])
             lines.extend("  " + line for line in temporaries)
             lines.append("  if (%s) {" % invalid)
-            for c in range(n):
+            for c in range(residual_width):
                 lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
             lines.extend(["    return;", "  }"])
             lines.extend("  %s[%d] = %s;" % (target, c, expression)
@@ -767,10 +786,7 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
         else:  # builder guards _RESIDUAL_LOCAL_OPS; this is belt-and-suspenders
             raise NotImplementedError(
                 "emit_cpp_program: residual op '%s' is not lowerable in a local Newton kernel" % w.op)
-    result = comps[v.attrs["residual"].id]
-    for c in range(n):
-        lines.append("rout[%d] = %s;" % (c, result[c]))
-    return lines
+    return lines, comps
 
 
 def _emit_solve_local_nonlinear_kernel(

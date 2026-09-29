@@ -66,8 +66,11 @@ class LocalResidual:
     A named mapping of State seeds forms a co-located local unknown product.
     Its body receives an immutable mapping of unknowns and returns the same keys
     with one component-expression tuple per State. The consumed result is indexed
-    by the exact BlockHandles. Product bodies currently require direct expressions;
-    Program source/apply nodes remain supported by the single-State form only.
+    by the exact BlockHandles. Product bodies support component expressions and
+    local Program source/apply calls on their exact arguments. Captured fields
+    retain their frozen State provenance; they do not become field solves at the
+    Newton candidate. Candidate-dependent auxiliary provider evaluation requires
+    a separate local realization and is rejected by code generation.
     """
 
     residual: Any

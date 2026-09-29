@@ -627,6 +627,10 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
         if v.attrs.get("problem_kind") == "local_residual_product":
             from .program_emit_local_product import product_components
             product_components(v)
+            arguments = set(v.attrs.get("product_argument_positions", ()))
+            for index, node in enumerate(v.attrs.get("residual_block", ())):
+                if index not in arguments:
+                    _check_op_lowerable(program, node, model, field_plans)
             return
         # A coupled_rate (collisions / ionization, Spec 3 criterion 27) lowers to ONE multi-state
         # for_each_cell kernel (see _emit_coupled_rate_kernel). The lowering reaches the operator
