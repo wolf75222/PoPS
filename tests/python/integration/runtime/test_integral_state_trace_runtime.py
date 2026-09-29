@@ -22,6 +22,7 @@ from pops.numerics.spatial import FiniteVolume
 from pops.projection import ConservativeCellAverage
 from pops.time import FixedDt
 from tests.python.support.collective_checks import collective_call, collective_check
+from tests.python.support.integral_state_receipts import collective_directory, save_public_snapshot
 from tests.python.support.native_execution_context import artifact_execution_context
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
@@ -103,7 +104,7 @@ def _case(kind):
 
 @pytest.mark.parametrize("kind", ("uniform", "amr1", "amr2"))
 def test_native_accepted_face_amount_and_initial_read(
-        isolated_native_cache, native_cxx, kokkos_root, kind):
+        isolated_native_cache, native_cxx, kokkos_root, tmp_path, record_property, kind):
     world = _world()
     case, layout, quantity = collective_call(world, lambda: _case(kind))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
@@ -137,8 +138,17 @@ def test_native_accepted_face_amount_and_initial_read(
             assert runtime.n_levels() == 2
             assert coarse.any() and (~coarse).any()
             assert not coarse[:, -1].any(), "the physical right face must be fine-owned"
+    directory = collective_directory(world, tmp_path)
+    save_public_snapshot(world, runtime, artifact, quantity, directory, "initial", amr=kind != "uniform")
+    if kind == "amr2":
+        with collective_check(world):
+            if world is None or int(world.rank) == 0:
+                np.savez(directory / "composite-ownership.npz", coarse_active=coarse)
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
+    save_public_snapshot(world, runtime, artifact, quantity, directory, "accepted", amr=kind != "uniform")
     with collective_check(world):
         assert abs(runtime.integral_state(quantity) - (.7 + right_value * DT)) < 2e-13
         assert runtime.macro_step() == 1
         assert abs(runtime.time() - DT) < 2e-15
+    record_property("integral_receipts", str(directory))
+    record_property("artifact_identity", artifact.artifact_identity.token)
