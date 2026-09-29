@@ -69,11 +69,12 @@ def build_case(cells: int):
     program = ForwardEuler(block[state], rate=rate)
     program.step_strategy(FixedDt(step))
     case.program(program)
+    subject = block[state]
     case.initials.add(InitialCondition(
-        state=block[state], value=BindArray(), projection=ConservativeCellAverage()))
+        state=subject, value=BindArray(), projection=ConservativeCellAverage()))
     layout = Uniform(CartesianGrid(
         frame=frame, cells=(cells,), periodic=PeriodicAxes(frame.axes)))
-    return case, layout
+    return case, layout, subject
 
 
 def _collective_call(world, label, operation):
@@ -200,7 +201,7 @@ def run_and_archive(destination: Path) -> list[dict]:
         initial = np.ascontiguousarray(initial_means(cells)[None, :])
         if np.max(np.abs(initial[0] - integrated_initial_means(cells))) > 2e-14:
             raise AssertionError("M05 requires true cell means, not center samples")
-        case, layout = build_case(cells)
+        case, layout, subject = build_case(cells)
         resolved = pops.resolve(pops.validate(case), layout=layout)
         from pops.codegen._native_mpi import native_mpi_communicator
         if native_mpi_communicator(native) == "MPI_COMM_WORLD":
@@ -220,8 +221,8 @@ def run_and_archive(destination: Path) -> list[dict]:
         execution = pops.ExecutionContext.mpi_world(artifact)
         world = execution.communicator.handle
         simulation = _collective_call(world, "bind", lambda artifact=artifact,
-                initial=initial, execution=execution: pops.bind(
-                    artifact, initial_state={"shear": initial},
+                initial=initial, subject=subject, execution=execution: pops.bind(
+                    artifact, initial_values={subject: initial},
                     resources={"execution_context": execution}))
         bound_global = _collective_call(
             world, "initial gather", lambda simulation=simulation:

@@ -45,7 +45,9 @@ incidences per cell, one physical occurrence and one evaluation context,
 with each oriented face flux independently checked against
 \(\nu N(u_{i+1}-u_i)\). The sum of integrated face amounts must equal each
 saved cell change times its width, and its global sum must vanish. All MPI
-ranks participate in bind/run/gather/status; only rank zero writes NPZ and
+ranks participate in bind/run/gather/status; `BindArray` is supplied through
+`initial_values` keyed by the exact block-qualified subject (no parallel
+legacy `initial_state` authority). Only rank zero writes NPZ and
 receipt, then broadcasts the verdict. Package prefix, native file hash,
 artifact identity/ABI, execution context and each NPZ hash enter the receipt.
 

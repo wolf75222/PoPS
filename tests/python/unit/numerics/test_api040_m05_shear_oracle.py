@@ -66,13 +66,15 @@ def test_public_case_selects_true_diffusion_provider_and_accepted_faces():
     from pops.codegen.program_codegen import emit_cpp_program
     from api040_m05_periodic_shear import build_case
 
-    case, layout = build_case(32)
-    resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production())
+    case, layout, subject = build_case(32)
+    validated = pops.validate(case)
+    resolved = pops.resolve(validated, layout=layout, backend=Production())
     model = case._block_registry.spec("shear")["model"]
     plan = next(iter(resolved.resolved_operations.values()))
     code = emit_cpp_program(
         resolved.time, model=lower_and_validate(model, resolved_operations=plan)[0])
     assert resolved.resolved_dimension == 1
+    assert resolved.initial_condition_plan.bindings[0].subject == validated.resolve(subject)
     assert "PreparedDiffusion<pops::kNativeDimension>" in code
     assert code.count(".stage_accepted_exchanges(") == 1
     assert "PreparedCoupledGradient" not in code
