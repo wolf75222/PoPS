@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-m",
+    "pytest",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-t2-uniform-w02/pytest.xml",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_two_block_captures_and_rebind_match_independent_fv_oracle[2-uniform]",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_two_block_captures_and_rebind_match_independent_fv_oracle[5-uniform]",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_inactive_singularity_succeeds_and_active_failure_rolls_back[uniform-reconstruction]",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_inactive_singularity_succeeds_and_active_failure_rolls_back[uniform-body]",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_inactive_singularity_succeeds_and_active_failure_rolls_back[uniform-bound]",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_authored_dissipation_bound_rejects_unsafe_pulse_and_accepts_safe_step[uniform]",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_independent_pulse_oracle_exposes_the_physical_only_bound_error",
+    "tests/python/integration/runtime/test_api040_m04_combined_bound_runtime.py"
+  ],
+  "returncode": 0,
+  "duration_seconds": 238.0400669160299,
+  "counts": {
+    "tests": 9,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "81c7a47b3f7aae64882087585d183252008bd7000b3f1212954dce21d2d5eff0",
+  "log_sha256": "7aaefe20a5310ea87562fbc94a73b8a96337c90eebfc3557c4b20b6ed747fd5f"
+}

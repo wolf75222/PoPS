@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "status": "failed",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-t2-uniform-w02-mpi2",
+    "--ranks",
+    "2",
+    "--test",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_two_block_captures_and_rebind_match_independent_fv_oracle[5-uniform]",
+    "--test",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_inactive_singularity_succeeds_and_active_failure_rolls_back[uniform-body]",
+    "--test",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_authored_dissipation_bound_rejects_unsafe_pulse_and_accepts_safe_step[uniform]",
+    "--test",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_rank_one_owned_invalid_cell_rejects_collectively_without_publication",
+    "--test",
+    "tests/python/integration/runtime/test_api040_m04_combined_bound_runtime.py"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 128.20319349993952,
+  "ranks": 2,
+  "threads": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 1
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_user_numerical_bodies_runtime",
+          "test_two_block_captures_and_rebind_match_independent_fv_oracle[5-uniform]"
+        ],
+        [
+          "tests.python.integration.runtime.test_user_numerical_bodies_runtime",
+          "test_inactive_singularity_succeeds_and_active_failure_rolls_back[uniform-body]"
+        ],
+        [
+          "tests.python.integration.runtime.test_user_numerical_bodies_runtime",
+          "test_authored_dissipation_bound_rejects_unsafe_pulse_and_accepts_safe_step[uniform]"
+        ],
+        [
+          "tests.python.integration.runtime.test_user_numerical_bodies_runtime",
+          "test_rank_one_owned_invalid_cell_rejects_collectively_without_publication"
+        ],
+        [
+          "tests.python.integration.runtime.test_api040_m04_combined_bound_runtime",
+          "test_dim2_native_rejects_unstable_sum_without_mutating_the_pulse[False]"
+        ],
+        [
+          "tests.python.integration.runtime.test_api040_m04_combined_bound_runtime",
+          "test_dim2_native_rejects_unstable_sum_without_mutating_the_pulse[True]"
+        ]
+      ],
+      "xml_sha256": "ab13e56691248bd489b361f89dcc639b164fdcfbc3f39035344007b93024a1df",
+      "log_sha256": "fddc9d4c34eb3e10f08fac6200670679c8c39f432d738cd2651002320fa9a8c4"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 1
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_user_numerical_bodies_runtime",
+          "test_two_block_captures_and_rebind_match_independent_fv_oracle[5-uniform]"
+        ],
+        [
+          "tests.python.integration.runtime.test_user_numerical_bodies_runtime",
+          "test_inactive_singularity_succeeds_and_active_failure_rolls_back[uniform-body]"
+        ],
+        [
+          "tests.python.integration.runtime.test_user_numerical_bodies_runtime",
+          "test_authored_dissipation_bound_rejects_unsafe_pulse_and_accepts_safe_step[uniform]"
+        ],
+        [
+          "tests.python.integration.runtime.test_user_numerical_bodies_runtime",
+          "test_rank_one_owned_invalid_cell_rejects_collectively_without_publication"
+        ],
+        [
+          "tests.python.integration.runtime.test_api040_m04_combined_bound_runtime",
+          "test_dim2_native_rejects_unstable_sum_without_mutating_the_pulse[False]"
+        ],
+        [
+          "tests.python.integration.runtime.test_api040_m04_combined_bound_runtime",
+          "test_dim2_native_rejects_unstable_sum_without_mutating_the_pulse[True]"
+        ]
+      ],
+      "xml_sha256": "9318219d04c8426e8012928635016abfb57488badd53b037406789bb20705c5d",
+      "log_sha256": "613b6f96ab223581b64d4ef68fbc37f1c8510d683298f948d01ed24346f724f7"
+    }
+  ],
+  "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87"
+}

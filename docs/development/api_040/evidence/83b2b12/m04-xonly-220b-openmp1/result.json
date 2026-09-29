@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "case": "m04",
+  "status": "failed",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m04_advection_diffusion.py"
+  ],
+  "returncode": 1,
+  "seconds": 84.7363619171083,
+  "ranks": 1,
+  "phases": [
+    {
+      "settings": {},
+      "returncode": 1,
+      "seconds": 84.73578458302654
+    }
+  ],
+  "threads": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "example_sources_unchanged": true,
+  "same_native": true,
+  "same_shipped_sources": true,
+  "correct_backend": true,
+  "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+  "scientific_receipt": "states/receipt.json",
+  "scientific_receipt_sha256": "8aab308a08c2a6c6c600db234fc89f3ef37421d9269e1355aea4f12e9b3b1355",
+  "settings": {
+    "OMP_NUM_THREADS": "1",
+    "POPS_THREADS": "1",
+    "POPS_API040_OUTPUT": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/m04-xonly-220b-openmp1/states",
+    "POPS_API040_M04_DIFFUSION": "x_only"
+  }
+}

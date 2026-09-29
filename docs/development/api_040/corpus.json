@@ -1,8 +1,8 @@
 {
   "source": "PoPS_Codex_handoff_0.4.0/reference/PoPS_API_v0.4.0/results/corpus_matrix.json",
   "witness_source": "PoPS_Codex_handoff_0.4.0/context/CORPUS_ORIGINAL.md:278-289",
-  "current_head": "022f5acbb9181eb85a6d9cd05e30a92aad1c4872",
-  "mapping_kind": "scoped production evidence, unresolved cases retained",
+  "current_head": "83b2b1239973f3e744f9e3975734a40a3abf65d6",
+  "mapping_kind": "source and receipt audit; historical identities retained; no global acceptance",
   "models": [
     {
       "id": "M01",
@@ -19,13 +19,15 @@
         "N01"
       ],
       "production_candidate_symbols": "python/pops/numerics/spatial.py:FiniteVolume;python/pops/lib/time/ssprk.py",
-      "production_status": "passed",
-      "qualification": "Full prescribed resolutions/time, native Dim=2 invariant-y. OpenMP 1/4 threads and MPICH 2 ranks; other dimensions and AMR remain unexecuted.",
+      "production_status": "historical_scoped_pass",
+      "qualification": "Full prescribed resolutions/time, native Dim=2 invariant-y. OpenMP 1/4 threads and MPICH 2 ranks; other dimensions and AMR remain unexecuted. Historical022f/e1070cb evidence only; not rerun on83b.",
       "production_evidence": [
         "evidence/022f5ac/m01-openmp1-reviewed",
         "evidence/022f5ac/m01-openmp4",
         "evidence/022f5ac/m01-mpi2-authenticated"
-      ]
+      ],
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "Other dimensions, AMR traversal and current-artifact scientific replay remain unexecuted."
     },
     {
       "id": "M02",
@@ -42,11 +44,15 @@
         "N03"
       ],
       "production_candidate_symbols": "python/pops/physics/_authoring_flux.py:flux_term;python/pops/numerics/spatial.py:FiniteVolume",
-      "production_status": "not_executed",
-      "qualification": "Shock/rarefaction Godunov examples and independent pure oracles are ready; User face contract and numerical stability implementation are in isolated review.",
+      "production_status": "historical_scoped_pass",
+      "qualification": "Full shock and rarefaction N100/200/400, t=.2, exact cell means, authored User Godunov with explicit numerical bound. Dim2 full NxN invariant-y CPU1 on native220b; exact source commit/diff retained in each identity.",
       "production_evidence": [
-        "evidence/022f5ac/astra-m02-burgers.md"
-      ]
+        "evidence/022f5ac/astra-m02-burgers.md",
+        "evidence/83b2b12/m02-shock-220b-openmp1",
+        "evidence/83b2b12/m02-rarefaction-220b-openmp1"
+      ],
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "MPI and other dimensions/AMR unexecuted; no general positivity/order guarantee for arbitrary User bodies."
     },
     {
       "id": "M03",
@@ -63,13 +69,15 @@
         "N05"
       ],
       "production_candidate_symbols": "python/pops/physics/_facade.py:Model;include/pops/physics/fluids/euler.hpp",
-      "production_status": "passed",
-      "qualification": "Prescribed N100/200/400 and t=.15, authored perfect and stiffened EOS, Dim=2 invariant-y CPU OpenMP1. Stiffened component and parameter names changed. Revision2 boundary budget replaces invalid unchanged-boundary assumption with measured accepted quadrature; all thresholds unchanged. Old failure retained. MPI2 and other dimensions remain unexecuted.",
+      "production_status": "historical_scoped_pass",
+      "qualification": "Prescribed N100/200/400 and t=.15, authored perfect and stiffened EOS, Dim=2 invariant-y CPU OpenMP1. Stiffened component and parameter names changed. Revision2 boundary budget replaces invalid unchanged-boundary assumption with measured accepted quadrature; all thresholds unchanged. Old failure retained. MPI2 and other dimensions remain unexecuted. The old renamed stiffened attempt remains failed; revised boundary-budget receipt is the accepted variant. No83b scientific replay.",
       "production_evidence": [
         "evidence/022f5ac/m03-ideal-openmp1",
         "evidence/022f5ac/m03-stiffened-boundary-budget",
         "evidence/022f5ac/m03-stiffened-renamed-openmp1"
-      ]
+      ],
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "Other dimensions/MPI2 and current-artifact scientific replay remain unexecuted."
     },
     {
       "id": "M04",
@@ -86,12 +94,17 @@
         "N04"
       ],
       "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion;python/pops/numerics/spatial.py:FiniteVolume",
-      "production_status": "failed",
-      "qualification": "Full-case stable dt rejected at N32: transport global maximum is counted again on inactive y axis. Correction in progress. W02 dangerous step rejects with exact rollback, which alone does not qualify stable M04. Exact diagonal Dy=0 extension is isolated, not installed.",
+      "production_status": "partial_with_distinct_method_receipts",
+      "qualification": "Directional-bound defect is fixed. Full x-only tensor ForwardEuler reaches t=.1 but fails unchanged order criterion (.60635<.7). Distinct SSPRK2 full N32/64/128 t=.1 passes; orders .97814/.98885 and discrete-Fourier oracle retained. Both use native220b CPU1 Dim2. Exact zero-axis diffusion additionally passes9 native critical83 cases including AMR mass/refinement.",
       "production_evidence": [
         "evidence/022f5ac/m04-openmp1",
-        "evidence/022f5ac/installed-w02-combined-bound"
-      ]
+        "evidence/022f5ac/installed-w02-combined-bound",
+        "evidence/83b2b12/m04-xonly-220b-openmp1",
+        "evidence/83b2b12/m04-ssprk2-220b-openmp1",
+        "evidence/83b2b12/installed-83b2b12-critical"
+      ],
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "Do not promote the failed ForwardEuler method using SSPRK2. General tensors/nonlinear joint flux and other backends remain unqualified."
     },
     {
       "id": "M05",
@@ -107,7 +120,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M06",
@@ -122,8 +137,14 @@
       "reference_limit": "Calcul d’accumulation possible; relation de phase et front de Stefan non construits.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_status": "source_and_oracle_checked_native_pending",
+      "qualification": "Authored conserved enthalpy with piecewise temperature/phase relation, native named diagnostics and predeclared saved-state criteria. M06/M13 eleven source/oracle cases pass in installed unit044fade; no full scientific receipt located in this window.",
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "Homogeneous H evolution does not establish nonlinear accumulation in T or moving Stefan interface.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "m06_m13_scientific.md"
+      ]
     },
     {
       "id": "M07",
@@ -139,7 +160,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_authoring_flux.py:flux_term",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M08",
@@ -154,8 +177,14 @@
       "reference_limit": "Solve et gradient disponibles; assemblage centre-guide 2D compatible non construit.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/fields/poisson.py;python/pops/time/_program/calls.py",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_status": "source_and_oracle_checked_native_pending",
+      "qualification": "Two separate charge/tracer states and blocks, SSPRK2 stage Poisson solves, same-time distinct probe, exact field-frontier negative tests and independent FFT/FV oracle integrated. Installed unit044fade contains14 field/M08 authoring/oracle checks. Fresh/stale discrimination requires3e-11 plus20x separation; old3e-7 is invalid for this purpose.",
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "No saved native state receipt for the complete variant in this window. Stage/cache correctness is not established by source emission alone.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "m08_scientific_variant.md"
+      ]
     },
     {
       "id": "M09",
@@ -170,8 +199,13 @@
       "reference_limit": "Potentiel continué par la méthode et condensation d’applications à intégrer; témoins de Schur hérités seulement.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/time/_program/condensed.py;python/pops/fields/problem.py:FieldProblem",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_status": "partial_source_oracle_with_expression_gap",
+      "qualification": "Original finite12x12 coupled matrix witness has independent monolithic/Schur NumPy oracle. Separate full disk PDE routes to existing authored Hoffart tutorial; source validate/resolve/emit only in this migration.",
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "EXPR/IMPL: exact random8x4 incidence map of finite witness is not represented by the spatial condensed API. Disk PDE is a different experiment; neither its old evidence nor the NumPy oracle qualifies the missing native finite witness.",
+      "production_evidence": [
+        "m09_hoffart_scope.md"
+      ]
     },
     {
       "id": "M10",
@@ -187,7 +221,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/drift_diffusion.py;python/pops/fields/poisson.py",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M11",
@@ -203,7 +239,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/diffusion.py;python/pops/fields/problem.py:FieldProblem",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M12",
@@ -221,7 +259,9 @@
       ],
       "production_candidate_symbols": "python/pops/physics/multispecies.py;python/pops/fields/poisson.py",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M13",
@@ -239,8 +279,14 @@
         "N11"
       ],
       "production_candidate_symbols": "python/pops/physics/_authoring_sources.py:source_term;python/pops/time/_program/local.py:solve",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_status": "source_and_oracle_checked_native_pending",
+      "qualification": "A→B→C SSPRK2 source chain, qualified live parameters/rebind, component permutation, independent closed-form and expm oracle, prescribed native negative-rate rollback prepared. Eleven combined M06/M13 source checks pass in installed unit044fade.",
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "Native full trajectory receipt not located. This source chain does not realize streamer transport, Poisson coupling or nonlocal photoionization/photon budgets.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "m06_m13_scientific.md"
+      ]
     },
     {
       "id": "M14",
@@ -256,7 +302,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/time/_step/transaction.py:StepTransactionPlan",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M15",
@@ -270,9 +318,15 @@
       "reference_profile": "not_demonstrated",
       "reference_limit": "Récurrences héritées seulement. Hiérarchies HyQMOM 1D de plusieurs ordres non assemblées ici.",
       "reference_evidence": [],
-      "production_candidate_symbols": "python/pops/moments/hierarchy.py",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_candidate_symbols": "python/pops/moments/closures/hyqmom_axial_b1.py;examples/migration/scientific/api040_m15_hyqmom_axial_b1.py",
+      "production_status": "partial_axial_source_witness",
+      "qualification": "AppendixB.1 nonlinear S50 axial restriction implemented in a library; positive density/variance and Hankel admission in example. Independent nonGaussian mixture discriminates the linearized Eq40 closure. Existing four M15/M16 source checks pass in unit044fade; later independent source review at1937758 is separate.",
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "A fixed five-moment1V axial restriction is not multi-order Fox-Laurent HyQMOM. Native axial trajectories and arbitrary-order hierarchy remain open.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "evidence/83b2b12/source-reviews/astra-m15-m16-independent-review.md"
+      ]
     },
     {
       "id": "M16",
@@ -288,9 +342,15 @@
       "reference_evidence": [
         "N10_hyqmom"
       ],
-      "production_candidate_symbols": "python/pops/moments/transport.py;python/pops/physics/_board_rate.py:rate",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_candidate_symbols": "python/pops/moments/closures/hyqmom15.py;examples/migration/scientific/api040_m16_hyqmom_b1_oblique.py",
+      "production_status": "partial_source_witness_with_math_blockage",
+      "qualification": "Complete2V15 moment indices/flux derivatives, correlated-Gaussian exact Jacobian/characteristic-polynomial and oblique/permutation witnesses checked at source. The example explicitly records MATH for the demonstrated hyperbolicity/admission conflict.",
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "MATH applies only to the established B.1 model/method witness, not an excuse to drop all transport work. No complete magnetic HyQMOM15 native campaign; realizability admission is not a proof of hyperbolicity.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "evidence/83b2b12/source-reviews/astra-m15-m16-independent-review.md"
+      ]
     },
     {
       "id": "M17",
@@ -307,8 +367,16 @@
         "N10_fan_li"
       ],
       "production_candidate_symbols": "python/pops/physics/_board_rate.py:nonconservative_product;python/pops/numerics/nonconservative.py:PathConservativeFiniteVolume",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_status": "failed_historical_reception_fix_pending",
+      "qualification": "Full Fan-Li source example and oracle exist. Native220b full run failed old FixedDt active-step_cfl restriction. Generic consumer-stability v2 and exact SSP budgets integrated; source path/oracle checks pass in unit044fade. Old CTest AMR budget expectation failed and was adapted in db486be.",
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "New native full M17 and adapted C++ witness receipt pending; no source-only or reduced path witness is promoted to full scientific qualification.",
+      "production_evidence": [
+        "evidence/83b2b12/m17-220b-openmp1",
+        "evidence/83b2b12/installed-38faddb-unit",
+        "evidence/83b2b12/manifest.json",
+        "path_consumer_stability_v2.md"
+      ]
     },
     {
       "id": "M18",
@@ -324,7 +392,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/moments/closures/protocol.py;python/pops/time/_program/local.py:solve",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M19",
@@ -340,7 +410,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/moments/projection.py;python/pops/fields/poisson.py",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M20",
@@ -356,7 +428,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/diffusion.py",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M21",
@@ -372,7 +446,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_facade.py:Model",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M22",
@@ -388,7 +464,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M23",
@@ -404,7 +482,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M24",
@@ -420,7 +500,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_board_rate.py:nonconservative_product",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M25",
@@ -436,7 +518,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M26",
@@ -452,7 +536,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/time/_program/local.py:solve",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M27",
@@ -468,7 +554,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/fields/problem.py:FieldProblem;python/pops/time/_program/local.py:solve",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     },
     {
       "id": "M28",
@@ -484,7 +572,9 @@
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/mesh/_amr/hierarchy_regrid.py:RegridTransactionGate",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
     }
   ],
   "witnesses": [
@@ -493,94 +583,169 @@
       "title": "Cosinus scalaire en FV",
       "related_model": "M01",
       "production_candidate_symbols": "python/pops/initial/__init__.py;python/pops/numerics/spatial.py:FiniteVolume",
-      "production_status": "passed",
-      "qualification": "Native cell-average initial state and independent face-integral oracle, complete M01 Dim=2 sweeps.",
+      "production_status": "historical_scoped_pass",
+      "qualification": "Native cell-average initial state and independent face-integral oracle, complete M01 Dim=2 sweeps. Historical identity only; not a global83b qualification.",
       "production_evidence": [
         "evidence/022f5ac/m01-openmp1-reviewed",
         "evidence/022f5ac/m01-mpi2-authenticated"
-      ]
+      ],
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
     },
     {
       "id": "W02",
       "title": "Advection-diffusion avec borne combinée",
       "related_model": "M04",
       "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion;python/pops/time/_step/transaction.py:AcceptanceGuard",
-      "production_status": "passed",
-      "qualification": "Actual native combined-bound violation rejects and preserves state/time; stable M04 reception separately failed.",
+      "production_status": "historical_scoped_pass",
+      "qualification": "Native combined-bound rejection/rollback passes at historicale107/220b. Stable M04 ForwardEuler scientific order still fails; SSPRK2 is a distinct successful variant.",
       "production_evidence": [
         "evidence/022f5ac/installed-w02-combined-bound"
-      ]
+      ],
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
     },
     {
       "id": "W03",
       "title": "Flux principal entre deux blocs",
       "related_model": "M12",
       "production_candidate_symbols": "python/pops/_ir/balance.py:BalanceView",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "partial_with_native_failures",
+      "qualification": "Generic group integrated;31 unit044fade source checks pass. Corrected critical83:6 Primitive native passes;6 AMRgroup and1 Primitive/User generated compilation failures. This does not close W03.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "evidence/83b2b12/installed-83b2b12-critical",
+        "evidence/83b2b12/installed-83b2b12-critical-pde"
+      ]
     },
     {
       "id": "W04",
       "title": "Poisson au vrai stage",
       "related_model": "M08",
       "production_candidate_symbols": "python/pops/time/_program/clocks.py:stage;python/pops/fields/poisson.py",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "source_checked_native_pending",
+      "qualification": "M08 exact same-time probe and fresh/stale second-field oracle discriminate erroneous reuse; native saved-state trajectory remains pending.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "m08_scientific_variant.md"
+      ]
     },
     {
       "id": "W05",
       "title": "Rotation pure de Lorentz",
       "related_model": "M12",
       "production_candidate_symbols": "python/pops/physics/_authoring_sources.py:source_term",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "No new complete production witness receipt located in this audit.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
     },
     {
       "id": "W06",
       "title": "Solve par blocs contre solve monolithique",
       "related_model": "M09",
       "production_candidate_symbols": "python/pops/time/_program/condensed.py;python/pops/linalg/problem.py:LinearProblem",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "independent_pure_oracle_only",
+      "qualification": "Original monolithic/Schur finite problem compared independently; direct native finite incidence representation remains EXPR/IMPL. Disk PDE does not substitute for it.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception.",
+      "production_evidence": [
+        "m09_hoffart_scope.md"
+      ]
     },
     {
       "id": "W07",
       "title": "HyQMOM15 états réalisables normales et permutations",
       "related_model": "M16",
       "production_candidate_symbols": "python/pops/moments/hierarchy.py;python/pops/moments/transport.py",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "partial_source_with_math_blockage",
+      "qualification": "Full correlated-Gaussian Jacobian/charpoly and permutations checked; demonstrated B.1 hyperbolicity conflict classified MATH; no native magnetic trajectory.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception.",
+      "production_evidence": [
+        "evidence/83b2b12/source-reviews/astra-m15-m16-independent-review.md"
+      ]
     },
     {
       "id": "W08",
       "title": "Fan-Li réellement non conservatif",
       "related_model": "M17",
       "production_candidate_symbols": "python/pops/numerics/nonconservative.py:PathConservativeFiniteVolume",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "failed_historical_reception_fix_pending",
+      "qualification": "True nonconservative Fan-Li case source/oracle present;220b failed old FixedDt admission; consumer-v2 full rerun pending.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception.",
+      "production_evidence": [
+        "evidence/83b2b12/m17-220b-openmp1",
+        "path_consumer_stability_v2.md"
+      ]
     },
     {
       "id": "W09",
       "title": "Fermeture infaisable sur sa quadrature",
       "related_model": "M18",
       "production_candidate_symbols": "python/pops/moments/closures/protocol.py",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "No new complete production witness receipt located in this audit.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
     },
     {
       "id": "W10",
       "title": "Contrainte collective de mélange",
       "related_model": "M11",
       "production_candidate_symbols": "python/pops/physics/diffusion.py",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "No new complete production witness receipt located in this audit.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
     },
     {
       "id": "W11",
       "title": "Rejet après calcul d'un courant de paroi",
       "related_model": "M14",
       "production_candidate_symbols": "python/pops/time/_step/transaction.py:StepTransactionPlan",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "No new complete production witness receipt located in this audit.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
     },
     {
       "id": "W12",
       "title": "Construction dépendant de la durée",
       "related_model": "M17",
       "production_candidate_symbols": "python/pops/runtime/_history_sample_identity.py",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "No new complete production witness receipt located in this audit.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
     }
   ],
-  "production_evidence_schema": 2
+  "production_evidence_schema": 2,
+  "evidence_manifest": "evidence/83b2b12/manifest.json",
+  "reception_window": {
+    "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
+    "verified_source_files": 1079,
+    "source_files_sha256": "c1f5d8141ac858aa80efc7e24ca1c2960b2733b83084b97b7715fb08ffeacaf5",
+    "initial_critical_receipt": {
+      "tests": 71,
+      "passed": 50,
+      "setup_errors": 21,
+      "failures": 0,
+      "status": "failed"
+    },
+    "qualification": "Both completed83 receipts retained separately; no global acceptance. Further reruns excluded. Other dimensions/GPU/OpenMPI unqualified.",
+    "corrected_pde_receipt": {
+      "tests": 21,
+      "passed": 12,
+      "failures": 9,
+      "setup_errors": 0,
+      "status": "failed",
+      "breakdown": "6 Primitive and6 LocalResidual native passes;2 C17 test-API failures;6 AMRgroup+1Primitive/User generated-package compilation failures."
+    }
+  },
+  "post_snapshot_source_fixes": [
+    {
+      "commit": "6ce6782dd9c83d18e56fbc1bee82429d8089f317",
+      "change": "C17 fixture reads diagnostics from installed native executor; former test-API failures retained.",
+      "reception": "pending; no pass inferred"
+    },
+    {
+      "commit": "3d06cab",
+      "change": "Do not instantiate group User policies on constituent Program-only storage carriers; principal helper retains policies.",
+      "reception": "pending; seven83 generated compilation failures retained"
+    }
+  ]
 }

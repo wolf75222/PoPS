@@ -3,8 +3,55 @@
 This directory tracks the integration into the production PoPS package. The
 provided specification is version 0.4.0; it is not the production package's
 version. The production additions use package 1.1.0, public API revision 2 and
-semantic IR revision 2. Native component ABI 3 and checkpoint payload schemas
-are unchanged. Exact artifact identities invalidate incompatible compiled plans.
+semantic IR revision 2. Release native ABI 3, generated System package protocol 5,
+and component interface 1 are separate authorities. Joint primitive coordinates
+use artifact manifest schema 10. See the [native boundary decision](c26_c27_native_boundary_decision_v1.md).
+Exact artifact identities invalidate incompatible compiled plans.
+
+## Registry audit at 83b2b12
+
+`contracts.csv` and `corpus.json` now distinguish the inspected source at
+`83b2b1239973f3e744f9e3975734a40a3abf65d6` from each historical receipt's exact
+source commit, dirty-diff hash, native hash and backend. `current_head` is **not**
+a claim that every row was rerun. Fourteen contract mappings retain older evidence
+without new qualification. All unresolved obligations remain active; missing
+expression/implementation is never converted to SCOPE.
+
+The [receipt manifest](evidence/83b2b12/manifest.json) preserves copied identities,
+results and XML with SHA-256 digests. Original workspace locations are recorded;
+large native state archives remain there. The bounded audit did not rerun any
+numerical campaign. It records these completed receipts separately:
+
+* Current native `4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb`,
+  1,079 verified source files, source digest
+  `c1f5d8141ac858aa80efc7e24ca1c2960b2733b83084b97b7715fb08ffeacaf5`:
+  initial critical run **50 passed / 21 setup errors** (Kokkos root absent).
+  Corrected PDE run **12 passed / 9 failed**: six Primitive and six LocalResidual
+  passes; two C17 test-API failures and seven principal/User generated-package
+  compilation failures. Neither run is globally green.
+  Subsequent source fixes `6ce6782` (C17 diagnostic facade) and `3d06cab`
+  (principal versus constituent-storage policy ownership) are recorded as
+  pending reception; they do not replace or turn the failed receipts green.
+* Historical unit directory `installed-38faddb-unit` actually authenticates
+  source `044fade`: **209 passed / 1 failed**, the absent-versus-empty C34 cursor
+  defect subsequently fixed in `db486be`. The current critical run receives 41
+  C34/transaction tests successfully. Historical CTest: **123 run / 9 not run /
+  1 failed**; its obsolete Path FixedDt expectation was adapted in `db486be`,
+  with a fresh C++ receipt still required.
+* M02 shock and rarefaction each passed the full prescribed grids/time on native
+  `220b48d…`, Dim=2 CPU, one rank/thread. M04 Forward Euler still fails its
+  original order criterion; the distinct SSPRK2 experiment passes. M17's old
+  FixedDt rejection is retained pending a full new scientific receipt.
+
+Check registry identities, source paths, receipt hashes and XML counts without
+running numerical tests:
+
+```sh
+python docs/development/api_040/check_registry.py
+```
+
+`build_registry.py` is the historical bootstrap inventory, not the updater for
+these reviewed records; rerunning it would discard their evidence and statuses.
 
 ## Baseline and provenance
 
@@ -60,8 +107,14 @@ they are not production PoPS integration or MPI/AMR qualifications.
 * Numerical robustness: signed subnormal/extreme Minmod/Van Leer/MC/Superbee;
   finite WENO evaluation at extreme scales and explicit invalid-input behavior.
 * C30: frozen descriptor deletion is prohibited as well as assignment.
+* C11/C12: shared principal operators, per-row parameter captures, explicit joint
+  primitive inverse/domain, and AMR halo/reflux routes are integrated. Current
+  principal/User generated compilation failures remain implementation defects.
+* C17/C34/C38: original-residual stagnation refusal, exact cursor compensation,
+  and frozen restart-history mutation guards are integrated. Their distinct
+  source and native reception states are recorded in the registry.
 
-The contract and corpus registries are initial source mappings, not a claim that
+The contract and corpus registries are scoped source/evidence mappings, not a claim that
 C01–C40 or M01–M28/W01–W12 have all been implemented or executed. Results and
 unresolved obligations must remain separate. See [decisions.md](decisions.md)
 and [agents.md](agents.md). This migration is still in progress until the native
@@ -101,15 +154,17 @@ env -u PYTHONPATH PYTHONNOUSERSITE=1 CONDA_PREFIX="$POPS_PREFIX" \
   --case m01 --ranks 2 --threads 1 --output /tmp/pops-api040-m01-mpi2
 ```
 
-The output directory must be empty. Cases are `m01`, `m02-shock`,
-`m02-rarefaction`, `m03-ideal`, `m03-stiffened`, `m04` and `m04-isotropic`. Availability in the
-runner does not imply acceptance: M02 requires the authored face-body tranche;
-M04 awaits the directional stability-frequency correction. M03 stiffened passes
+The output directory must be empty. The runner also includes `m04-ssprk2`,
+`m06`, `m08`, `m13` and `m17`; use its `--help` for the exact current choices.
+Availability in the runner does not imply acceptance. M02's full serial receipts
+are historical native evidence; M04's directional restriction is fixed, while
+the original Forward Euler order criterion still fails. M03 stiffened passes
 receipt schema 2, which independently reconstructs the discrete incoming
 boundary integral from saved native states. Its previous far-field-budget
 failure is retained in the checkpoint. Grids, final times and criteria are
 fixed in each linear example.
-M04 receipt schema 2 uses the exact tensor `diag(.01, 0)` for the requested
+M04 receipt schema 3 separates its spatial and temporal methods and checks an
+independent discrete Fourier oracle. It uses the exact tensor `diag(.01, 0)` for the requested
 x-only law. `m04-isotropic` retains the previous `diag(.01, .01)` variant to
 reproduce and repair its directional-frequency failure. Both retain the same
 error, conservation and bound criteria, with the combined step computed from
