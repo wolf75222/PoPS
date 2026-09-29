@@ -5,6 +5,7 @@
 #include <pops/mesh/geometry/prepared_metric_provider.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/spatial/nd/finite_volume.hpp>
+#include <pops/numerics/spatial/nd/face_frequency.hpp>
 #include <pops/numerics/spatial/nd/reconstruction.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <exception>
@@ -225,7 +226,9 @@ class PreparedPrincipalFlux {
     try {
       faces_<0>(std::as_const(input), model, reconstruction, numerical);
       const auto metric = metric_;
-      const auto geometry = geometry_;
+      std::array<Real, Dim> inverse_spacing{};
+      for (int axis = 0; axis < Dim; ++axis)
+        inverse_spacing[axis] = Real(1) / geometry_.spacing(axis);
       for (std::size_t local = 0; local < input.local_size(); ++local) {
         const auto faces = std::as_const(flux_[local]).view();
         const auto bounds = std::as_const(bound_[local]).view();
@@ -233,20 +236,10 @@ class PreparedPrincipalFlux {
         const auto status = status_.fab(local).view();
         for_each_cell(input.box(local), [=] POPS_HD(const Index<Dim>& cell) {
           const auto residual = nd::conservative_residual<Components>(metric, faces, cell);
-          bool valid = residual.succeeded();
-          Real frequency = Real(0);
-          for (int axis = 0; axis < Dim; ++axis) {
-            auto upper = cell;
-            ++upper[axis];
-            const Real lower_speed = bounds.axes[axis](cell, 0);
-            const Real upper_speed = bounds.axes[axis](upper, 0);
-            valid = valid && Kokkos::isfinite(lower_speed) && Kokkos::isfinite(upper_speed) &&
-                    lower_speed >= Real(0) && upper_speed >= Real(0);
-            frequency += Kokkos::max(lower_speed, upper_speed) / geometry.spacing(axis);
-          }
+          const Real frequency = nd::incident_face_frequency_at(bounds, cell, inverse_spacing);
           for (int component = 0; component < Components; ++component)
             result(cell, component) = residual.value[component];
-          status(cell, 0) = valid && Kokkos::isfinite(frequency)
+          status(cell, 0) = residual.succeeded() && Kokkos::isfinite(frequency)
                                ? frequency : std::numeric_limits<Real>::infinity();
         });
       }

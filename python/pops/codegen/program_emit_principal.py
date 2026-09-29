@@ -1,5 +1,4 @@
 """Emit a shared native face evaluation and exact principal rate projections."""
-import json
 
 
 def _checked(roots, count, indent="      "):
@@ -77,39 +76,26 @@ def emit_principal_models(program, authority):
 
 
 def emit_principal_helper(entry):
-    from pops.identity.scalar import scalar_cpp
+    from .program_emit_principal_numerics import (
+        emit_principal_numerical_flux, emit_principal_reconstruction)
     group, name = entry["group"], entry["cpp_name"]
-    method = group.methods[0]
-    reconstruction = method.reconstruction.native_id
-    user_definition = ""
-    if method.reconstruction.scheme == "source_stencil":
-        from types import SimpleNamespace
-        from .user_reconstruction_lowering import emit_user_reconstruction_policy
-        policy = name + "Reconstruction"
-        user_definition = emit_user_reconstruction_policy(
-            SimpleNamespace(_user_reconstruction=method.reconstruction)).replace("UserReconstructionPolicy", policy)
-        reconstruction = "pops_generated::" + policy
-    if not reconstruction:
-        raise ValueError("principal reconstruction lacks an authenticated native implementation")
-    numerical = method.riemann.native_id
-    if numerical != "pops::RusanovFlux":
-        raise NotImplementedError("principal numerical flux currently realizes the declared common Rusanov bound")
-    epsilon = method.reconstruction.options.get("epsilon")
-    reconstruction += "{" + ("" if epsilon is None else scalar_cpp(epsilon)) + "}"
+    reconstruction_definition, reconstruction = emit_principal_reconstruction(entry)
+    numerical_definition, numerical = emit_principal_numerical_flux(entry)
     size = len(group.states)
     lines = ["template<class Context>", "auto& %s_evaluate(Context& ctx,std::int64_t node," % name,
         "    const std::array<pops::MultiFab<pops::kNativeDimension>*,%d>& inputs," % size,
         "    const std::array<int,%d>& blocks) {" % size,
         "  for (int block : blocks) ctx.require_cartesian_generated_operator(block,\"principal_finite_volume\");",
-        "  auto& packed=ctx.scalar_scratch(node,0,*inputs[0],%d,%d);" % (group.component_count,method.ghost_depth),
+        "  auto& packed=ctx.scalar_scratch(node,0,*inputs[0],%d,%d);" % (
+            group.component_count,max(method.ghost_depth for method in group.methods)),
         "  const auto geometry=ctx.geometry(); const auto& lane=ctx.prepared_execution_lane();",
         "  auto& resource=ctx.template prepared_resource<pops::runtime::program::PreparedPrincipalFlux<pops::kNativeDimension,%d>>(" % group.component_count,
         "    node,blocks[0],[&](const auto& previous){return previous.matches_preparation(geometry,lane,packed);},ctx,packed);",
         "  resource.pack(inputs,packed,%s::component_counts);" % name, "  %s model;" % name,
         "  for (int i=0;i<%d;++i) model.parameter_sets[i]=ctx.program_params(blocks[i]);" % size,
-        "  resource.evaluate(packed,model,%s,%s{});" % (reconstruction,numerical),
+        "  resource.evaluate(packed,model,%s,%s);" % (reconstruction,numerical),
         "  return resource;", "}"]
-    return user_definition + "\n".join(lines) + "\n"
+    return reconstruction_definition + numerical_definition + "\n".join(lines) + "\n"
 
 
 def principal_dt_bounds(program, authority):
@@ -182,6 +168,8 @@ def emit_principal_rate(value, var, lines, model, block_indices, target):
     if cached is not None and output_index not in cached[1]:
         cached[1].add(output_index)
         var[value.id] = cached[0][output_index]
+        var[("partition_frequency", value.id)] = cached[2]
+        var[("principal_frequency", value.id)] = cached[2]
         return
     stage = evaluation_stage_fraction(value, ark_partition="explicit")
     prefix = "principal_%d" % value.id
@@ -190,15 +178,16 @@ def emit_principal_rate(value, var, lines, model, block_indices, target):
     lines += ["std::array<pops::MultiFab<pops::kNativeDimension>*,%d> %s_inputs{%s};" %
               (len(inputs), prefix, ",".join("&" + var[item.id] for item in inputs)),
               "auto& %s_resource=%s_evaluate(ctx,%d,%s_inputs,std::array<int,%d>{%s});" %
-              (prefix,entry["cpp_name"],value.id,prefix,len(indices),",".join(map(str,indices))),
-              "if (!(std::isfinite(dt) && dt>=0 && dt*%s_resource.explicit_frequency()<=1+32*std::numeric_limits<pops::Real>::epsilon()))" % prefix,
-              "  ctx.consume_pointwise_evaluation_status(%d,%d,2,%s,503);" %
-              (indices[output_index], value.id, json.dumps(group.identity.token))]
+              (prefix,entry["cpp_name"],value.id,prefix,len(indices),",".join(map(str,indices)))]
+    frequency = "principal_frequency_%d" % value.id
+    lines.append("const pops::Real %s=%s_resource.explicit_frequency();" % (frequency, prefix))
+    var[("partition_frequency", value.id)] = frequency
+    var[("principal_frequency", value.id)] = frequency
     outputs = ["%s_rate_%d" % (prefix, i) for i in range(len(inputs))]
     for i, (output, item) in enumerate(zip(outputs, inputs, strict=True)):
         lines.append("auto& %s=ctx.rhs_scratch(%d,%d,%s);" % (output, value.id, i, var[item.id]))
     lines += ["std::array<pops::MultiFab<pops::kNativeDimension>*,%d> %s_outputs{%s};" %
               (len(outputs), prefix, ",".join("&" + output for output in outputs)),
               "%s_resource.publish(%s_outputs,%s::component_counts);" % (prefix, prefix, entry["cpp_name"])]
-    var[key] = (outputs, {output_index})
+    var[key] = (outputs, {output_index}, frequency)
     var[value.id] = outputs[output_index]

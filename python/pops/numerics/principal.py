@@ -48,6 +48,16 @@ def resolve_principal_groups(case, block):
     from pops.numerics.spatial import FiniteVolume, _brick_data
     from pops.model.ownership import OwnerKind
 
+    def choice(method):
+        # Authored componentwise/row bodies form an explicitly ordered product.
+        # Their complete descriptors remain in the group identity; equal display
+        # names or equal scalar body widths never merge their captured contexts.
+        recon = ("source_stencil" if method.reconstruction.scheme == "source_stencil"
+                 else _brick_data(method.reconstruction))
+        face = ("source_face" if method.riemann.scheme == "source_face"
+                else _brick_data(method.riemann))
+        return recon, face, method.variables.scheme, method.positivity_floor
+
     rows = []
     for block_name, plan in case._numerics_assignments.items():
         owner = case._block_registry.handle(block_name)
@@ -86,17 +96,14 @@ def resolve_principal_groups(case, block):
         declared_order = {state.name: i for i, state in enumerate(model._states.values())}
         selected.sort(key=lambda row: (declared_order[(row[0].declaration_ref or row[0]).local_id],
                                        row[0].qualified_id))
-        reference = (_brick_data(method.reconstruction), _brick_data(method.riemann),
-                     method.variables.scheme, method.positivity_floor)
+        reference = choice(method)
         spaces = tuple((row[0].declaration_ref or row[0]).space for row in selected)
         for state, row_rate, row_method, row_model, row_contract in selected:
             if row_model is not model:
                 raise ValueError("principal group states must belong to one authenticated physical Model")
             if frozenset((state, *row_method.sampling)) != members:
                 raise ValueError("principal reconstruction sampling must name the complete same group")
-            choice = (_brick_data(row_method.reconstruction), _brick_data(row_method.riemann),
-                      row_method.variables.scheme, row_method.positivity_floor)
-            if choice != reference:
+            if choice(row_method) != reference:
                 raise ValueError("principal group requires one common reconstruction and numerical flux")
             registry = model.module.operator_registry()
             view = registry.get(row_rate.registered_operator_name).lowering["physical_balance"]

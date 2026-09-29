@@ -62,9 +62,7 @@ class _RuntimeParamsMixin(_HyperbolicModel):
             out.extend(path["kernel"].get("parameter_expressions", ()))
             out.extend(value for row in path["covectors"] for value in row)
         for principal in getattr(self, "_principal_groups", ()):
-            out.extend(_wrap(value) for body in principal["fluxes"]
-                       for row in body.values() for value in row)
-            out.extend(_wrap(value) for row in principal["waves"].values() for value in row)
+            out.extend(value for row in principal["row_expressions"] for value in row)
         authored_reconstruction = getattr(self, "_user_reconstruction", None)
         if authored_reconstruction is not None:
             out.append(authored_reconstruction.expression)

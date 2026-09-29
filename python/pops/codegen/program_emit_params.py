@@ -71,8 +71,7 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     elif v.op == "principal_rate":
         from .principal_lowering import principal_for_value
         entry = principal_for_value(impl, v)
-        out.extend(value for body in entry["fluxes"] for row in body.values() for value in row)
-        out.extend(value for row in entry["waves"].values() for value in row)
+        out.extend(value for row in entry["row_expressions"] for value in row)
     elif v.op == "rhs" and v.attrs.get("path_conservative", False):
         path = impl._path_conservative
         out.extend(path["kernel"].get("parameter_expressions", ()))
@@ -191,9 +190,11 @@ def _parameter_read_sites(program, model):
             yield value
             continue
         impl = _formula_carrier(model_for_node(model, value))
-        expressions = _op_model_exprs(impl, value)
-        blocks = dict.fromkeys(item.block for item in value.inputs)
-        for block in blocks:
+        from .principal_lowering import principal_for_value
+        entry = principal_for_value(impl, value)
+        for state, expressions in zip(entry["group"].states, entry["row_expressions"], strict=True):
+            block, = {item.block for item in value.inputs
+                      if item.block._resolved() == state.block_ref}
             yield SimpleNamespace(op="principal_capture", block=block, name=value.name,
                 attrs={"principal_expressions": expressions})
 

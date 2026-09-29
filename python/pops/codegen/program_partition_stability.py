@@ -205,13 +205,16 @@ def emit_partition_stability(value, var, lines, *, block_index, include_transpor
 
 
 def emit_user_face_stability(value, var, lines, *, block_index):
-    """Check only consumers of authored face rates, using their Shu--Osher budget."""
-    if not any(("user_face_frequency", node.id) in var
+    """Check explicit consumers of authored or principal faces with one shared budget."""
+    def selected(node):
+        return any((kind, node.id) in var for kind in ("user_face_frequency", "principal_frequency"))
+
+    if not any(selected(node)
                for node, _ in _affine_terms(value)):
         return
     groups = partition_stability_groups(value, include_transport=True)
     for index, (_, alpha, rates) in enumerate(groups):
-        if not any(("user_face_frequency", rate.id) in var for rate, _ in rates):
+        if not any(selected(rate) for rate, _ in rates):
             continue
         terms = []
         for rate, beta in rates:

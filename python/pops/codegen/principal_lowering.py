@@ -2,6 +2,55 @@
 from types import MappingProxyType
 
 
+def principal_row_expressions(entry):
+    """The exact formulas read in each row's parameter context, including numerics."""
+    from pops._ir import _wrap
+    waves = tuple(value for values in entry["waves"].values() for value in values)
+    rows = []
+    for body, method in zip(entry["fluxes"], entry["group"].methods, strict=True):
+        roots = [_wrap(value) for values in body.values() for value in values]
+        roots.extend(_wrap(value) for value in waves)
+        if method.reconstruction.scheme == "source_stencil":
+            roots.append(method.reconstruction.expression)
+        if method.riemann.scheme == "source_face":
+            roots.extend(method.riemann.expression)
+        rows.append(tuple(roots))
+    return tuple(rows)
+
+
+def _authenticate_numerical_captures(module, group):
+    from pops._ir.values import RuntimeParamRef
+    from pops._ir.visitors import _children
+    from pops.numerics.reconstruction.user import authenticated_user_reconstruction
+    from pops.numerics.riemann.user import authenticated_user_face
+    for state, method in zip(group.states, group.methods, strict=True):
+        roots = []
+        if method.reconstruction.scheme == "source_stencil":
+            roots.append(authenticated_user_reconstruction(method.reconstruction).expression)
+        if method.riemann.scheme == "source_face":
+            descriptor = authenticated_user_face(method.riemann)
+            if descriptor.options["state"] != state:
+                raise ValueError("principal face state differs from its exact row owner")
+            roots.extend(descriptor.expression)
+        seen = set()
+        while roots:
+            node = roots.pop()
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            if isinstance(node, RuntimeParamRef):
+                handle = node.handle
+                if handle.is_instance:
+                    if handle.block_ref._resolved() != state.block_ref._resolved():
+                        raise ValueError("principal numerical capture belongs to another block instance")
+                    handle = handle.declaration_ref
+                try:
+                    module._param_registry.handle(handle)
+                except (KeyError, ValueError) as exc:
+                    raise ValueError("principal numerical capture belongs to another model") from exc
+            roots.extend(_children(node))
+
+
 def prepare_principal_carrier(emitter, module, numerics):
     groups = () if numerics is None else numerics.principal_groups
     impl = getattr(emitter, "_m", emitter)
@@ -14,6 +63,7 @@ def prepare_principal_carrier(emitter, module, numerics):
     from pops._ir.primitive_expansion import expand_primitive_recipes
     prepared = []
     for group in groups:
+        _authenticate_numerical_captures(module, group)
         bindings, offset = {}, 0
         for quantity, count in zip(group.states, group.component_counts, strict=True):
             declaration = quantity.declaration_ref or quantity
@@ -50,9 +100,11 @@ def prepare_principal_carrier(emitter, module, numerics):
         method = group.methods[0]
         if method.variables.scheme != "conservative":
             raise NotImplementedError("principal primitive reconstruction requires a joint authored variable map")
-        prepared.append(MappingProxyType({"group": group, "fluxes": tuple(flux_rows),
+        entry = {"group": group, "fluxes": tuple(flux_rows),
             "waves": waves, "axes": axes,
-            "cpp_name": "PoPSPrincipal_" + group.identity.token.split(":")[-1][:24]}))
+            "cpp_name": "PoPSPrincipal_" + group.identity.token.split(":")[-1][:24]}
+        entry["row_expressions"] = principal_row_expressions(entry)
+        prepared.append(MappingProxyType(entry))
     object.__setattr__(impl, "_principal_groups", tuple(prepared))
     indices = tuple((node.name, index) for index, node in enumerate(impl.assign_runtime_indices()))
     object.__setattr__(impl, "_principal_groups", tuple(

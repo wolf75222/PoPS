@@ -60,7 +60,7 @@ def test_prescribed_step_does_not_evaluate_an_inactive_group_to_find_a_bound():
     bound = bound[:bound.index("\n}")]
     assert "_evaluate(ctx," not in bound
     assert "_resource.publish(" in source
-    assert "dt*principal_" in source
+    assert "user_face_numerical_stability" in source
 
 
 def test_conditional_adaptive_group_requires_its_authored_bound():
