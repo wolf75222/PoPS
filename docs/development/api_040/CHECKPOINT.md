@@ -15,9 +15,20 @@ introduced. The rebuilt Dim2 OpenMP/MPI package is authenticated at a085890:
 `6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb`, SDK
 `dfcd85eba73c963aaceeaf85738296e5a46272e3f76aff1890a2f7850c4b94d8`.
 Logs: parent `outputs/build-user-amr-route-openmp-mpi.log` and
-`outputs/installed-a085890-amr-routes/`. The seven-test installed reception is
-running: standalone User AMR first, then the six principal AMR clock/oracle tests.
-Do not mutate production or rebuild the shared environment during that run.
+`outputs/installed-a085890-amr-routes/`. All seven installed tests pass (284.85 s):
+standalone User AMR and six principal AMR cases, including partial refinement,
+2+3 components, permutations, parameter rebind, composite conservation, an
+independent flux oracle, real clock advancement and rejection rollback. This is
+single-rank evidence on the authenticated OpenMP/MPI-capable Dim2 package.
+
+The next MPI2 rank-one-owned failure injection completed without timeout but
+failed its expected-diagnostic assertion on both ranks. The package and test
+sources remained unchanged, and both ranks ran the same test. The initial test
+did not print the collected exceptions, so this receipt does not yet establish
+the cause or qualify rollback. 797b94b adds those actual exceptions to the
+failure message without changing the expected diagnostic or rollback assertions.
+Raw failure: `outputs/installed-eac92bb-rank-one-amr-mpi2/`; a new receipt is
+required rather than replacing that evidence.
 
 The T2/C38 C++ rebuild completed and ran 193 CTest rows in 68.24 s: **187 passed,
 two failed, four single-rank guards skipped**. WENO/vector and both repaired
@@ -29,16 +40,18 @@ owners 1–2 and asserts exact array lengths, retaining all state/history checks
 a085890 records Sol's independent review. Its final native execution is pending.
 Raw evidence: `outputs/native-t2-c38-repaired{.xml,-ctest.log,-receipt.json}`.
 
-Next after the current installed run: build C++ targets
+Currently rebuilding the C++ targets
 `test_generated_amr_system_block`, `test_amr_synthetic_program_loader_transaction`
-and `test_amr_history_ring`, run their labelled CTest rows/MPI variants, then the
-installed rank-one-owned AMR failure test. Build true Dim1 with the existing
+and `test_amr_history_ring`; run their labelled CTest rows/MPI variants, then
+repeat the installed rank-one-owned AMR failure test with diagnostics. Build true Dim1 with the existing
 `scripts/build_python.sh --dim 1 --mpi` only when no installed tests are active;
 the script preserves compatible Dim2 variants. M15/M17 and the other scientific
 campaigns remain pending. M07 coordinated-face implementation and its asymmetric
 non-integrable counterexample remain isolated agent work, not integrated code.
-The paired performance v1 plan is ready but unmeasured; its separate resource
-profiling companion is being authored/reviewed without changing v1.
+The paired performance v1 plan is ready but unmeasured. Its separate resource
+profiling companion is integrated in d64fd26, independently reviewed in adedca0,
+with four unit checks and nine independent counter-tests. No native resource
+counts have yet been measured, and absent counters must not be reported as zero.
 
 ## Previous reception: T2 source 3bd6ea9, native 4b458dab (historical)
 
