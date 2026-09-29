@@ -30,6 +30,21 @@ def _run_errors(runtime, world):
     return allgather_value(world, error)
 
 
+def _all_check(world, operation):
+    """Converge a rank-local assertion before the next collective state check."""
+    error = None
+    try:
+        operation()
+    except Exception as exc:
+        error = (type(exc).__name__, str(exc))
+    if world is None:
+        errors = (error,)
+    else:
+        from pops._native_collectives import allgather_value
+        errors = allgather_value(world, error)
+    assert not any(errors), errors
+
+
 @pytest.mark.parametrize("permuted", (False, True))
 def test_augmented_product_preserves_original_friction_and_refuses_incompatible_force(
         isolated_native_cache, native_cxx, kokkos_root, tmp_path, record_property, permuted):
@@ -47,7 +62,10 @@ def test_augmented_product_preserves_original_friction_and_refuses_incompatible_
         errors = _run_errors(runtime, world)
         assert not any(errors), errors
         raw_flux, raw_multiplier = _snapshot(runtime)
-        assert runtime.time() == case_module.DT and runtime.macro_step() == 1
+
+        def accepted_clock():
+            assert runtime.time() == case_module.DT and runtime.macro_step() == 1
+        _all_check(world, accepted_clock)
 
         def original_equations():
             flux = raw_flux.reshape(3, 4, 4)[np.argsort(order)]
@@ -81,8 +99,11 @@ def test_augmented_product_preserves_original_friction_and_refuses_incompatible_
     assert all("original_friction" in row[1] for row in errors), errors
     record_property("incompatible_force_native_diagnostic", repr(errors))
     after = _snapshot(failed)
-    assert failed.time() == 0. and failed.macro_step() == 0
-    assert failed._executor._temporal_restart_state.to_data() == temporal_before
+
+    def rejected_envelope():
+        assert failed.time() == 0. and failed.macro_step() == 0
+        assert failed._executor._temporal_restart_state.to_data() == temporal_before
+    _all_check(world, rejected_envelope)
 
     def unchanged():
         for old, new in zip(before, after, strict=True):
