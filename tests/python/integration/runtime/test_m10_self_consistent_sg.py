@@ -15,6 +15,7 @@ import numpy as np
 import pops
 import pytest
 from pops import math
+from pops._native_collectives import allgather_value
 from pops.codegen import Production
 from pops.domain import CartesianDomain
 from pops.fields import FieldBoundary, FieldDiscretization, FieldProblem, SharedMeanGauge, bcs
@@ -35,6 +36,53 @@ D = 0.1
 AMPLITUDE = 0.4
 PERTURBATION = 0.08
 DT = 1 / (16 * N * N)
+STATE_ATOL = 2e-11
+STALE_MIN_GAP = 1e-8
+
+
+def _collective_check(context, check):
+    error = ""
+    try:
+        check()
+    except Exception as caught:
+        error = type(caught).__name__ + ": " + str(caught)
+    errors = ([error] if context.communicator.identity == "serial" else
+              allgather_value(context.communicator.handle, error))
+    assert not any(errors), "; ".join("rank %d: %s" % (rank, message)
+                                    for rank, message in enumerate(errors) if message)
+
+
+def _global_exchange_records(runtime, context):
+    local = runtime._executor._program_exchange_records()
+    if context.communicator.identity == "serial":
+        return local
+    # Owned-cell incidences are local, including [] on ranks without boxes.
+    # Do not deduplicate: duplicate owners are an error checked below.
+    return [row for batch in allgather_value(context.communicator.handle, local) for row in batch]
+
+
+def _assert_exchange_records(records, actual, density, potential):
+    assert len(records) == 2*N
+    assert len({row["evaluation_context"] for row in records}) == 1
+    assert len({row["operation_identity"] for row in records}) == 1
+    assert all("joint-occurrences:0,1" in row["occurrence_identity"] for row in records)
+    faces = _face_flux(density, potential)
+    exchanged, identities = np.zeros(N), set()
+    for row in records:
+        cell_token, axis_token, side_token = row["quadrature_identity"].split("/")
+        cell, axis, side = (int(token.split(":")[1]) for token in (cell_token, axis_token, side_token))
+        assert 0 <= cell < N and axis == 0 and side in (0,1)
+        assert (cell,side) not in identities
+        identities.add((cell,side))
+        assert row["orientation"] == (-1 if side == 0 else 1)
+        assert row["multiplicity"] == 1 and row["face_measure"] == 1
+        assert row["temporal_weight"] == DT
+        # This face tolerance propagates the separately required potential error;
+        # state, history and inventory comparisons retain their original 2e-11.
+        assert abs(row["numerical_flux"]-faces[(cell+side-1) % N]) <= 1e-9
+        assert abs(row["integrated_amount"] - row["orientation"]*DT*row["numerical_flux"]) <= 1e-18
+        exchanged[cell] += row["integrated_amount"]
+    np.testing.assert_allclose(exchanged, (actual-density)/N, rtol=0, atol=STATE_ATOL)
 
 
 def _data(n=N):
@@ -171,36 +219,39 @@ def test_m10_native_self_consistent_stage_field_and_joint_flux(
         isolated_native_cache, native_cxx, kokkos_root):
     del isolated_native_cache, native_cxx, kokkos_root
     equilibrium, background, density, potential, stale = _data()
+    expected = _one_step(density, potential)
+    stale_result = _one_step(density, stale)
+    assert np.max(np.abs(expected-stale_result)) > STALE_MIN_GAP
     case, layout, _, _, _, _ = _case()
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout,
                                          backend=Production()))
+    assert artifact.resolved_dimension == 1
+    context = artifact_execution_context(artifact)
     runtime = pops.bind(artifact, initial_state={
         "density": np.ascontiguousarray(density[None]),
         "background": np.ascontiguousarray(background[None]),
-    }, resources={"execution_context": artifact_execution_context(artifact)})
+    }, resources={"execution_context": context})
     report = pops.run(runtime, t_end=DT, max_steps=1, console=False)
-    assert report.accepted_steps == 1
-    assert runtime.macro_step() == 1 and runtime.time() == DT
+    def accepted_clock():
+        assert report.accepted_steps == 1
+        assert runtime.macro_step() == 1 and runtime.time() == DT
+    _collective_check(context, accepted_clock)
     actual = np.asarray(runtime.state_global("density")).reshape(-1)
     observed = np.asarray(runtime.history_global("stage-potential", 1)).reshape(-1)
-    expected = _one_step(density, potential)
-    stale_result = _one_step(density, stale)
-    assert np.max(np.abs(expected - stale_result)) > 1e-8
-    np.testing.assert_allclose(observed, potential, rtol=0, atol=2e-11)
-    np.testing.assert_allclose(actual, expected, rtol=0, atol=2e-11)
-    assert np.max(np.abs(actual - stale_result)) > 1e-8
-    np.testing.assert_array_equal(np.asarray(runtime.state_global("background")).reshape(-1),
-                                  background)
-    records = runtime._executor._program_exchange_records()
-    assert len(records) == 2 * N  # two oriented cell incidences for each periodic face
-    assert all("joint-occurrences:0,1" in row["occurrence_identity"] for row in records)
-    exchanged = np.zeros(N)
-    for row in records:
-        cell = int(row["quadrature_identity"].split("/")[0].split(":")[1])
-        exchanged[cell] += row["integrated_amount"]
-    np.testing.assert_allclose(exchanged, (actual - density) / N, rtol=0, atol=2e-11)
+    actual_background = np.asarray(runtime.state_global("background")).reshape(-1)
+    records = _global_exchange_records(runtime, context)
+    def accepted_data():
+        np.testing.assert_allclose(observed, potential, rtol=0, atol=STATE_ATOL)
+        np.testing.assert_allclose(actual, expected, rtol=0, atol=STATE_ATOL)
+        assert np.max(np.abs(actual-stale_result)) > STALE_MIN_GAP
+        np.testing.assert_array_equal(actual_background, background)
+        _assert_exchange_records(records, actual, density, potential)
+    _collective_check(context, accepted_data)
     destination = os.environ.get("POPS_M10_EVIDENCE_DIR")
-    if destination:
+    def write_receipt():
+        if not destination or (context.communicator.identity != "serial" and
+                               context.communicator.handle.rank != 0):
+            return
         target = Path(destination)
         target.mkdir(parents=True, exist_ok=True)
         (target / "self-consistent-periodic.json").write_text(json.dumps({
@@ -210,4 +261,7 @@ def test_m10_native_self_consistent_stage_field_and_joint_flux(
             "state_error": float(np.max(np.abs(actual - expected))),
             "stale_state_gap": float(np.max(np.abs(actual - stale_result))),
             "face_records": len(records),
+            "dimension": artifact.resolved_dimension,
+            "ranks": (1 if context.communicator.identity == "serial" else context.communicator.handle.size),
         }, indent=2) + "\n")
+    _collective_check(context, write_receipt)

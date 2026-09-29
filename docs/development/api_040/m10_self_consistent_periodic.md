@@ -15,6 +15,15 @@ Poisson operator. A fixed background block stores `b`. The field equation is
 then published to the density's exact provider before its fitted rate.
 The program accepts one Forward Euler step and stores the field observation.
 
+The State arrays prescribe **discrete cell averages**: equivalently they define
+a piecewise constant density in each cell. `exp(-psi_i)` is not the exact cell
+average of the smooth function `exp(-0.4 cos(2 pi x))`. This is a mesh-dependent
+discrete equilibrium witness; it does not measure projection error or continuum
+convergence. The potential is the centered scalar field unknown. The background
+`b` is a fixed signed charge, which need not be positive; the periodic mean of
+`n-b` is zero. The normalization uses Poisson coefficient one (no quasi-neutral
+limit is claimed).
+
 The perturbed initial density is `n*+0.08 cos(4 pi x)`. An independent
 discrete eigenvalue calculation gives the stage potential
 `psi+[0.08/(4 N^2 sin^2(2 pi/N))] cos(4 pi x)`. The face oracle evaluates
@@ -24,6 +33,18 @@ latest published potential (history slot 1 after commit), exact signed joint
 occurrence coverage and the per-cell accepted exchange ledger. The same
 one-step oracle with the old potential differs by more than `1e-8`, making a
 stale field observable. The unperturbed pair has zero SG flux to roundoff.
+
+`_face_flux` returns `G=-j`, so the accepted rate is `+div_h(G)`. Its lower
+incident face has ledger orientation -1, its upper face +1. The test gathers
+the rank-local owned-cell incidence records without deduplicating, then checks
+every cell/side exactly once, its sign, face measure, time weight, multiplicity,
+numerical face value and integrated amount. Global State/history reads and the
+background check precede collectively converged assertions. Only rank zero
+writes the optional receipt, and an I/O failure is converged to every rank.
+The state/history tolerances remain `2e-11`; the `1e-8` stale-state separation
+is checked before compilation. The additional face-value tolerance `1e-9`
+propagates the independently checked potential error and changes neither of
+those existing acceptance thresholds.
 
 This test does not claim physical-wall boundary closure, transient
 convergence, positivity for arbitrary data, or entropy dissipation. Those
