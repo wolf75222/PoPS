@@ -334,6 +334,26 @@ public:
         std::forward<Args>(args)...);
   }
 
+  template <class Resource, class Matches, class... Args>
+  PreparedResourceLease<Resource> prepared_resource_lease(std::int64_t node, int block,
+                                                          Matches&& matches, Args&&... args) const {
+    refresh_resources_();
+    return prepared_resources_.template acquire_lease<Resource>(
+        node, block, active_level_, prepared_execution_lane(), std::forward<Matches>(matches),
+        std::forward<Args>(args)...);
+  }
+
+  PreparedResourceAttempt resource_attempt() const { return prepared_resources_.current_attempt(); }
+
+  template <class Executor, class Functor, class... Resources>
+  PreparedResourceTask submit_prepared_for(
+      const PreparedResourceLease<Executor>& executor, std::size_t lane, const char* label,
+      std::int64_t count, Functor functor,
+      const PreparedResourceLease<Resources>&... resources) const {
+    return executor.get().submit_for(prepared_resources_, resource_attempt(), executor, lane, label,
+                                     count, std::move(functor), resources...);
+  }
+
   // Class-scope responsibility fragments preserve the public nested-type identities and member
   // layout of AmrProgramContext while making each semantic authority independently auditable.
 #include <pops/runtime/program/amr_program_context_spatial.inc>

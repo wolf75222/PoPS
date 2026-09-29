@@ -3575,9 +3575,10 @@ struct AmrSystem<Dim>::Impl {
     bool automatic_bootstrap_complete = false;
 
     explicit AcceptedSnapshot(const Impl& owner)
-        : engine(owner.engine
-                     ? std::optional<typename engine_type::Snapshot>(owner.engine->snapshot())
-                     : std::nullopt),
+        : engine((owner.program.drain_resource_work(),
+                  owner.engine
+                      ? std::optional<typename engine_type::Snapshot>(owner.engine->snapshot())
+                      : std::nullopt)),
           multiblock(owner.multiblock_hierarchy ? std::optional<typename multiblock_type::Snapshot>(
                                                       owner.multiblock_hierarchy->snapshot())
                                                 : std::nullopt),

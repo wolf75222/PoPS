@@ -112,6 +112,7 @@ std::string advance_cadence_region(double& physical_time_cursor, int& macro_step
         auto next = std::exchange(frame.next, std::function<void()>{});
         next();
       }
+      finish_resource_work();
       frame.executing = false;
       if (!frame.port_identity.empty())
         return frame.port_identity;
@@ -133,6 +134,7 @@ std::string advance_cadence_region(double& physical_time_cursor, int& macro_step
     cancel_cadence_continuation();
     return {};
   } catch (...) {
+    reject_resource_work();
     physical_time_cursor = frame.accepted_time;
     macro_step_cursor = frame.accepted_macro_step;
     cancel_cadence_continuation();

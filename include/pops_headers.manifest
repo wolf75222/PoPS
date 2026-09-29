@@ -205,6 +205,7 @@ api pops/physics/composition/no_source.hpp
 api pops/physics/fluids/euler.hpp
 api pops/physics/inversion/inversion.hpp
 api pops/physics/inversion/variable_inversion.hpp
+sdk-support pops/runtime/accelerator/prepared_stream_completion.hpp
 sdk-support pops/runtime/accelerator/prepared_stream_executor.hpp
 api pops/runtime/amr/amr_layout_transfer.hpp
 sdk-support pops/runtime/amr/amr_layout_transfer_bridge.hpp
@@ -328,6 +329,7 @@ sdk-support pops/runtime/program/module_metadata.hpp
 sdk-support pops/runtime/program/profiler.hpp
 sdk-root pops/runtime/program/program_context.hpp
 sdk-support pops/runtime/program/prepared_resource_cache.hpp
+sdk-support pops/runtime/program/prepared_resource_lifetime.hpp
 sdk-support pops/runtime/program/program_cadence_continuation.inc
 sdk-support pops/runtime/program/prepared_condensed_sampling.hpp
 sdk-support pops/runtime/program/prepared_scalar_boundary_session.hpp

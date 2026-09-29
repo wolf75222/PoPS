@@ -205,7 +205,9 @@ class ProgramContext {
   explicit ProgramContext(runtime_type* system) : system_(require_system_(system)) {}
 
   void install(std::function<void(double)> step) const {
+    auto lifetime = prepared_resources_.lifetime_callback();
     system_->install_program_step(std::move(step));
+    runtime_state().install_resource_lifetime(std::move(lifetime));
   }
 
   void suspend_map(std::string identity, bool target, field_type& field,
@@ -218,6 +220,7 @@ class ProgramContext {
     (void)prepared_execution_lane();
     if (!std::isfinite(dt) || dt <= 0.0)
       throw std::invalid_argument("ProgramContext step requires a finite positive dt");
+    (void)prepared_resources_.begin_attempt(prepared_execution_lane());
     current_dt_ = dt;
     stage_time_ = ::pops::amr::Rational(0, 1);
     logical_phase_begin_ = ::pops::amr::Rational(0, 1);
@@ -455,6 +458,25 @@ class ProgramContext {
     return prepared_resources_.template acquire<Resource>(node, block, 0, prepared_execution_lane(),
                                                           std::forward<Matches>(matches),
                                                           std::forward<Args>(args)...);
+  }
+
+  template <class Resource, class Matches, class... Args>
+  PreparedResourceLease<Resource> prepared_resource_lease(std::int64_t node, int block,
+                                                          Matches&& matches, Args&&... args) const {
+    return prepared_resources_.template acquire_lease<Resource>(
+        node, block, 0, prepared_execution_lane(), std::forward<Matches>(matches),
+        std::forward<Args>(args)...);
+  }
+
+  PreparedResourceAttempt resource_attempt() const { return prepared_resources_.current_attempt(); }
+
+  template <class Executor, class Functor, class... Resources>
+  PreparedResourceTask submit_prepared_for(
+      const PreparedResourceLease<Executor>& executor, std::size_t lane, const char* label,
+      std::int64_t count, Functor functor,
+      const PreparedResourceLease<Resources>&... resources) const {
+    return executor.get().submit_for(prepared_resources_, resource_attempt(), executor, lane, label,
+                                     count, std::move(functor), resources...);
   }
 
   field_type& scratch_state(std::int64_t value_id, int subslot, const field_type& prototype) const {

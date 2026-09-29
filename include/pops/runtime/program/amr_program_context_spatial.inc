@@ -142,7 +142,9 @@ void install(std::function<void(double)> step) const {
   require_facade_execution_();
   if (!step)
     throw std::invalid_argument("AMR Program install requires a non-empty step");
+  auto lifetime = prepared_resources_.lifetime_callback();
   facade_->install_program_step(std::move(step));
+  runtime_state().install_resource_lifetime(std::move(lifetime));
 }
 
 void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext> keep_alive,
@@ -151,7 +153,9 @@ void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext
   require_facade_execution_();
   if (!step || !keep_alive || keep_alive.get() != this)
     throw std::invalid_argument("AMR Program install requires its exact owning context");
+  auto lifetime = prepared_resources_.lifetime_callback();
   facade_->install_program_step([step = std::move(step), keep_alive](double dt) { step(dt); });
+  runtime_state().install_resource_lifetime(std::move(lifetime));
   if (resource_refresh)
     facade_->install_program_resource_refresh(std::move(resource_refresh));
   if (hierarchy_refresh)
@@ -188,6 +192,7 @@ void begin_step(double dt) const {
   require_facade_execution_();
   if (!std::isfinite(dt) || !(dt > 0.0))
     throw std::invalid_argument("AMR Program step requires a finite positive dt");
+  (void)prepared_resources_.begin_attempt(prepared_execution_lane());
   rhs_input_traces_.clear();
   current_dt_ = dt;
   current_interval_start_time_ = facade_->time();

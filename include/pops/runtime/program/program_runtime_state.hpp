@@ -61,6 +61,7 @@
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
 #include <pops/runtime/program/accepted_exchange.hpp>
 #include <pops/runtime/program/cache_manager.hpp>    // CacheManager (held-node scheduler cache)
+#include <pops/runtime/program/prepared_resource_lifetime.hpp>
 #include <pops/runtime/program/module_metadata.hpp>  // frozen checkpoint-shape metadata
 #include <pops/runtime/program/profiler.hpp>         // Profiler (per-node / per-brick timing)
 
@@ -423,6 +424,9 @@ struct ProgramRuntimeState {
   /// the restored physical epoch/generation is unchanged. Never publishes accepted state.
   std::function<void()> resource_refresh_;
   bool resource_refresh_pending_ = false;
+  /// Weak native-resource hook distinguishes quiescence, region success and revocation.
+  /// Attempt identities live in the context cache, outside accepted snapshots.
+  std::function<void(PreparedResourceAction)> resource_lifetime_;
   /// AMR-only, artifact-owned remap boundary. Unlike hierarchy_refresh_, this callback is reached
   /// only after AmrSystem published a topology and atomically exchanged a prepared history manager.
   /// Keeping it distinct prevents a generic hierarchy refresh from accepting stale history storage.
@@ -604,6 +608,7 @@ struct ProgramRuntimeState {
     std::function<void()> hierarchy_refresh;
     std::function<void()> resource_refresh;
     bool resource_refresh_pending = false;
+    std::function<void(PreparedResourceAction)> resource_lifetime;
     std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted;
     std::function<void()> restart_regrid_preflight;
     std::function<void()> restart_regrid;
@@ -698,6 +703,7 @@ struct ProgramRuntimeState {
     if (this == &accepted)
       throw std::invalid_argument(
           "Program accepted restore requires an independent accepted image");
+    reject_resource_work();
     return PreparedProgramAcceptedRestore(*this, accepted);
   }
 
@@ -769,6 +775,8 @@ struct ProgramRuntimeState {
       throw std::invalid_argument("Program install requires a non-empty whole-system step");
     if (step_install_generation_ == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("Program step-install generation overflow");
+    reject_resource_work();
+    resource_lifetime_ = nullptr;
     step_ = std::move(step);
     hierarchy_refresh_ = nullptr;
     resource_refresh_ = nullptr;
@@ -794,6 +802,7 @@ struct ProgramRuntimeState {
                                        hierarchy_refresh_,
                                        resource_refresh_,
                                        resource_refresh_pending_,
+                                       resource_lifetime_,
                                        history_remap_accepted_,
                                        restart_regrid_preflight_,
                                        restart_regrid_,
@@ -825,6 +834,8 @@ struct ProgramRuntimeState {
   }
 
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
+    reject_resource_work();
+    resource_lifetime_ = std::move(snapshot.resource_lifetime);
     step_ = std::move(snapshot.step);
     hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
     resource_refresh_ = std::move(snapshot.resource_refresh);
@@ -878,7 +889,41 @@ struct ProgramRuntimeState {
     resource_refresh_pending_ = false;
   }
 
+  void install_resource_lifetime(std::function<void(PreparedResourceAction)> hook) {
+    if (!step_ || !hook)
+      throw std::invalid_argument("Program resource lifetime requires an installed step and hook");
+    reject_resource_work();
+    resource_lifetime_ = std::move(hook);
+  }
+
+  /// A snapshot or regrid may proceed only after real queue completion. Drainage
+  /// alone deliberately does not accept a failed/rejected numerical attempt.
+  void drain_resource_work() const noexcept {
+    try {
+      if (resource_lifetime_)
+        resource_lifetime_(PreparedResourceAction::drain);
+    } catch (...) {
+      std::terminate();
+    }
+  }
+
+  void finish_resource_work() const {
+    if (resource_lifetime_)
+      resource_lifetime_(PreparedResourceAction::finish);
+  }
+
+  /// Rollback cannot overwrite accepted carriers if physical drainage is unproven.
+  void reject_resource_work() const noexcept {
+    try {
+      if (resource_lifetime_)
+        resource_lifetime_(PreparedResourceAction::reject);
+    } catch (...) {
+      std::terminate();
+    }
+  }
+
   void invalidate_resources() noexcept {
+    reject_resource_work();
     resource_refresh_pending_ = static_cast<bool>(resource_refresh_);
   }
 
@@ -940,6 +985,7 @@ struct ProgramRuntimeState {
     if (!restart_regrid_preflight_ || !restart_regrid_ || !restart_resync_ ||
         !accepted_context_snapshot_)
       throw std::logic_error(runtime + " artifact lacks its restart preflight/regrid/resync hooks");
+    drain_resource_work();
     restart_regrid_preflight_();
   }
 

@@ -5,6 +5,8 @@
 
 #include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/runtime/accelerator/prepared_stream_completion.hpp>
+#include <pops/runtime/program/prepared_resource_cache.hpp>
 
 #include <Kokkos_Core.hpp>
 #if __has_include(<impl/Kokkos_PartitionSpace.hpp>)
@@ -210,9 +212,9 @@ struct PreparedStreamPartitionEvidence {
 /// Prepared authority for concurrent accelerator kernels.
 ///
 /// The authority owns every execution-space instance and one device-memory workspace per lane.
-/// Both are materialized before execution. ``launch_for`` takes a lane explicitly and performs no
-/// PoPS allocation or global fence, allowing independent lanes to overlap.  Callers synchronize
-/// with ``fence(lane)`` or ``fence_all()`` only at their dependency boundary.
+/// Both are materialized before execution. ``submit_for`` retains the executor and every explicit
+/// captured-buffer lease through physical completion. The legacy unowned ``launch_for`` fences its
+/// lane before returning, since a caller could immediately destroy a raw captured buffer.
 template <class Scalar = Real, class ExecutionSpace = Kokkos::DefaultExecutionSpace>
 class PreparedAcceleratorStreamExecutor {
  public:
@@ -228,6 +230,29 @@ class PreparedAcceleratorStreamExecutor {
   PreparedAcceleratorStreamExecutor& operator=(const PreparedAcceleratorStreamExecutor&) = delete;
   PreparedAcceleratorStreamExecutor(PreparedAcceleratorStreamExecutor&&) noexcept = default;
   PreparedAcceleratorStreamExecutor& operator=(PreparedAcceleratorStreamExecutor&&) = delete;
+  ~PreparedAcceleratorStreamExecutor() noexcept {
+    if (!lanes_.empty()) {
+      if (!Kokkos::is_initialized())
+        std::terminate();
+      try {
+        fence_all();
+      } catch (...) {
+        std::terminate();
+      }
+    }
+  }
+
+  /// One synchronous Kokkos execution instance. This does not weaken prepare()'s
+  /// proof of independent accelerator streams, nor claim CPU/GPU overlap.
+  [[nodiscard]] static PreparedAcceleratorStreamExecutor prepare_synchronous(
+      std::size_t workspace_values) {
+    if (workspace_values == 0 ||
+        workspace_values > std::numeric_limits<std::size_t>::max() / sizeof(scalar_type))
+      throw std::invalid_argument("synchronous workspace extent is invalid");
+    pops::detail::ensure_kokkos_initialized();
+    return PreparedAcceleratorStreamExecutor({}, {execution_space{}}, workspace_values,
+                                             "synchronous-instance-fence", true);
+  }
 
   /// Materialize an exact stream partition and all lane-private workspaces.
   ///
@@ -298,18 +323,73 @@ class PreparedAcceleratorStreamExecutor {
     return lane_(lane).identity;
   }
 
-  /// Submit a kernel to one exact prepared lane.  This call intentionally does not fence.
+  /// Unowned compatibility route: raw captures are safe to release on return.
   template <class Functor>
   void launch_for(std::size_t lane, const char* label, std::int64_t count, Functor functor) const {
     if (label == nullptr || *label == '\0')
       throw std::invalid_argument("accelerator stream kernel label must be non-empty");
     if (count < 0)
       throw std::invalid_argument("accelerator stream kernel extent must be non-negative");
+    const Lane& selected = lane_(lane);
     if (count == 0)
       return;
-    const Lane& selected = lane_(lane);
     using policy_type = Kokkos::RangePolicy<execution_space, Kokkos::IndexType<std::int64_t>>;
-    Kokkos::parallel_for(label, policy_type(selected.instance, 0, count), std::move(functor));
+    try {
+      Kokkos::parallel_for(label, policy_type(selected.instance, 0, count), std::move(functor));
+      selected.instance.fence("PoPS unowned prepared stream launch");
+    } catch (...) {
+      const auto error = std::current_exception();
+      try {
+        selected.instance.fence("PoPS failed unowned prepared stream launch");
+      } catch (...) {
+        std::terminate();
+      }
+      std::rethrow_exception(error);
+    }
+  }
+
+  /// Owned submission. Every allocation captured by a raw pointer must be represented
+  /// by self or buffers; retaining just the executor workspace is not sufficient.
+  /// The native completion event is created and the work is registered before launch.
+  template <class Functor, class... Resources>
+  [[nodiscard]] program::PreparedResourceTask submit_for(
+      program::PreparedResourceCache& cache, const program::PreparedResourceAttempt& attempt,
+      const program::PreparedResourceLease<PreparedAcceleratorStreamExecutor>& self,
+      std::size_t lane, const char* label, std::int64_t count, Functor functor,
+      const program::PreparedResourceLease<Resources>&... buffers) const {
+    if (&self.get() != this || !self.current() || self.version_->authority.lock() != cache.state_)
+      throw std::logic_error("prepared submission requires this exact current executor lease");
+    if (label == nullptr || *label == '\0' || count < 0)
+      throw std::invalid_argument("prepared submission label/extent is invalid");
+    const auto& selected = lane_(lane);
+    using Task = program::PreparedResourceTask;
+    auto control = std::make_shared<typename Task::Control>();
+    control->attempt = attempt.state_;
+    control->retained.reserve(1 + sizeof...(Resources));
+    auto retain = [&](const auto& lease) {
+      if (!lease.current() || lease.version_->authority.lock() != cache.state_)
+        throw std::logic_error("prepared submission requires a current resource from its cache");
+      control->retained.push_back({lease.owner_, lease.version_});
+    };
+    retain(self);
+    (retain(buffers), ...);
+    auto completion = std::make_shared<detail::PreparedStreamCompletion<execution_space>>(
+        selected.instance, synchronous_);
+    control->query = [completion] { return completion->query(); };
+    control->drain = [completion] { completion->wait(); };
+    cache.register_task_(control);
+    control->complete = false;
+    try {
+      using policy_type = Kokkos::RangePolicy<execution_space, Kokkos::IndexType<std::int64_t>>;
+      if (count != 0)
+        Kokkos::parallel_for(label, policy_type(selected.instance, 0, count), std::move(functor));
+      completion->record();
+    } catch (...) {
+      control->error = std::current_exception();
+      control->wait();  // If this cannot drain, Control's destructor terminates without freeing.
+      std::rethrow_exception(control->error);
+    }
+    return Task(std::move(control));
   }
 
   void fence(std::size_t lane, const std::string& label = "PoPS prepared stream fence") const {
@@ -330,10 +410,11 @@ class PreparedAcceleratorStreamExecutor {
   PreparedAcceleratorStreamExecutor(
       std::vector<detail::OwnedNativeStream<execution_space>> owned_native_streams,
       std::vector<execution_space> instances, std::size_t workspace_values_per_stream,
-      const char* partition_mechanism)
-      : owned_native_streams_(std::move(owned_native_streams)) {
+      const char* partition_mechanism, bool synchronous = false)
+      : owned_native_streams_(std::move(owned_native_streams)), synchronous_(synchronous) {
     lanes_.reserve(instances.size());
-    evidence_.backend = detail::stream_backend_name<execution_space>();
+    evidence_.backend =
+        synchronous ? execution_space::name() : detail::stream_backend_name<execution_space>();
     evidence_.workspace_values_per_stream = workspace_values_per_stream;
     evidence_.partition_mechanism = partition_mechanism;
     evidence_.stream_identities.reserve(instances.size());
@@ -341,13 +422,28 @@ class PreparedAcceleratorStreamExecutor {
     std::vector<std::uint32_t> instance_ids;
     instance_ids.reserve(instances.size());
     for (std::size_t lane = 0; lane < instances.size(); ++lane) {
-      const std::uint32_t instance_id =
-          static_cast<std::uint32_t>(instances[lane].impl_instance_id());
+      const std::uint32_t instance_id = [&] {
+        if constexpr (detail::InstanceIdentifiedExecutionSpace<execution_space>)
+          return static_cast<std::uint32_t>(instances[lane].impl_instance_id());
+        else
+          return std::uint32_t{0};
+      }();
       const std::string identity = evidence_.backend + ":instance=" + std::to_string(instance_id) +
                                    ":lane=" + std::to_string(lane);
       const std::string workspace_label = "pops_prepared_stream_workspace_" + std::to_string(lane);
       workspace_type workspace(workspace_label, workspace_values_per_stream);
-      Kokkos::deep_copy(instances[lane], workspace, scalar_type{});
+      try {
+        Kokkos::deep_copy(instances[lane], workspace, scalar_type{});
+        instances[lane].fence("PoPS prepared workspace initialization");
+      } catch (...) {
+        const auto error = std::current_exception();
+        try {
+          instances[lane].fence("PoPS failed prepared workspace initialization");
+        } catch (...) {
+          std::terminate();
+        }
+        std::rethrow_exception(error);
+      }
       lanes_.push_back({std::move(instances[lane]), std::move(workspace), identity});
       instance_ids.push_back(instance_id);
       evidence_.stream_identities.push_back(identity);
@@ -356,9 +452,10 @@ class PreparedAcceleratorStreamExecutor {
 
     std::sort(instance_ids.begin(), instance_ids.end());
     evidence_.independent_streams =
+        !synchronous &&
         std::adjacent_find(instance_ids.begin(), instance_ids.end()) == instance_ids.end();
     evidence_.disjoint_workspaces = workspaces_are_disjoint_();
-    if (!evidence_.independent_streams)
+    if (!synchronous && !evidence_.independent_streams)
       throw PreparedStreamPartitionError(
           "Kokkos partition_space returned aliased accelerator instances");
     if (!evidence_.disjoint_workspaces)
@@ -390,6 +487,7 @@ class PreparedAcceleratorStreamExecutor {
   std::vector<detail::OwnedNativeStream<execution_space>> owned_native_streams_;
   std::vector<Lane> lanes_;
   PreparedStreamPartitionEvidence evidence_;
+  bool synchronous_ = false;
 };
 
 }  // namespace pops::runtime::accelerator

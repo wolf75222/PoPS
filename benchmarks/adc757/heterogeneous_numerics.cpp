@@ -54,6 +54,8 @@
 namespace {
 
 using Executor = pops::runtime::accelerator::PreparedAcceleratorStreamExecutor<double>;
+using ResourceCache = pops::runtime::program::PreparedResourceCache;
+using ExecutorLease = pops::runtime::program::PreparedResourceLease<Executor>;
 using Clock = std::chrono::steady_clock;
 
 constexpr std::string_view kMeasurementSchema = "pops.adc757.heterogeneous-numerics.measurement.v1";
@@ -204,35 +206,41 @@ struct UpdateKernel {
   }
 };
 
-void reset_workspaces(Executor& executor, double value = 1.0) {
+void reset_workspaces(ResourceCache& cache, Executor& executor, double value = 1.0) {
+  cache.finish_attempt();
+  (void)cache.begin_attempt();
   for (std::size_t lane = 0; lane < executor.size(); ++lane)
     Kokkos::deep_copy(executor.instance(lane), executor.workspace(lane), value);
   executor.fence_all();
 }
 
-void launch_update(Executor& executor, std::size_t lane, std::int64_t extent, int work,
-                   double increment, const char* label) {
-  executor.launch_for(lane, label, extent,
-                      UpdateKernel{executor.workspace_data(lane), increment, work});
+void launch_update(ResourceCache& cache, const ExecutorLease& executor_lease, Executor& executor,
+                   std::size_t lane, std::int64_t extent, int work, double increment,
+                   const char* label) {
+  // The registry owns each submission even when no caller retains its ticket.
+  (void)executor.submit_for(cache, cache.current_attempt(), executor_lease, lane, label, extent,
+                            UpdateKernel{executor.workspace_data(lane), increment, work});
 }
 
-void run_local_time_route(Executor& executor, const Config& config, Route route) {
-  reset_workspaces(executor);
+void run_local_time_route(ResourceCache& cache, const ExecutorLease& executor_lease,
+                          Executor& executor, const Config& config, Route route) {
+  reset_workspaces(cache, executor);
   if (route == Route::Baseline) {
     for (int substep = 0; substep < kLocalSubsteps; ++substep) {
-      launch_update(executor, 0, config.extent, config.inner_iterations, 1.0 / kLocalSubsteps,
-                    "pops_adc757_global_fast");
+      launch_update(cache, executor_lease, executor, 0, config.extent, config.inner_iterations,
+                    1.0 / kLocalSubsteps, "pops_adc757_global_fast");
       executor.fence(0);
-      launch_update(executor, 1, config.extent, config.inner_iterations, 1.0 / kLocalSubsteps,
-                    "pops_adc757_global_slow");
+      launch_update(cache, executor_lease, executor, 1, config.extent, config.inner_iterations,
+                    1.0 / kLocalSubsteps, "pops_adc757_global_slow");
       executor.fence(1);
     }
     return;
   }
   for (int substep = 0; substep < kLocalSubsteps; ++substep)
-    launch_update(executor, 0, config.extent, config.inner_iterations, 1.0 / kLocalSubsteps,
-                  "pops_adc757_local_fast");
-  launch_update(executor, 1, config.extent, config.inner_iterations, 1.0, "pops_adc757_local_slow");
+    launch_update(cache, executor_lease, executor, 0, config.extent, config.inner_iterations,
+                  1.0 / kLocalSubsteps, "pops_adc757_local_fast");
+  launch_update(cache, executor_lease, executor, 1, config.extent, config.inner_iterations, 1.0,
+                "pops_adc757_local_slow");
   executor.fence_all();
 }
 
@@ -262,14 +270,15 @@ double host_sum(const View& values) {
   return sum;
 }
 
-Correctness validate_local_time(Executor& executor, const Config& config) {
-  run_local_time_route(executor, config, Route::Baseline);
+Correctness validate_local_time(ResourceCache& cache, const ExecutorLease& executor_lease,
+                                Executor& executor, const Config& config) {
+  run_local_time_route(cache, executor_lease, executor, config, Route::Baseline);
   const auto baseline_fast =
       Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, executor.workspace(0));
   const auto baseline_slow =
       Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, executor.workspace(1));
 
-  run_local_time_route(executor, config, Route::Candidate);
+  run_local_time_route(cache, executor_lease, executor, config, Route::Candidate);
   const auto candidate_fast =
       Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, executor.workspace(0));
   const auto candidate_slow =
@@ -283,11 +292,11 @@ Correctness validate_local_time(Executor& executor, const Config& config) {
                                         (host_sum(candidate_fast) + host_sum(candidate_slow))) /
                               static_cast<double>(2 * config.extent);
 
-  reset_workspaces(executor);
+  reset_workspaces(cache, executor);
   for (int substep = 0; substep < kLocalSubsteps / 2; ++substep)
-    launch_update(executor, 0, config.extent, config.inner_iterations, 1.0 / kLocalSubsteps,
-                  "pops_adc757_restart_first_half");
-  launch_update(executor, 1, config.extent, config.inner_iterations, 1.0,
+    launch_update(cache, executor_lease, executor, 0, config.extent, config.inner_iterations,
+                  1.0 / kLocalSubsteps, "pops_adc757_restart_first_half");
+  launch_update(cache, executor_lease, executor, 1, config.extent, config.inner_iterations, 1.0,
                 "pops_adc757_restart_slow");
   executor.fence_all();
   const auto accepted_fast =
@@ -296,8 +305,8 @@ Correctness validate_local_time(Executor& executor, const Config& config) {
       Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, executor.workspace(1));
 
   for (int substep = kLocalSubsteps / 2; substep < kLocalSubsteps; ++substep)
-    launch_update(executor, 0, config.extent, config.inner_iterations, 1.0 / kLocalSubsteps,
-                  "pops_adc757_restart_second_half");
+    launch_update(cache, executor_lease, executor, 0, config.extent, config.inner_iterations,
+                  1.0 / kLocalSubsteps, "pops_adc757_restart_second_half");
   executor.fence_all();
   const auto restarted_fast =
       Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, executor.workspace(0));
@@ -306,11 +315,12 @@ Correctness validate_local_time(Executor& executor, const Config& config) {
   const double restart_error = std::max(maximum_error(candidate_fast, restarted_fast),
                                         maximum_error(candidate_slow, restarted_slow));
 
-  launch_update(executor, 0, config.extent, config.inner_iterations, 17.0,
+  launch_update(cache, executor_lease, executor, 0, config.extent, config.inner_iterations, 17.0,
                 "pops_adc757_rejected_attempt");
-  launch_update(executor, 1, config.extent, config.inner_iterations, -11.0,
+  launch_update(cache, executor_lease, executor, 1, config.extent, config.inner_iterations, -11.0,
                 "pops_adc757_rejected_attempt_slow");
-  executor.fence_all();
+  cache.reject_attempt();
+  cache.drain();
   Kokkos::deep_copy(executor.instance(0), executor.workspace(0), accepted_fast);
   Kokkos::deep_copy(executor.instance(1), executor.workspace(1), accepted_slow);
   executor.fence_all();
@@ -320,6 +330,7 @@ Correctness validate_local_time(Executor& executor, const Config& config) {
       Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, executor.workspace(1));
   const double rollback_error = std::max(maximum_error(accepted_fast, rolled_back_fast),
                                          maximum_error(accepted_slow, rolled_back_slow));
+  (void)cache.begin_attempt();
 
   const double global_parity = pops::all_reduce_max(parity_error);
   Correctness result;
@@ -496,15 +507,17 @@ int checked_kernel_work(long weight, int inner_iterations) {
   return static_cast<int>(weight * inner_iterations);
 }
 
-void run_load_balance_route(Executor& executor, const Config& config, Route route,
+void run_load_balance_route(ResourceCache& cache, const ExecutorLease& executor_lease,
+                            Executor& executor, const Config& config, Route route,
                             const std::vector<Task>& tasks, MigrationPlan& migration,
                             double& local_communication_seconds) {
-  reset_workspaces(executor);
+  reset_workspaces(cache, executor);
   if (route == Route::Baseline) {
     const auto loads = owner_loads(tasks, pops::n_ranks(), Route::Baseline);
     const long work = loads[static_cast<std::size_t>(pops::my_rank())];
-    launch_update(executor, 0, config.extent, checked_kernel_work(work, config.inner_iterations),
-                  1.0, "pops_adc757_round_robin_load");
+    launch_update(cache, executor_lease, executor, 0, config.extent,
+                  checked_kernel_work(work, config.inner_iterations), 1.0,
+                  "pops_adc757_round_robin_load");
     executor.fence(0);
     local_communication_seconds = 0.0;
     return;
@@ -514,7 +527,7 @@ void run_load_balance_route(Executor& executor, const Config& config, Route rout
   const std::array<long, 2> lane_loads = split_candidate_load(tasks, pops::my_rank());
   for (std::size_t lane = 0; lane < lane_loads.size(); ++lane)
     if (lane_loads[lane] != 0)
-      launch_update(executor, lane, config.extent,
+      launch_update(cache, executor_lease, executor, lane, config.extent,
                     checked_kernel_work(lane_loads[lane], config.inner_iterations), 1.0,
                     "pops_adc757_cost_aware_load");
   executor.fence_all();
@@ -560,21 +573,22 @@ double median(std::vector<double> values) {
   return values.size() % 2 == 0 ? 0.5 * (values[middle - 1] + values[middle]) : values[middle];
 }
 
-bool observe_stream_overlap(Executor& executor, const Config& config) {
+bool observe_stream_overlap(ResourceCache& cache, const ExecutorLease& executor_lease,
+                            Executor& executor, const Config& config) {
   const std::int64_t extent = std::min<std::int64_t>(config.extent, 4096);
   const int work = static_cast<int>(
       std::min<std::int64_t>(static_cast<std::int64_t>(config.inner_iterations) * 64, 100'000));
   auto run_sequential = [&](double&) {
-    reset_workspaces(executor);
-    launch_update(executor, 0, extent, work, 0.0, "pops_adc757_overlap_a0");
+    reset_workspaces(cache, executor);
+    launch_update(cache, executor_lease, executor, 0, extent, work, 0.0, "pops_adc757_overlap_a0");
     executor.fence(0);
-    launch_update(executor, 1, extent, work, 0.0, "pops_adc757_overlap_a1");
+    launch_update(cache, executor_lease, executor, 1, extent, work, 0.0, "pops_adc757_overlap_a1");
     executor.fence(1);
   };
   auto run_concurrent = [&](double&) {
-    reset_workspaces(executor);
-    launch_update(executor, 0, extent, work, 0.0, "pops_adc757_overlap_b0");
-    launch_update(executor, 1, extent, work, 0.0, "pops_adc757_overlap_b1");
+    reset_workspaces(cache, executor);
+    launch_update(cache, executor_lease, executor, 0, extent, work, 0.0, "pops_adc757_overlap_b0");
+    launch_update(cache, executor_lease, executor, 1, extent, work, 0.0, "pops_adc757_overlap_b1");
     executor.fence_all();
   };
   for (int warmup = 0; warmup < 2; ++warmup) {
@@ -690,23 +704,29 @@ int run(const Config& config) {
     throw std::runtime_error(
         "accelerator stream preparation failed on at least one MPI rank" +
         (local_preparation_error.empty() ? std::string{} : ": " + local_preparation_error));
-  Executor& executor = *prepared_executor;
+  ResourceCache cache;
+  const auto execution_lane = pops::ExecutionLane::world("adc757-native-submissions");
+  auto executor_lease = cache.acquire_lease<Executor>(
+      0, 0, 0, execution_lane, [](const Executor&) { return true; }, std::move(*prepared_executor));
+  prepared_executor.reset();
+  (void)cache.begin_attempt(execution_lane);
+  Executor& executor = executor_lease.get();
   const std::vector<std::string> device_uuids = gather_device_uuids();
-  const bool overlap_observed = observe_stream_overlap(executor, config);
+  const bool overlap_observed = observe_stream_overlap(cache, executor_lease, executor, config);
 
   std::vector<Task> tasks = make_tasks(pops::n_ranks());
   MigrationPlan migration(tasks, config.migration_values_per_task);
   const Correctness correctness = config.scenario == Scenario::PreparedLocalTime
-                                      ? validate_local_time(executor, config)
+                                      ? validate_local_time(cache, executor_lease, executor, config)
                                       : validate_load_balance(migration, tasks);
 
   auto selected_route = [&](double& local_communication_seconds) {
     if (config.scenario == Scenario::PreparedLocalTime) {
-      run_local_time_route(executor, config, config.route);
+      run_local_time_route(cache, executor_lease, executor, config, config.route);
       local_communication_seconds = 0.0;
     } else {
-      run_load_balance_route(executor, config, config.route, tasks, migration,
-                             local_communication_seconds);
+      run_load_balance_route(cache, executor_lease, executor, config, config.route, tasks,
+                             migration, local_communication_seconds);
     }
   };
   for (int warmup = 0; warmup < 2; ++warmup) {
@@ -716,6 +736,7 @@ int run(const Config& config) {
     pops::barrier();
   }
   const TimedResult timing = measure(selected_route, executor);
+  cache.finish_attempt();
 
   Metrics metrics;
   metrics.time_to_solution_seconds = timing.seconds;

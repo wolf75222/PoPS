@@ -679,7 +679,8 @@ struct System<Dim>::Impl {
     int macro_step = 0;
 
     explicit AcceptedSnapshot(const Impl& owner)
-        : auxiliary_registry(owner.auxiliary_registry_),
+        : states((owner.program_.drain_resource_work(), std::vector<field_type>{})),
+          auxiliary_registry(owner.auxiliary_registry_),
           provider_carrier(owner.provider_carrier_
                                ? std::optional<runtime::system::AuxiliaryStorageGroups<Dim>>(
                                      *owner.provider_carrier_)

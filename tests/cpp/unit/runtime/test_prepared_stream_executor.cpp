@@ -86,4 +86,65 @@ TEST(PreparedStreamExecutor, AcceleratorInstancesLaunchOnExplicitDisjointLanes) 
   }
 }
 
+TEST(PreparedStreamExecutor, CancelledCudaSubmissionRetainsWorkspaceThroughRealPendingEvent) {
+#if defined(KOKKOS_ENABLE_CUDA)
+  using CudaExecutor = PreparedAcceleratorStreamExecutor<double, Kokkos::Cuda>;
+  using Task = pops::runtime::program::PreparedResourceTask;
+  pops::comm_init();
+  auto lane = pops::ExecutionLane::world("cuda-real-resource-completion");
+  pops::runtime::program::PreparedResourceCache cache;
+  auto executor = cache.acquire_lease<CudaExecutor>(
+      1, 0, 0, lane, [](const CudaExecutor&) { return true; }, CudaExecutor::prepare(2, 4096));
+  auto attempt = cache.begin_attempt();
+  double* workspace = executor->workspace_data(0);
+  auto task = executor->submit_for(
+      cache, attempt, executor, 0, "cuda-leased-workspace", 4096,
+      KOKKOS_LAMBDA(std::int64_t index) {
+        volatile double value = static_cast<double>(index);
+        for (int iteration = 0; iteration < 65536; ++iteration)
+          value = value * 1.00000001 + .125;
+        workspace[index] = value;
+      });
+  if (task.poll())
+    GTEST_SKIP() << "CUDA work already completed; pending interleaving was not observed";
+  EXPECT_FALSE(task.physically_complete());
+  EXPECT_EQ(task.retained_resource_count(), 1u);
+  task.request_cancel();
+  executor = {};
+  cache.clear();  // No external View or executor reference can mask a missing task owner.
+  EXPECT_EQ(task.status(), Task::Status::cancel_requested);
+  EXPECT_EQ(task.retained_resource_count(), 1u);
+  EXPECT_THROW(task.require_consumable(attempt), std::logic_error);
+  task.wait();
+  EXPECT_TRUE(task.physically_complete());
+  EXPECT_TRUE(cache.quiescent());
+  EXPECT_EQ(task.retained_resource_count(), 0u);
+  EXPECT_EQ(task.status(), Task::Status::cancelled);
+  EXPECT_THROW(task.require_consumable(attempt), std::logic_error);
+#else
+  GTEST_SKIP() << "not_executed: real asynchronous CUDA completion requires CUDA hardware/backend";
+#endif
+}
+
+TEST(PreparedStreamExecutor, LegacyCudaRawCaptureIsCompleteBeforeExternalBufferRelease) {
+#if defined(KOKKOS_ENABLE_CUDA)
+  using CudaExecutor = PreparedAcceleratorStreamExecutor<double, Kokkos::Cuda>;
+  auto executor = CudaExecutor::prepare(2, 4096);
+  Kokkos::View<double*, Kokkos::CudaSpace> external("unowned-external-cuda-buffer", 4096);
+  double* raw = external.data();
+  executor.launch_for(
+      0, "legacy-external-cuda-lifetime", 4096, KOKKOS_LAMBDA(std::int64_t index) {
+        volatile double value = static_cast<double>(index);
+        for (int iteration = 0; iteration < 65536; ++iteration)
+          value = value * 1.00000001 + .125;
+        raw[index] = value;
+      });
+  // Query BEFORE any host mirror/deep_copy or view destructor can mask an unfenced return.
+  EXPECT_EQ(cudaStreamQuery(executor.instance(0).cuda_stream()), cudaSuccess);
+  external = {};
+#else
+  GTEST_SKIP() << "not_executed: raw CUDA buffer lifetime requires CUDA hardware/backend";
+#endif
+}
+
 }  // namespace

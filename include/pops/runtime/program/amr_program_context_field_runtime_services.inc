@@ -151,8 +151,10 @@ void require_hierarchy_tensor_binding_(int program_block, int components) const 
 
 void synchronize_resource_generation_() const {
   if (resource_epoch_ != runtime_->topology_epoch() ||
-      resource_generation_ != runtime_->materialization_generation())
+      resource_generation_ != runtime_->materialization_generation()) {
     prepared_resources_.clear();
+    prepared_resources_.drain();
+  }
   if (interface_flux_ledger_ &&
       interface_flux_ledger_->topology_epoch() != runtime_->topology_epoch())
     interface_flux_commit_guard_.reset();

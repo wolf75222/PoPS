@@ -33,6 +33,7 @@
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
+#include <pops/runtime/accelerator/prepared_stream_executor.hpp>
 #include <pops/runtime/program/program_context.hpp>  // NativeProgramContext (the contract under test)
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system.hpp>
@@ -2382,4 +2383,101 @@ TEST(ProgramContextContract, AmrProgramSingleCarrierTopologyRejectsMultipleBlock
   EXPECT_EQ(system->program_accepted_state(), program);
   for (int block = 0; block < 2; ++block)
     EXPECT_EQ(difference_sum_sq_all(context->state(block), before_values[block]), Real(0));
+}
+
+// This crosses the real System accepted transaction: rank zero fails after submitting
+// actual Kokkos work; other ranks return normally, then collective rollback revokes
+// every exact attempt before the accepted carriers are rewritten.
+TEST(ProgramContextContract, PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.native-lifetime");
+  add_gas_block(sim, "gas");
+  sim.seal_auxiliary_providers();
+  sim.set_state("gas", ic(4));
+  const auto accepted = sim.get_state("gas");
+  NativeProgramContext context(&sim);
+  context.configure_primary_clock("clock.macro");
+  using Executor =
+      runtime::accelerator::PreparedAcceleratorStreamExecutor<double,
+                                                              Kokkos::DefaultHostExecutionSpace>;
+  using Task = runtime::program::PreparedResourceTask;
+  auto executor = context.prepared_resource_lease<Executor>(
+      701, 0, [](const Executor&) { return true; }, Executor::prepare_synchronous(8));
+  Task task;
+  runtime::program::PreparedResourceAttempt attempt;
+  bool fail = true;
+  context.install([&](double dt) {
+    context.begin_step(dt);
+    attempt = context.resource_attempt();
+    double* raw = executor->workspace_data(0);
+    task = context.submit_prepared_for(
+        executor, 0, "context-lifetime-write", 8, KOKKOS_LAMBDA(std::int64_t i) { raw[i] = 42; });
+    context.state(0).set_val(Real(7));
+    if (fail && context.prepared_execution_lane().rank() == 0)
+      throw std::runtime_error("injected rank-local rejection after native submission");
+  });
+  sim.set_program_block_map({0});
+  EXPECT_THROW(sim.step(0.1), std::runtime_error);
+  EXPECT_EQ(sim.get_state("gas"), accepted);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.0);
+  EXPECT_EQ(sim.macro_step(), 0);
+  EXPECT_FALSE(attempt.visible());
+  EXPECT_TRUE(task.physically_complete());
+  EXPECT_EQ(task.status(), Task::Status::cancelled);
+  EXPECT_THROW(task.require_consumable(attempt), std::logic_error);
+  const auto rejected_ordinal = attempt.ordinal();
+  fail = false;
+  EXPECT_NO_THROW(sim.step(0.1));
+  EXPECT_GT(attempt.ordinal(), rejected_ordinal);
+  EXPECT_TRUE(attempt.visible());
+  EXPECT_TRUE(task.physically_complete());
+  EXPECT_NO_THROW(task.require_consumable(attempt));
+  EXPECT_DOUBLE_EQ(executor->workspace_data(0)[7], 42);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.1);
+}
+
+TEST(ProgramContextContract,
+     ArtifactInstallRollbackRestoresWeakLifetimeHookWithoutRevivingAttempt) {
+  ensure_kokkos();
+  comm_init();
+  auto lane = ExecutionLane::world("pops.test.program-context.install-lifetime");
+  using namespace runtime::program;
+  using Executor =
+      runtime::accelerator::PreparedAcceleratorStreamExecutor<double,
+                                                              Kokkos::DefaultHostExecutionSpace>;
+  PreparedResourceCache accepted_cache, candidate_cache;
+  auto accepted_executor = accepted_cache.acquire_lease<Executor>(
+      1, 0, 0, lane, [](const Executor&) { return true; }, Executor::prepare_synchronous(8));
+  auto candidate_executor = candidate_cache.acquire_lease<Executor>(
+      1, 0, 0, lane, [](const Executor&) { return true; }, Executor::prepare_synchronous(8));
+  ProgramRuntimeState<kTestDimension> state;
+  state.install_unverified_step([](double) {});
+  state.install_resource_lifetime(accepted_cache.lifetime_callback());
+  const auto accepted_attempt = accepted_cache.begin_attempt(lane);
+  auto install_snapshot = state.capture_artifact_step_install();
+  state.install_unverified_step([](double) {});
+  EXPECT_FALSE(accepted_attempt.visible());
+  state.install_resource_lifetime(candidate_cache.lifetime_callback());
+  const auto candidate_attempt = candidate_cache.begin_attempt(lane);
+  auto candidate_task =
+      candidate_executor->submit_for(candidate_cache, candidate_attempt, candidate_executor, 0,
+                                     "candidate-install", 1, KOKKOS_LAMBDA(std::int64_t){});
+  state.rollback_artifact_step_install(std::move(install_snapshot));
+  EXPECT_FALSE(candidate_attempt.visible());
+  EXPECT_TRUE(candidate_task.physically_complete());
+  EXPECT_FALSE(accepted_attempt.visible());
+  const auto retry = accepted_cache.begin_attempt(lane);
+  EXPECT_GT(retry.ordinal(), accepted_attempt.ordinal());
+  auto task = accepted_executor->submit_for(accepted_cache, retry, accepted_executor, 0,
+                                            "restored-install", 1, KOKKOS_LAMBDA(std::int64_t){});
+  EXPECT_NO_THROW(state.finish_resource_work());
+  EXPECT_TRUE(task.physically_complete());
+  EXPECT_NO_THROW(task.require_consumable(retry));
+  state.invalidate_resources();
+  EXPECT_FALSE(retry.visible());
+  EXPECT_THROW(task.require_consumable(retry), std::logic_error);
+  // Quiescence before a retry snapshot remains legal after numerical rejection.
+  EXPECT_NO_THROW(state.drain_resource_work());
 }
