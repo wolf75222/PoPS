@@ -55,7 +55,7 @@ def _case(order):
                                       projection=ConservativeCellAverage()))
     layout = Uniform(CartesianGrid(frame=frame, cells=(CELLS,),
                                   periodic=PeriodicAxes(frame.axes)))
-    return pops.resolve(pops.validate(case), layout=layout)
+    return pops.resolve(pops.validate(case), layout=layout), block[state]
 
 
 def _initial():
@@ -75,14 +75,14 @@ def test_matrix_flux_occurrences_and_rollback(isolated_native_cache, native_cxx,
     del isolated_native_cache, native_cxx, kokkos_root
     native = select_native_dimension(1)
     world = native.mpi_world()
-    resolved = _case(order)
+    resolved, subject = _case(order)
     artifact = compile_resolved_plan_once(world, resolved,
         route="independent coupled matrix", compile_artifact=pops.compile)
     context = collective_call(world, lambda: artifact_execution_context(artifact))
 
     def bind(values):
         return collective_call(world, lambda: pops.bind(artifact,
-            initial_state={"mixture": np.ascontiguousarray(values[list(order)])},
+            initial_values={subject: np.ascontiguousarray(values[list(order)])},
             resources={"execution_context": context}))
 
     initial = _initial()

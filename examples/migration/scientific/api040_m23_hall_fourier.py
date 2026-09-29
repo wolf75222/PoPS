@@ -72,7 +72,7 @@ def build_case(cells: int, *, eta_h: float, order: tuple[int, int]):
         projection=ConservativeCellAverage()))
     layout = Uniform(CartesianGrid(
         frame=frame, cells=(cells,), periodic=PeriodicAxes(frame.axes)))
-    return case, layout
+    return case, layout, block[state]
 
 
 def initial_means(cells: int, order: tuple[int, int]):
@@ -115,7 +115,7 @@ def run_and_archive(destination: Path):
     for eta_h, cells, order in (
             *((ETA_H, n, order) for order in ORDERS for n in CELLS),
             (0., CELLS[0], ORDERS[0])):
-        case, layout = build_case(cells, eta_h=eta_h, order=order)
+        case, layout, subject = build_case(cells, eta_h=eta_h, order=order)
         resolved = pops.resolve(pops.validate(case), layout=layout)
         from pops.codegen._native_mpi import native_mpi_communicator
         if native_mpi_communicator(native) == "MPI_COMM_WORLD":
@@ -139,7 +139,7 @@ def run_and_archive(destination: Path):
         initial = initial_means(cells, order)
         simulation = _collective_call(world, "bind", lambda artifact=artifact,
                 initial=initial, execution=execution: pops.bind(
-            artifact, initial_state={"transverse": initial},
+            artifact, initial_values={subject: initial},
             resources={"execution_context": execution}))
         before_global = _collective_call(
             world, "initial gather", lambda simulation=simulation:

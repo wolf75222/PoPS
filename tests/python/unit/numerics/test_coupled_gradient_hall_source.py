@@ -202,7 +202,7 @@ def test_scientific_variants_resolve_without_spd_substitution(eta_h, order):
         from api040_m23_hall_fourier import build_case
         from pops.codegen.module_lowering import lower_and_validate
         from pops.codegen.program_codegen import emit_cpp_program
-        case, layout = build_case(32, eta_h=eta_h, order=order)
+        case, layout, _ = build_case(32, eta_h=eta_h, order=order)
         resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production())
         model = case._block_registry.spec("transverse")["model"]
         plan = next(iter(resolved.resolved_operations.values()))
