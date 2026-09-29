@@ -35,15 +35,39 @@ def _target_space(target: Handle) -> Any:
 
 
 def _states(solve: Any, program: Any) -> dict[Any, Any]:
-    from pops.codegen.program_field_plan import _nodes, _reachable
+    from pops.codegen.program_field_plan import _nodes
 
+    by_id = {node.id: node for node in _nodes(program)}
     states = {}
-    for node in _reachable(solve, _nodes(program)):
+    visited = set()
+
+    def visit(value: Any) -> None:
+        node = by_id.get(value.id, value)
+        if node.id in visited:
+            return
+        visited.add(node.id)
+        # A current stage State can itself have been assembled from an earlier
+        # field solve.  Its ancestors are provenance of that State, not inputs
+        # of this field equation.  Crossing this boundary would report two
+        # sequential solves as contradictory simultaneous state bindings.
+        if node.vtype == "state":
+            return
+        if node.id != solve.id and node.op == "solve_linear":
+            return
         if node.op in ("field_problem_load", "field_problem_coefficients"):
             for value in node.inputs:
+                if value.vtype != "state":
+                    raise ValueError("field publication equation input is not a State")
                 if value.block in states and states[value.block] is not value:
                     raise ValueError("field publication has ambiguous current state provenance")
                 states[value.block] = value
+        for source in node.inputs:
+            visit(source)
+        for key in ("apply_block", "residual_block", "body_block"):
+            for child in node.attrs.get(key, ()):
+                visit(child)
+
+    visit(solve)
     return states
 
 
