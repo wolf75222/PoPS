@@ -1,0 +1,8 @@
+{
+  "rank": 1,
+  "ranks": 2,
+  "dimension": 2,
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "00b38fe09ba42678a5a2beda64a3767be9aa130455ecdfcf864a7182fc519cc9"
+}

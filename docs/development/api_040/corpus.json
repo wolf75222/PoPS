@@ -252,10 +252,13 @@
       "reference_limit": "Loi collective et contraintes de mélange à écrire; aucune substitution par diffusions indépendantes.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/diffusion.py;python/pops/fields/problem.py:FieldProblem",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established",
-      "assessment_kind": "prior_mapping_retained_without_new_requalification",
-      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+      "production_status": "scoped_native_constrained_product_serial_and_mpi2_pass",
+      "qualification": "The normalized three-flux rank2 friction witness retains the original equations and sum-zero constraint through a public augmented local product. Both orderings pass MPI2, including incompatible forcing refusal and rollback; its separate earlier serial passes are preserved.",
+      "assessment_kind": "scoped_serial_and_mpi2_xml_hash_verified",
+      "remaining_gap": "This is the finite M11/W10 algebraic subproblem, not a spatial Poisson-Maxwell-Stefan campaign or a completed physical mixture closure.",
+      "production_evidence": [
+        "evidence/local-affine-converged/manifest.json"
+      ]
     },
     {
       "id": "M12",
@@ -411,12 +414,13 @@
       "reference_limit": "Newton public disponible; fermeture entropique complète sur quadrature paramétrable non construite.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/moments/closures/protocol.py;python/pops/time/_program/local.py:solve",
-      "production_status": "scoped_native_entropy_twenty_targets_pass",
-      "qualification": "The first installed readonly/M11/M18 selection retained an M18 rectangular fixture shape failure. The later 2f7c8806 fixture repair passes five source/host checks and one installed Dim2 native twenty-interior-target/outside-cone-refusal test, including repeated refusal and rollback on native 00b38fe0.",
-      "assessment_kind": "scoped_native_entropy_receipt_after_fixture_repair",
-      "remaining_gap": "This selects a five-node, three-moment discrete entropy closure and twenty moderate targets; it does not establish general quadratures or a distinct native diagnostic classification for boundary versus infeasible targets. The earlier rectangular-shape failure remains historical.",
+      "production_status": "scoped_native_entropy_serial_and_mpi2_pass",
+      "qualification": "The repaired five-node, three-moment closure passes its separate serial receipt and one MPI2 case on both ranks covering20 moderate interior targets, positive populations, original moment residuals, independent entropy/nullspace checks, read-only targets and repeated outside-cone refusal with rollback.",
+      "assessment_kind": "scoped_serial_and_mpi2_xml_hash_verified",
+      "remaining_gap": "No general quadrature, near-boundary robustness, native BOUNDARY-vs-INFEASIBLE diagnostic classification, AMR/GPU or full MN transport follows. The earlier rectangular fixture failure remains archived.",
       "production_evidence": [
-        "evidence/post-7b35ffd-scoped/manifest.json"
+        "evidence/post-7b35ffd-scoped/manifest.json",
+        "evidence/local-affine-converged/manifest.json"
       ]
     },
     {
@@ -486,10 +490,13 @@
       "reference_limit": "Fermeture M1, échange matière–rayonnement et régime de diffusion non assemblés.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established",
-      "assessment_kind": "prior_mapping_retained_without_new_requalification",
-      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+      "production_status": "scoped_native_h05_serial_and_mpi2_pass",
+      "qualification": "Four H05 cases (two orders plus two independent nonuniform-cell variants) pass both serial and MPI2. Same-artifact rate rebind .8/0/-.8 verifies original backward-Euler exchange residuals, energy conservation, domain refusal and rollback at dt=.4 without post-solve renormalization.",
+      "assessment_kind": "scoped_serial_and_mpi2_xml_hash_verified",
+      "remaining_gap": "Only the normalized two-reservoir linear exchange H05 subproblem is received. Full M1 closure/transport, nonlinear T^4 matter coupling, opacity/boundary specification and Marshak diffusion limits remain open.",
+      "production_evidence": [
+        "evidence/local-affine-converged/manifest.json"
+      ]
     },
     {
       "id": "M23",
@@ -710,21 +717,27 @@
       "title": "Fermeture infaisable sur sa quadrature",
       "related_model": "M18",
       "production_candidate_symbols": "python/pops/moments/closures/protocol.py",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "No new complete production witness receipt located in this audit.",
-      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
+      "production_status": "scoped_variant_native_infeasible_capture_serial_and_mpi2_pass",
+      "qualification": "The M18 five-node variant on[-1,1] refuses target(m0,m1,m2)=(1,0,1.1) twice, with original-residual failure and dual/read-only-target/time rollback on each MPI rank; a separate repaired serial receipt also passes.",
+      "remaining_gap": "The original W09 quadrature/target variant is not silently replaced by this M18 variant. A distinct native boundary-versus-infeasible diagnostic is still absent.",
+      "assessment_kind": "scoped_serial_and_mpi2_xml_hash_verified",
+      "production_evidence": [
+        "evidence/local-affine-converged/manifest.json"
+      ]
     },
     {
       "id": "W10",
       "title": "Contrainte collective de mélange",
       "related_model": "M11",
       "production_candidate_symbols": "python/pops/physics/diffusion.py",
-      "production_status": "scoped_native_two_variants_pass",
-      "qualification": "The installed readonly/M11/M18 XML has two passing native M11/W10 constrained-product variants; the augmented product retains the original friction and rejects incompatible forcing. The nine-test suite as a whole remains failed because of an unrelated M18 rectangular fixture.",
-      "remaining_gap": "Selected constraint/product witness only; no general collective mixture theorem or broader M11 campaign is inferred.",
+      "production_status": "scoped_native_constrained_product_serial_and_mpi2_pass",
+      "qualification": "Two public augmented-product permutations pass on each MPI rank, retaining original friction and sum-zero constraint and refusing incompatible forcing; earlier serial positives remain in their original failed-suite context.",
+      "remaining_gap": "Selected normalized constraint/product witness only; no general collective-mixture theorem, full M11 field campaign or arbitrary singular operator acceptance is inferred.",
       "production_evidence": [
-        "evidence/post-7b35ffd-scoped/manifest.json"
-      ]
+        "evidence/post-7b35ffd-scoped/manifest.json",
+        "evidence/local-affine-converged/manifest.json"
+      ],
+      "assessment_kind": "scoped_serial_and_mpi2_xml_hash_verified"
     },
     {
       "id": "W11",
@@ -885,6 +898,22 @@
       "excluded_live_campaigns": [
         "later affine fixture repair or other campaigns after these archived receipts"
       ]
+    },
+    "local_affine_converged": {
+      "manifest": "evidence/local-affine-converged/manifest.json",
+      "statuses": {
+        "installed-local-affine-serial-converged": "passed",
+        "installed-local-affine-m11-m18-mpi2": "passed",
+        "installed-selected-state-waves-unit": "passed"
+      },
+      "serial_counts": {
+        "helper": 6,
+        "native": 20
+      },
+      "mpi_native_cases_per_rank": 23,
+      "installed_unit_cases": 28,
+      "affine_scope": "Four native library-body cases: velocity1D order6 and2D order5, both orderings, on spatial Dim2 Uniform; shared body on stages and local unknowns. Conditional inactive/active coefficients and old/new particle-oracle equivalence pass serial/MPI2. Historical affine AMR recipe is outside this receipt.",
+      "limits": "CPU Kokkos Dim2 Uniform only. Twenty serial native cases coincide with the first20 MPI cases; MPI adds two M11 and one M18, whose serial evidence is separate. No general AMR/GPU/global solver or complete-corpus qualification. All earlier red receipts remain preserved."
     }
   }
 }

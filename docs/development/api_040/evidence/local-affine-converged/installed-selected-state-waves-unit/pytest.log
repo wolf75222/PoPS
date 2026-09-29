@@ -1,0 +1,38 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 28 items
+
+tests/python/unit/codegen/test_selected_eigenvalues.py::test_only_selected_transport_state_receives_its_waves[False-route_order0-species_order0] PASSED [  3%]
+tests/python/unit/codegen/test_selected_eigenvalues.py::test_only_selected_transport_state_receives_its_waves[False-route_order0-species_order1] PASSED [  7%]
+tests/python/unit/codegen/test_selected_eigenvalues.py::test_only_selected_transport_state_receives_its_waves[False-route_order1-species_order0] PASSED [ 10%]
+tests/python/unit/codegen/test_selected_eigenvalues.py::test_only_selected_transport_state_receives_its_waves[False-route_order1-species_order1] PASSED [ 14%]
+tests/python/unit/codegen/test_selected_eigenvalues.py::test_only_selected_transport_state_receives_its_waves[True-route_order0-species_order0] PASSED [ 17%]
+tests/python/unit/codegen/test_selected_eigenvalues.py::test_only_selected_transport_state_receives_its_waves[True-route_order0-species_order1] PASSED [ 21%]
+tests/python/unit/codegen/test_selected_eigenvalues.py::test_only_selected_transport_state_receives_its_waves[True-route_order1-species_order0] PASSED [ 25%]
+tests/python/unit/codegen/test_selected_eigenvalues.py::test_only_selected_transport_state_receives_its_waves[True-route_order1-species_order1] PASSED [ 28%]
+tests/python/unit/codegen/test_selected_eigenvalues.py::test_single_state_orphan_wave_declaration_remains_invalid PASSED [ 32%]
+tests/python/unit/codegen/test_selected_eigenvalues.py::test_selected_transport_flux_does_not_silently_inherit_foreign_waves PASSED [ 35%]
+tests/python/unit/codegen/test_resolved_local_storage_authority.py::test_local_product_resolves_real_storage_before_inspection[False] PASSED [ 39%]
+tests/python/unit/codegen/test_resolved_local_storage_authority.py::test_local_product_resolves_real_storage_before_inspection[True] PASSED [ 42%]
+tests/python/unit/codegen/test_resolved_local_storage_authority.py::test_shared_multistate_a_b_a_retains_exact_selection_and_authoring PASSED [ 46%]
+tests/python/unit/codegen/test_resolved_local_storage_authority.py::test_spatial_neighbour_does_not_change_local_state_admission PASSED [ 50%]
+tests/python/unit/codegen/test_resolved_local_storage_authority.py::test_diffusion_grid_operator_is_not_admitted_as_local_storage PASSED [ 53%]
+tests/python/unit/codegen/test_resolved_local_storage_authority.py::test_declared_source_stencil_larger_than_one_remains_authoritative PASSED [ 57%]
+tests/python/unit/codegen/test_resolved_local_storage_authority.py::test_inspector_still_refuses_a_plan_with_the_storage_authority_removed PASSED [ 60%]
+tests/python/unit/codegen/test_resolved_local_storage_independent_review.py::test_local_state_selection_survives_a_spatial_neighbour_through_lowering PASSED [ 64%]
+tests/python/unit/codegen/test_local_product_readonly_capture.py::test_one_unknown_product_already_accepts_frozen_foreign_block_capture PASSED [ 67%]
+tests/python/unit/codegen/test_local_product_readonly_capture.py::test_readonly_captured_state_remains_an_exact_required_bind_input[False] PASSED [ 71%]
+tests/python/unit/codegen/test_local_product_readonly_capture.py::test_readonly_captured_state_remains_an_exact_required_bind_input[True] PASSED [ 75%]
+tests/python/unit/codegen/test_qualified_parameter_inspection_review.py::test_qualified_kinds_domains_and_reports_survive_conflicting_local_views[False-False] PASSED [ 78%]
+tests/python/unit/codegen/test_qualified_parameter_inspection_review.py::test_qualified_kinds_domains_and_reports_survive_conflicting_local_views[False-True] PASSED [ 82%]
+tests/python/unit/codegen/test_qualified_parameter_inspection_review.py::test_qualified_kinds_domains_and_reports_survive_conflicting_local_views[True-False] PASSED [ 85%]
+tests/python/unit/codegen/test_qualified_parameter_inspection_review.py::test_qualified_kinds_domains_and_reports_survive_conflicting_local_views[True-True] PASSED [ 89%]
+tests/python/unit/codegen/test_qualified_parameter_inspection_review.py::test_low_level_without_schema_preserves_report_and_conflict_refusal[False] PASSED [ 92%]
+tests/python/unit/codegen/test_qualified_parameter_inspection_review.py::test_low_level_without_schema_preserves_report_and_conflict_refusal[True] PASSED [ 96%]
+tests/python/unit/codegen/test_qualified_parameter_inspection_review.py::test_native_install_still_refuses_missing_or_wrong_kind_schema_slots PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-selected-state-waves-unit/pytest.xml -
+============================== 28 passed in 6.44s ==============================

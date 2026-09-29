@@ -51,6 +51,14 @@ numerical campaign. It records these completed receipts separately:
   original order criterion; the distinct SSPRK2 experiment passes. M17's old
   FixedDt rejection is retained pending a full new scientific receipt.
 
+The later [local/affine bundle](evidence/local-affine-converged/README.md)
+archives 26 passing serial cases (6 helper units plus 20 native tests), the
+same 20 native cases plus two M11/W10 and one M18 case passing on each MPI rank,
+and 28 passing installed selected-state/parameter/read-only unit cases. Its
+Dim2 CPU identities, per-rank XML inventory and source snapshots are checked
+independently. Earlier failed runs remain preserved; this is no AMR/GPU or
+complete-corpus qualification.
+
 Check registry identities, source paths, receipt hashes and XML counts without
 running numerical tests:
 

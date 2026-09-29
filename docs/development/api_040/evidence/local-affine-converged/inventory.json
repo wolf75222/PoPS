@@ -1,0 +1,481 @@
+{
+  "installed-local-affine-serial-converged/pytest.xml": {
+    "counts": {
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "nodes": [
+      [
+        "tests.python.unit.runtime.test_collective_fixture_checks",
+        "test_rank_local_check_failure_stops_both_before_next_collective[error0]"
+      ],
+      [
+        "tests.python.unit.runtime.test_collective_fixture_checks",
+        "test_rank_local_check_failure_stops_both_before_next_collective[error1]"
+      ],
+      [
+        "tests.python.unit.runtime.test_collective_fixture_checks",
+        "test_unexpected_native_exception_stops_successful_peer"
+      ],
+      [
+        "tests.python.unit.runtime.test_collective_fixture_checks",
+        "test_runtime_error_family_preserves_subclass_diagnostic"
+      ],
+      [
+        "tests.python.unit.runtime.test_collective_fixture_checks",
+        "test_snapshot_conversion_failure_prevents_second_state_gather"
+      ],
+      [
+        "tests.python.unit.runtime.test_collective_fixture_checks",
+        "test_success_returns_local_values_and_serial_checks_are_preserved"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[False-False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[False-True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[True-False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[True-True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_runtime",
+        "test_h05_original_residual_rebind_and_domain_rollback[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_runtime",
+        "test_h05_original_residual_rebind_and_domain_rollback[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime",
+        "test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime",
+        "test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_operators_runtime",
+        "test_public_source_apply_product_rebind_and_incompatible_equation_rollback[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_operators_runtime",
+        "test_public_source_apply_product_rebind_and_incompatible_equation_rollback[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_readonly_runtime",
+        "test_readonly_capture_binds_without_becoming_an_unknown_or_commit[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_readonly_runtime",
+        "test_readonly_capture_binds_without_becoming_an_unknown_or_commit[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[False-1-6]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[False-2-5]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[True-1-6]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[True-2-5]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[diffusion]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine_library]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_affine_library_consumer_matches_particles_and_retained_recipe"
+      ]
+    ],
+    "by_module": {
+      "tests.python.unit.runtime.test_collective_fixture_checks": 6,
+      "tests.python.integration.runtime.test_local_residual_product_runtime": 4,
+      "tests.python.integration.runtime.test_api040_m22_h05_runtime": 2,
+      "tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime": 2,
+      "tests.python.integration.runtime.test_local_product_operators_runtime": 2,
+      "tests.python.integration.runtime.test_local_product_readonly_runtime": 2,
+      "tests.python.integration.runtime.test_affine_push_forward_runtime": 4,
+      "tests.python.integration.runtime.test_conditional_consumers_runtime": 4
+    }
+  },
+  "installed-local-affine-m11-m18-mpi2/rank0.xml": {
+    "counts": {
+      "tests": 23,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "nodes": [
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[False-False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[False-True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[True-False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[True-True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_runtime",
+        "test_h05_original_residual_rebind_and_domain_rollback[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_runtime",
+        "test_h05_original_residual_rebind_and_domain_rollback[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime",
+        "test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime",
+        "test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_operators_runtime",
+        "test_public_source_apply_product_rebind_and_incompatible_equation_rollback[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_operators_runtime",
+        "test_public_source_apply_product_rebind_and_incompatible_equation_rollback[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_readonly_runtime",
+        "test_readonly_capture_binds_without_becoming_an_unknown_or_commit[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_readonly_runtime",
+        "test_readonly_capture_binds_without_becoming_an_unknown_or_commit[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[False-1-6]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[False-2-5]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[True-1-6]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[True-2-5]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[diffusion]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine_library]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_affine_library_consumer_matches_particles_and_retained_recipe"
+      ],
+      [
+        "tests.python.integration.runtime.test_m11_w10_constrained_runtime",
+        "test_augmented_product_preserves_original_friction_and_refuses_incompatible_force[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_m11_w10_constrained_runtime",
+        "test_augmented_product_preserves_original_friction_and_refuses_incompatible_force[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_m18_discrete_entropy_runtime",
+        "test_twenty_interior_targets_and_outside_cone_refusal"
+      ]
+    ],
+    "by_module": {
+      "tests.python.integration.runtime.test_local_residual_product_runtime": 4,
+      "tests.python.integration.runtime.test_api040_m22_h05_runtime": 2,
+      "tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime": 2,
+      "tests.python.integration.runtime.test_local_product_operators_runtime": 2,
+      "tests.python.integration.runtime.test_local_product_readonly_runtime": 2,
+      "tests.python.integration.runtime.test_affine_push_forward_runtime": 4,
+      "tests.python.integration.runtime.test_conditional_consumers_runtime": 4,
+      "tests.python.integration.runtime.test_m11_w10_constrained_runtime": 2,
+      "tests.python.integration.runtime.test_m18_discrete_entropy_runtime": 1
+    }
+  },
+  "installed-local-affine-m11-m18-mpi2/rank1.xml": {
+    "counts": {
+      "tests": 23,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "nodes": [
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[False-False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[False-True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[True-False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_residual_product_runtime",
+        "test_joint_product_rebind_or_atomic_failure[True-True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_runtime",
+        "test_h05_original_residual_rebind_and_domain_rollback[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_runtime",
+        "test_h05_original_residual_rebind_and_domain_rollback[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime",
+        "test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime",
+        "test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_operators_runtime",
+        "test_public_source_apply_product_rebind_and_incompatible_equation_rollback[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_operators_runtime",
+        "test_public_source_apply_product_rebind_and_incompatible_equation_rollback[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_readonly_runtime",
+        "test_readonly_capture_binds_without_becoming_an_unknown_or_commit[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_local_product_readonly_runtime",
+        "test_readonly_capture_binds_without_becoming_an_unknown_or_commit[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[False-1-6]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[False-2-5]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[True-1-6]"
+      ],
+      [
+        "tests.python.integration.runtime.test_affine_push_forward_runtime",
+        "test_native_affine_body_on_stage_and_unknown_matches_discrete_measure[True-2-5]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[diffusion]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine_library]"
+      ],
+      [
+        "tests.python.integration.runtime.test_conditional_consumers_runtime",
+        "test_native_affine_library_consumer_matches_particles_and_retained_recipe"
+      ],
+      [
+        "tests.python.integration.runtime.test_m11_w10_constrained_runtime",
+        "test_augmented_product_preserves_original_friction_and_refuses_incompatible_force[False]"
+      ],
+      [
+        "tests.python.integration.runtime.test_m11_w10_constrained_runtime",
+        "test_augmented_product_preserves_original_friction_and_refuses_incompatible_force[True]"
+      ],
+      [
+        "tests.python.integration.runtime.test_m18_discrete_entropy_runtime",
+        "test_twenty_interior_targets_and_outside_cone_refusal"
+      ]
+    ],
+    "by_module": {
+      "tests.python.integration.runtime.test_local_residual_product_runtime": 4,
+      "tests.python.integration.runtime.test_api040_m22_h05_runtime": 2,
+      "tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime": 2,
+      "tests.python.integration.runtime.test_local_product_operators_runtime": 2,
+      "tests.python.integration.runtime.test_local_product_readonly_runtime": 2,
+      "tests.python.integration.runtime.test_affine_push_forward_runtime": 4,
+      "tests.python.integration.runtime.test_conditional_consumers_runtime": 4,
+      "tests.python.integration.runtime.test_m11_w10_constrained_runtime": 2,
+      "tests.python.integration.runtime.test_m18_discrete_entropy_runtime": 1
+    }
+  },
+  "installed-selected-state-waves-unit/pytest.xml": {
+    "counts": {
+      "tests": 28,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "nodes": [
+      [
+        "tests.python.unit.codegen.test_selected_eigenvalues",
+        "test_only_selected_transport_state_receives_its_waves[False-route_order0-species_order0]"
+      ],
+      [
+        "tests.python.unit.codegen.test_selected_eigenvalues",
+        "test_only_selected_transport_state_receives_its_waves[False-route_order0-species_order1]"
+      ],
+      [
+        "tests.python.unit.codegen.test_selected_eigenvalues",
+        "test_only_selected_transport_state_receives_its_waves[False-route_order1-species_order0]"
+      ],
+      [
+        "tests.python.unit.codegen.test_selected_eigenvalues",
+        "test_only_selected_transport_state_receives_its_waves[False-route_order1-species_order1]"
+      ],
+      [
+        "tests.python.unit.codegen.test_selected_eigenvalues",
+        "test_only_selected_transport_state_receives_its_waves[True-route_order0-species_order0]"
+      ],
+      [
+        "tests.python.unit.codegen.test_selected_eigenvalues",
+        "test_only_selected_transport_state_receives_its_waves[True-route_order0-species_order1]"
+      ],
+      [
+        "tests.python.unit.codegen.test_selected_eigenvalues",
+        "test_only_selected_transport_state_receives_its_waves[True-route_order1-species_order0]"
+      ],
+      [
+        "tests.python.unit.codegen.test_selected_eigenvalues",
+        "test_only_selected_transport_state_receives_its_waves[True-route_order1-species_order1]"
+      ],
+      [
+        "tests.python.unit.codegen.test_selected_eigenvalues",
+        "test_single_state_orphan_wave_declaration_remains_invalid"
+      ],
+      [
+        "tests.python.unit.codegen.test_selected_eigenvalues",
+        "test_selected_transport_flux_does_not_silently_inherit_foreign_waves"
+      ],
+      [
+        "tests.python.unit.codegen.test_resolved_local_storage_authority",
+        "test_local_product_resolves_real_storage_before_inspection[False]"
+      ],
+      [
+        "tests.python.unit.codegen.test_resolved_local_storage_authority",
+        "test_local_product_resolves_real_storage_before_inspection[True]"
+      ],
+      [
+        "tests.python.unit.codegen.test_resolved_local_storage_authority",
+        "test_shared_multistate_a_b_a_retains_exact_selection_and_authoring"
+      ],
+      [
+        "tests.python.unit.codegen.test_resolved_local_storage_authority",
+        "test_spatial_neighbour_does_not_change_local_state_admission"
+      ],
+      [
+        "tests.python.unit.codegen.test_resolved_local_storage_authority",
+        "test_diffusion_grid_operator_is_not_admitted_as_local_storage"
+      ],
+      [
+        "tests.python.unit.codegen.test_resolved_local_storage_authority",
+        "test_declared_source_stencil_larger_than_one_remains_authoritative"
+      ],
+      [
+        "tests.python.unit.codegen.test_resolved_local_storage_authority",
+        "test_inspector_still_refuses_a_plan_with_the_storage_authority_removed"
+      ],
+      [
+        "tests.python.unit.codegen.test_resolved_local_storage_independent_review",
+        "test_local_state_selection_survives_a_spatial_neighbour_through_lowering"
+      ],
+      [
+        "tests.python.unit.codegen.test_local_product_readonly_capture",
+        "test_one_unknown_product_already_accepts_frozen_foreign_block_capture"
+      ],
+      [
+        "tests.python.unit.codegen.test_local_product_readonly_capture",
+        "test_readonly_captured_state_remains_an_exact_required_bind_input[False]"
+      ],
+      [
+        "tests.python.unit.codegen.test_local_product_readonly_capture",
+        "test_readonly_captured_state_remains_an_exact_required_bind_input[True]"
+      ],
+      [
+        "tests.python.unit.codegen.test_qualified_parameter_inspection_review",
+        "test_qualified_kinds_domains_and_reports_survive_conflicting_local_views[False-False]"
+      ],
+      [
+        "tests.python.unit.codegen.test_qualified_parameter_inspection_review",
+        "test_qualified_kinds_domains_and_reports_survive_conflicting_local_views[False-True]"
+      ],
+      [
+        "tests.python.unit.codegen.test_qualified_parameter_inspection_review",
+        "test_qualified_kinds_domains_and_reports_survive_conflicting_local_views[True-False]"
+      ],
+      [
+        "tests.python.unit.codegen.test_qualified_parameter_inspection_review",
+        "test_qualified_kinds_domains_and_reports_survive_conflicting_local_views[True-True]"
+      ],
+      [
+        "tests.python.unit.codegen.test_qualified_parameter_inspection_review",
+        "test_low_level_without_schema_preserves_report_and_conflict_refusal[False]"
+      ],
+      [
+        "tests.python.unit.codegen.test_qualified_parameter_inspection_review",
+        "test_low_level_without_schema_preserves_report_and_conflict_refusal[True]"
+      ],
+      [
+        "tests.python.unit.codegen.test_qualified_parameter_inspection_review",
+        "test_native_install_still_refuses_missing_or_wrong_kind_schema_slots"
+      ]
+    ],
+    "by_module": {
+      "tests.python.unit.codegen.test_selected_eigenvalues": 10,
+      "tests.python.unit.codegen.test_resolved_local_storage_authority": 7,
+      "tests.python.unit.codegen.test_resolved_local_storage_independent_review": 1,
+      "tests.python.unit.codegen.test_local_product_readonly_capture": 3,
+      "tests.python.unit.codegen.test_qualified_parameter_inspection_review": 7
+    }
+  }
+}

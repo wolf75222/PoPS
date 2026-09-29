@@ -38,6 +38,9 @@ def pytest_counts(path):
 
 
 def main():
+    from check_local_affine_evidence import verify
+
+    verify(HERE / "evidence/local-affine-converged")
     with (HERE / "contracts.csv").open(newline="") as source:
         contracts = list(csv.DictReader(source))
     corpus = read_json(HERE / "corpus.json")
@@ -640,7 +643,7 @@ def main():
             and m15_receipt["resolutions"] == [32, 64, 128]
             and m15_receipt["t_end"] == 0.02,
             "M15 six-run scientific receipt changed")
-    for record, metrics in zip(m15_receipt["records"], m15_metrics["records"]):
+    for record, metrics in zip(m15_receipt["records"], m15_metrics["records"], strict=True):
         saved = periodic_root / m15_name / "states" / record["saved_state"]
         with zipfile.ZipFile(saved) as archive:
             require(archive.testzip() is None
