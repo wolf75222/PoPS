@@ -36,6 +36,11 @@ def _cell_in(box, x, y):
     return lower[0] <= x < upper[0] and lower[1] <= y < upper[1]
 
 
+def _agree(world, condition, message):
+    failures = allgather_value(world, "" if condition else message)
+    assert not any(failures), "; ".join(item for item in failures if item)
+
+
 def test_rank_one_owned_invalid_body_collectively_rolls_back(
         isolated_native_cache, native_cxx, kokkos_root):
     world = _world()
@@ -52,17 +57,22 @@ def test_rank_one_owned_invalid_body_collectively_rolls_back(
 
     local = probe.amr.coarse_local_box_bounds()
     report = probe.amr.patch_table()
-    assert len(local) == report.coarse_local_boxes
-    assert report.coarse_total_boxes > len(local) > 0
+    _agree(world, len(local) == report.coarse_local_boxes and
+           report.coarse_total_boxes > len(local) > 0,
+           "native local AMR box count disagrees with the live patch report")
     owned = allgather_value(world, local)
-    assert len(owned) == 2 and all(owned)
-    assert sum(len(row) for row in owned) == report.coarse_total_boxes
+    _agree(world, len(owned) == 2 and all(owned) and
+           sum(len(row) for row in owned) == report.coarse_total_boxes,
+           "two nonempty rank-owned box sets must match global box count")
     coverage = np.zeros((N, N), dtype=np.int8)
+    valid_bounds = True
     for boxes in owned:
         for (lx, ly), (ux, uy) in boxes:
-            assert 0 <= lx < ux <= N and 0 <= ly < uy <= N
-            coverage[ly:uy, lx:ux] += 1
-    np.testing.assert_array_equal(coverage, np.ones_like(coverage))
+            valid_bounds &= 0 <= lx < ux <= N and 0 <= ly < uy <= N
+            if valid_bounds:
+                coverage[ly:uy, lx:ux] += 1
+    _agree(world, valid_bounds and bool(np.all(coverage == 1)),
+           "native rank-owned AMR boxes must cover each level-0 cell exactly once")
 
     # A rank-one interior cell is selected from the native MultiFab local boxes.
     # It is not inferred from a round-robin assumption or global patch listing.
@@ -71,23 +81,33 @@ def test_rank_one_owned_invalid_body_collectively_rolls_back(
         for x in range(lx + 1, ux - 1) for y in range(ly + 1, uy - 1)
         if not any(_cell_in(box, x, y) for box in owned[0])
     ]
-    assert candidates, "rank one needs a stencil-interior owned cell"
+    _agree(world, bool(candidates), "rank one needs a stencil-interior owned cell")
     x, y = candidates[0]
+
+    # Same artifact/layout/parameters without an active invalid branch must
+    # accept one step. This rules out an unrelated preflight or layout failure.
+    pops.run(probe, t_end=DT, max_steps=1, console=False)
+    _agree(world, probe.time() == DT and probe.macro_step() == 1,
+           "inactive User body did not complete the positive control")
+
     disturbed = initials[0].copy()
     disturbed[0, y, x] = 3.
     runtime = _bind(artifact, handles, subjects, (disturbed, initials[1]),
                     ((0., .75), (0., .6)), gate=2.)
-    assert runtime.amr.coarse_local_box_bounds() == tuple(owned[world.rank])
+    _agree(world, runtime.amr.coarse_local_box_bounds() == tuple(owned[world.rank]),
+           "rank ownership changed between positive and negative bind")
     before = tuple(_snapshot(runtime, name, 1, "amr1", world)
                    for name in ("first", "second"))
-    failure = ""
+    failure = ("", "")
     try:
         pops.run(runtime, t_end=DT, max_steps=1, console=False)
-    except RuntimeError as exc:
-        failure = str(exc)
+    except Exception as exc:
+        failure = (type(exc).__name__, str(exc))
     failures = allgather_value(world, failure)
-    assert all(failures), "the rank-one failure must reach both ranks"
-    assert runtime.time() == 0. and runtime.macro_step() == 0
+    _agree(world, all(kind == "RuntimeError" and message for kind, message in failures),
+           "the active User body must reject collectively as RuntimeError")
+    _agree(world, runtime.time() == 0. and runtime.macro_step() == 0,
+           "rejected step advanced accepted time or macro-step")
     after = tuple(_snapshot(runtime, name, 1, "amr1", world)
                   for name in ("first", "second"))
     if world.rank == 0:
