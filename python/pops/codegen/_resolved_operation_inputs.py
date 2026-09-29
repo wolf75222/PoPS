@@ -515,7 +515,7 @@ def derive_module_operations(module: Any, packs: Any, *, boundary_data: Any = ()
         route, refusal = native_route(module, operator)
         effects = _derive_effects(module, operator, boundary_data)
         exchanges = tuple(ExchangeRecord(term.identity, term.target)
-                          for term in occurrences if term.kind in {"flux", "transport", "diffusion", "drift", "grid_operator"})
+                          for term in occurrences if term.kind in {"flux", "transport", "diffusion", "coupled_gradient", "drift", "grid_operator"})
         operations.append(NumericalConstruction(
             identity, evaluation, tuple(term.identity for term in occurrences),
             inputs=derive_inputs(module, operator, packs, boundary_data=boundary_data),

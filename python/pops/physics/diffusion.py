@@ -77,6 +77,18 @@ class DiffusiveFluxHandle(Handle):
         object.__setattr__(self, "law", law)
 
 
+class CoupledGradientFluxHandle(DiffusiveFluxHandle):
+    """A signed rate flux retaining dissipative and reversible component parts."""
+
+    __slots__ = ()
+
+    def __init__(self, name: str, law: CoupledGradientLaw, *, owner: Any) -> None:
+        Handle.__init__(self, name, kind="coupled_gradient_flux", owner=owner)
+        object.__setattr__(self, "reg_name", name)
+        object.__setattr__(self, "state", law.state)
+        object.__setattr__(self, "law", law)
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class DiffusiveFluxLaw:
     """The physical law Fd=A grad(W), retaining every gradient/coefficient dependency."""
@@ -142,6 +154,94 @@ class DiffusiveFluxLaw:
                           for axis, coefficient in enumerate(row)), Const(0)))
                      for variable, tensor in zip(self.variables, self.component_coefficients, strict=True)
                      for row in tensor)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class CoupledGradientLaw(DiffusiveFluxLaw):
+    """Rate flux D grad(U) - F_rev, where F_rev = -R grad(U), R^T = -R."""
+
+    dissipative_components: tuple[tuple[float, ...], ...]
+    reversible_components: tuple[tuple[float, ...], ...]
+
+    def resolve_references(self, resolver: Any) -> CoupledGradientLaw:
+        base = DiffusiveFluxLaw.resolve_references(self, resolver)
+        return CoupledGradientLaw(
+            base.state, base.variable, base.coefficients, base.axes, base.inputs,
+            base.boundaries, self.dissipative_components, self.reversible_components)
+
+    def to_data(self) -> dict[str, Any]:
+        data = DiffusiveFluxLaw.to_data(self)
+        data.update(kind="constitutive_coupled_gradient_flux",
+                    dissipative_components=self.dissipative_components,
+                    reversible_components=self.reversible_components,
+                    signed_rate_flux="D_grad_U_minus_F_rev",
+                    reversible_physical_flux="-R_grad_U")
+        return data
+
+
+def declare_coupled_gradient_flux(model: Any, name: Any, *, state: Any,
+                                  dissipative: Any, reversible: Any,
+                                  boundaries: Any = None) -> CoupledGradientFluxHandle:
+    """Declare distinct component-space symmetric and skew gradient fluxes.
+
+    This is a physical declaration for any Cartesian dimension. A numerical
+    method separately chooses which frames, traces and stages it can realize.
+    """
+    import math
+    from ._board_contract import require_name
+    from .board_handles import StateHandle
+
+    model._guard_mutable("declare a coupled gradient flux")
+    name = require_name(name, "coupled gradient flux name")
+    if not isinstance(state, StateHandle) or model._states.get(state.name) != state:
+        raise ValueError("coupled gradient flux requires this Model's exact state")
+    if model.frame is None:
+        raise ValueError("coupled gradient flux requires an explicit Cartesian frame")
+    n = len(state.components)
+    def matrix(value, label):
+        if not isinstance(value, (tuple, list)) or len(value) != n:
+            raise ValueError(label + " must cover every exact state component")
+        rows = tuple(tuple(row) for row in value)
+        if any(len(row) != n for row in rows):
+            raise ValueError(label + " must be a complete square component matrix")
+        if any(isinstance(item, bool) or not isinstance(item, (int, float))
+               or not math.isfinite(item) for row in rows for item in row):
+            raise ValueError(label + " entries must be finite real constants")
+        return rows
+    d, r = matrix(dissipative, "dissipative matrix"), matrix(reversible, "reversible matrix")
+    if any(d[i][j] != d[j][i] or r[i][j] != -r[j][i]
+           for i in range(n) for j in range(n)):
+        raise ValueError("coupled gradient requires symmetric D and skew R")
+    import numpy as np
+    if np.linalg.eigvalsh(np.asarray(d, dtype=float))[0] < 0:
+        raise ValueError("dissipative component matrix must be positive semidefinite")
+    from pops._ir.expr import Const
+    components = tuple(state)
+    variables = tuple(cast(Expr, sum(
+        (Const(d[i][j] + r[i][j]) * components[j] for j in range(n)), Const(0)))
+        for i in range(n))
+    axes = tuple(axis.name for axis in model.frame.axes)
+    tensors = tuple(_coefficient_tensor(1, len(axes)) for _ in range(n))
+    if boundaries is None:
+        physical = _physical_boundaries(None, len(axes)) * n
+    else:
+        from collections.abc import Mapping
+        if not isinstance(boundaries, Mapping) or set(boundaries) != set(state.components):
+            raise ValueError("coupled gradient boundaries must cover exact components")
+        physical = tuple(row for component in state.components
+                         for row in _physical_boundaries(boundaries[component], len(axes)))
+    expressions = (*variables, *(entry for tensor in tensors for row in tensor for entry in row))
+    for expression in expressions:
+        _authenticate_expression(model, expression, state, label="coupled gradient law")
+    existing = getattr(model, "_diffusive_fluxes", {})
+    if name in existing or name in model._fluxes:
+        raise ValueError("physical flux %r is already declared" % name)
+    law = CoupledGradientLaw(state, variables, tensors, axes,
+                             _law_inputs(model, state, expressions), physical, d, r)
+    handle = CoupledGradientFluxHandle(name, law, owner=model.owner_path)
+    model._diffusive_fluxes = {**existing, name: handle}
+    model._invalidate_authoring_views()
+    return handle
 
 
 def _gradient_law(value: Any) -> tuple[Any, Any]:
@@ -299,4 +399,5 @@ def install_diffusive_fluxes(model: Any, module: Any) -> None:
                               declarations=declarations)
 
 
-__all__ = ["DiffusiveFluxHandle", "DiffusiveFluxLaw", "DiffusiveBoundary"]
+__all__ = ["DiffusiveFluxHandle", "DiffusiveFluxLaw", "DiffusiveBoundary",
+           "CoupledGradientFluxHandle", "CoupledGradientLaw", "declare_coupled_gradient_flux"]

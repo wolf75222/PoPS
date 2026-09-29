@@ -653,13 +653,14 @@ class RateExpr(RateTerm):
             if not isinstance(term, (tuple, list)) or len(term) != 3:
                 raise TypeError("a rate term must be a (kind, payload, sign) triple")
             kind, payload, sign = term
-            if kind not in ("flux", "diffusion", "drift", "source", "projection", "nonconservative"):
+            if kind not in ("flux", "diffusion", "coupled_gradient", "drift", "source", "projection", "nonconservative"):
                 raise ValueError("unknown rate term kind %r" % (kind,))
             if kind == "projection":
                 from .application import RateApplicationProjection
                 if not isinstance(payload, RateApplicationProjection):
                     raise TypeError("a projection rate term requires a whole typed RateSpace projection")
             elif getattr(payload, "kind", None) != ({"diffusion": "diffusive_flux",
+                    "coupled_gradient": "coupled_gradient_flux",
                     "drift": "drift_flux", "nonconservative": "nonconservative_product"}.get(kind, kind)):
                 raise TypeError("rate term %s payload must be a matching declaration Handle" % kind)
             sign = exact_numeric_scalar(sign, where="rate term sign")
@@ -681,7 +682,8 @@ class Divergence(RateTerm):
         self.scale = exact_numeric_scalar(scale, where="Divergence scale")
 
     def _rate_terms(self) -> Any:
-        kind = {"diffusive_flux":"diffusion","drift_flux":"drift"}.get(getattr(self.flux,"kind",""),"flux")
+        kind = {"diffusive_flux":"diffusion","coupled_gradient_flux":"coupled_gradient",
+                "drift_flux":"drift"}.get(getattr(self.flux,"kind",""),"flux")
         return [(kind, self.flux, self.scale)]
 
     def __repr__(self) -> str:

@@ -2,9 +2,10 @@
 
 def diffusion_balance_supported(view):
     if view is None or not view.accumulation.is_identity or not any(
-            row.kind == "diffusion" for row in view.occurrences):
+            row.kind in {"diffusion", "coupled_gradient"} for row in view.occurrences):
         return False
-    return all(row.kind in {"diffusion", "source", "flux"} for row in view.occurrences)
+    return all(row.kind in {"diffusion", "coupled_gradient", "source", "flux"}
+               for row in view.occurrences)
 
 
 def fitted_balance_supported(view):

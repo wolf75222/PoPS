@@ -51,10 +51,11 @@ struct DiffusiveBoundary {
 /// One preparation per Program evaluation/implicit operator, reused for every trial.
 /// The law factory supplies W(U), nonnegative diagonal A(U,fields), and dW/dU at each cell.
 /// Neighbor differences are taken AFTER evaluating W: no discrete chain rule is substituted.
-template <int Dim, int Components = 1, bool Tensor = false>
+template <int Dim, int Components = 1, bool Tensor = false, bool Coupled = false>
 class PreparedDiffusion {
   static_assert(Dim >= 1 && Dim <= 3, "Cartesian diffusion requires native dimensions 1 through 3");
   static_assert(Components > 0, "diffusion requires at least one accumulated component");
+  static_assert(!Coupled || Tensor, "coupled gradients require the full component Jacobian");
   using Field = MultiFab<Dim>;
   using Boundary = PreparedScalarBoundarySession<Dim>;
   Geometry<Dim> geometry_;
@@ -282,7 +283,12 @@ class PreparedDiffusion {
                 w(cell, Components + component * Components + column) = derivative;
               }
             }
-            valid = valid && positive_definite_<Components>(jacobian);
+            if constexpr (Coupled) {
+              for (const Real entry : jacobian)
+                valid = valid && Kokkos::isfinite(entry);
+            } else {
+              valid = valid && positive_definite_<Components>(jacobian);
+            }
           } else {
             for (int component = 0; component < Components; ++component) {
               const int offset = component * (Dim + 2);
@@ -756,5 +762,15 @@ class PreparedDiffusion {
   const auto& faces() const { return faces_; }
   const Field& prototype() const { return variable_; }
   const auto& geometry() const { return geometry_; }
+};
+
+/// Version-one signed component-gradient provider. Physical D and R are retained
+/// separately by the authored law; the prepared Jacobian of W=(D+R)U may be skew.
+/// It does not inherit TensorDiffusion's SPD energy or monotone CFL assertion.
+template <int Dim, int Components>
+class PreparedCoupledGradient final : public PreparedDiffusion<Dim, Components, true, true> {
+  static_assert(Dim == 1, "coupled gradient v1 realizes one periodic Cartesian axis");
+ public:
+  using PreparedDiffusion<Dim, Components, true, true>::PreparedDiffusion;
 };
 }  // namespace pops::runtime::program

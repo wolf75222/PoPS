@@ -29,6 +29,13 @@ class _RateAuthoringMixin(_BoardModel):
         from .diffusion import declare_diffusive_flux
         return declare_diffusive_flux(self, name, state=state, value=value, boundaries=boundaries)
 
+    def coupled_gradient_flux(self, name: Any, *, state: Any, dissipative: Any,
+                              reversible: Any, boundaries: Any = None) -> Any:
+        from .diffusion import declare_coupled_gradient_flux
+        return declare_coupled_gradient_flux(
+            self, name, state=state, dissipative=dissipative,
+            reversible=reversible, boundaries=boundaries)
+
     def drift_flux(self,name: Any,*,state: Any,mobility: Any,potential: Any,boundaries: Any=None) -> Any:
         """Declare the physical drift -mobility*n*grad(potential), without fitting a stencil."""
         from .drift_diffusion import declare_drift_flux
@@ -67,7 +74,7 @@ class _RateAuthoringMixin(_BoardModel):
                     else self._dsl._m.operator_registry())
         inputs = [state.space]
         for kind, payload, _coefficient in terms:
-            if kind in {"diffusion", "drift", "nonconservative"}:
+            if kind in {"diffusion", "coupled_gradient", "drift", "nonconservative"}:
                 for space in payload.law.inputs:
                     if space not in inputs:
                         inputs.append(space)
@@ -446,6 +453,13 @@ class _RateAuthoringMixin(_BoardModel):
                         or getattr(self, "_diffusive_fluxes", {}).get(payload.name) != payload
                         or payload.state != target):
                     raise ValueError("a diffusive rate term must name this state's exact constitutive flux")
+            elif kind == "coupled_gradient":
+                from .diffusion import CoupledGradientFluxHandle
+                if (type(payload) is not CoupledGradientFluxHandle
+                        or payload.owner_path != self.owner_path
+                        or getattr(self, "_diffusive_fluxes", {}).get(payload.name) != payload
+                        or payload.state != target):
+                    raise ValueError("a coupled gradient term must name this state's exact reversible flux")
             elif kind == "flux":
                 if (not isinstance(payload, FluxHandle)
                         or payload.owner_path != self.owner_path

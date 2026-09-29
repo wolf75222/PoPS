@@ -93,6 +93,8 @@ class Diffusion(Descriptor):
         if not diffusion_balance_supported(view):
             raise ValueError("Diffusion requires a diffusion/source physical balance")
         for occurrence in view.occurrences:
+            if occurrence.kind == "coupled_gradient":
+                raise ValueError("Diffusion cannot consume a reversible coupled gradient flux")
             if occurrence.kind == "diffusion":
                 if occurrence.payload != self.flux or occurrence.coefficient <= 0:
                     raise ValueError("Diffusion requires positive uses of its exact constitutive flux")
@@ -175,6 +177,60 @@ class TensorDiffusion(Diffusion):
                     amr_energy="requires_separate_composite_adjoint_analysis",
                     explicit_restriction="affine_gradient_state_independent_tensor_frozen_spectral_bound")
         return data
+
+    def runtime_configuration(self):
+        return {**super().runtime_configuration(), "ghost_depth": self.ghost_depth}
+
+    def runtime_spatial(self):
+        from pops.runtime._state_storage import StateStorageSpatial
+        return StateStorageSpatial(ghost_depth=self.ghost_depth)
+
+
+class CoupledGradient(Diffusion):
+    """Selected periodic component-coupled gradient route, distinct from SPD diffusion.
+
+    The physical law retains D and R separately. This first realization is one
+    Cartesian periodic axis with constant component matrices. Its semidiscrete
+    spatial operator has a skew part; no monotone diffusion CFL is asserted for
+    an explicit temporal method.
+    """
+
+    native_id = "pops::runtime::program::PreparedCoupledGradient"
+    ghost_depth = 2
+
+    def __init__(self, *, flux):
+        from pops.physics.diffusion import CoupledGradientFluxHandle
+        if type(flux) is not CoupledGradientFluxHandle:
+            raise TypeError("CoupledGradient requires an exact coupled gradient flux")
+        self.flux, self.law, self.transport = flux, flux.law, None
+        self.validate()
+
+    def validate(self):
+        from pops.physics.diffusion import CoupledGradientLaw
+        if type(self.law) is not CoupledGradientLaw:
+            raise TypeError("coupled gradient law identity changed")
+        if self.law.dimension != 1 or any(
+                boundary.kind != "periodic" for boundary in self.law.boundaries):
+            raise ValueError("first coupled gradient realization requires one periodic axis")
+        return True
+
+    def validate_balance_view(self, view):
+        if not diffusion_balance_supported(view):
+            raise ValueError("coupled gradient requires a retained gradient balance")
+        rows = tuple(row for row in view.occurrences if row.kind == "coupled_gradient")
+        if len(rows) != 1 or rows[0].payload != self.flux or rows[0].coefficient != 1:
+            raise ValueError("coupled gradient requires one positive exact physical flux")
+        if any(row.kind not in {"coupled_gradient", "source"} for row in view.occurrences):
+            raise ValueError("first coupled gradient realization does not compose transport")
+        return self.validate()
+
+    def to_data(self):
+        return {"schema_version": 1, "method": "coupled_gradient",
+                "flux": self.flux.canonical_identity(), "law": self.law.to_data(),
+                "spatial_realization": "periodic_two_point_component_matrix_v1",
+                "semidiscrete_energy": "skew_part_zero_quadratic_form",
+                "temporal_stability": "requires_separate_method_specific_spectral_certificate",
+                "ghost_depth": self.ghost_depth}
 
     def runtime_configuration(self):
         return {**super().runtime_configuration(), "ghost_depth": self.ghost_depth}

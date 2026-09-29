@@ -24,7 +24,7 @@ from .nonconservative import CoordinatedFace, FaceBalance, CoordinatedFiniteVolu
 from .state_storage import StateStorage
 from .named_flux import NamedCenteredDivergence
 from .interactions import JointEvaluation
-from .diffusion import Diffusion, TensorDiffusion
+from .diffusion import Diffusion, TensorDiffusion, CoupledGradient
 from .scharfetter_gummel import ScharfetterGummel
 from .indicator_stencils import DiscreteGradientStencil, LinearAxisStencil
 from .plan import DiscretizationPlan
@@ -33,5 +33,6 @@ __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", 
            "FaceBalance", "CoordinatedFace", "CoordinatedFiniteVolume",
            "spatial", "FiniteVolume", "FanLi15RawMomentPath", "SymbolicPath", "PathConservativeFiniteVolume",
            "StateStorage", "NamedCenteredDivergence", "Diffusion", "TensorDiffusion",
+           "CoupledGradient",
            "ScharfetterGummel",
            "DiscreteGradientStencil", "LinearAxisStencil", "DiscretizationPlan", "JointEvaluation"]
