@@ -29,7 +29,10 @@ The proposed repair publishes the prepared group core for a complete periodic
 pair of flux/full callbacks. The core then uses the existing
 `periodic_{flux,full}_at_point_prepared` callbacks and their collective
 face-materialization boundary. Blocks without these callbacks retain their
-unprepared route inside a per-block collective error boundary. The new installed
+unprepared route inside a per-block collective error boundary. An exact ranked
+route contract votes the physical and periodic callback presences before bind
+preparation and again before each group evaluation; a rank cannot quietly
+select fallback while its peer enters a prepared callback. The new installed
 MPI regression separates bind and step, requires the genuine native face
 rejection on every rank, and checks no state or clock publication. The public
 `CartesianGrid.native_spatial_data()` declares one base box; the regression
@@ -41,4 +44,7 @@ strand its peer in `state_global()` through a test assertion.
 Current verification: source-only Python syntax and `git diff --check` pass.
 The regression is intentionally unqualified until root rebuilds the native
 Dim=1 package and executes it with MPI2. Existing serial M15 results do not
-establish MPI rejection convergence.
+establish MPI rejection convergence. This is the Uniform System route; it does
+not qualify AMR. The preexisting detached-state materialization before the
+prepared callback has its own broader collective-failure obligation, outside
+this owner-only face-domain witness.

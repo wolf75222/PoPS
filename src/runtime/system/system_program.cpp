@@ -478,12 +478,15 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
             const int mode = flux_only.empty() ? 0 : flux_only[block];
             if (mode != 0 && mode != 1)
               throw std::invalid_argument("shared-interface core has a nonboolean flux mode");
+            const auto& selected = owner->sp[block];
             const bool capture = !retained_faces.empty() && retained_faces[block] != nullptr;
             contract.presence(states[block] != nullptr)
                 .scalar(static_cast<std::uint8_t>(mode))
-                .presence(capture);
+                .presence(capture)
+                .presence(selected.boundary != nullptr)
+                .presence(static_cast<bool>(selected.periodic_flux_at_point_prepared))
+                .presence(static_cast<bool>(selected.periodic_full_at_point_prepared));
             if (capture) {
-              const auto& selected = owner->sp[block];
               const auto omitted = selected.boundary ? selected.boundary->omitted_interface_faces()
                                                      : std::array<bool, 2 * Dim>{};
               if (states[block] == nullptr ||
@@ -580,6 +583,24 @@ void System<Dim>::prepare_bound_physical_group_() {
   const bool physical = !p_->boundary_registry_.boundaries().empty();
   if (!physical && !prepared_boundary_execution_lane_)
     return;
+  const auto& lane = prepared_boundary_execution_lane();
+  std::string route_contract;
+  runtime::program::collective_boundary_provider_phase(
+      lane, "System prepared physical group route authentication", [&] {
+        ExactContractBuilder contract;
+        contract.text("pops.system.prepared-physical-group-route")
+            .scalar(std::int32_t{Dim})
+            .presence(physical)
+            .scalar(static_cast<std::uint64_t>(p_->sp.size()));
+        for (const auto& block : p_->sp)
+          contract.presence(block.boundary != nullptr)
+              .presence(static_cast<bool>(block.periodic_flux_at_point_prepared))
+              .presence(static_cast<bool>(block.periodic_full_at_point_prepared));
+        route_contract = std::move(contract).release();
+      });
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-prepared-physical-group-route", route_contract}}, lane))
+    throw std::runtime_error("System prepared physical group route differs across MPI ranks");
   const bool periodic_prepared = std::any_of(p_->sp.begin(), p_->sp.end(), [](const auto& block) {
     return static_cast<bool>(block.periodic_flux_at_point_prepared) &&
            static_cast<bool>(block.periodic_full_at_point_prepared);
