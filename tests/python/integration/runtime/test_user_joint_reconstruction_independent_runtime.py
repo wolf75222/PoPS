@@ -40,12 +40,20 @@ def _matrices(permutation):
     return tuple(a[np.ix_(permutation, permutation)] for a in (x, y))
 
 
-def _case(permutation, *, guarded=False):
+def _case(permutation, *, guarded=False, primitive=False):
     frame = Rectangle("joint_user_native", (0., 0.), (1., 1.)).frame(Cartesian2D())
     model = pops.Model("joint_user_native_model", frame=frame)
     states = (model.species("first", state=tuple("q%d" % k for k in permutation[:2])),
               model.species("second", state=tuple("q%d" % k for k in permutation[2:])))
     q = tuple(component for state in states for component in state)
+    if primitive:
+        coordinates = (q[0], *(model.primitive("p%d" % j,
+                         q[j] / q[0] + .02 * q[0] * q[0]) for j in range(1, 5)))
+        inverse = (coordinates[0], *(coordinates[0] *
+                   (coordinates[j] - .02 * coordinates[0] * coordinates[0])
+                   for j in range(1, 5)))
+        model.primitive_state(*coordinates, states=states, conservative=inverse)
+        model.recovery_admissibility(states=states, **{q[0].component: q[0] > 0})
     parameters = (model.param(RuntimeParam("alpha", default=.03)),
                   model.param(RuntimeParam("beta", default=-.02)))
     alpha, beta = (model.value(parameter) for parameter in parameters)
@@ -86,7 +94,9 @@ def _case(permutation, *, guarded=False):
     for row, body in enumerate((first, second)):
         policy = reconstruction.User(body, state=states[row], sampling=(states[1-row],),
                                      formal_order=1)
-        method = FiniteVolume(flux=fluxes[row], variables=variables.Conservative(states[row]),
+        variable_policy = (variables.Primitive(states[row]) if primitive
+                           else variables.Conservative(states[row]))
+        method = FiniteVolume(flux=fluxes[row], variables=variable_policy,
                               reconstruction=policy, riemann=riemann.Rusanov(),
                               sampling=(states[1-row],))
         plan = DiscretizationPlan()
@@ -111,11 +121,22 @@ def _case(permutation, *, guarded=False):
     return case, layout, subjects, handles, matrices, calls
 
 
-def _oracle(initial, matrices, alpha, beta):
+def _oracle(initial, matrices, alpha, beta, *, primitive=False):
     result = initial.copy()
+    sampled = initial.copy()
+    if primitive:
+        sampled[1:] = initial[1:] / initial[0:1] + .02 * initial[0:1] ** 2
+
+    def conservative(value):
+        if not primitive:
+            return value
+        physical = value.copy()
+        physical[1:] = value[0:1] * (value[1:] - .02 * value[0:1] ** 2)
+        return physical
+
     for matrix, axis in zip(matrices, (2, 1), strict=True):
         def sample(offset, *, right=False):
-            return np.roll(initial, offset - 1 if right else -offset, axis=axis)
+            return np.roll(sampled, offset - 1 if right else -offset, axis=axis)
         def trace(right):
             q0, qm1, qp1 = sample(0, right=right), sample(-1, right=right), sample(1, right=right)
             qp2, qp3 = sample(2, right=right), sample(3, right=right)
@@ -124,7 +145,7 @@ def _oracle(initial, matrices, alpha, beta):
                              q0[2] + beta * (qp1[1] - qm1[1]),
                              q0[3] + beta * (qp1[4] - qm1[4]),
                              q0[4] + beta * (qp2[0] - qm1[0])))
-        left, right = trace(False), trace(True)
+        left, right = conservative(trace(False)), conservative(trace(True))
         speed = float(np.max(np.sum(np.abs(matrix), axis=1)))
         face = .5 * np.einsum("ij,jyx->iyx", matrix, left + right) - .5 * speed * (right - left)
         result += DT * N * (np.roll(face, 1, axis=axis) - face)
@@ -149,10 +170,11 @@ def _gather(runtime, world):
                            np.asarray(rows[1]).reshape(3, N, N)))
 
 
-@pytest.mark.parametrize("permutation", (tuple(range(5)), (4, 2, 0, 3, 1)))
+@pytest.mark.parametrize("permutation,primitive", ((tuple(range(5)), False),
+                                                   ((4, 2, 0, 3, 1), True)))
 def test_joint_native_face_matches_cross_component_oracle_and_live_rebind(
-        isolated_native_cache, native_cxx, kokkos_root, permutation):
-    case, layout, subjects, handles, matrices, calls = _case(permutation)
+        isolated_native_cache, native_cxx, kokkos_root, permutation, primitive):
+    case, layout, subjects, handles, matrices, calls = _case(permutation, primitive=primitive)
     artifact, world = _compile(case, layout, "joint-user-cross-component")
     authoring_calls = tuple(calls)
     initial = _initial(permutation)
@@ -162,7 +184,7 @@ def test_joint_native_face_matches_cross_component_oracle_and_live_rebind(
         pops.run(runtime, t_end=DT, max_steps=1, console=False)
         actual = _gather(runtime, world)
         def check():
-            expected = _oracle(initial, matrices, alpha, beta)
+            expected = _oracle(initial, matrices, alpha, beta, primitive=primitive)
             np.testing.assert_allclose(actual, expected, rtol=4e-12, atol=4e-12)
             np.testing.assert_allclose(actual.sum(axis=(1, 2)), initial.sum(axis=(1, 2)),
                                        rtol=0, atol=5e-11)
