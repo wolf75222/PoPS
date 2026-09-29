@@ -230,3 +230,29 @@ TEST(ProgramRuntimeStateCadence, RejectedContinuationRestoresClockAndDiscardsBor
   EXPECT_DOUBLE_EQ(time, 2.125);
   EXPECT_EQ(step, 1);
 }
+
+TEST(ProgramRuntimeStateCadence, ForeignPortReleaseCannotConsumeSuspendedStage) {
+  pops::runtime::program::ProgramRuntimeState<2> state;
+  pops::MultiFab<2> stage;
+  double time = 1.0;
+  int step = 3;
+  int completed = 0;
+  state.install_unverified_step([&](double) {
+    state.suspend_program_map("owned-stage", false, {&stage}, [&] { ++completed; }, 37);
+  });
+
+  EXPECT_EQ(state.advance_cadence_region(time, step, 0.125, "PortReview"), "owned-stage");
+  EXPECT_THROW(state.release_program_map("foreign-stage", false), std::logic_error);
+  EXPECT_THROW(state.release_program_map("owned-stage", true), std::logic_error);
+  EXPECT_EQ(state.program_map_fields("owned-stage", false).front(), &stage);
+  EXPECT_EQ(state.program_map_stage_generation("owned-stage", false), 37u);
+  EXPECT_DOUBLE_EQ(time, 1.0);
+  EXPECT_EQ(step, 3);
+  EXPECT_EQ(completed, 0);
+
+  state.release_program_map("owned-stage", false);
+  EXPECT_TRUE(state.advance_cadence_region(time, step, 0.125, "PortReview").empty());
+  EXPECT_EQ(completed, 1);
+  EXPECT_DOUBLE_EQ(time, 1.125);
+  EXPECT_EQ(step, 4);
+}
