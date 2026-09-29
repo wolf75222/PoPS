@@ -40,13 +40,14 @@ inline void install_amr_runtime_authority(AmrSystem<Dim>& system, std::string_vi
 /// engine inspected by tests and exposes no temporal step entry point.
 template <int Dim>
 inline std::shared_ptr<runtime::program::AmrProgramContext<Dim>>
-install_forward_euler_program_context(AmrSystem<Dim>& system, bool solve_default_field) {
+install_forward_euler_program_context(AmrSystem<Dim>& system, bool solve_default_field,
+                                     const std::string& primary_clock = "test.clock.macro") {
   std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
   std::iota(block_map.begin(), block_map.end(), 0);
   if (system.engine() == nullptr)
     throw std::runtime_error("explicit AMR test Program requires the materialized runtime engine");
   auto context = runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("test.clock.macro");
+  context->configure_primary_clock(primary_clock);
   context->install(
       [context, solve_default_field](double macro_dt) {
         context->advance_hierarchy(macro_dt, [context, solve_default_field](double level_dt) {

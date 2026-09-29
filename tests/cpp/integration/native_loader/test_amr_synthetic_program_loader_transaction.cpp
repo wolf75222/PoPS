@@ -237,8 +237,10 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
     }
     (void)system.materialize_bootstrap_action(kStateRoute, "prolong_from_parent",
                                               "conservative_linear", level);
-    system.commit_bootstrap_level();
   }
+  // Public finalize_bootstrap commits the complete hierarchy once. Committing inside the
+  // loop destroys the transaction required to materialize the second refined level.
+  system.commit_bootstrap_level();
   system.mark_bound();
 }
 

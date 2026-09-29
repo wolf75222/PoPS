@@ -98,14 +98,18 @@ struct Fixture {
   pops::AmrSystem<Dim> system;
   std::shared_ptr<pops::runtime::program::AmrProgramContext<Dim>> context;
 
-  Fixture() : system(config()) {
+  explicit Fixture(bool restart_ready = false) : system(config()) {
     pops::test::install_amr_runtime_authority(system, "test.amr-history.fixture/runtime@1");
     system.install_block_state_route("tracer", "state/tracer");
     install_advection(system);
     system.set_conservative_state("tracer", std::vector<double>(cell_count(config().shape), 1.0));
     (void)system.engine();
     system.set_program_block_map({0});
-    context = pops::runtime::program::make_program_execution_provider(&system);
+    // A restart seals the Program's history/flux capacity, so the restart witnesses need
+    // a real installed body and its declared budget before registering any history.
+    context = restart_ready
+                  ? pops::test::install_forward_euler_program_context(system, false, "clock.macro")
+                  : pops::runtime::program::make_program_execution_provider(&system);
     context->configure_primary_clock("clock.macro");
     context->declare_clock_relation("clock.macro", "clock.fast", 2);
   }
@@ -193,7 +197,7 @@ TEST(test_amr_history_ring, FacadeTransactionRestoresAcceptedHistoryImage) {
 
 TEST(test_amr_history_ring, RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction) {
   constexpr int Dim = pops::kNativeDimension;
-  Fixture<Dim> fixture;
+  Fixture<Dim> fixture(true);
   fixture.register_history();
   auto sample = fixture.context->scratch_state_like(fixture.context->state(0));
   sample.set_val(pops::Real(7));
@@ -229,7 +233,7 @@ TEST(test_amr_history_ring, RestartRegridImageRejectsPendingStoreAndEndsWithItsT
 
 TEST(test_amr_history_ring, FrozenRestartImageRefusesLaterStoreRotationAndRestore) {
   constexpr int Dim = pops::kNativeDimension;
-  Fixture<Dim> fixture;
+  Fixture<Dim> fixture(true);
   fixture.register_history();
   auto sample = fixture.context->scratch_state_like(fixture.context->state(0));
   fixture.context->begin_step(0.125);
