@@ -96,10 +96,17 @@ def _prepared_case(cells: int):
     if fraction > CRITERIA["explicit_frequency_fraction_max"]:
         raise AssertionError("M05 authored Forward Euler frequency bound is inadmissible")
     initial = np.ascontiguousarray(initial_means(cells)[None, :])
-    if np.max(np.abs(initial[0] - integrated_initial_means(cells))) > 2e-14:
+    if (initial.shape != (1, cells) or not np.all(np.isfinite(initial)) or
+            np.max(np.abs(initial[0] - integrated_initial_means(cells))) > 2e-14):
         raise AssertionError("M05 requires true cell means, not center samples")
     case, layout, subject = build_case(cells)
-    resolved = pops.resolve(pops.validate(case), layout=layout)
+    validated = pops.validate(case)
+    resolved = pops.resolve(validated, layout=layout)
+    if resolved.resolved_dimension != 1:
+        raise RuntimeError("M05 requires a genuine one-dimensional resolved plan")
+    bindings = resolved.initial_condition_plan.bindings
+    if len(bindings) != 1 or bindings[0].subject != validated.resolve(subject):
+        raise RuntimeError("M05 BindArray subject differs from its exact initial plan")
     return step, fraction, initial, subject, resolved
 
 
@@ -241,13 +248,15 @@ def run_and_archive(destination: Path) -> list[dict]:
                 compile_artifact=pops.compile)
         else:
             artifact = pops.compile(resolved)
-        def prepare_execution(artifact=artifact):
+        def require_dim1_artifact(artifact=artifact):
             if artifact.resolved_dimension != 1:
                 raise RuntimeError("M05 requires a genuine one-dimensional artifact")
-            return pops.ExecutionContext.mpi_world(artifact)
+            return True
 
+        _collective_call(bootstrap_world, "Dim1 artifact", require_dim1_artifact)
         execution = _collective_call(
-            bootstrap_world, "Dim1 artifact and execution context", prepare_execution)
+            bootstrap_world, "execution context",
+            lambda artifact=artifact: pops.ExecutionContext.mpi_world(artifact))
         world = _collective_call(
             bootstrap_world, "execution communicator",
             lambda execution=execution: execution.communicator.handle)
