@@ -918,17 +918,25 @@ def emit_cpp_native_loader(
         emit_user_reconstruction_policy, user_reconstruction_source_identity,
     )
 
-    user_reconstruction_identity = user_reconstruction_source_identity(m)
-    user_reconstruction_source = emit_user_reconstruction_policy(m)
-    user_reconstruction_descriptor = getattr(getattr(m, "_m", m), "_user_reconstruction", None)
+    # A Program-owned carrier supplies storage and halo access, not an independent
+    # face operator. Its numerical policies are instantiated by the complete
+    # Program operator (for example the principal group), with that operator's
+    # coupled states and parameter contexts. Passing them to this row's builder
+    # would instead instantiate an unavailable standalone physical flux/speed.
+    storage_only = bool(getattr(getattr(m, "_m", m), "_program_only_storage_axes", ()))
+    user_reconstruction_identity = None if storage_only else user_reconstruction_source_identity(m)
+    user_reconstruction_source = "" if storage_only else emit_user_reconstruction_policy(m)
+    user_reconstruction_descriptor = (None if storage_only else
+        getattr(getattr(m, "_m", m), "_user_reconstruction", None))
     user_reconstruction_captures = bool(
         user_reconstruction_descriptor is not None and
         user_reconstruction_descriptor.options["runtime_captures"])
     from pops.codegen.user_riemann_lowering import emit_user_face_policy, user_face_source_identity
 
-    user_face_identity = user_face_source_identity(m)
-    user_face_source = emit_user_face_policy(m)
-    user_face_descriptor = getattr(getattr(m, "_m", m), "_user_face", None)
+    user_face_identity = None if storage_only else user_face_source_identity(m)
+    user_face_source = "" if storage_only else emit_user_face_policy(m)
+    user_face_descriptor = (None if storage_only else
+        getattr(getattr(m, "_m", m), "_user_face", None))
     user_face_captures = bool(user_face_descriptor is not None and
                               user_face_descriptor.options["runtime_captures"])
     model_identity = str(model_identity if model_identity is not None else model_hash(m))
