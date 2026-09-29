@@ -19,13 +19,19 @@ struct Context {
   ExecutionLane lane =
       ExecutionLane::duplicate_world_collectively("test.exchange-batch.boundary-interior");
   AcceptedExchangeLedger ledger;
+  const Field* active_override = nullptr;
   const auto& geometry() const { return geometry_; }
   const auto& prepared_execution_lane() const { return lane; }
   auto prepare_mesh_boundary_session(Field& field, const ExecutionLane& execution) {
     return PreparedScalarBoundarySession<1>::prepare(geometry_, BoundaryTopology<1>::physical(),
                                                      field, execution, 1);
   }
-  const Field* pointwise_active_mask(int, const Field&) const { return nullptr; }
+  const Field* pointwise_active_mask(int, const Field& field) const {
+    if (active_override != nullptr && active_override->layout() != field.layout())
+      throw std::invalid_argument("rank-local active mask layout differs from state");
+    return active_override;
+  }
+  const Field* pointwise_exchange_coverage_mask(int, const Field&) const { return nullptr; }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
     auto records = prepare_exchange_batch(std::forward<Producer>(producer), [](auto&) {}, lane);
@@ -81,8 +87,35 @@ TEST(ExchangeBatches, UnequalPhysicalBoundaryOwnershipConservesAndFailuresRollba
   const auto before = context.ledger.checkpoint();
   const Real state_before = integral(q, context.lane), rhs_before = integral(rhs, context.lane);
 
-  // The interior rank produces no faces, but still joins preparation failure consensus.
+  // The interior-only rank rejects a real carrier layout mismatch after the
+  // common preparation. Boundary owners must reach the same refusal vote even
+  // though their coverage lookup succeeded and they could stage face records.
+  const auto wrong_boxes = mesh::BoxArray<1>::from_domain(
+      Box<1>{Index<1>{0}, Index<1>{15}}, Extent<1>{4});
+  const auto wrong_distribution = mesh::Distribution<1>::partitioned(
+      wrong_boxes, mesh::RankSpace<1>{Index<1>{0}, Extent<1>{3}},
+      std::vector<Index<1>>{Index<1>{0}, Index<1>{1}, Index<1>{2}, Index<1>{0}});
+  Field wrong_mask(wrong_boxes, wrong_distribution, Index<1>{my_rank()}, 1, Extent<1>{1});
+  if (my_rank() == 1)
+    context.active_override = &wrong_mask;
   bool refused = false;
+  std::string refusal;
+  try {
+    prepared.stage_accepted_exchanges(context, 0, "diffusion", "wrong-layout", "accepted", .05,
+                                      true);
+  } catch (const std::invalid_argument& error) {
+    refused = true;
+    refusal = error.what();
+  }
+  context.active_override = nullptr;
+  EXPECT_EQ(all_reduce_sum(refused ? 1L : 0L, context.lane), 3);
+  EXPECT_EQ(refusal, "accepted diffusive face mask preparation failed collectively");
+  EXPECT_EQ(context.ledger.checkpoint(), before);
+  EXPECT_EQ(integral(q, context.lane), state_before);
+  EXPECT_EQ(integral(rhs, context.lane), rhs_before);
+
+  // The interior rank produces no faces, but still joins preparation failure consensus.
+  refused = false;
   try {
     context.stage_exchange_batch([&](auto&& stage) {
       if (my_rank() == 0)

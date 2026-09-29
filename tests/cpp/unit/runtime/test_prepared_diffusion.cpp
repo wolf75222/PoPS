@@ -21,6 +21,7 @@ struct DiffusionContext {
                                                      coverage);
   }
   const Field* pointwise_active_mask(int, const Field&) const { return nullptr; }
+  const Field* pointwise_exchange_coverage_mask(int, const Field&) const { return nullptr; }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
     auto records = prepare_exchange_batch(std::forward<Producer>(producer), [](auto&) {}, lane);
@@ -316,6 +317,9 @@ struct FittedContext {
     return PreparedScalarBoundarySession<1>::prepare(geometry_, topology, field, execution, 1);
   }
   const MultiFab<1>* pointwise_active_mask(int, const MultiFab<1>&) const { return nullptr; }
+  const MultiFab<1>* pointwise_exchange_coverage_mask(int, const MultiFab<1>&) const {
+    return nullptr;
+  }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
     auto records = prepare_exchange_batch(std::forward<Producer>(producer), [](auto&) {}, lane);

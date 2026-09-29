@@ -302,9 +302,11 @@ const field_type* pointwise_active_mask(int program_block, const field_type& fie
 /// Finest-owner coverage is independent of the embedded-boundary activity mask.
 /// A covered coarse cell must not contribute another accepted exterior face
 /// when its fine descendants already stage the same physical trace.
+/// The caller has already refreshed the hierarchy through pointwise_active_mask.
+/// Keep this second lookup local: a rank-local mask validation may have failed on
+/// another rank, so another collective refresh here would diverge from its vote.
 const field_type* pointwise_exchange_coverage_mask(int program_block,
                                                     const field_type& field) const {
-  refresh_resources_();
   const int runtime_block = sys_block(program_block);
   const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, active_level_);
   require_same_layout_(field, accepted, "AMR Program accepted exchange coverage");
