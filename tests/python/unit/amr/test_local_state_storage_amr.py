@@ -1,5 +1,7 @@
 """AMR resolution of a Program-owned state with no physical face flux."""
 
+from dataclasses import replace
+
 import pytest
 import pops
 
@@ -71,3 +73,17 @@ def test_independent_particle_oracle_has_exact_amr_cell_axes():
         assert expected.shape == (len(mapped), width, width)
         assert expected[0, 0, 0] == pytest.approx(1.0 + .6 * .5 / width)
         assert expected[0, -1, -1] == pytest.approx(1.0 + .6 * (width - .5) / width)
+
+
+def test_transfer_does_not_reduce_a_deeper_exact_storage_halo():
+    case, layout, subject = affine_amr_case(levels=2)
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    qualified = case.resolve(subject)
+    deeper = ResolvedAMRStateStorage(
+        replace(plan.blocks[0], spatial=StateStorage(ghost_depth=3)), qualified)
+    projection = plan.layout_plan.project(plan.layout_plan.layouts[0].handle)
+    resolved = layout.transfer.resolve_references(case.resolve).resolve(
+        projection, (), state_storage=(deeper,))
+    fill = resolved.for_subject(qualified, COARSE_FINE_FILL)
+    assert resolved.nesting_requirement.minimum_buffer == (3, 3)
+    assert all(row.accuracy.ghost_depth == (3, 3) for row in fill.requirements)

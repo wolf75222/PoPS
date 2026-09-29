@@ -24,7 +24,7 @@ limit is absolute `3e-12`, relative zero, chosen before native execution. A
 separate impossible first residual tests collective refusal, unchanged levels,
 patches, time and bitwise states on two attempts.
 
-Source reception: five tests in `test_local_state_storage_amr.py` pass
+Source reception: six tests in `test_local_state_storage_amr.py` pass
 validate/resolve/Program emission, exact storage and nesting checks. The three
 installed variants are collected but have **not** been executed by this
 worktree; native compilation, MPI and rollback qualification belong to the
