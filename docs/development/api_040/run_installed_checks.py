@@ -116,7 +116,19 @@ def main() -> int:
     if args.identity_only:
         return 0
     environment = dict(os.environ, POPS_REQUIRE_NATIVE_TESTS="1")
-    command = [sys.executable, "-m", "pytest", "-v", "--tb=short", "-o", "pythonpath=",
+    # Selection in this parent process does not carry across subprocess.run.
+    # Select/authenticate the exact native specialization in the pytest process
+    # too, so focused protocol tests do not depend on an earlier test's compile.
+    bootstrap = (
+        "import hashlib,sys; from pathlib import Path; import pops; "
+        "from pops._native_selector import select_native_dimension; "
+        f"native=select_native_dimension({dimension}); "
+        f"assert Path(pops.__file__).resolve()==Path({str(Path(pops.__file__).resolve())!r}); "
+        f"assert Path(native.__file__).resolve()==Path({str(origin)!r}); "
+        f"assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=={digest(origin)!r}; "
+        "import pytest; raise SystemExit(pytest.main(sys.argv[1:]))"
+    )
+    command = [sys.executable, "-c", bootstrap, "-v", "--tb=short", "-o", "pythonpath=",
                f"--junitxml={output / 'pytest.xml'}", *(args.tests or TESTS)]
     start = time.monotonic()
     with (output / "pytest.log").open("w") as log:

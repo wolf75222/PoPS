@@ -134,6 +134,28 @@ def test_disjoint_rollback_does_not_restore_over_other_root(tmp_path):
     assert authority.cursors.for_consumer("right") == right.cursor_after
 
 
+@pytest.mark.parametrize("explicit_empty", [False, True])
+@pytest.mark.parametrize("right_first", [False, True])
+def test_compensation_restores_exact_row_membership_with_disjoint_commit(
+        tmp_path, explicit_empty, right_first):
+    left_path, right_path = tmp_path / "left.npz", tmp_path / "right.npz"
+    left, right = _effect("left", "left", left_path), _effect("right", "right", right_path)
+    untouched = ScheduleCursor("unrelated", "previous-sample", 17)
+    initial = ConsumerCursorSet((untouched, left.cursor_before) if explicit_empty else (untouched,))
+    authority = ConsumerCursorAuthority(initial)
+    publisher = _publisher({left.identity.token: left_path, right.identity.token: right_path})
+    left_tx = ConsumerTransaction(_plan(left), initial, publisher, authority)
+    right_tx = ConsumerTransaction(_plan(right), initial, publisher, authority)
+    for transaction in ((right_tx, left_tx) if right_first else (left_tx, right_tx)):
+        transaction.accept()
+    right_tx.seal()
+    rejected = left_tx.rollback_accepted()
+    expected = ConsumerCursorSet((*initial.rows, right.cursor_after))
+    assert rejected.cursors.to_data() == expected.to_data()
+    assert authority.cursors.to_data() == expected.to_data()
+    assert not left_path.exists() and right_path.is_file()
+
+
 def test_failed_publication_releases_cursor_for_real_retry(tmp_path):
     target = tmp_path / "blocked.npz"
     target.mkdir()

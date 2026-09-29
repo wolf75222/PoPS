@@ -429,7 +429,7 @@ void expect_success(const Fixture& fixture) {
         expected[component] += Real(kDt) * rhs[component];
       return expected;
     }, level == 0);
-  EXPECT_THROW(fixture.context->path_rhs_courant(), std::logic_error);
+  EXPECT_EQ(fixture.context->path_rhs_courant(), Real(1));
 }
 }  // namespace
 
@@ -527,7 +527,7 @@ TEST(AmrPathRhsBarrier, ActualStageCflDomainAndIdentityFailuresRollbackThenPermi
     EXPECT_EQ(fixture.evidence->completed, 0);
     EXPECT_DOUBLE_EQ(fixture.system->time(), 0.0);
     EXPECT_EQ(fixture.system->program_accepted_state(), accepted);
-    EXPECT_THROW(fixture.context->path_rhs_courant(), std::logic_error);
+    EXPECT_EQ(fixture.context->path_rhs_courant(), Real(1));
     for (int level = 0; level < 2; ++level)
       expect_cells(fixture.system->engine()->hierarchy().state(level),
                    [level](int, int) { return accepted_state(level); });
@@ -537,16 +537,31 @@ TEST(AmrPathRhsBarrier, ActualStageCflDomainAndIdentityFailuresRollbackThenPermi
   expect_success(fixture);
 }
 
-TEST(AmrPathRhsBarrier, FixedDtCannotInventAuthoredCourantAndFailedAttemptCanRetry) {
+TEST(AmrPathRhsBarrier, FixedDtEnforcesTheUnitBudgetAndFailedAttemptCanRetry) {
   auto fixture = prepare_fixture();
   const auto accepted = fixture.system->program_accepted_state();
-  EXPECT_THROW(fixture.system->step(kDt), std::exception);
+  // The actual hot stage violates the unit forward-Euler budget. A fixed dt
+  // alone is admissible under consumer-stability v2; failure must be numerical.
+  fixture.evidence->failure = Failure::HotTrace;
+  std::string refusal;
+  try {
+    fixture.system->step(kDt);
+  } catch (const std::exception& error) {
+    refusal = error.what();
+  }
+  EXPECT_NE(refusal.find("actual face CFL exceeds authored Courant"), std::string::npos)
+      << refusal;
   EXPECT_EQ(fixture.evidence->published, 0);
   EXPECT_EQ(fixture.evidence->continued, 0);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0.0);
+  EXPECT_EQ(fixture.system->macro_step(), 0);
   EXPECT_EQ(fixture.system->program_accepted_state(), accepted);
-  EXPECT_THROW(fixture.context->path_rhs_courant(), std::logic_error);
+  for (int level = 0; level < 2; ++level)
+    expect_cells(fixture.system->engine()->hierarchy().state(level),
+                 [level](int, int) { return accepted_state(level); });
+  EXPECT_EQ(fixture.context->path_rhs_courant(), Real(1));
   *fixture.evidence = Evidence{};
-  fixture.system->step_cfl(0.3, 1e-12, kDt, 0);
+  fixture.system->step(kDt);
   expect_success(fixture);
 }
 #else

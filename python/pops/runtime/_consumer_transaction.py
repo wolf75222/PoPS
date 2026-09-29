@@ -28,7 +28,9 @@ class ConsumerCursorAuthority:
             raise TypeError("ConsumerCursorAuthority requires exact ConsumerCursorSet")
         self._cursors = cursors
         self._held: dict[str, object] = {}
-        self._committed: dict[object, tuple[AcceptedSideEffect, ...]] = {}
+        self._committed: dict[
+            object, tuple[tuple[AcceptedSideEffect, ...], frozenset[str]]
+        ] = {}
         self._terminal: set[str] = set()
         self._epoch = 0
         self._revision = 0
@@ -98,6 +100,10 @@ class ConsumerCursorAuthority:
             if owner in self._committed:
                 raise RuntimeError("publication root already committed its cursors")
             cursors = self._cursors
+            # Missing rows and stored empty cursors have equal lookup values,
+            # but distinct checkpoint representations. Restore only this root's
+            # membership, preserving changes to every disjoint consumer.
+            prior_rows = frozenset(row.consumer_id for row in cursors.rows)
             for effect in effects:
                 if cursors.for_consumer(effect.consumer_id) != effect.cursor_before:
                     raise RuntimeError("reserved consumer cursor changed before commit")
@@ -105,19 +111,23 @@ class ConsumerCursorAuthority:
             self._cursors = cursors
             if effects:
                 self._revision += 1
-            self._committed[owner] = effects
+            self._committed[owner] = effects, prior_rows
             return cursors
 
     def release(self, owner: object, *, rollback: bool = False) -> ConsumerCursorSet:
         with self._lock:
-            committed = self._committed.get(owner, ())
+            committed, prior_rows = self._committed.get(owner, ((), frozenset()))
             if rollback:
                 cursors = self._cursors
+                rows = {row.consumer_id: row for row in cursors.rows}
                 for effect in committed:
                     if cursors.for_consumer(effect.consumer_id) != effect.cursor_after:
                         raise RuntimeError("accepted cursor changed before compensation")
-                    cursors = cursors.replace(effect.cursor_before)
-                self._cursors = cursors
+                    if effect.consumer_id in prior_rows:
+                        rows[effect.consumer_id] = effect.cursor_before
+                    else:
+                        rows.pop(effect.consumer_id, None)
+                self._cursors = ConsumerCursorSet(rows.values())
                 if committed:
                     self._revision += 1
             self._committed.pop(owner, None)
