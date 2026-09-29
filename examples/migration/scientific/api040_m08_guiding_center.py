@@ -188,6 +188,8 @@ for n in RESOLUTIONS:
     q_initial, c_initial = cell_means(n)
     inputs = {"charge": q_initial[None, :, :], "tracer": c_initial[None, :, :]}
     q_reference, c_reference = ssprk2_reference(q_initial, c_initial, dt=DT, steps=STEPS)
+    # The final accepted step evaluates stage 0 at t=(STEPS-1)*DT, before its update.
+    q_final_stage0, _ = ssprk2_reference(q_initial, c_initial, dt=DT, steps=STEPS-1)
     q_stale, c_stale = ssprk2_reference(q_initial, c_initial, dt=DT, steps=STEPS,
                                       stale_second_stage=True)
     oracle_separation = float(max(np.max(np.abs(q_reference - q_stale)),
@@ -226,7 +228,8 @@ for n in RESOLUTIONS:
     report = pops.run(runtime, t_end=T_END, max_steps=STEPS)
     run_seconds = time.perf_counter() - run_at
     final = {name: np.asarray(runtime.state_global(name)) for name in inputs}
-    history = {name: np.asarray(runtime.history_global(name, 0))
+    # End-of-step rotation places the final accepted step's stage sample in slot 1.
+    history = {name: np.asarray(runtime.history_global(name, 1))
                for name in ("stage0_q", "stage0_phi", "stage0_gradient",
                             "probe_q", "probe_phi", "stage1_q", "stage1_phi",
                             "stage1_gradient")}
@@ -252,6 +255,7 @@ for n in RESOLUTIONS:
                 initial_q=gathered_initial["charge"][0],
                 initial_c=gathered_initial["tracer"][0],
                 final_q=final["charge"][0], final_c=final["tracer"][0],
+                reference_final_stage0_q=q_final_stage0,
                 reference_q=q_reference, reference_c=c_reference,
                 stale_reference_q=q_stale, stale_reference_c=c_stale,
                 time=runtime.time(), cells=n, dt=DT, **history)
@@ -272,6 +276,8 @@ for n in RESOLUTIONS:
                     saved["stage1_phi"] - saved["stage0_phi"])))
                 fv_error = float(max(np.max(np.abs(saved["final_q"] - saved["reference_q"])),
                                      np.max(np.abs(saved["final_c"] - saved["reference_c"]))))
+                final_stage0_q_error = float(np.max(np.abs(
+                    saved["stage0_q"] - saved["reference_final_stage0_q"])))
                 stale_error = float(max(np.max(np.abs(saved["final_q"] - saved["stale_reference_q"])),
                                         np.max(np.abs(saved["final_c"] - saved["stale_reference_c"]))))
                 stale_margin = stale_error / CRITERIA["reference_fv_max_error"]
@@ -295,6 +301,7 @@ for n in RESOLUTIONS:
                 and probe_separation >= CRITERIA["probe_potential_separation_min"]
                 and stage_separation >= CRITERIA["stage_potential_separation_min"]
                 and fv_error <= CRITERIA["reference_fv_max_error"]
+                and final_stage0_q_error <= CRITERIA["reference_fv_max_error"]
                 and stale_margin >= CRITERIA["stale_transport_margin_min"]
                 and mass_defect <= CRITERIA["mean_defect_max"])
             record = {"cells": [n, n], "time": saved_time, "accepted_steps": report.accepted_steps,
@@ -304,6 +311,7 @@ for n in RESOLUTIONS:
                 "same_time_probe_separation": probe_separation,
                 "physical_stage_field_separation": stage_separation,
                 "independent_fv_max_error": fv_error,
+                "final_step_stage0_charge_max_error": final_stage0_q_error,
                 "fresh_stale_oracle_separation": oracle_separation,
                 "stale_reference_max_error": stale_error,
                 "stale_transport_margin": stale_margin, "mass_defect": mass_defect,

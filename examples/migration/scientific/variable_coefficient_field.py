@@ -117,7 +117,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     artifact = pops.compile(resolved)
     runtime = pops.bind(artifact, initial_state=initial, resources=_execution_resources(artifact))
     report = pops.run(runtime, t_end=args.steps * dt, max_steps=args.steps, console=False)
-    potential = np.asarray(runtime.history_global("potential", 0))
+    potential = np.asarray(runtime.history_global("potential", 1))
     return {
         "workflow": "variable-coefficient-field",
         "accepted_steps": report.accepted_steps,

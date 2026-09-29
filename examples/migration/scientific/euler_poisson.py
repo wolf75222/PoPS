@@ -167,7 +167,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     runtime = pops.bind(artifact, initial_state=initial, resources=_execution_resources(artifact))
     report = pops.run(runtime, t_end=args.steps * dt, max_steps=args.steps, console=False)
     after = np.asarray(runtime.state_global("fluid")).reshape(initial["fluid"].shape)
-    gradient_values = np.asarray(runtime.history_global("gradient", 0))
+    gradient_values = np.asarray(runtime.history_global("gradient", 1))
     return {
         "workflow": "euler-poisson",
         "accepted_steps": report.accepted_steps,
