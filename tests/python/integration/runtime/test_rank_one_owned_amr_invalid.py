@@ -11,6 +11,7 @@ import pops
 import pytest
 
 from pops._native_collectives import allgather_value
+from pops._native_selector import select_native_dimension
 from pops.amr import PatchLayout
 from pops.layouts import AMR
 from tests.python.integration.runtime.test_user_numerical_bodies_runtime import (
@@ -43,6 +44,7 @@ def _agree(world, condition, message):
 
 def test_rank_one_owned_invalid_body_collectively_rolls_back(
         isolated_native_cache, native_cxx, kokkos_root):
+    select_native_dimension(2)
     world = _world()
     if world is None or world.size != 2:
         pytest.skip("requires two actual native MPI ranks")
@@ -52,11 +54,11 @@ def test_rank_one_owned_invalid_body_collectively_rolls_back(
     artifact, world = _compile(case, _distributed(base_layout),
                                "user-invalid-owned-rank-one-amr")
     initials = (np.ones((1, N, N)), np.ones((1, N, N)))
-    probe = _bind(artifact, handles, subjects, initials,
-                  ((0., .75), (0., .6)), gate=2.)
+    layout_probe = _bind(artifact, handles, subjects, initials,
+                         ((0., .75), (0., .6)), gate=2.)
 
-    local = probe.amr.coarse_local_box_bounds()
-    report = probe.amr.patch_table()
+    local = layout_probe.amr.coarse_local_box_bounds()
+    report = layout_probe.amr.patch_table()
     _agree(world, len(local) == report.coarse_local_boxes and
            report.coarse_total_boxes > len(local) > 0,
            "native local AMR box count disagrees with the live patch report")
@@ -84,32 +86,50 @@ def test_rank_one_owned_invalid_body_collectively_rolls_back(
     _agree(world, bool(candidates), "rank one needs a stencil-interior owned cell")
     x, y = candidates[0]
 
-    # Same artifact/layout/parameters without an active invalid branch must
-    # accept one step. This rules out an unrelated preflight or layout failure.
-    pops.run(probe, t_end=DT, max_steps=1, console=False)
-    _agree(world, probe.time() == DT and probe.macro_step() == 1,
-           "inactive User body did not complete the positive control")
-
     disturbed = initials[0].copy()
     disturbed[0, y, x] = 3.
+    # The same rank-one-owned poison is present in both runs.  Only the gate
+    # changes: 4 keeps where(left[0] > gate, 1/(left-left), normal) inactive;
+    # 2 activates that division on a face of the selected cell.
+    inactive = _bind(artifact, handles, subjects, (disturbed, initials[1]),
+                     ((0., .75), (0., .6)), gate=4.)
+    _agree(world, inactive.amr.coarse_local_box_bounds() == tuple(owned[world.rank]),
+           "rank ownership changed before the poisoned positive control")
+    positive_report = pops.run(inactive, t_end=DT, max_steps=1, console=False)
+    _agree(world, positive_report.accepted_steps == 1 and inactive.time() == DT
+           and inactive.macro_step() == 1,
+           "same poisoned state with inactive User branch did not accept one step")
+    positive = _snapshot(inactive, "first", 1, "amr1", world)
+    _agree(world, world.rank != 0 or (bool(np.isfinite(positive).all())
+           and bool(np.max(np.abs(positive - disturbed)) > 0.)),
+           "inactive poisoned run did not evolve to a finite state")
+
     runtime = _bind(artifact, handles, subjects, (disturbed, initials[1]),
                     ((0., .75), (0., .6)), gate=2.)
     _agree(world, runtime.amr.coarse_local_box_bounds() == tuple(owned[world.rank]),
            "rank ownership changed between positive and negative bind")
     before = tuple(_snapshot(runtime, name, 1, "amr1", world)
                    for name in ("first", "second"))
+    before_ledger = tuple(tuple(map(str, row)) for row in
+                          runtime._executor.program_flux_ledger_manifest())
     failure = ("", "")
     try:
         pops.run(runtime, t_end=DT, max_steps=1, console=False)
     except Exception as exc:
         failure = (type(exc).__name__, str(exc))
     failures = allgather_value(world, failure)
-    _agree(world, all(kind == "RuntimeError" and message for kind, message in failures),
-           "the active User body must reject collectively as RuntimeError")
+    _agree(world, all(kind == "RuntimeError" and
+                      "AMR Program RHS group evaluation failed collectively" in message
+                      for kind, message in failures),
+           "the active rank-one User face body must cause the collective RHS-group numerical rejection")
     _agree(world, runtime.time() == 0. and runtime.macro_step() == 0,
            "rejected step advanced accepted time or macro-step")
     after = tuple(_snapshot(runtime, name, 1, "amr1", world)
                   for name in ("first", "second"))
+    after_ledger = tuple(tuple(map(str, row)) for row in
+                         runtime._executor.program_flux_ledger_manifest())
+    _agree(world, after_ledger == before_ledger,
+           "rejected rank-one User face published a flux ledger entry")
     if world.rank == 0:
         for old, new in zip(before, after, strict=True):
             np.testing.assert_array_equal(new, old)
