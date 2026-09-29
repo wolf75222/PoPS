@@ -841,6 +841,45 @@ TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysi
                std::invalid_argument);
 }
 
+TEST(GeneratedAmrSystemBlock, CoordinatedFacePreflightDoesNotAuthenticateTheBody) {
+  const std::string identity = "pops.numerics.coordinated-face.v1.v1:sha256:" + std::string(64, 'a');
+  pops::CompiledAmrSystemBlockRoutes routes{
+      "none", "coordinated_face:v1:" + identity, "conservative", "explicit"};
+  EXPECT_NO_THROW(pops::validate_compiled_amr_system_block_route_syntax(routes));
+  EXPECT_NO_THROW(pops::validate_compiled_amr_system_block_routes(routes, {}, {}, identity));
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(routes), std::runtime_error);
+  const auto foreign = identity.substr(0, identity.size()-1) + "b";
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(routes, {}, {}, foreign),
+               std::invalid_argument);
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(routes, "stencil", {}, identity),
+               std::invalid_argument);
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(routes, {}, "face", identity),
+               std::invalid_argument);
+  for (const auto& malformed : {std::string("coordinated_face:v1:"),
+                               std::string("coordinated_face:v1:") + identity + "0"}) {
+    auto changed = routes;
+    changed.riemann = malformed;
+    EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed),
+                 std::invalid_argument);
+  }
+  auto changed = routes;
+  changed.riemann = "coordinated_face:v2:" + identity;
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed),
+               std::runtime_error);
+  changed = routes;
+  changed.limiter = "minmod";
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed),
+               std::invalid_argument);
+  changed = routes;
+  changed.reconstruction = "primitive";
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed),
+               std::invalid_argument);
+  changed = routes;
+  changed.positivity_floor = pops::Real(1.e-9);
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed),
+               std::invalid_argument);
+}
+
 TEST(GeneratedAmrSystemBlock, SourceRoutePreflightDefersAuthenticationToCompiledPolicies) {
   const std::string stencil_identity(64, 'a');
   const std::string face_identity(64, 'b');

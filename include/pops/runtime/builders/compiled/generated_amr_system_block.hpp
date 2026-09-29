@@ -1833,18 +1833,25 @@ template <int Dim, nd::ReconstructionVariables Variables, class Request, class R
 PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction reconstruction) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
   if constexpr (path_conservative_model<Model>) {
-    // The complete authored path carrier chooses this distinct F/L/R interface.
-    // Rusanov specifies its dissipation; it never invokes an ordinary flux-only RHS.
+    // The complete authored carrier authenticates this F/L/R interface.
+    // A coordinated tuple never passes through the legacy Rusanov split.
     if constexpr (std::is_same_v<Reconstruction, NoSlope> &&
                   Variables == nd::ReconstructionVariables::Conservative) {
-      if (parse_riemann_route(request.routes.riemann, "generated AMR path block") ==
-          RiemannRouteId::kRusanov)
-        return materialize_system<Dim, Model, Reconstruction, PathRusanovFlux<Model::n_vars>,
+      const bool matching = [&] {
+        if constexpr (coordinated_face_model<Model>)
+          return request.routes.riemann == std::string("coordinated_face:v1:") +
+                                              std::string(Model::path_operator_identity());
+        else
+          return parse_riemann_route(request.routes.riemann, "generated AMR path block") ==
+                 RiemannRouteId::kRusanov;
+      }();
+      if (matching)
+        return materialize_system<Dim, Model, Reconstruction, ModelPathFlux<Model>,
                                   Variables>(std::move(request), reconstruction,
-                                             PathRusanovFlux<Model::n_vars>{});
+                                             ModelPathFlux<Model>{});
     }
     throw std::invalid_argument(
-        "Path transport requires first-order conservative Rusanov");
+        "Path transport requires exact first-order conservative face authority");
   } else {
   switch (parse_riemann_route(request.routes.riemann, "generated AMR block")) {
     case RiemannRouteId::kRusanov:
@@ -2246,7 +2253,8 @@ struct CompiledAmrSystemBlockPreparation {
 inline void validate_compiled_amr_system_block_routes(
     const CompiledAmrSystemBlockRoutes& routes,
     std::string_view source_reconstruction_identity = {},
-    std::string_view source_face_identity = {}) {
+    std::string_view source_face_identity = {},
+    std::string_view coordinated_face_identity = {}) {
   if (routes.limiter.empty() || routes.riemann.empty())
     throw std::invalid_argument("compiled AMR block requires explicit limiter and Riemann routes");
   const bool storage_only = routes.limiter == "state_storage" && routes.riemann == "unavailable";
@@ -2264,7 +2272,14 @@ inline void validate_compiled_amr_system_block_routes(
       throw std::invalid_argument(
           "compiled AMR reconstruction source identity differs from package");
     }
-    if (source_face_identity.empty()) {
+    if (!coordinated_face_identity.empty()) {
+      if (!source_face_identity.empty() || !source_reconstruction_identity.empty() ||
+          routes.limiter != "none" || routes.reconstruction != "conservative" ||
+          routes.positivity_floor != Real(0) ||
+          routes.riemann != std::string("coordinated_face:v1:") +
+                                std::string(coordinated_face_identity))
+        throw std::invalid_argument("compiled AMR coordinated face identity differs from package");
+    } else if (source_face_identity.empty()) {
       (void)parse_riemann_route(routes.riemann, "compiled AMR block");
     } else if (routes.riemann !=
                std::string("source_face:") + std::string(source_face_identity)) {
@@ -2307,6 +2322,18 @@ inline void validate_compiled_amr_system_block_route_syntax(
       throw std::invalid_argument("compiled AMR source route requires a lowercase SHA-256 identity");
     return identity;
   };
+  constexpr std::string_view coordinated_prefix = "coordinated_face:v1:";
+  if (std::string_view(routes.riemann).starts_with(coordinated_prefix)) {
+    constexpr std::string_view complete_prefix =
+        "coordinated_face:v1:pops.numerics.coordinated-face.v1.v1:sha256:";
+    if (source_identity(routes.riemann, complete_prefix).empty())
+      throw std::invalid_argument("compiled AMR coordinated face requires its versioned identity");
+    // Syntax only: the typed installer separately compares this complete identity
+    // with Model::path_operator_identity(), not with the route's own suffix.
+    validate_compiled_amr_system_block_routes(
+        routes, {}, {}, std::string_view(routes.riemann).substr(coordinated_prefix.size()));
+    return;
+  }
   validate_compiled_amr_system_block_routes(
       routes, source_identity(routes.limiter, "source_stencil:"),
       source_identity(routes.riemann, "source_face:"));
@@ -2352,7 +2379,10 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
                                       static_cast<Real>(positivity_floor),
                                       static_cast<Real>(weno_epsilon),
                                       wave_speed_cache};
-  validate_compiled_amr_system_block_routes(routes);
+  if constexpr (coordinated_face_model<Model>)
+    validate_compiled_amr_system_block_routes(routes, {}, {}, Model::path_operator_identity());
+  else
+    validate_compiled_amr_system_block_routes(routes);
   return prepare_generated_amr_system_block(CompiledAmrSystemBlockPreparation<Dim, Model>{
       name, provider_consumer_qid, std::move(model), std::move(routes), gamma, substeps, stride,
       newton, newton_diagnostics});
