@@ -143,7 +143,7 @@ struct PreparedLocalNonlinearControls {
   int max_backtracks = 12;
   Real absolute_tolerance = Real(1e-12);
   Real relative_tolerance = Real(0);
-  Real step_tolerance = Real(0);
+  Real step_tolerance = Real(0);  ///< optional stagnation stop, never residual convergence
   Real finite_difference_step = Real(1e-7);
   Real pivot_tolerance = Real(64) * std::numeric_limits<Real>::epsilon();
   Real initial_step = Real(1);
@@ -718,7 +718,10 @@ POPS_HD inline LocalNonlinearCellResult<N> solve_prepared_local_nonlinear(
     }
     if (problem.controls.step_tolerance > Real(0) &&
         result.step_norm <= problem.controls.step_tolerance) {
-      result.status = LocalNonlinearStatus::kConverged;
+      // The original residual was evaluated at this candidate and failed its
+      // convergence test above. A small update may be caused by damping or
+      // rounding; it supplies no bound on the remaining equation error.
+      result.status = LocalNonlinearStatus::kSafeguardFailure;
       return result;
     }
   }

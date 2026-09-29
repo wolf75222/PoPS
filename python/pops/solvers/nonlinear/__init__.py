@@ -301,7 +301,12 @@ class Newton(Descriptor):
 
 
 class LocalNewton(Descriptor):
-    """Typed controls for the single prepared cell-local nonlinear provider."""
+    """Typed controls for the single prepared cell-local nonlinear provider.
+
+    ``step_tolerance`` optionally stops a stagnating iteration. A small step is
+    not convergence: if the original residual still fails its tolerance, this
+    stop produces a safeguard failure for the solve's explicit consumer.
+    """
 
     category = "nonlinear_solver"
     native_id = "pops::LocalNewton"
