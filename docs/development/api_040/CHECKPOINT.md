@@ -3,7 +3,58 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Latest completed reception: periodic collective core and qualified inputs
+## Current reception: finite supports and exact AMR local storage
+
+The first installed reception at `70c4724` used SDK
+`396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c`,
+native Dim1 SHA256
+`54630dc0f21e88b08ee074df031b74f8daa2b2c894afe62826344e490f010494`
+and Dim2 SHA256
+`aed8c1582c3344bd5afb19ab784adec260bcdbd4bf944b26a29242b53889c862`.
+Both incremental builds and doctor passed; the installed runner authenticated
+1089 shipped Python/header files against this checkout. The prototype package
+was not imported. Output paths in this section are under the workspace `outputs/`.
+
+- `installed-finite-amr-units`: 119 installed unit checks, **118 passed and one
+  failed**, no skips. The one failure expected the previous transfer diagnostic;
+  the exact-authority refusal itself worked. `7333129` updates the expectation,
+  and `installed-amr-flat-authority-repaired` passes **13/13** relevant checks.
+  These checks include source resolution, host compilation and native tagging;
+  they are not 119 PDE simulations.
+- `installed-finite-amr-native-serial`: **2/9 native checks passed, seven failed**
+  in 173.39 s. All six finite M09 cases failed generated Program compilation:
+  the finite co-location vote hid the activity mask from the later reduction.
+  Root also found scratch allocation still used the first input rather than
+  the explicitly declared output template. `957353c6` repairs both through one
+  checked output authority; four complete generated-TU syntax probes passed
+  after reproducing all four compilation failures. The red native receipt and
+  failed generated C++ sources are retained.
+- In that same native run, the one-level affine/local-residual AMR case and
+  two-level repeated impossible-residual rollback passed. The positive two-level
+  fixture failed its requirement for a real coarse/fine interface: its N8 grid
+  became fully refined. `2156e757` changes the fixture to N16 and also requires
+  partial refinement in the rollback case; equations, threshold, time step and
+  particle oracle tolerance remain unchanged. Partial support awaits reception.
+
+Current installed Python includes the finite materialization correction. The
+header and native hashes above are unchanged by that Python-only refresh
+(`build-finite-materialization-repaired-dim2.log`). The next run is
+`installed-finite-amr-repaired-serial`: thirteen native checks, adding different
+seeds, changed operands bound to the same artifact, finite-input overflow on
+the cell owner, exact rollback and a new bind after two refusals. These are
+finite 8+4 DOF samples, not a distributed meshed mixed PDE solve. MPI2 will be
+received separately. The runners now retain pytest temporary states under each
+output directory, including actual NPZ files, for subsequent evidence archival.
+
+The W12 ProgramRuntime discriminant (`954b7dcf`, independent correction
+`86646b6c`) uses actual native duration/cache/exchange transactions with proposed
+durations .1/.2/.3, nested child and parent rollback, and an authenticated
+duplicate-occurrence refusal. Its reviewed C++ target is rebuilding; no passing
+W12 runtime result is claimed yet. M23 remains isolated pending final review
+and its own native build/reception. General integral circuit/surface state is
+still an implementation obligation; scalar diagnostics do not close it.
+
+## Previous reception: periodic collective core and qualified inputs (historical)
 
 The subsequent converged matrix at `941afec2` passes **26/26 serial checks
 (six test-harness checks and twenty native checks)** and **23/23 native checks
