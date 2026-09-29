@@ -208,13 +208,16 @@
       "reference_profile": "extension",
       "reference_limit": "Potentiel continué par la méthode et condensation d’applications à intégrer; témoins de Schur hérités seulement.",
       "reference_evidence": [],
-      "production_candidate_symbols": "python/pops/time/_program/condensed.py;python/pops/fields/problem.py:FieldProblem",
-      "production_status": "partial_source_oracle_with_expression_gap",
-      "qualification": "Original finite12x12 coupled matrix witness has independent monolithic/Schur NumPy oracle. Separate full disk PDE routes to existing authored Hoffart tutorial; source validate/resolve/emit only in this migration.",
-      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
-      "remaining_gap": "EXPR/IMPL: exact random8x4 incidence map of finite witness is not represented by the spatial condensed API. Disk PDE is a different experiment; neither its old evidence nor the NumPy oracle qualifies the missing native finite witness.",
+      "production_candidate_symbols": "python/pops/linalg/finite.py;include/pops/numerics/linalg/finite_linear.hpp;examples/migration/scientific/api040_m09_finite_native.py",
+      "production_status": "scoped_native_finite_witness_serial_and_mpi2_pass",
+      "qualification": "Original finite8+4 W06 equations execute in a singleton native batch via explicit finite supports and LocalResidual. Ten cases pass serial and on each MPI2 rank: mono/condensed, permutations, singular chosen pivot, rebound captures, owner-only finite-input overflow, rollback and new bind. Thirty-two saved states independently recompute residual<3.553e-15, monolithic error<7.772e-16 and CN endpoint energy error<1.066e-14 (fixed criterion1e-11).",
+      "assessment_kind": "finite_amr_bundle_xml_source_hashes_and_saved_state_recomputation_verified",
+      "remaining_gap": "Finite support witness does not qualify a globally meshed/distributed mixed residual, nonlinear spatial condensation or full Hoffart disk campaign. The original random8x4 incidence map is now implemented; older NumPy-only and failed native receipts remain historical.",
       "production_evidence": [
-        "m09_hoffart_scope.md"
+        "m09_hoffart_scope.md",
+        "evidence/finite-amr-preliminary/manifest.json",
+        "evidence/finite-amr-converged/manifest.json",
+        "finite_amr_converged_reception.md"
       ]
     },
     {
@@ -677,12 +680,14 @@
       "id": "W06",
       "title": "Solve par blocs contre solve monolithique",
       "related_model": "M09",
-      "production_candidate_symbols": "python/pops/time/_program/condensed.py;python/pops/linalg/problem.py:LinearProblem",
-      "production_status": "independent_pure_oracle_only",
-      "qualification": "Original monolithic/Schur finite problem compared independently; direct native finite incidence representation remains EXPR/IMPL. Disk PDE does not substitute for it.",
-      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception.",
+      "production_candidate_symbols": "python/pops/linalg/finite.py;include/pops/numerics/linalg/finite_linear.hpp;examples/migration/scientific/api040_m09_finite_native.py",
+      "production_status": "scoped_native_finite_witness_serial_and_mpi2_pass",
+      "qualification": "Original finite8+4 W06 equations execute in a singleton native batch via explicit finite supports and LocalResidual. Ten cases pass serial and on each MPI2 rank: mono/condensed, permutations, singular chosen pivot, rebound captures, owner-only finite-input overflow, rollback and new bind. Thirty-two saved states independently recompute residual<3.553e-15, monolithic error<7.772e-16 and CN endpoint energy error<1.066e-14 (fixed criterion1e-11).",
+      "remaining_gap": "Finite original witness received; general spatial/global condensation with candidate-dependent providers and arbitrary field constraints remains open.",
       "production_evidence": [
-        "m09_hoffart_scope.md"
+        "m09_hoffart_scope.md",
+        "evidence/finite-amr-preliminary/manifest.json",
+        "evidence/finite-amr-converged/manifest.json"
       ]
     },
     {
@@ -752,10 +757,14 @@
       "id": "W12",
       "title": "Construction dépendant de la durée",
       "related_model": "M17",
-      "production_candidate_symbols": "python/pops/runtime/_history_sample_identity.py",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "No new complete production witness receipt located in this audit.",
-      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
+      "production_candidate_symbols": "include/pops/runtime/program/program_runtime_state.hpp;include/pops/runtime/program/accepted_exchange.hpp;tests/cpp/integration/runtime/test_program_runtime.cpp",
+      "production_status": "scoped_native_duration_transaction_serial_and_mpi2_pass",
+      "qualification": "Real ProgramRuntime accepted caches/exchanges distinguish proposed durations .1/.2/.3 after child commit, parent rollback and retry. Exact state/history/cache/clock rollback and duplicate-occurrence refusal pass3/3 CTest entries including the ten-case MPI2 aggregate. Earlier MPI test snapshot ownership error is retained and repaired.",
+      "remaining_gap": "General interval exchange replacement, computed endpoints and persistent IntegralState/circuit are not established by this W12 cache/mailbox witness.",
+      "production_evidence": [
+        "evidence/finite-amr-converged/manifest.json",
+        "finite_amr_converged_reception.md"
+      ]
     }
   ],
   "production_evidence_schema": 5,
@@ -914,6 +923,29 @@
       "installed_unit_cases": 28,
       "affine_scope": "Four native library-body cases: velocity1D order6 and2D order5, both orderings, on spatial Dim2 Uniform; shared body on stages and local unknowns. Conditional inactive/active coefficients and old/new particle-oracle equivalence pass serial/MPI2. Historical affine AMR recipe is outside this receipt.",
       "limits": "CPU Kokkos Dim2 Uniform only. Twenty serial native cases coincide with the first20 MPI cases; MPI adds two M11 and one M18, whose serial evidence is separate. No general AMR/GPU/global solver or complete-corpus qualification. All earlier red receipts remain preserved."
+    },
+    "finite_amr_converged": {
+      "manifest": "evidence/finite-amr-converged/manifest.json",
+      "manifest_sha256": "2bbefba5801829198ec91d802765310a88792e90723890c75e0e9a04b4f2e8fd",
+      "prior_red_manifest": "evidence/finite-amr-preliminary/manifest.json",
+      "reconciled_at": "b2e32523",
+      "native_sha256": "aed8c1582c3344bd5afb19ab784adec260bcdbd4bf944b26a29242b53889c862",
+      "sdk_header_sha256": "396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c",
+      "serial_m09_passed": 10,
+      "mpi_m09_passed_per_rank": 10,
+      "amr_passed_serial_and_per_mpi_rank": 3,
+      "w12_ctest_passed": 3,
+      "saved_m09_states": 32,
+      "statuses": {
+        "installed-finite-amr-repaired-unit": "passed",
+        "installed-finite-amr-repaired-serial": "failed",
+        "installed-finite-m09-mpi2": "passed",
+        "installed-affine-amr-interface-serial": "passed",
+        "installed-affine-amr-interface-mpi2": "passed",
+        "native-w12-reviewed-ctest": "failed",
+        "native-w12-snapshot-repaired-ctest": "passed"
+      },
+      "limits": "CPU OpenMP/MPICH2, finite8+4 M09 batch, selected partial2-level affine/local-state AMR, W12 native transaction. No meshed mixed PDE, general AMR, integral circuit, GPU, HPC or remote CI qualification; later M23 SDK is distinct."
     }
   }
 }

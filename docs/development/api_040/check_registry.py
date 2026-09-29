@@ -39,11 +39,23 @@ def pytest_counts(path):
 
 def main():
     from check_local_affine_evidence import verify
+    from check_finite_amr_converged import verify_bundle
 
     verify(HERE / "evidence/local-affine-converged")
+    finite = verify_bundle(HERE / "evidence/finite-amr-converged")
     with (HERE / "contracts.csv").open(newline="") as source:
         contracts = list(csv.DictReader(source))
     corpus = read_json(HERE / "corpus.json")
+    finite_registry = corpus["supplemental_receptions"]["finite_amr_converged"]
+    require(finite_registry["manifest_sha256"] == hashlib.sha256(
+                (HERE / finite_registry["manifest"]).read_bytes()).hexdigest()
+            and finite_registry["saved_m09_states"] == finite["saved_m09_states"] == 32,
+            "finite/AMR evidence binding changed")
+    require(finite_registry["serial_m09_passed"] == 10
+            and finite_registry["mpi_m09_passed_per_rank"] == 10
+            and finite_registry["amr_passed_serial_and_per_mpi_rank"] == 3
+            and finite_registry["w12_ctest_passed"] == 3,
+            "finite/AMR reception counts changed")
     for rows, key, prefix, count in (
         (contracts, "contract_id", "C", 40),
         (corpus["models"], "id", "M", 28),

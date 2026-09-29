@@ -73,7 +73,11 @@ header and native hashes above are unchanged by that Python-only refresh
 The first red round is frozen in `evidence/finite-amr-preliminary` (`03e25b14`):
 42 payloads plus inventory/manifest/checksums, including six failed generated
 translation units. Its checker and all 43 checksum rows pass. The converged
-bundle is being assembled separately. Runners retain temporary states under
+bundle `evidence/finite-amr-converged` (`b2e32523`) contains 119 manifested
+files, all 32 saved M09 states, the earlier two AMR and one W12 failed XML rows,
+the C++ build/binary identity and exact test/helper snapshots. Root replayed
+`check_finite_amr_converged.py --recompute`: inventory, provenance and saved
+state recomputation pass. Runners retain temporary states under
 each output directory; historical receipts are not overwritten by a repair.
 
 The W12 ProgramRuntime discriminant (`954b7dcf`, independent correction
