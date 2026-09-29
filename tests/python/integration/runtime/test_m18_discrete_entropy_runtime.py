@@ -36,6 +36,12 @@ def _snapshot(runtime):
             np.asarray(runtime.state_global("target")).copy())
 
 
+def _all_check(world, operation):
+    """Converge rank-local assertions before any following collective check."""
+    errors = _failures(world, operation)
+    assert not any(errors), errors
+
+
 def test_twenty_interior_targets_and_outside_cone_refusal(
         isolated_native_cache, native_cxx, kokkos_root, record_property):
     del isolated_native_cache, native_cxx, kokkos_root
@@ -56,7 +62,9 @@ def test_twenty_interior_targets_and_outside_cone_refusal(
         accepted, t_end=.01, max_steps=1, console=False))
     assert not any(errors), errors
     after_dual, after_target = _snapshot(accepted)
-    assert accepted.time() == .01 and accepted.macro_step() == 1
+    def verify_accepted_clock():
+        assert accepted.time() == .01 and accepted.macro_step() == 1
+    _all_check(world, verify_accepted_clock)
 
     def verify_accepted():
         multipliers = after_dual.reshape(3, 4, 5)
@@ -91,8 +99,10 @@ def test_twenty_interior_targets_and_outside_cone_refusal(
         assert all("coupled_implicit failed:" in row[1] for row in errors), errors
         record_property("outside_cone_failure_%d" % attempt, repr(errors))
         after = _snapshot(failed)
-        assert failed.time() == 0. and failed.macro_step() == 0
-        assert failed._executor._temporal_restart_state.to_data() == temporal_before
+        def verify_local_rollback():
+            assert failed.time() == 0. and failed.macro_step() == 0
+            assert failed._executor._temporal_restart_state.to_data() == temporal_before
+        _all_check(world, verify_local_rollback)
         _root_check(world, lambda after=after: [np.testing.assert_array_equal(a, b)
                                                 for a, b in zip(after, before, strict=True)])
     record_property("mpi_ranks", 1 if world is None else int(world.size))
