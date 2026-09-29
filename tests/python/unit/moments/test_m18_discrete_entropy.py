@@ -62,8 +62,12 @@ def test_parametric_quadrature_refuses_invalid_coefficients():
 def test_public_local_residual_compiles_exp_without_python_cell_callback():
     case, layout, _ = make_case()
     plan = pops.resolve(pops.validate(case), layout=layout)
+    token = next(value for value in plan.time._values if value.op == "solve_coupled_implicit")
+    assert token.attrs["output_count"] == 1 and len(token.inputs) == 2
+    assert len(plan.time._commits) == 1
+    assert all("dual" in state.qualified_id for state in plan.time._commits)
     graph = ProgramModelGraph.from_resolved_blocks(plan.blocks)
     source = emit_cpp_program(plan.time, model=graph)
-    assert "prepare_local_nonlinear_problem<6>" in source
+    assert "prepare_local_nonlinear_problem<3>" in source
     assert source.count("std::exp(") >= 5
     assert "pops::solve_prepared_local_nonlinear" in source

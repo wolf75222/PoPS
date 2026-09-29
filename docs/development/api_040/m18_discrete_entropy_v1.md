@@ -12,11 +12,12 @@ for
 The public example `examples/migration/scientific/api040_m18_entropy.py` fixes
 five nodes `(-1,-.5,0,.5,1)`, weights `(.1,.2,.4,.2,.1)` and basis
 `(1,v,v²)`. It specifies 20 moderate, strictly interior target cells. Two
-state blocks give `LocalResidual` an exact captured target and a separate dual
-unknown. The target's three identity equations retain it through the same
-six-unknown product solve. `LocalNewton` has 12 iterations, backtracking and an
+state blocks give `LocalResidual` one three-component dual unknown and an exact
+read-only target capture. The target is initialized on its own State block and
+is never projected from the solve or committed again. `LocalNewton` has 12 iterations, backtracking and an
 original-residual tolerance of `2e-11`. A failed solve is consumed through
-`FailRun`; the step must not publish either block or advance the clock.
+`FailRun`; the step must not publish the dual block or advance the clock, while
+the read-only target remains unchanged.
 
 The new public `pops.math.exp` is a distinct `Exp` expression node. Its
 structural/CSE key and closed Program DAG opcode are `exp`, with derivative
@@ -46,6 +47,7 @@ Source tests and an isolated host C++ probe of the emitted public residual
 are separate from installed PoPS evidence. The installed integration witness
 is collected but has not been run on a rebuilt package in this branch. It is
 designed to check all 20 accepted cells and a one-cell outside-cone refusal,
-including all-rank failure collection, both state buffers, time and temporal
+including all-rank failure collection, the committed dual and read-only target
+buffers, time and temporal
 envelope across two failed attempts. It does not claim near-boundary solver
 convergence, AMR, GPU, arbitrary quadrature rank or a transport PDE.

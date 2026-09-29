@@ -21,7 +21,7 @@ def emitted_solver(tmp_path_factory):
     case, layout, _ = make_case()
     program = pops.resolve(pops.validate(case), layout=layout).time
     token = next(value for value in program._values if value.op == "solve_coupled_implicit")
-    assert token.attrs["output_count"] == 2 and len(token.inputs) == 3
+    assert token.attrs["output_count"] == 1 and len(token.inputs) == 2
     variables = {value.id: "input%d" % i for i, value in enumerate(token.inputs)}
     body = "\n".join(product_residual_lines(token, variables))
     assert body.count("std::exp(") >= 5
@@ -32,8 +32,8 @@ namespace Kokkos { using std::isfinite; }
 struct Capture { const double* data; double operator()(int, int c) const { return data[c]; } };
 extern "C" int solve(const double* target, double* output, double* residual_norm) {
   const int index = 0;
-  const Capture input2A{target};
-  auto residual = [&](const pops::Real (&Ueval)[6], pops::Real (&rout)[6]) {
+  const Capture input1A{target};
+  auto residual = [&](const pops::Real (&Ueval)[3], pops::Real (&rout)[3]) {
 """ + body + """
   };
   pops::PreparedLocalNonlinearControls controls;
@@ -42,12 +42,12 @@ extern "C" int solve(const double* target, double* output, double* residual_norm
   controls.max_backtracks = 16;
   controls.minimum_step = 1.0/65536.0;
   controls.safeguard = pops::LocalSafeguardKind::kBacktrackingLineSearch;
-  const auto prepared = pops::prepare_local_nonlinear_problem<6>(
-      residual, pops::FiniteDifferenceLocalJacobian<6>{},
-      pops::AcceptAllLocalCandidates<6>{}, controls);
-  pops::Real seed[6] = {0, 0, 0, target[0], target[1], target[2]};
+  const auto prepared = pops::prepare_local_nonlinear_problem<3>(
+      residual, pops::FiniteDifferenceLocalJacobian<3>{},
+      pops::AcceptAllLocalCandidates<3>{}, controls);
+  pops::Real seed[3] = {0, 0, 0};
   const auto result = pops::solve_prepared_local_nonlinear(prepared, seed);
-  for (int i=0; i<6; ++i) output[i] = result.value[i];
+  for (int i=0; i<3; ++i) output[i] = result.value[i];
   *residual_norm = result.residual_norm;
   return static_cast<int>(result.status);
 }
@@ -67,7 +67,7 @@ extern "C" int solve(const double* target, double* output, double* residual_norm
 
 def _solve(function, target):
     target = np.ascontiguousarray(target, dtype=np.float64)
-    output = np.empty(6, dtype=np.float64)
+    output = np.empty(3, dtype=np.float64)
     residual = ctypes.c_double()
     status = function(target.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
                       output.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
@@ -81,8 +81,8 @@ def test_all_twenty_emitted_native_cell_solves_match_original_residual(emitted_s
     for x, y in np.ndindex(4, 5):
         status, result, norm = _solve(emitted_solver, targets[:, x, y])
         assert status == 0, (x, y, status, norm)
-        np.testing.assert_allclose(result[:3], expected[:, x, y], rtol=0, atol=1.e-8)
-        np.testing.assert_allclose(result[3:], targets[:, x, y], rtol=0, atol=2.e-11)
+        assert norm <= 2.e-11
+        np.testing.assert_allclose(result, expected[:, x, y], rtol=0, atol=1.e-8)
 
 
 def test_outside_cone_emitted_native_cell_cannot_publish(emitted_solver):

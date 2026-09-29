@@ -58,19 +58,16 @@ def make_case(*, cells=(4, 5)):
     program = pops.Program("m18_entropy_step")
     dual_state, data_state = (program.state(subject) for subject in subjects)
     seed = program.value("dual_seed", dual_state.n, at=dual_state.next.point)
-    data_seed = program.value("target_seed", data_state.n, at=data_state.next.point)
 
     def residual(_program, unknowns, *, target):
-        return {"dual": QUADRATURE.residual(unknowns["dual"], target),
-                "target": tuple(unknowns["target"][i]-target[i] for i in range(3))}
+        return {"dual": QUADRATURE.residual(unknowns["dual"], target)}
 
     solved = program.solve(LocalResidual(
-        residual, {"dual": seed, "target": data_seed}, captures={"target": data_state.n}),
+        residual, {"dual": seed}, captures={"target": data_state.n}),
         solver=LocalNewton(tolerance=2.e-11, max_iterations=12,
                            safeguard="backtracking", max_backtracks=16,
                            minimum_step=2.**-16)).consume(action=FailRun())
-    program.commit_many({dual_state.next: solved[dual_block],
-                         data_state.next: solved[data_block]})
+    program.commit(dual_state.next, solved[dual_block])
     program.step_strategy(FixedDt(.01))
     case.program(program)
     for subject in subjects:
