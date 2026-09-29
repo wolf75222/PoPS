@@ -3,7 +3,19 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Current reception: component gradients, M05 and implicit-state inspection
+## Integrated persistent state, native reception pending
+
+`1adbb10a` integrates Program-owned IntegralState, accepted exterior-face delivery,
+collective scalar publication, exact stage selection, parent rollback and restart.
+Independent source/host tests and report are `34f9d509` / `6f60f5a8`; installed
+native/MPI/AMR qualification is still required. The first Dim1 build fails on a
+real release-contract drift: `module_capabilities.hpp` retains native ABI 3 while
+the generated contract is ABI 4. `e39761e0` aligns the declaration; repository
+`release_preflight.py` passes. The failed build is preserved as
+`outputs/build-integral-state-dim1.log`; the repaired build is running. No earlier
+native receipt is promoted across this ABI boundary.
+
+## Received component gradients, M05 and implicit-state inspection (SDK623)
 
 Both incremental native builds pass with SDK
 `62398f3c13c193eb48db07518735fe755e6d108821adffc37acccd8fcea290eb`,
@@ -58,10 +70,11 @@ This is a separate evidence window from SDK396719 below.
   Euler/SSPRK2 accepted quadratures. This is not an MPI receipt for those five
   historical fixtures.
 
-The source and raw evidence bundle for this window is being assembled. Earlier
-failed receipts remain immutable. IntegralState is under implementation and
-independent review; the whole migration, general mixed spatial solves, computed
-frontiers, GPU and full scientific corpus remain open.
+The [source and raw evidence bundle](m23_m05_converged_reception.md) is integrated
+at `e25133e7`: 206 payloads, 26 NPZ states, ten raw ledgers and four retained
+failed testcases. Root's `check_m23_m05_converged.py --recompute` passes. Earlier
+failed receipts remain immutable. IntegralState native reception, mixed spatial
+solves, computed frontiers, GPU and the full scientific corpus remain open.
 
 ## Received finite supports and exact AMR local storage (SDK396719)
 

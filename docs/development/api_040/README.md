@@ -2,12 +2,15 @@
 
 This directory tracks the integration into the production PoPS package. The
 provided specification is version 0.4.0; it is not the production package's
-version. The production additions use package 1.1.0, public API revision 2 and
-semantic IR revision 2. Release native ABI 3, generated System package protocol 6,
+version. The production additions use package 1.1.0, public API revision 3 and
+semantic IR revision 3. Release native ABI 4, generated System package protocol 7,
 and component interface 1 are separate authorities. Joint primitive coordinates
 use artifact manifest schema 10. The [native boundary decision](c26_c27_native_boundary_decision_v1.md)
 records the original protocol 5 decision; the [prepared boundary extension](m07_prepared_boundary_route.md)
 records its protocol 6 successor.
+The [persistent integral extension](integral_state_trace_v1.md) records protocol 7,
+Program IR 5 and the conditional accepted-exchange image `POPSEX02`. Its native
+reception remains separate from the earlier SDK623 results below.
 Exact artifact identities invalidate incompatible compiled plans.
 
 The migration remains in progress. Start with the [current checkpoint](CHECKPOINT.md)
@@ -58,6 +61,14 @@ and 28 passing installed selected-state/parameter/read-only unit cases. Its
 Dim2 CPU identities, per-rank XML inventory and source snapshots are checked
 independently. Earlier failed runs remain preserved; this is no AMR/GPU or
 complete-corpus qualification.
+
+The [M23/M05 archive](m23_m05_converged_reception.md) preserves the SDK623
+component-gradient and periodic scalar-shear receptions, their initial failures,
+and the distinct implicit-State Python repair. Root has independently reopened
+and recomputed the saved states and raw ledgers. Its 206-file inventory includes
+26 NPZ states and ten ledgers; the registry checks their exact manifest binding.
+These receipts qualify the documented closed subproblems on CPU serial/MPI2,
+with no claim of complete Hall MHD or Navier–Stokes/thermal acceptance.
 
 Check registry identities, source paths, receipt hashes and XML counts without
 running numerical tests:

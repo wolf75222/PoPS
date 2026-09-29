@@ -119,10 +119,14 @@
       "reference_limit": "Flux visqueux/thermiques, gradients primitifs et conditions de paroi non réalisés.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established",
-      "assessment_kind": "prior_mapping_retained_without_new_requalification",
-      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+      "production_status": "scoped_native_serial_and_mpi2_pass",
+      "qualification": "Closed periodic scalar viscous shear nu=.03, N32/64/128, T=.1, Forward Euler: strengthened serial 19/19 (18 source/math plus one three-grid native case) and MPI2 1/1 per rank. Six saved states and six raw ledgers independently reproduce discrete Fourier damping, dissipative work and the separate FE energy correction. Continuous errors are nonmonotone; no fitted convergence order.",
+      "assessment_kind": "sdk623_saved_state_and_ledger_recomputation_verified",
+      "remaining_gap": "Full compressible Navier-Stokes, primitive viscous stresses, conduction, thermal wall data and Couette acceptance remain IMPL/model-closure obligations. This is a closed scalar shear reduction on CPU Dim1; other backends are unqualified.",
+      "production_evidence": [
+        "evidence/m23-m05-converged/manifest.json",
+        "m23_m05_converged_reception.md"
+      ]
     },
     {
       "id": "M06",
@@ -513,11 +517,15 @@
       "reference_profile": "extension",
       "reference_limit": "Gradients réversibles prévus par la note; réalisation MHD–Hall complète absente.",
       "reference_evidence": [],
-      "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established",
-      "assessment_kind": "prior_mapping_retained_without_new_requalification",
-      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+      "production_candidate_symbols": "python/pops/numerics/diffusion.py:CoupledGradient;python/pops/codegen/program_emit_diffusion.py;include/pops/numerics/diffusion/prepared_diffusion.hpp",
+      "production_status": "scoped_native_serial_and_mpi2_pass",
+      "qualification": "Constant component D sym-PSD plus R skew is realized in a real periodic Dim1 kernel. Five Hall Fourier trajectories per backend cover N32/64, component permutation, eta=.3 and zero. Two three-component matrix variants exercise rank-one D, two weighted occurrences, both SSPRK2 stages, all 384 oriented records, overflow rejection and exact rollback. Three native tests pass serial and each MPI rank, including an empty rank. Independent saved-state phase and polynomial-amplification oracle passes.",
+      "assessment_kind": "sdk623_saved_state_and_ledger_recomputation_verified",
+      "remaining_gap": "Full Hall MHD, arbitrary spatial tensors, variable/nonlinear coefficients, nonperiodic boundaries, AMR and GPU remain implementation/qualification obligations. This receipt does not prove general SSPRK2 imaginary-axis stability; dimensions 2/3 are being extended separately and are not covered by SDK623.",
+      "production_evidence": [
+        "evidence/m23-m05-converged/manifest.json",
+        "m23_m05_converged_reception.md"
+      ]
     },
     {
       "id": "M24",
@@ -946,6 +954,20 @@
         "native-w12-snapshot-repaired-ctest": "passed"
       },
       "limits": "CPU OpenMP/MPICH2, finite8+4 M09 batch, selected partial2-level affine/local-state AMR, W12 native transaction. No meshed mixed PDE, general AMR, integral circuit, GPU, HPC or remote CI qualification; later M23 SDK is distinct."
+    },
+    "m23_m05_converged": {
+      "manifest": "evidence/m23-m05-converged/manifest.json",
+      "manifest_sha256": "d4b9d913133b77884c3dbb09ed4c1e329d9100978baf7f9cf4acdc779764c996",
+      "reconciled_at": "e25133e7",
+      "saved_states": 26,
+      "raw_ledgers": 10,
+      "retained_failed_testcases": 4,
+      "sdk_header_sha256": "62398f3c13c193eb48db07518735fe755e6d108821adffc37acccd8fcea290eb",
+      "native_sha256": {
+        "dim1": "42436a0ccef7c5504273c9e459f4bd946652597aa6ee025bc484ac595ad7ca02",
+        "dim2": "1afb920397c7fca0d683444c8c21b3fbc908847bdd7e8906457e6dd384c44c27"
+      },
+      "limits": "Closed Dim1 Hall/component-gradient and scalar-shear witnesses, CPU serial/MPI2. The distinct 0cd16d01 Python refresh receives the old five Dim2 implicit/diffusion cases serial only. No complete Hall MHD, NS/conduction, AMR/GPU/HPC, new IntegralState ABI or remote CI qualification."
     }
   }
 }

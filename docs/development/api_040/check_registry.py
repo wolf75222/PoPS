@@ -40,12 +40,22 @@ def pytest_counts(path):
 def main():
     from check_local_affine_evidence import verify
     from check_finite_amr_converged import verify_bundle
+    from check_m23_m05_converged import verify_bundle as verify_component_bundle
 
     verify(HERE / "evidence/local-affine-converged")
     finite = verify_bundle(HERE / "evidence/finite-amr-converged")
     with (HERE / "contracts.csv").open(newline="") as source:
         contracts = list(csv.DictReader(source))
     corpus = read_json(HERE / "corpus.json")
+    component = verify_component_bundle(HERE / "evidence/m23-m05-converged")
+    component_registry = corpus["supplemental_receptions"]["m23_m05_converged"]
+    require(component_registry["manifest_sha256"] == hashlib.sha256(
+                (HERE / component_registry["manifest"]).read_bytes()).hexdigest()
+            and component_registry["saved_states"] == component["npz"] == 26
+            and component_registry["raw_ledgers"] == component["raw_ledgers"] == 10
+            and component_registry["retained_failed_testcases"]
+                == component["retained_failed_testcases"] == 4,
+            "M23/M05 archived receipt binding changed")
     finite_registry = corpus["supplemental_receptions"]["finite_amr_converged"]
     require(finite_registry["manifest_sha256"] == hashlib.sha256(
                 (HERE / finite_registry["manifest"]).read_bytes()).hexdigest()
