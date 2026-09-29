@@ -27,14 +27,9 @@ def expression_cpp(node, inputs):
     raise ValueError("pointwise expression has an unsupported leaf or arity")
 
 
-def checked_pointwise_rows(value, inputs):
-    """Restore the closed DAG into the common CSE emitter and observe every result."""
+def pointwise_output_template(value):
+    """One authenticated output authority for allocation, mask and cell evaluation."""
     from pops.time.expressions import component_names
-    if len(inputs) != len(value.inputs):
-        raise ValueError("pointwise expression input arity changed")
-    for original, row in zip(value.inputs, inputs, strict=True):
-        if len(row) != len(component_names(original)):
-            raise ValueError("pointwise expression component Space changed")
     if "finite_support_v1" in value.attrs:
         from pops.linalg.finite import FiniteSupport
         support = FiniteSupport(*value.attrs["finite_support_v1"])
@@ -45,6 +40,19 @@ def checked_pointwise_rows(value, inputs):
                 or value.inputs[index].block != value.block
                 or value.inputs[index].state_ref != value.state_ref):
             raise ValueError("finite materialization output authority changed")
+        return value.inputs[index]
+    return value.inputs[0]
+
+
+def checked_pointwise_rows(value, inputs):
+    """Restore the closed DAG into the common CSE emitter and observe every result."""
+    from pops.time.expressions import component_names
+    if len(inputs) != len(value.inputs):
+        raise ValueError("pointwise expression input arity changed")
+    for original, row in zip(value.inputs, inputs, strict=True):
+        if len(row) != len(component_names(original)):
+            raise ValueError("pointwise expression component Space changed")
+    pointwise_output_template(value)
     expressions = value.attrs["expressions"]
     if len(expressions) != len(component_names(value)):
         raise ValueError("pointwise expression output Space changed")
@@ -112,7 +120,7 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
     from pops.codegen.program_emit_kernels import _kernel_open, _kernel_close
     from pops.time.expressions import component_names
     names = [variables[item.id] for item in value.inputs]
-    template_name = names[value.attrs.get("finite_template_index", 0)]
+    template_name = variables[pointwise_output_template(value).id]
     body = _kernel_open(output, template_name)
     index = next(i for i, line in enumerate(body) if "pops::for_each_cell" in line)
     views = []
@@ -148,5 +156,5 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
                         % (name, output, name, output, name, output))
         vote += ["if (pops::all_reduce_max(finite_layout_error_, ctx.prepared_execution_lane()))",
                  '  throw std::runtime_error("finite materialization requires co-located layouts, distributions and ranks");']
-        return vote + body + _kernel_close() + ["}"]
+        return vote + ["}"] + body + _kernel_close()
     return body + _kernel_close()

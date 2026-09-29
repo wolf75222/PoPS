@@ -1477,14 +1477,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             program, v, base, var, model, lines, prelude, block_idx, field_plans,
             target=target)
     elif v.op == "pointwise_expression":
-        from pops.codegen.program_emit_expressions import emit_pointwise_kernel
+        from pops.codegen.program_emit_expressions import emit_pointwise_kernel, pointwise_output_template
+        template_var = var[pointwise_output_template(v).id]
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                     % (var[v.id], v.id, var[v.inputs[0].id]))
+                     % (var[v.id], v.id, template_var))
         output_setup_end = len(lines)
         status = "expression_status_%d" % v.id
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
-                     % (status, v.id, var[v.inputs[0].id]))
+                     % (status, v.id, template_var))
         lines += emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
         reduction = "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
         lines.append("if (ctx.%s(%d, %s, expression_active_%d, ctx.prepared_execution_lane()) != pops::Real(0)) {"
