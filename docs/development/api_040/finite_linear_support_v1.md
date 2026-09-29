@@ -108,3 +108,12 @@ mpiexec -n 2 python -m pytest -q tests/python/integration/runtime/test_finite_m0
 
 Use the authenticated rebuilt package for the last two commands, with a timeout
 for MPI; source injection is not installed-runtime evidence.
+
+
+Fixture follow-up: installed tests use the shared `collective_checks` helpers
+introduced by 9c9dd579/941afec2. Bind, individual state gathers, local conversions,
+clocks and expected rejection assertions converge before the next collective.
+The serialized exception admission retains `isinstance(RuntimeError)`, including
+native step rejection subclasses; any other family fails explicitly. The example
+has the same per-operation convergence without importing test utilities. These
+boundaries do not claim to recover a deadlock *inside* a native collective.

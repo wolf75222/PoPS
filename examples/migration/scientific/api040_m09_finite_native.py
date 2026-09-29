@@ -96,10 +96,22 @@ def main():
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     context = pops.ExecutionContext.mpi_world(artifact)
     world = context.communicator.handle
-    runtime = pops.bind(artifact, initial_values={
+    def collective(operation):
+        value, failure = None, None
+        try:
+            value = operation()
+        except Exception as exc:
+            failure = (type(exc).__name__, str(exc), isinstance(exc, RuntimeError))
+        failures = allgather_value(world, failure)
+        if any(failures):
+            raise RuntimeError(repr(failures))
+        return value
+
+    initial = collective(lambda: {
         subjects[0]: data.velocity_old[list(vo)].reshape(8, 1, 1),
-        subjects[1]: data.potential_old[list(po)].reshape(4, 1, 1)},
-        resources={"execution_context": context})
+        subjects[1]: data.potential_old[list(po)].reshape(4, 1, 1)})
+    runtime = collective(lambda: pops.bind(artifact, initial_values=initial,
+                         resources={"execution_context": context}))
     error = None
     try:
         pops.run(runtime, t_end=DT, max_steps=1, console=False)
@@ -109,8 +121,10 @@ def main():
     errors = allgather_value(world, error)
     if any(errors):
         raise RuntimeError(repr(errors))
-    velocity = np.asarray(runtime.state_global("velocity"))
-    potential = np.asarray(runtime.state_global("potential"))
+    raw_velocity = collective(lambda: runtime.state_global("velocity"))
+    velocity = collective(lambda: np.asarray(raw_velocity))
+    raw_potential = collective(lambda: runtime.state_global("potential"))
+    potential = collective(lambda: np.asarray(raw_potential))
     if world.rank == 0:
         try:
             args.output.mkdir(parents=True, exist_ok=True)
