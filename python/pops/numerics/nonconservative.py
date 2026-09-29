@@ -236,6 +236,7 @@ class PathConservativeFiniteVolume(FiniteVolume):
         for name in ("variables", "reconstruction", "riemann"):
             setattr(result, name, _resolved_brick(getattr(self, name), resolver))
         result.flux = resolver(self.flux)
+        result.sampling = tuple(resolver(item) for item in self.sampling)
         result.path = self.path.resolve_references(resolver)
         result.positivity_floor = None
         result.zero_measure_faces = self.zero_measure_faces
@@ -248,6 +249,7 @@ class PathConservativeFiniteVolume(FiniteVolume):
             raise ValueError("PathConservativeFiniteVolume.to_data requires resolved physical handles")
         return {"schema_version": 1, "method": "path_conservative_finite_volume",
                 "flux": flux.canonical_identity(), "path": self.path.to_data(),
+                "sampling": [item.canonical_identity() for item in self.sampling],
                 "variables": _brick_data(self.variables),
                 "reconstruction": _brick_data(self.reconstruction),
                 "riemann": _brick_data(self.riemann),
