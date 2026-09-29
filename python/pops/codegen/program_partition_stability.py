@@ -201,6 +201,8 @@ def partition_stability_groups(value, *, include_transport=False):
     rates = [(node, weight) for node, weight in terms if _is_rate(node)]
     states = [(node, weight) for node, weight in terms if not _is_rate(node)]
     if not states:
+        if value.vtype == "state":
+            raise ValueError(_DIAGNOSTIC + "; an explicit state consumer has no state weight")
         return ()
     if any(node.vtype != "state" or set(weight) != {0} or weight[0] < 0
            for node, weight in states):

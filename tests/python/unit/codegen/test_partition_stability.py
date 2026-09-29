@@ -35,6 +35,7 @@ def test_nested_rate_sum_keeps_each_exact_fraction_and_one_state_budget():
     state = _state(0)
     transport, diffusion = _pair(state)
     rate_sum = _combine(20, (transport, {0: Fraction(1, 2)}), (diffusion, {0: Fraction(3, 4)}))
+    rate_sum.vtype = "rhs"  # An observed sum of rates is not an accepted state.
     assert partition_stability_groups(rate_sum) == ()
     update = _combine(21, (state, {0: 1}), (rate_sum, {1: Fraction(2, 3)}))
     assert partition_stability_groups(update) == (
