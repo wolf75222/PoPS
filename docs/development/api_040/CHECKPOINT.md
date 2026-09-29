@@ -3,7 +3,43 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Current reception: source 83b2b12, native 4574ed60 (in progress)
+## Current reception: source 3d06cab, native 4574ed60 (in progress)
+
+The wheel was incrementally rebuilt after the principal carrier fix 3d06cab.
+Its native binary and SDK header signature remain those listed below: the change
+is in the production Python loader emitter. All 1,079 installed sources match,
+manifest SHA256 `2a76043ebff3bb5405d3408b39867856b9dd635d67a72ca9040d6535794300ce`.
+Receipts: parent `outputs/build-principal-storage-openmp-mpi.log` and
+`outputs/installed-3d06cab-storage-newton/`.
+
+The 12-test installed run finished with six passes and six failures. Both C17
+tests passed, including actual Newton execution, original-residual rejection,
+rollback/history checks and the converged positive case. Principal AMR active
+singularity rollback, Primitive/User widest halo, and standalone User 2- and
+5-component Uniform rebind/oracle cases also passed. The seven prior compiler
+errors are resolved without introducing row wave speeds.
+
+Five positive principal AMR cases stopped before numerical comparison because
+the fixture expected `patch_boxes()` to include level zero. The API lists refined
+patches; ac2aed0 now checks `n_levels()`, the coarse array shape, and refined boxes
+separately. The remaining failure was another fixture using a literal threshold
+where the existing AMR predicate contract requires a RuntimeParam. The unchanged
+threshold value 1000 is now authored as a Case RuntimeParam. This does not claim
+general constant-threshold predicate support. These six cases still require rerun.
+
+The nine affected C++ targets are rebuilding at ac2aed0 in `build-mpi`, including
+the previously omitted Schur-free target and new native history/LocalNewton tests.
+Log: parent `outputs/native-c17-c38-3d06cab-build.log`. Production source is frozen
+during this reception. The exact source/receipt registry was reconciled in 722393c;
+`check_registry.py` passes without implying numerical or native acceptance.
+
+Isolated next work: Astra/high joint User reconstruction commit 72b336c is under
+Sol/high independent review, with an installed runtime witness prepared; it is
+not integrated yet. Astra/high and Sol/high are preparing and independently
+reviewing a real Dim1 reception of the bounded axial B.1 M15 variant. No Dim1
+package build or M15 native run has occurred. Root centralizes all heavy builds.
+
+## Previous reception: source 83b2b12, native 4574ed60 (historical)
 
 The incremental MPI/Dim2 OpenMP wheel build succeeded. The installed native SHA256 is
 `4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb`;
