@@ -276,6 +276,7 @@ def _emit_contiguous_rhs_group(
         capture = "" if faces is None else ", &"+faces
         from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
         input_trace = emit_rhs_input_trace(value, index, var[state.id], lines, target)
+        var[("rhs_input_trace", value.id)] = input_trace
         trace = ""
         if input_trace is not None:
             if not capture:
@@ -290,7 +291,7 @@ def _emit_contiguous_rhs_group(
     if model is not None:
         for value in values:
             emit_transport_frequency(value, var, lines, model=model_for_node(model, value),
-                                     block_index=block_idx[value.block])
+                                     block_index=block_idx[value.block], target=target)
 
 
 def _emit_commit_group(commits: Any, bases: Any, var: Any, *, phase: int) -> list[str]:

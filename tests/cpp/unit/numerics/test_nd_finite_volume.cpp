@@ -2,6 +2,7 @@
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/spatial/nd/finite_volume.hpp>
+#include <pops/numerics/spatial/nd/face_frequency.hpp>
 
 #include <algorithm>
 #include <array>
@@ -390,6 +391,26 @@ TEST(test_nd_finite_volume, face_field_owns_one_axis_static_fab_per_direction) {
   const auto metric = prepare_metric_provider(
       cells, CartesianCoordinateMap<3>::make(RealVector<3>{}, RealVector<3>{1, 1, 1}));
   EXPECT_TRUE(nd::conservative_residual<5>(metric, faces.view(), Index<3>{}).succeeded());
+}
+
+TEST(test_nd_finite_volume, incident_face_frequency_uses_each_axis_actual_speed) {
+  const Box<2> cells = make_box<2>({3, 3});
+  HostFaceStorage<2, 1> speeds(cells);
+  speeds.fill(Real(0));
+  const Index<2> cell{1, 1};
+  speeds.set(0, Index<2>{1, 1}, 0, Real(0.7));
+  speeds.set(0, Index<2>{2, 1}, 0, Real(0.5));
+  const std::array<Real, 2> inverse_spacing{Real(32), Real(64)};
+  EXPECT_DOUBLE_EQ(nd::incident_face_frequency_at(speeds.view(), cell, inverse_spacing),
+                   Real(0.7) * Real(32));
+  speeds.set(1, Index<2>{1, 1}, 0, Real(0.4));
+  speeds.set(1, Index<2>{1, 2}, 0, Real(0.2));
+  EXPECT_DOUBLE_EQ(nd::incident_face_frequency_at(speeds.view(), cell, inverse_spacing),
+                   Real(0.7) * Real(32) + Real(0.4) * Real(64));
+  speeds.set(1, Index<2>{1, 2}, 0, std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_TRUE(std::isinf(nd::incident_face_frequency_at(speeds.view(), cell, inverse_spacing)));
+  speeds.set(1, Index<2>{1, 2}, 0, Real(-1));
+  EXPECT_TRUE(std::isinf(nd::incident_face_frequency_at(speeds.view(), cell, inverse_spacing)));
 }
 
 TEST(test_nd_finite_volume, inadmissible_states_and_invalid_metric_inputs_fail_closed) {

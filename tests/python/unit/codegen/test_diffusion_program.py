@@ -86,9 +86,10 @@ def test_combined_transport_retains_native_riemann_and_adds_stability_frequencie
     assert code.count("ctx.neg_div_flux_default_with_faces_into(") == 1
     assert "ctx.prepare_provider_values(" not in code  # field-free native flux stays field-free
     assert "_transport_faces" in code
-    assert "ctx.max_wave_speed(" in code
+    assert "diffusive_transport_frequency_" in code
+    assert "ctx.max_wave_speed(" not in code
     assert "combined_transport_diffusion_stability" in code
-    assert ".explicit_frequency() + ctx.max_wave_speed" in code
+    assert ".explicit_frequency() + diffusive_transport_frequency_" in code
     assert code.index(".stage_accepted_exchanges(")<code.index("ctx.commit_many(")
     assert model._dsl._m._flux
 

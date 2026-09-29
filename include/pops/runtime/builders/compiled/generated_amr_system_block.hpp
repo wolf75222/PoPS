@@ -165,6 +165,9 @@ struct PreparedAmrLevelEvaluation {
   std::uint64_t materialization_generation = 0;
   MultiFab<Dim, MemorySpace> residual;
   std::vector<nd::FaceField<Dim, MemorySpace>> integrated_face_fluxes;
+  std::vector<nd::FaceField<Dim, MemorySpace>> face_speed_bounds;
+  mutable MultiFab<Dim, MemorySpace> face_frequency_scratch;
+  bool face_speeds_valid = false;
   std::optional<PreparedAmrPathFaceData<Dim, MemorySpace>> path_faces;
 };
 
@@ -1283,7 +1286,11 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
             .residual =
                 MultiFab<Dim>(prototype.layout(), prototype.distribution(), prototype.local_rank(),
                               prototype.ncomp(), prototype.ghosts()),
-            .integrated_face_fluxes = nd::make_face_flux_workspace(prototype)};
+            .integrated_face_fluxes = nd::make_face_flux_workspace(prototype),
+            .face_speed_bounds = nd::make_face_flux_workspace(prototype, 1),
+            .face_frequency_scratch = MultiFab<Dim>(
+                prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
+                prototype.ghosts())};
         if (!path_identity.empty())
           evaluation.path_faces.emplace(PreparedAmrPathFaceData<Dim>::prepare(prototype,
                                                                               path_identity));
@@ -1418,6 +1425,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
               image.set_val(Real(0));
               generated_system_detail::copy_valid(state, image);
               evaluation.residual.set_val(Real(0));
+              evaluation.face_speeds_valid = false;
               for (auto& faces : evaluation.integrated_face_fluxes)
                 faces.set_val(Real(0));
               if (evaluation.path_faces)
@@ -1493,14 +1501,16 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                     spatial.materialize_face_fluxes(
                         image.fab(local), faces[local],
                         evaluation_scratch->spatial.face_candidate(local),
-                        evaluation_scratch->spatial.face_status(local), omitted_faces);
+                        evaluation_scratch->spatial.face_status(local), omitted_faces,
+                        &evaluation.face_speed_bounds[local]);
                   else
                     spatial.materialize_face_fluxes(
                         image.fab(local),
                         runtime::system::bind_provider_storage_view<Dim, provider_count>(
                             provider_plan, provider_storage, local),
                         faces[local], evaluation_scratch->spatial.face_candidate(local),
-                        evaluation_scratch->spatial.face_status(local), omitted_faces);
+                        evaluation_scratch->spatial.face_status(local), omitted_faces,
+                        &evaluation.face_speed_bounds[local]);
                   if (physical && physical_boundary)
                     physical_boundary->apply_physical_flux_conditions(faces[local],
                                                                       geometry.domain());
@@ -1510,6 +1520,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                 spatial.assemble_residual_from_face_fluxes(
                     faces, residual, evaluation_scratch->spatial.residual_candidate(),
                     evaluation_scratch->spatial.residual_status());
+                evaluation.face_speeds_valid = true;
               }
             },
             "generated AMR flux/residual materialization failed collectively");

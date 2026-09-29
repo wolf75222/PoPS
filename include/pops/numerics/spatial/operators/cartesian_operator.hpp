@@ -43,9 +43,11 @@ class PreparedCartesianOperatorScratch {
                          prototype.ghosts()) {
     face_candidates_.reserve(prototype.local_size());
     face_statuses_.reserve(prototype.local_size());
+    face_speeds_.reserve(prototype.local_size());
     for (std::size_t local = 0; local < prototype.local_size(); ++local) {
       face_candidates_.emplace_back(prototype.box(local), prototype.ncomp());
       face_statuses_.emplace_back(prototype.box(local), 1);
+      face_speeds_.emplace_back(prototype.box(local), 1);
     }
   }
 
@@ -57,7 +59,8 @@ class PreparedCartesianOperatorScratch {
         field.ncomp() != residual_candidate_.ncomp() ||
         field.ghosts() != residual_candidate_.ghosts() ||
         face_candidates_.size() != field.local_size() ||
-        face_statuses_.size() != field.local_size())
+        face_statuses_.size() != field.local_size() ||
+        face_speeds_.size() != field.local_size())
       throw std::invalid_argument(
           "prepared Cartesian operator scratch differs from its authenticated field layout");
   }
@@ -66,12 +69,17 @@ class PreparedCartesianOperatorScratch {
     return face_candidates_.at(local);
   }
   FaceField<Dim, MemorySpace>& face_status(std::size_t local) { return face_statuses_.at(local); }
+  FaceField<Dim, MemorySpace>& face_speed(std::size_t local) { return face_speeds_.at(local); }
+  const std::vector<FaceField<Dim, MemorySpace>>& face_speeds() const noexcept {
+    return face_speeds_;
+  }
   MultiFab<Dim, MemorySpace>& residual_candidate() noexcept { return residual_candidate_; }
   MultiFab<Dim, MemorySpace>& residual_status() noexcept { return residual_status_; }
 
  private:
   std::vector<FaceField<Dim, MemorySpace>> face_candidates_;
   std::vector<FaceField<Dim, MemorySpace>> face_statuses_;
+  std::vector<FaceField<Dim, MemorySpace>> face_speeds_;
   MultiFab<Dim, MemorySpace> residual_candidate_;
   MultiFab<Dim, MemorySpace> residual_status_;
 };
@@ -206,6 +214,8 @@ struct MaterializeFaceFlux {
   ProviderStorage providers;
   FaceFieldView<Real, Dim> integrated_fluxes{};
   FaceFieldView<Real, Dim> statuses{};
+  FaceFieldView<Real, Dim> speeds{};
+  bool record_speeds = false;
   Box<Dim> domain{};
   std::array<bool, 2 * Dim> omitted_faces{};
 
@@ -213,6 +223,10 @@ struct MaterializeFaceFlux {
     for (int component = 0; component < Model::n_vars; ++component)
       integrated_fluxes.template operator()<Axis>(face.coordinate, component) = Real(0);
     statuses.template operator()<Axis>(face.coordinate) = static_cast<Real>(status);
+    if (record_speeds)
+      speeds.template operator()<Axis>(face.coordinate) =
+          status == FiniteVolumeStatus::Success ? Real(0)
+                                                : std::numeric_limits<Real>::quiet_NaN();
   }
 
   POPS_HD void operator()(const FaceIndex<Dim, Axis>& face) const {
@@ -266,6 +280,14 @@ struct MaterializeFaceFlux {
       fail(face, FiniteVolumeStatus::InvalidWaveSpeed);
       return;
     }
+    if (record_speeds &&
+        (!Kokkos::isfinite(evaluation.stability.value) ||
+         evaluation.stability.value < Real(0) ||
+         evaluation.stability.unit != StabilityUnit::kLengthPerTime ||
+         evaluation.stability.convention != StabilityConvention::kNormalSpectralRadius)) {
+      fail(face, FiniteVolumeStatus::InvalidWaveSpeed);
+      return;
+    }
     auto integrated = apply_face_measure(evaluation.checked_density(), context);
     if constexpr (DiffusiveModel<Model>) {
       const Real spacing = context.cell_measure / context.face_measure;
@@ -285,6 +307,8 @@ struct MaterializeFaceFlux {
           integrated.value[component];
     statuses.template operator()<Axis>(face.coordinate) =
         static_cast<Real>(FiniteVolumeStatus::Success);
+    if (record_speeds)
+      speeds.template operator()<Axis>(face.coordinate) = evaluation.stability.value;
   }
 };
 
@@ -441,17 +465,19 @@ void materialize_axes(const Model& model, const Metric& metric,
                       const Fab<Dim, MemorySpace>& state, const ProviderStorage& providers,
                       FaceField<Dim, MemorySpace>& integrated_fluxes,
                       FaceField<Dim, MemorySpace>& statuses,
-                      const std::array<bool, 2 * Dim>& omitted_faces = {}) {
+                      const std::array<bool, 2 * Dim>& omitted_faces = {},
+                      FaceField<Dim, MemorySpace>* speeds = nullptr) {
   for_each_face<Axis>(state.box(),
                       MaterializeFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction,
                                           NumericalFlux, ProviderStorage>{
                           model, metric, reconstruction, numerical_flux, positivity_floor,
                           positivity_component, state.view(), providers, integrated_fluxes.view(),
-                          statuses.view(), metric.identity().domain, omitted_faces});
+                          statuses.view(), speeds ? speeds->view() : FaceFieldView<Real, Dim>{},
+                          speeds != nullptr, metric.identity().domain, omitted_faces});
   if constexpr (Axis + 1 < Dim)
     materialize_axes<Axis + 1, Variables>(model, metric, reconstruction, numerical_flux,
                                           positivity_floor, positivity_component, state, providers,
-                                          integrated_fluxes, statuses, omitted_faces);
+                                          integrated_fluxes, statuses, omitted_faces, speeds);
 }
 
 template <int Axis, int Dim, class MemorySpace>
@@ -689,7 +715,8 @@ class PreparedCartesianOperator {
                                FaceField<Dim, MemorySpace>& output,
                                FaceField<Dim, MemorySpace>& candidate,
                                FaceField<Dim, MemorySpace>& statuses,
-                               const std::array<bool, 2 * Dim>& omitted_faces = {}) const
+                               const std::array<bool, 2 * Dim>& omitted_faces = {},
+                               FaceField<Dim, MemorySpace>* speeds = nullptr) const
     requires(flux_provider_count<Model> == 0)
   {
     require_ordinary_route_();
@@ -699,10 +726,12 @@ class PreparedCartesianOperator {
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(candidate, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(statuses, state.box(), 1);
+    if (speeds)
+      cartesian_operator_detail::require_face_output(*speeds, state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
         model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
         state, cartesian_operator_detail::ProviderFreeStorage<Dim>{}, candidate, statuses,
-        omitted_faces);
+        omitted_faces, speeds);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error(hyperbolic_publication_refusal(
@@ -733,7 +762,8 @@ class PreparedCartesianOperator {
                                FaceField<Dim, MemorySpace>& output,
                                FaceField<Dim, MemorySpace>& candidate,
                                FaceField<Dim, MemorySpace>& statuses,
-                               const std::array<bool, 2 * Dim>& omitted_faces = {}) const {
+                               const std::array<bool, 2 * Dim>& omitted_faces = {},
+                               FaceField<Dim, MemorySpace>* speeds = nullptr) const {
     require_ordinary_route_();
     if (&output == &candidate || &output == &statuses || &candidate == &statuses)
       throw std::invalid_argument("prepared ND hyperbolic face output and scratch must not alias");
@@ -742,9 +772,11 @@ class PreparedCartesianOperator {
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(candidate, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(statuses, state.box(), 1);
+    if (speeds)
+      cartesian_operator_detail::require_face_output(*speeds, state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
         model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
-        state, providers.view(), candidate, statuses, omitted_faces);
+        state, providers.view(), candidate, statuses, omitted_faces, speeds);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error(hyperbolic_publication_refusal(
@@ -779,7 +811,8 @@ class PreparedCartesianOperator {
                                FaceField<Dim, MemorySpace>& output,
                                FaceField<Dim, MemorySpace>& candidate,
                                FaceField<Dim, MemorySpace>& statuses,
-                               const std::array<bool, 2 * Dim>& omitted_faces = {}) const
+                               const std::array<bool, 2 * Dim>& omitted_faces = {},
+                               FaceField<Dim, MemorySpace>* speeds = nullptr) const
     requires(Count == flux_provider_count<Model>)
   {
     require_ordinary_route_();
@@ -790,9 +823,11 @@ class PreparedCartesianOperator {
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(candidate, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(statuses, state.box(), 1);
+    if (speeds)
+      cartesian_operator_detail::require_face_output(*speeds, state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
         model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
-        state, providers, candidate, statuses, omitted_faces);
+        state, providers, candidate, statuses, omitted_faces, speeds);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error(hyperbolic_publication_refusal(
@@ -1155,11 +1190,13 @@ auto prepare_cartesian_operator(const Geometry<Dim>& geometry, Model model,
 
 template <int Dim, class MemorySpace>
 std::vector<FaceField<Dim, MemorySpace>> make_face_flux_workspace(
-    const MultiFab<Dim, MemorySpace>& state) {
+    const MultiFab<Dim, MemorySpace>& state, int components = 0) {
+  if (components < 0)
+    throw std::invalid_argument("face workspace component count must be nonnegative");
   std::vector<FaceField<Dim, MemorySpace>> result;
   result.reserve(state.local_size());
   for (std::size_t local = 0; local < state.local_size(); ++local)
-    result.emplace_back(state.box(local), state.ncomp());
+    result.emplace_back(state.box(local), components ? components : state.ncomp());
   return result;
 }
 

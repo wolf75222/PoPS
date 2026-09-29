@@ -77,7 +77,7 @@ def test_ssprk2_flux_families_are_operation_typed_and_installed_before_restore_h
     assert source.index(declaration) < source.index("ctx.install([=](double dt)")
     for family in by_provider["1"]:
         assert source.count('neg_div_flux_default_with_faces_into(0,u') == 2
-        assert source.count(f',"{family}");') >= 2
+        assert source.count(f',"{family}",nullptr,&diffusive_transport_frequency_') >= 2
     for family in by_provider["4"]:
         assert source.count("ctx.attach_diffusive_flux_basis(") == 2
         assert source.count(f',"{family}");') >= 2

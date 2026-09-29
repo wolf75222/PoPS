@@ -834,14 +834,16 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                 spatial.materialize_face_fluxes(state.fab(local), faces[local],
                                                 scratch.cartesian_operator.face_candidate(local),
                                                 scratch.cartesian_operator.face_status(local),
-                                                omitted_faces);
+                                                omitted_faces,
+                                                &scratch.cartesian_operator.face_speed(local));
               else
                 spatial.materialize_face_fluxes(
                     state.fab(local),
                     runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
                         provider_plan, provider_storage, local),
                     faces[local], scratch.cartesian_operator.face_candidate(local),
-                    scratch.cartesian_operator.face_status(local), omitted_faces);
+                    scratch.cartesian_operator.face_status(local), omitted_faces,
+                    &scratch.cartesian_operator.face_speed(local));
               if (boundary != nullptr)
                 boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
             }

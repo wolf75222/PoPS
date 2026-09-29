@@ -5,7 +5,12 @@ void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_s
                                           field_type& rhs, int rate_id,
                                           std::vector<nd::FaceField<Dim>>& faces,
                                           std::string_view temporal_family = {},
-                                          const RhsInputTrace* input_trace = nullptr) const {
+                                          const RhsInputTrace* input_trace = nullptr,
+                                          Real* transport_frequency = nullptr) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  if (all_reduce_min(transport_frequency ? 1L : 0L, lane) !=
+      all_reduce_max(transport_frequency ? 1L : 0L, lane))
+    throw std::invalid_argument("AMR transport face-frequency request differs across ranks");
   const int runtime_block = sys_block(program_block);
   require_rate_identity_(rate_id);
   require_same_field_contract_(stage_state, rhs, "AMR Program default flux residual");
@@ -19,21 +24,71 @@ void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_s
                 parent);
   copy_valid_(evaluation.residual, rhs);
   std::exception_ptr copy_error;
+  Real local_frequency = Real(0);
   try {
     faces = evaluation.integrated_face_fluxes;
+    if (transport_frequency) {
+      if (!evaluation.face_speeds_valid)
+        throw std::invalid_argument("AMR transport frequency requires evaluated Cartesian faces");
+      local_frequency = nd::maximum_incident_face_frequency(
+          stage_state, evaluation.face_speed_bounds, geometry(),
+          evaluation.face_frequency_scratch);
+    }
   } catch (...) {
     copy_error = std::current_exception();
   }
-  const ExecutionLane& lane = prepared_execution_lane();
   if (all_reduce_max(copy_error ? 1L : 0L, lane) != 0) {
     if (lane.size() == 1 && copy_error)
       std::rethrow_exception(copy_error);
     throw std::runtime_error("AMR retained transport face copy failed collectively");
   }
+  if (transport_frequency) {
+    const Real frequency = static_cast<Real>(all_reduce_max(local_frequency, lane));
+    if (!std::isfinite(frequency) || frequency < Real(0))
+      throw std::runtime_error("AMR transport face frequency is nonfinite or negative");
+    *transport_frequency = frequency;
+  }
   if (!active_attempt_states_.empty())
     attach_active_flux_basis_(runtime_block, evaluation, rhs, rate_id,
                               FluxBasisProvider::PreparedDefaultFlux, temporal_family);
   count_kernel_();
+}
+
+/// A grouped partition guard can require the face envelope after its RHS has
+/// already been evaluated. Re-evaluate at the same stage without attaching an
+/// accepted flux basis or publishing a second residual.
+Real evaluated_transport_frequency(int program_block, field_type& stage_state,
+                                   int rate_id,
+                                   const RhsInputTrace* input_trace = nullptr) const {
+  const int runtime_block = sys_block(program_block);
+  require_rate_identity_(rate_id);
+  const auto point = boundary_evaluation_point(rate_id);
+  const auto* parent = rhs_input_parent_(runtime_block, stage_state, rate_id, input_trace);
+  const auto& evaluation =
+      active_attempt_states_.empty()
+          ? facade_->evaluate_prepared_amr_block_level_flux_at(runtime_block, point, stage_state)
+          : facade_->evaluate_prepared_amr_block_level_flux_at(
+                runtime_block, point, stage_state, active_level_ - 1, parent);
+  const ExecutionLane& lane = prepared_execution_lane();
+  Real local_frequency = Real(0);
+  std::exception_ptr error;
+  try {
+    if (!evaluation.face_speeds_valid)
+      throw std::invalid_argument("AMR partition frequency requires evaluated Cartesian faces");
+    local_frequency = nd::maximum_incident_face_frequency(
+        stage_state, evaluation.face_speed_bounds, geometry(),
+        evaluation.face_frequency_scratch);
+  } catch (...) { error = std::current_exception(); }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("AMR partition face frequency failed collectively");
+  }
+  const Real frequency = static_cast<Real>(all_reduce_max(local_frequency, lane));
+  if (!std::isfinite(frequency) || frequency < Real(0))
+    throw std::runtime_error("AMR partition face frequency is nonfinite or negative");
+  count_kernel_();
+  return frequency;
 }
 
 /// Register the conservative flux corresponding to the prepared constitutive rate. Prepared

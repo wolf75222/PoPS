@@ -32,7 +32,7 @@ def has_independent_diffusion_transport(model):
             transport = True
             proof = row.guarantees.get("explicit_transport_frequency")
             authenticated &= (proof is not None
-                              and proof.get("provider") == "native_endpoint_model_wave_envelope")
+                              and proof.get("provider") == "native_incident_face_stability")
         diffusion |= method.get("method") in {"diffusion", "tensor_diffusion"}
     if transport and diffusion and not authenticated:
         raise ValueError("composed transport stability requires an authenticated resolved face envelope")
@@ -110,7 +110,7 @@ def partition_stability_groups(value, *, include_transport=False):
     return tuple((state, alpha, tuple(rows)) for state, alpha, rows in groups.values())
 
 
-def emit_transport_frequency(value, var, lines, *, model, block_index):
+def emit_transport_frequency(value, var, lines, *, model, block_index, target="system"):
     """Capture the selected envelope while this exact rate's inputs/providers are current."""
     if not has_independent_diffusion_transport(model):
         return
@@ -118,12 +118,11 @@ def emit_transport_frequency(value, var, lines, *, model, block_index):
 
     if _named_fluxes(value) is not None:
         raise ValueError("composed transport stability requires the selected native finite-volume envelope")
-    dimension = len(_model_impl(model)._flux)
-    inverse_spacing = " + ".join("1/ctx.geometry().spacing(%d)" % axis
-                                 for axis in range(dimension))
     frequency = "transport_frequency_%d" % value.id
-    lines.append("const pops::Real %s = ctx.max_wave_speed(%d,%s) * (%s);"
-                 % (frequency, block_index, var[value.inputs[0].id], inverse_spacing))
+    trace = ("," + (var.get(("rhs_input_trace", value.id)) or "nullptr")
+             if target == "amr_system" else "")
+    lines.append("const pops::Real %s = ctx.evaluated_transport_frequency(%d,%s,%d%s);"
+                 % (frequency, block_index, var[value.inputs[0].id], value.id, trace))
     var[("partition_frequency", value.id)] = frequency
 
 

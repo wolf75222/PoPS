@@ -166,6 +166,8 @@ class PreparedScalarBoundarySession {
                            prototype.ncomp(), prototype.ghosts()),
           generated_source_status(prototype.layout(), prototype.distribution(),
                                   prototype.local_rank(), 1, prototype.ghosts()),
+          generated_face_frequency(prototype.layout(), prototype.distribution(),
+                                   prototype.local_rank(), 1, prototype.ghosts()),
           generated_faces(nd::make_face_flux_workspace(prototype)),
           cartesian_operator(prototype) {}
 
@@ -184,6 +186,7 @@ class PreparedScalarBoundarySession {
     field_type generated_candidate;
     field_type generated_source;
     field_type generated_source_status;
+    field_type generated_face_frequency;
     std::vector<nd::FaceField<Dim>> generated_faces;
     nd::PreparedCartesianOperatorScratch<Dim> cartesian_operator;
   };

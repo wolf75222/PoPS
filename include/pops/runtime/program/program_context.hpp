@@ -11,6 +11,7 @@
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
+#include <pops/numerics/spatial/nd/face_frequency.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
@@ -513,19 +514,67 @@ class ProgramContext {
   /// numerical observations; only the accepted Program quadrature may stage exchanges.
   void neg_div_flux_default_with_faces_into(int program_block, field_type& state_value,
                                             field_type& rhs, int rate_id,
-                                            std::vector<nd::FaceField<Dim>>& faces) const {
+                                            std::vector<nd::FaceField<Dim>>& faces,
+                                            Real* transport_frequency = nullptr) const {
     require_rate_identity_(rate_id);
     count_kernel_();
     const auto point = boundary_evaluation_point(rate_id);
     const auto& lane = prepared_execution_lane();
+    if (all_reduce_min(transport_frequency ? 1L : 0L, lane) !=
+        all_reduce_max(transport_frequency ? 1L : 0L, lane))
+      throw std::invalid_argument("transport face-frequency request differs across ranks");
     auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
     system_->block_neg_div_flux_into_at_prepared(
         point, sys_block(program_block), state_value, rhs, boundary->system(),
         boundary->runtime_block(), boundary->point(), boundary->lane(), boundary->transport());
     // FaceField owns Fab values with deep-copy semantics: subsequent residual evaluations
     // cannot overwrite a prior stage's accepted quadrature data.
-    boundary->transport().with_boundary_scratch(
-        state_value, [&](auto& scratch) { faces = scratch.generated_faces; });
+    Real local_frequency = Real(0);
+    std::exception_ptr error;
+    try {
+      boundary->transport().with_boundary_scratch(state_value, [&](auto& scratch) {
+        if (transport_frequency)
+          local_frequency = nd::maximum_incident_face_frequency(
+              state_value, scratch.cartesian_operator.face_speeds(), geometry(),
+              scratch.generated_face_frequency);
+        faces = scratch.generated_faces;
+      });
+    } catch (...) { error = std::current_exception(); }
+    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && error)
+        std::rethrow_exception(error);
+      throw std::runtime_error("transport face observation failed collectively");
+    }
+    if (transport_frequency) {
+      const Real frequency = static_cast<Real>(all_reduce_max(local_frequency, lane));
+      if (!std::isfinite(frequency) || frequency < Real(0))
+        throw std::runtime_error("transport face frequency is nonfinite or negative");
+      *transport_frequency = frequency;
+    }
+  }
+
+  /// A partition guard may be emitted after grouped RHS evaluation, where no
+  /// individual face carrier is retained. Re-evaluate the same prepared default
+  /// numerical flux at its exact stage, but publish neither RHS nor exchanges.
+  Real evaluated_transport_frequency(int program_block, field_type& state_value,
+                                     int rate_id) const {
+    const auto& lane = prepared_execution_lane();
+    std::optional<field_type> provisional;
+    std::exception_ptr error;
+    try {
+      provisional.emplace(state_value.layout(), state_value.distribution(),
+                          state_value.local_rank(), state_value.ncomp(), state_value.ghosts());
+    } catch (...) { error = std::current_exception(); }
+    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && error)
+        std::rethrow_exception(error);
+      throw std::runtime_error("transport frequency scratch allocation failed collectively");
+    }
+    std::vector<nd::FaceField<Dim>> provisional_faces;
+    Real frequency = Real(0);
+    neg_div_flux_default_with_faces_into(program_block, state_value, *provisional,
+                                         rate_id, provisional_faces, &frequency);
+    return frequency;
   }
 
   void source_default_into(int program_block, field_type& state_value, field_type& rhs) const {

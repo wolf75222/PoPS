@@ -269,13 +269,15 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         transport_binding = provider_plans.bind_pack(transport_pack, qid+"/transport")
         lines.extend(_prepare_provider_values(transport_binding, bidx, state_var))
         suffix = "," + json.dumps(transport_family) if target == "amr_system" else ""
-        lines.append("ctx.neg_div_flux_default_with_faces_into(%d,%s,%s,%d,%s_transport_faces%s);" % (
-            bidx,state_var,temporary,v.id,prepared_var,suffix))
+        transport_frequency = "diffusive_transport_frequency_%d" % v.id
+        lines.append("pops::Real %s=0;" % transport_frequency)
+        frequency_output = (",nullptr,&" if target == "amr_system" else ",&") + transport_frequency
+        lines.append("ctx.neg_div_flux_default_with_faces_into(%d,%s,%s,%d,%s_transport_faces%s%s);" % (
+            bidx,state_var,temporary,v.id,prepared_var,suffix,frequency_output))
         # This combines spatial rates. Its unit coefficient has dt power zero; the
         # authored time update supplies the sole dt factor, including in AMR subcycles.
         lines.append("ctx.axpy(%s,1,%s,dt,{{0, 1, 1}});" % (out,temporary))
-        inverse_spacing=" + ".join("1/ctx.geometry().spacing(%d)" % axis for axis in range(selected["physical"].dimension))
-        frequency+=" + ctx.max_wave_speed(%d,%s)*(%s)" % (bidx,state_var,inverse_spacing)
+        frequency += " + " + transport_frequency
     if explicit:
         lines.append("const pops::Real diffusion_frequency_%d=%s;" % (v.id,frequency))
         if not defer_explicit_bound:

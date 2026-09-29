@@ -922,6 +922,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
         input_trace = (emit_rhs_input_trace(v, bidx, var[state_in.id], lines, target)
                        if want_flux else None)
+        var[("rhs_input_trace", v.id)] = input_trace
         trace_suffix = ", " + input_trace if input_trace is not None else ""
         if not want_flux:
             # SOURCE-ONLY (ADC-430): flux=False -- NO -div F base (the rhs_scratch starts at zero).
@@ -1039,7 +1040,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
         if want_flux:
             from pops.codegen.program_partition_stability import emit_transport_frequency
-            emit_transport_frequency(v, var, lines, model=node_model, block_index=bidx)
+            emit_transport_frequency(v, var, lines, model=node_model, block_index=bidx,
+                                     target=target)
     elif v.op == "implicit_source":
         state_in = v.inputs[0]
         var[v.id] = "r%d" % v.id
