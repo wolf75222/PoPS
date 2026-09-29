@@ -17677,7 +17677,12 @@ void AmrSystem<Dim>::step(double dt) {
       p_->program.accepted_exchanges_.clear();
       p_->program.begin_step_projection_report();
     }
-    const auto& lane = p_->require_prepared_engine_lane("AMR Program step");
+    (void)p_->require_prepared_engine_lane("AMR Program step");
+    // The completion body may replace PreparedHierarchy during scheduled regrid. Its lane is a
+    // graph-owned child; lifecycle votes must outlive that graph (including failed refreshes).
+    // Carrier and graph lanes are MPI_Comm_dup descendants of this RuntimeInstance authority,
+    // preserving its participants and rank order without falling back to MPI_COMM_WORLD.
+    const auto& lane = p_->require_package_assembly_lane();
     p_->program.dispatch_cadence_step(p_->accepted_time, p_->macro_step, dt, "AmrSystem",
                                       lane.communicator());
     runtime::program::collective_step_rejection_phase(
@@ -17730,7 +17735,9 @@ void AmrSystem<Dim>::suspend_program_map(std::string identity, bool target,
 
 template <int Dim>
 std::string AmrSystem<Dim>::advance_program_region(double dt) {
-  const auto& lane = p_->require_prepared_engine_lane("AMR Program region");
+  (void)p_->require_prepared_engine_lane("AMR Program region");
+  // A resumed region may complete a scheduled regrid before its collective result is published.
+  const auto& lane = p_->require_package_assembly_lane();
   runtime::program::require_step_transaction_control(
       lane, 8, static_cast<long>(step_transaction_depth()),
       p_->external_step_transaction && !p_->external_step_committed,

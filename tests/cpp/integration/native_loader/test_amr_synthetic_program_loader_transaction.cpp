@@ -35,6 +35,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -188,11 +189,13 @@ std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> prepare_exact_loader_arti
 
 void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& shared_object,
                           const std::vector<double>& state, bool synchronous = false) {
-  auto lane = std::make_shared<pops::ExecutionLane>(
-      pops::ExecutionLane::duplicate_world_collectively("test.synthetic-loader.package"));
-  auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
-      prepared_execution()->for_lane(*lane));
-  system.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
+  if (!system.has_package_assembly_lane()) {
+    auto lane = std::make_shared<pops::ExecutionLane>(
+        pops::ExecutionLane::duplicate_world_collectively("test.synthetic-loader.package"));
+    auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
+        prepared_execution()->for_lane(*lane));
+    system.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
+  }
   system.install_block_state_route(kBlock, kStateRoute);
   const pops::dynlib::AuthenticatedNativeFile authenticated(shared_object);
   system.add_native_block(
@@ -1566,4 +1569,96 @@ TEST(test_amr_synthetic_program_loader_transaction,
     ASSERT_TRUE(second.flux_shard.empty());
   }
   // Keep the exact generated source and DSO for failed-test diagnostics, as in the history fixture.
+}
+
+// The post-operation vote must not borrow the hierarchy lane destroyed by scheduled regrid.
+// This exercises actual native hierarchy replacement and external transaction rollback; the
+// synthetic DSO is a loader/lifetime fixture, not a Python numerical-method qualification.
+TEST(test_amr_synthetic_program_loader_transaction,
+     ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback) {
+  static_assert(!std::is_copy_constructible_v<pops::AmrSystem<Dim>>);
+  static_assert(!std::is_copy_assignable_v<pops::AmrSystem<Dim>>);
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_completion_lane_" +
+                           std::to_string(pops::my_rank()) + "_" +
+                           std::to_string(static_cast<long>(std::clock()));
+  const std::string shared_object = stem + ".so";
+  auto observer = pops::ExecutionLane::duplicate_world_collectively("test.completion.observer");
+  auto artifact = prepare_exact_loader_artifact(stem + ".cpp", shared_object, observer, false, true);
+  for (const bool use_region : {false, true}) {
+    SCOPED_TRACE(use_region ? "advance_program_region" : "step");
+    auto settings = config();
+    settings.regrid_every = 1;
+    pops::AmrSystem<Dim> assembling(settings);
+    std::shared_ptr<pops::ExecutionLane> package;
+#ifdef POPS_HAS_MPI
+    // Public borrowed authority supports congruent rank spaces. Free the embedding's parent
+    // before any step, so only the RuntimeInstance-owned duplicate can keep its votes valid.
+    MPI_Comm parent = MPI_COMM_NULL;
+    ASSERT_EQ(MPI_Comm_dup(MPI_COMM_WORLD, &parent), MPI_SUCCESS);
+    package = std::make_shared<pops::ExecutionLane>(pops::ExecutionLane::duplicate_collectively(
+        pops::ExecutionCommunicator::borrowed("test.completion.embedding", parent),
+        "test.completion.package"));
+    ASSERT_EQ(MPI_Comm_free(&parent), MPI_SUCCESS);
+#else
+    package = std::make_shared<pops::ExecutionLane>(
+        pops::ExecutionLane::duplicate_world_collectively("test.completion.package"));
+#endif
+    auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
+        prepared_execution()->for_lane(*package));
+    assembling.install_prepared_boundary_execution_context(std::move(package), std::move(execution));
+    // Move the installed RuntimeInstance authority, before Program captures bind the facade.
+    pops::AmrSystem<Dim> moved(std::move(assembling));
+    pops::AmrSystem<Dim> system(settings);
+    system = std::move(moved);
+    ASSERT_NO_THROW(build_refined_system(system, shared_object, initial_state(settings.shape), true));
+    const auto accepted = system.program_accepted_state();
+    const auto boxes = system.patch_boxes();
+    const auto initial_state0 = system.block_level_state_global(kBlock, 0);
+    const auto initial_state1 = system.block_level_state_global(kBlock, 1);
+    const auto epoch = system.checkpoint_topology_epoch();
+    const auto regrids = system.checkpoint_regrid_count();
+    constexpr double dt = .125;
+    auto advance = [&] {
+      if (use_region) {
+        const auto port = system.advance_program_region(dt);
+        if (!port.empty())
+          throw std::runtime_error("unexpected suspended port in completion-lane fixture");
+      } else {
+        system.step(dt);
+      }
+    };
+    system.begin_step_transaction();
+    ASSERT_NO_THROW(advance());
+    ASSERT_GT(system.checkpoint_topology_epoch(), epoch);
+    ASSERT_GT(system.checkpoint_regrid_count(), regrids);
+    ASSERT_NE(system.patch_boxes(), boxes);
+    // Reject only after a real replacement, on one rank, then restore the public transaction
+    // on every participant. A second step must use the restored graph and the same durable lane.
+    EXPECT_THROW(pops::runtime::program::collective_step_rejection_phase(
+        observer.communicator(),
+        {"test.post-regrid-rejection.v1", "test.post-regrid-rejection", false, false},
+        "post-regrid rejection failed collectively", [&] {
+          if (observer.rank() == 0)
+            throw std::runtime_error("injected rejection after scheduled regrid");
+        }), std::runtime_error);
+    ASSERT_NO_THROW(system.rollback_step_transaction());
+    EXPECT_EQ(system.program_accepted_state(), accepted);
+    EXPECT_EQ(system.patch_boxes(), boxes);
+    EXPECT_EQ(system.checkpoint_topology_epoch(), epoch);
+    EXPECT_EQ(system.checkpoint_regrid_count(), regrids);
+    EXPECT_EQ(system.block_level_state_global(kBlock, 0), initial_state0);
+    EXPECT_EQ(system.block_level_state_global(kBlock, 1), initial_state1);
+    EXPECT_EQ(system.time(), 0.0);
+    EXPECT_EQ(system.macro_step(), 0);
+    ASSERT_FALSE(system.has_active_step_transaction());
+    system.begin_step_transaction();
+    ASSERT_NO_THROW(advance());
+    ASSERT_NO_THROW(system.commit_step_transaction());
+    ASSERT_NO_THROW(system.finalize_step_transaction());
+    EXPECT_EQ(system.time(), dt);
+    EXPECT_EQ(system.macro_step(), 1);
+    EXPECT_GT(system.checkpoint_topology_epoch(), epoch);
+    EXPECT_GT(system.checkpoint_regrid_count(), regrids);
+    EXPECT_FALSE(system.has_active_step_transaction());
+  }
 }
