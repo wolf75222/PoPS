@@ -52,7 +52,11 @@ This is a separate evidence window from SDK396719 below.
   `0cd16d01` excludes only the actual solver-owned candidate while retaining
   the refusal of an anonymous homonym. The Python refresh passes with unchanged
   SDK/native binaries. `installed-implicit-state-reviewed-unit` passes
-  **33/33** installed checks; the five-case native rerun is in progress.
+  **33/33** installed checks. `installed-implicit-state-native-repaired`
+  passes the complete **5/5** serial Dim2 native rerun in 178.17 s, including
+  both tensor/transport temporal methods, the combined-bound refusal and
+  Euler/SSPRK2 accepted quadratures. This is not an MPI receipt for those five
+  historical fixtures.
 
 The source and raw evidence bundle for this window is being assembled. Earlier
 failed receipts remain immutable. IntegralState is under implementation and
