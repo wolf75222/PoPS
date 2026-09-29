@@ -9,7 +9,9 @@ The public construction API is a set of thin facades over that generator: a flue
 calls :func:`build_moment_model` only on ``.build()``, plus the inert structural
 descriptors (:class:`MomentHierarchy` / :class:`MomentBasis` / ... ) and the closures
 surface (:mod:`pops.moments.closures`). This package is an advertised 2V/2D physical
-specialization, not a fallback used by the generic 1D/2D/3D runtime.
+specialization, not a fallback used by the generic 1D/2D/3D runtime. One
+explicit order-four axial B.1 flux is also exported for a one-velocity case;
+no all-order one-velocity recurrence is implied.
 """
 # --- generator surface (the engine) ----------------------------------------
 from .model_builder import (
@@ -22,7 +24,7 @@ from .model_builder import (
 from .sources import (MOMENT_VELOCITY_DIMENSION, lorentz_sources, maxwellian_moments, bgk_source,
                       VlasovSources, MagneticMomentSource)
 from .closures import (gaussian_closure, closure, Closure, LocalClosure,
-                       apply_local_closure, HyQMOM15Closure)
+                       apply_local_closure, HyQMOM15Closure, hyqmom_b1_axial_flux)
 
 # --- facade API (thin wrappers over the generator) -------------------------
 from .hierarchy import CartesianVelocityMoments, CompositeMean, MomentModel, MomentHierarchy
@@ -78,6 +80,7 @@ __all__ = [
     "LocalClosure",
     "apply_local_closure",
     "HyQMOM15Closure",
+    "hyqmom_b1_axial_flux",
     # generic construction vocabulary (ADC-543): inert handles + typed aliases
     "VelocitySpace",
     "MomentState",
