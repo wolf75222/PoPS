@@ -2680,6 +2680,7 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
   std::vector<Real> observed_effective_dt;
   std::vector<std::string> observed_exchange_contexts;
   bool duplicate_rejected = false;
+  std::string duplicate_error;
   ctx->install([&](double dt) {
     ctx->begin_step(dt);
     const Real effective_dt = ctx->cache_effective_dt(node, Real(dt));
@@ -2703,8 +2704,9 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
     if (dt == 0.3) {
       try {
         ctx->stage_exchange(contribution);
-      } catch (const std::exception&) {
+      } catch (const std::exception& error) {
         duplicate_rejected = true;
+        duplicate_error = error.what();
       }
     }
     if (fail_after_effective_dt)
@@ -2789,6 +2791,8 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
     EXPECT_NE(observed_exchange_contexts[2], observed_exchange_contexts[1]);
   }
   EXPECT_TRUE(duplicate_rejected);
+  EXPECT_NE(duplicate_error.find("duplicate accepted exchange occurrence/quadrature contribution"),
+            std::string::npos) << duplicate_error;
   EXPECT_EQ(sim.macro_step(), 1);
   EXPECT_DOUBLE_EQ(sim.time(), 0.3);
   EXPECT_TRUE(sim.history_initialized("gas.U"));
