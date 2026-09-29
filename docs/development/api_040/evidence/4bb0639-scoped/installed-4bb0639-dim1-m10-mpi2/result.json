@@ -1,0 +1,76 @@
+{
+  "schema_version": 2,
+  "status": "passed",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-4bb0639-dim1-m10-mpi2",
+    "--ranks",
+    "2",
+    "--dimension",
+    "1",
+    "--test",
+    "tests/python/integration/runtime/test_m10_self_consistent_sg.py"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 27.105596875073388,
+  "ranks": 2,
+  "threads": 1,
+  "dimension": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_m10_self_consistent_sg",
+          "test_m10_source_has_one_joint_face_construction_and_live_poisson_dependencies"
+        ],
+        [
+          "tests.python.integration.runtime.test_m10_self_consistent_sg",
+          "test_m10_native_self_consistent_stage_field_and_joint_flux"
+        ]
+      ],
+      "xml_sha256": "5362f9d3799fa09ccec18d1d14a042842ba1d8c349585e1833431f4a1d8e6dc8",
+      "log_sha256": "07158451fe350497472bcc3fe949ccf21c681ec150ea9a5ccad9b9fdc04aaad3"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_m10_self_consistent_sg",
+          "test_m10_source_has_one_joint_face_construction_and_live_poisson_dependencies"
+        ],
+        [
+          "tests.python.integration.runtime.test_m10_self_consistent_sg",
+          "test_m10_native_self_consistent_stage_field_and_joint_flux"
+        ]
+      ],
+      "xml_sha256": "09d21bb85dd8e108d3a8232f11181c172d6847d441f1ca7ffd8943742a0f47da",
+      "log_sha256": "b9f6bff60777e17357b955fd8950f8d2448c5df62923a69aafd5132cfedef73a"
+    }
+  ],
+  "native_sha256": "84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c"
+}

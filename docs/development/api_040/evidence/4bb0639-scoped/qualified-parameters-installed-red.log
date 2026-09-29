@@ -1,0 +1,23 @@
+package /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py
+inspector /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py e33878533609c4f31381ec4151b562e1ec308753b27a35588fea387801084080
+scope: source/host tests on installed pre-fix inspector, not native PDE execution
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_distinct_homonymous_defaults_survive_arguments_manifest_and_memory_metadata[False] _
+tests/python/unit/codegen/test_qualified_parameter_inspection.py:25: in test_distinct_homonymous_defaults_survive_arguments_manifest_and_memory_metadata
+    metadata = tuple(replace(row, params=dict(require_compiler_lowering(
+tests/python/unit/codegen/test_qualified_parameter_inspection.py:26: in <genexpr>
+    case._blocks[row.block_name]["model"]).emit_model.params)) for row in original_rows)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: 'BlockRegistry' object is not subscriptable
+_ test_distinct_homonymous_defaults_survive_arguments_manifest_and_memory_metadata[True] _
+tests/python/unit/codegen/test_qualified_parameter_inspection.py:25: in test_distinct_homonymous_defaults_survive_arguments_manifest_and_memory_metadata
+    metadata = tuple(replace(row, params=dict(require_compiler_lowering(
+tests/python/unit/codegen/test_qualified_parameter_inspection.py:26: in <genexpr>
+    case._blocks[row.block_name]["model"]).emit_model.params)) for row in original_rows)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: 'BlockRegistry' object is not subscriptable
+=========================== short test summary info ============================
+FAILED tests/python/unit/codegen/test_qualified_parameter_inspection.py::test_distinct_homonymous_defaults_survive_arguments_manifest_and_memory_metadata[False]
+FAILED tests/python/unit/codegen/test_qualified_parameter_inspection.py::test_distinct_homonymous_defaults_survive_arguments_manifest_and_memory_metadata[True]
+2 failed in 1.51s

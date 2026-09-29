@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="10" skipped="0" tests="21" time="311.028" timestamp="2026-09-29T08:06:10.334664+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_local_residual_product_runtime" name="test_joint_product_rebind_or_atomic_failure[False-False]" time="14.428"><failure message="ValueError: compiled block 'left' has no exact ghost depth in its resolved numerics/spatial plan">tests/python/integration/runtime/test_local_residual_product_runtime.py:25: in test_joint_product_rebind_or_atomic_failure
+    runtime = pops.bind(artifact, initial_values=dict(zip(subjects,(a,b),strict=True)),
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:22: in install_plan
+    run_bind_gates(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_validation.py:706: in run_bind_gates
+    manifest = manifest_fn()
+               ^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:904: in manifest
+    return build_compiled_manifest(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/external/artifact_manifest.py:423: in build_compiled_manifest
+    args = compiled.arguments() if hasattr(compiled, "arguments") else None
+           ^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:909: in arguments
+    return build_arguments(self)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:210: in build_arguments
+    return _build_arguments(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:449: in _build_arguments
+    ghost_depth_by_block = _ghost_depth_by_block(compiled, tuple(instances))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:534: in _ghost_depth_by_block
+    raise ValueError(
+E   ValueError: compiled block 'left' has no exact ghost depth in its resolved numerics/spatial plan</failure></testcase><testcase classname="tests.python.integration.runtime.test_local_residual_product_runtime" name="test_joint_product_rebind_or_atomic_failure[False-True]" time="13.944"><failure message="ValueError: compiled block 'left' has no exact ghost depth in its resolved numerics/spatial plan">tests/python/integration/runtime/test_local_residual_product_runtime.py:25: in test_joint_product_rebind_or_atomic_failure
+    runtime = pops.bind(artifact, initial_values=dict(zip(subjects,(a,b),strict=True)),
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:22: in install_plan
+    run_bind_gates(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_validation.py:706: in run_bind_gates
+    manifest = manifest_fn()
+               ^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:904: in manifest
+    return build_compiled_manifest(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/external/artifact_manifest.py:423: in build_compiled_manifest
+    args = compiled.arguments() if hasattr(compiled, "arguments") else None
+           ^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:909: in arguments
+    return build_arguments(self)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:210: in build_arguments
+    return _build_arguments(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:449: in _build_arguments
+    ghost_depth_by_block = _ghost_depth_by_block(compiled, tuple(instances))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:534: in _ghost_depth_by_block
+    raise ValueError(
+E   ValueError: compiled block 'left' has no exact ghost depth in its resolved numerics/spatial plan</failure></testcase><testcase classname="tests.python.integration.runtime.test_local_residual_product_runtime" name="test_joint_product_rebind_or_atomic_failure[True-False]" time="12.955"><failure message="ValueError: compiled block 'left' has no exact ghost depth in its resolved numerics/spatial plan">tests/python/integration/runtime/test_local_residual_product_runtime.py:25: in test_joint_product_rebind_or_atomic_failure
+    runtime = pops.bind(artifact, initial_values=dict(zip(subjects,(a,b),strict=True)),
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:22: in install_plan
+    run_bind_gates(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_validation.py:706: in run_bind_gates
+    manifest = manifest_fn()
+               ^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:904: in manifest
+    return build_compiled_manifest(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/external/artifact_manifest.py:423: in build_compiled_manifest
+    args = compiled.arguments() if hasattr(compiled, "arguments") else None
+           ^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:909: in arguments
+    return build_arguments(self)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:210: in build_arguments
+    return _build_arguments(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:449: in _build_arguments
+    ghost_depth_by_block = _ghost_depth_by_block(compiled, tuple(instances))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:534: in _ghost_depth_by_block
+    raise ValueError(
+E   ValueError: compiled block 'left' has no exact ghost depth in its resolved numerics/spatial plan</failure></testcase><testcase classname="tests.python.integration.runtime.test_local_residual_product_runtime" name="test_joint_product_rebind_or_atomic_failure[True-True]" time="13.068"><failure message="ValueError: compiled block 'left' has no exact ghost depth in its resolved numerics/spatial plan">tests/python/integration/runtime/test_local_residual_product_runtime.py:25: in test_joint_product_rebind_or_atomic_failure
+    runtime = pops.bind(artifact, initial_values=dict(zip(subjects,(a,b),strict=True)),
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:22: in install_plan
+    run_bind_gates(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_validation.py:706: in run_bind_gates
+    manifest = manifest_fn()
+               ^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:904: in manifest
+    return build_compiled_manifest(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/external/artifact_manifest.py:423: in build_compiled_manifest
+    args = compiled.arguments() if hasattr(compiled, "arguments") else None
+           ^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:909: in arguments
+    return build_arguments(self)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:210: in build_arguments
+    return _build_arguments(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:449: in _build_arguments
+    ghost_depth_by_block = _ghost_depth_by_block(compiled, tuple(instances))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:534: in _ghost_depth_by_block
+    raise ValueError(
+E   ValueError: compiled block 'left' has no exact ghost depth in its resolved numerics/spatial plan</failure></testcase><testcase classname="tests.python.integration.runtime.test_api040_m22_h05_runtime" name="test_h05_original_residual_rebind_and_domain_rollback[False]" time="13.494"><failure message="ValueError: compiled block 'matter' has no exact ghost depth in its resolved numerics/spatial plan">tests/python/integration/runtime/test_api040_m22_h05_runtime.py:38: in test_h05_original_residual_rebind_and_domain_rollback
+    runtime=pops.bind(artifact,
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:22: in install_plan
+    run_bind_gates(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_validation.py:706: in run_bind_gates
+    manifest = manifest_fn()
+               ^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:904: in manifest
+    return build_compiled_manifest(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/external/artifact_manifest.py:423: in build_compiled_manifest
+    args = compiled.arguments() if hasattr(compiled, "arguments") else None
+           ^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:909: in arguments
+    return build_arguments(self)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:210: in build_arguments
+    return _build_arguments(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:449: in _build_arguments
+    ghost_depth_by_block = _ghost_depth_by_block(compiled, tuple(instances))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:534: in _ghost_depth_by_block
+    raise ValueError(
+E   ValueError: compiled block 'matter' has no exact ghost depth in its resolved numerics/spatial plan</failure></testcase><testcase classname="tests.python.integration.runtime.test_api040_m22_h05_runtime" name="test_h05_original_residual_rebind_and_domain_rollback[True]" time="13.602"><failure message="ValueError: compiled block 'matter' has no exact ghost depth in its resolved numerics/spatial plan">tests/python/integration/runtime/test_api040_m22_h05_runtime.py:38: in test_h05_original_residual_rebind_and_domain_rollback
+    runtime=pops.bind(artifact,
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:22: in install_plan
+    run_bind_gates(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_validation.py:706: in run_bind_gates
+    manifest = manifest_fn()
+               ^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:904: in manifest
+    return build_compiled_manifest(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/external/artifact_manifest.py:423: in build_compiled_manifest
+    args = compiled.arguments() if hasattr(compiled, "arguments") else None
+           ^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:909: in arguments
+    return build_arguments(self)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:210: in build_arguments
+    return _build_arguments(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:449: in _build_arguments
+    ghost_depth_by_block = _ghost_depth_by_block(compiled, tuple(instances))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:534: in _ghost_depth_by_block
+    raise ValueError(
+E   ValueError: compiled block 'matter' has no exact ghost depth in its resolved numerics/spatial plan</failure></testcase><testcase classname="tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime" name="test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False]" time="14.008"><failure message="AssertionError: (('ValueError', &quot;compiled block 'matter' has no exact ghost depth in its resolved numerics/spatial plan&quot;),)&#10;assert False&#10; +  where False = all(&lt;generator object test_h05_nonuniform_cells_rebind_and_collective_negative_rate.&lt;locals&gt;.&lt;genexpr&gt; at 0x1263d3e00&gt;)">tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py:72: in test_h05_nonuniform_cells_rebind_and_collective_negative_rate
+    assert all(kind == "" for kind, _ in bind_errors), bind_errors
+E   AssertionError: (('ValueError', "compiled block 'matter' has no exact ghost depth in its resolved numerics/spatial plan"),)
+E   assert False
+E    +  where False = all(&lt;generator object test_h05_nonuniform_cells_rebind_and_collective_negative_rate.&lt;locals&gt;.&lt;genexpr&gt; at 0x1263d3e00&gt;)</failure></testcase><testcase classname="tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime" name="test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True]" time="13.999"><failure message="AssertionError: (('ValueError', &quot;compiled block 'matter' has no exact ghost depth in its resolved numerics/spatial plan&quot;),)&#10;assert False&#10; +  where False = all(&lt;generator object test_h05_nonuniform_cells_rebind_and_collective_negative_rate.&lt;locals&gt;.&lt;genexpr&gt; at 0x1263d3510&gt;)">tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py:72: in test_h05_nonuniform_cells_rebind_and_collective_negative_rate
+    assert all(kind == "" for kind, _ in bind_errors), bind_errors
+E   AssertionError: (('ValueError', "compiled block 'matter' has no exact ghost depth in its resolved numerics/spatial plan"),)
+E   assert False
+E    +  where False = all(&lt;generator object test_h05_nonuniform_cells_rebind_and_collective_negative_rate.&lt;locals&gt;.&lt;genexpr&gt; at 0x1263d3510&gt;)</failure></testcase><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_uniform_path_adaptive_cfl_without_max_dt_matches_two_step_oracle" time="14.789" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_uniform_path_refusal_preserves_accepted_state_and_clock[fixed_dt]" time="14.463" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_uniform_path_refusal_preserves_accepted_state_and_clock[actual_stage_cfl]" time="14.901" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_uniform_path_fixed_dt_uses_unit_numerical_budget" time="14.623" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[fractional]" time="16.010" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[diagnostic]" time="16.062" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[guarded]" time="17.104" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_uniform_path_checkpoint_restart_does_not_request_an_absent_poisson_field" time="15.762" /><testcase classname="tests.python.integration.runtime.test_api040_c17_stagnation_runtime" name="test_original_residual_is_required_before_publication_and_history_rotation[1.0-False]" time="10.797" /><testcase classname="tests.python.integration.runtime.test_api040_c17_stagnation_runtime" name="test_original_residual_is_required_before_publication_and_history_rotation[0.0-True]" time="10.733" /><testcase classname="tests.python.integration.runtime.test_external_grid_frontier_runtime" name="test_native_external_grid_frontier_and_rank_local_landing_rollback" time="11.503" /><testcase classname="tests.python.integration.runtime.test_local_product_operators_runtime" name="test_public_source_apply_product_rebind_and_incompatible_equation_rollback[False]" time="24.126"><failure message="ValueError: compiled blocks 'block_0' and 'block_1' declare conflicting parameter metadata for 'gain'">tests/python/integration/runtime/test_local_product_operators_runtime.py:76: in test_public_source_apply_product_rebind_and_incompatible_equation_rollback
+    accepted(bind(captures, gains), captures, gains)
+             ^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_local_product_operators_runtime.py:50: in bind
+    return pops.bind(artifact, params=dict(zip(parameters, gains, strict=True)),
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:22: in install_plan
+    run_bind_gates(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_validation.py:706: in run_bind_gates
+    manifest = manifest_fn()
+               ^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:904: in manifest
+    return build_compiled_manifest(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/external/artifact_manifest.py:423: in build_compiled_manifest
+    args = compiled.arguments() if hasattr(compiled, "arguments") else None
+           ^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:909: in arguments
+    return build_arguments(self)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:210: in build_arguments
+    return _build_arguments(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:396: in _build_arguments
+    params = _merge_parameter_metadata(model_rows)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:299: in _merge_parameter_metadata
+    raise ValueError(
+E   ValueError: compiled blocks 'block_0' and 'block_1' declare conflicting parameter metadata for 'gain'</failure></testcase><testcase classname="tests.python.integration.runtime.test_local_product_operators_runtime" name="test_public_source_apply_product_rebind_and_incompatible_equation_rollback[True]" time="19.533"><failure message="ValueError: compiled blocks 'block_2' and 'block_1' declare conflicting parameter metadata for 'gain'">tests/python/integration/runtime/test_local_product_operators_runtime.py:76: in test_public_source_apply_product_rebind_and_incompatible_equation_rollback
+    accepted(bind(captures, gains), captures, gains)
+             ^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_local_product_operators_runtime.py:50: in bind
+    return pops.bind(artifact, params=dict(zip(parameters, gains, strict=True)),
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:22: in install_plan
+    run_bind_gates(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_validation.py:706: in run_bind_gates
+    manifest = manifest_fn()
+               ^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:904: in manifest
+    return build_compiled_manifest(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/external/artifact_manifest.py:423: in build_compiled_manifest
+    args = compiled.arguments() if hasattr(compiled, "arguments") else None
+           ^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:909: in arguments
+    return build_arguments(self)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:210: in build_arguments
+    return _build_arguments(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:396: in _build_arguments
+    params = _merge_parameter_metadata(model_rows)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:299: in _merge_parameter_metadata
+    raise ValueError(
+E   ValueError: compiled blocks 'block_2' and 'block_1' declare conflicting parameter metadata for 'gain'</failure></testcase></testsuite></testsuites>

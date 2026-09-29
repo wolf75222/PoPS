@@ -230,12 +230,13 @@
       "reference_limit": "Corps de Bernoulli testé auparavant; réalisation conjointe dérive–diffusion avec champ non intégrée.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/drift_diffusion.py;python/pops/fields/poisson.py",
-      "production_status": "scoped_native_dim1_one_step_pass",
-      "qualification": "Installed Dim1 receipt has one source/emission check and one native N32 single-step self-consistent Poisson-stage/joint Scharfetter-Gummel flux check; independent stale-field and face-incidence discriminants apply to that test.",
-      "assessment_kind": "scoped_native_single_step_receipt_at_cfef849",
-      "remaining_gap": "Full M10 spatial/temporal campaign, multiple meshes, MPI and broader boundary cases remain unqualified.",
+      "production_status": "scoped_native_dim1_mpi2_one_step_pass",
+      "qualification": "Installed Dim1 receipt has one source/emission check and one native N32 single-step self-consistent Poisson-stage/joint Scharfetter-Gummel flux check; independent stale-field and face-incidence discriminants apply to that test. A later 4bb0639 installed Dim1 MPI2 receipt passes the same selected source/emission and native one-step checks on both ranks.",
+      "assessment_kind": "scoped_native_single_step_receipts_through_4bb0639",
+      "remaining_gap": "Full M10 spatial/temporal campaign, multiple meshes, longer time and broader boundary cases remain unqualified; the MPI2 receipt is only the selected N32 one-step witness.",
       "production_evidence": [
-        "evidence/cfef849-scoped/manifest.json"
+        "evidence/cfef849-scoped/manifest.json",
+        "evidence/4bb0639-scoped/manifest.json"
       ]
     },
     {
@@ -336,11 +337,12 @@
       "production_status": "scoped_native_axial_b1_pass",
       "qualification": "Six installed native Dim1 axial B.1 order-four runs N32/64/128 to T=0.02 in two component orders pass independent FV/HLL oracle; six invalid initial states refuse. This is five-moment 1V axial only.",
       "assessment_kind": "scoped_scientific_receipt_after_388c323",
-      "remaining_gap": "Multiorder Fox-Laurent hierarchy, higher moments and general HyQMOM remain unqualified.",
+      "remaining_gap": "Multiorder Fox-Laurent hierarchy, higher moments and general HyQMOM remain unqualified. Historical 4bb0639 MPI2 attempt hung after one canonical N32 state and was interrupted without scientific receipt; it does not extend the earlier serial qualification.",
       "production_evidence": [
         "evidence/83b2b12/installed-38faddb-unit",
         "evidence/83b2b12/source-reviews/astra-m15-m16-independent-review.md",
-        "evidence/native-388c323-and-t2-v1-3/manifest.json"
+        "evidence/native-388c323-and-t2-v1-3/manifest.json",
+        "evidence/4bb0639-scoped/manifest.json"
       ]
     },
     {
@@ -833,6 +835,26 @@
         "T3/H05 local product native after collective layout-vote fix",
         "C22 general native PDE frontier",
         "full M10 spatial campaign"
+      ]
+    },
+    "after_4bb0639": {
+      "manifest": "evidence/4bb0639-scoped/manifest.json",
+      "native_sha256": {
+        "dim1": "84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c",
+        "dim2": "7105935a756fc6f0411c831ea18500f549365a30bc35cdbe340ef4ef11d56011"
+      },
+      "statuses": {
+        "installed-4bb0639-products-operators-frontier": "failed",
+        "installed-4bb0639-dim1-m10-mpi2": "passed",
+        "m15-4bb0639-dim1-mpi2": "failed"
+      },
+      "limits": "Dim2 products/operators/frontier 11 pass/10 fail; selected M10 true Dim1 MPI2 two tests per rank pass; M15 MPI2 interrupted after first N32 state and has no scientific receipt. Source/host qualified-parameter red remains diagnostic only. No aggregate acceptance.",
+      "pending": [
+        "Local product/H05 runtime after ghost-depth and parameter repairs",
+        "general M10 spatial/temporal campaign"
+      ],
+      "excluded_later_evidence": [
+        "M15 MPI2 result on rebuilt native cd45279c belongs to the next evidence window"
       ]
     }
   }

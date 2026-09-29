@@ -12,6 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import zipfile
 
 
 HERE = Path(__file__).resolve().parent
@@ -397,12 +398,145 @@ def main():
             and cfef_registry["statuses"]["m07-cfef849-dim1-mpi2"]
             == cfef["scientific"]["M07"]["status"] == "passed",
             "scientific status promotion")
+    historical_registry = corpus["supplemental_receptions"]["after_4bb0639"]
+    historical_path = HERE / historical_registry["manifest"]
+    historical_root = historical_path.parent
+    historical = read_json(historical_path)
+    require(historical["schema"] == "pops.api040.4bb0639-final-scoped-evidence/v1"
+            and historical["mapping_source_commit"]
+            == "4bb0639e33598b6c0aa0d1198ba74e5b5d5200db"
+            and historical["native_sha256"] == historical_registry["native_sha256"],
+            "wrong 4bb0639 bundle identity")
+    historical_files = {item["path"]: item for item in historical["files"]}
+    require(len(historical_files) == len(historical["files"]) == 38,
+            "4bb0639 copied file inventory changed")
+    for relative, item in historical_files.items():
+        path = historical_root / relative
+        require(path.is_file() and path.stat().st_size == item["bytes"]
+                and hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"],
+                f"4bb0639 copied bytes changed: {relative}")
+    checksum_lines = (historical_root / "SHA256SUMS").read_text().splitlines()
+    checksums = dict(line.split("  ", 1)[::-1] for line in checksum_lines)
+    require(len(checksum_lines) == 40
+            and set(checksums) == set(historical_files) | {"README.md", "manifest.json"},
+            "4bb0639 checksum inventory changed")
+    for relative, digest_value in checksums.items():
+        require(hashlib.sha256((historical_root / relative).read_bytes()).hexdigest()
+                == digest_value, f"4bb0639 checksum changed: {relative}")
+    source_commit = historical["mapping_source_commit"]
+    product_id = "installed-4bb0639-products-operators-frontier"
+    product = read_json(historical_root / product_id / "result.json")
+    product_identity_path = historical_root / product_id / "identity.json"
+    product_identity = read_json(product_identity_path)
+    product_counts = {"tests": 21, "failures": 10, "errors": 0, "skipped": 0}
+    require(product["status"] == historical_registry["statuses"][product_id] == "failed"
+            and product["counts"] == historical["installed"][product_id]["counts"]
+            == pytest_counts(historical_root / product_id / "pytest.xml") == product_counts
+            and historical["installed"][product_id]["passing"] == 11
+            and product["identity_sha256"]
+            == hashlib.sha256(product_identity_path.read_bytes()).hexdigest()
+            and product_identity["source_commit"] == source_commit
+            and product_identity["native_sha256"] == historical["native_sha256"]["dim2"],
+            "4bb0639 installed product/frontier result promoted or changed")
+    product_cases = list(ET.parse(historical_root / product_id / "pytest.xml")
+                         .getroot().iter("testcase"))
+    failure_messages = [case.find("failure").get("message", "") for case in product_cases
+                        if case.find("failure") is not None]
+    require(sum("no exact ghost depth" in message for message in failure_messages) == 8
+            and sum("conflicting parameter metadata for 'gain'" in message
+                    for message in failure_messages) == 2
+            and sum(case.find("failure") is None and case.find("error") is None
+                    and case.find("skipped") is None for case in product_cases) == 11,
+            "4bb0639 installed failure groups changed")
+    require(sum(case.get("classname", "").endswith("test_api040_c17_stagnation_runtime")
+                and case.find("failure") is None for case in product_cases) == 2
+            and sum(case.get("classname", "").endswith("test_external_grid_frontier_runtime")
+                    and case.find("failure") is None for case in product_cases) == 1,
+            "4bb0639 C17/C22 scoped passes changed")
+    m10_id = "installed-4bb0639-dim1-m10-mpi2"
+    m10 = read_json(historical_root / m10_id / "result.json")
+    m10_before = read_json(historical_root / m10_id / "before/identity.json")
+    m10_after = read_json(historical_root / m10_id / "after/identity.json")
+    require(m10["status"] == historical_registry["statuses"][m10_id] == "passed"
+            and m10["dimension"] == 1 and m10["ranks"] == 2
+            and m10["returncode"] == 0 and m10["timeout"] is False
+            and m10["authentication_before"] == m10["authentication_after"] == 0
+            and all(m10[key] is True for key in
+                    ("same_installation", "test_sources_unchanged", "rank_test_parity"))
+            and m10_before["source_commit"] == m10_after["source_commit"] == source_commit
+            and m10_before["source_files_sha256"] == m10_after["source_files_sha256"]
+            and m10_before["native_sha256"] == m10_after["native_sha256"]
+            == m10["native_sha256"] == historical["native_sha256"]["dim1"],
+            "4bb0639 M10 MPI2 provenance changed")
+    m10_counts = {"tests": 2, "failures": 0, "errors": 0, "skipped": 0}
+    m10_nodes = [
+        ["tests.python.integration.runtime.test_m10_self_consistent_sg",
+         "test_m10_source_has_one_joint_face_construction_and_live_poisson_dependencies"],
+        ["tests.python.integration.runtime.test_m10_self_consistent_sg",
+         "test_m10_native_self_consistent_stage_field_and_joint_flux"],
+    ]
+    require(len(m10["rank_results"]) == 2, "4bb0639 M10 rank inventory changed")
+    for rank, row in enumerate(m10["rank_results"]):
+        prefix = historical_root / m10_id / f"rank{rank}"
+        identity = read_json(prefix.with_suffix(".identity.json"))
+        require(row["rank"] == rank and row["counts"] == m10_counts
+                and pytest_counts(prefix.with_suffix(".xml")) == m10_counts
+                and row["nodes"] == m10_nodes
+                and row["xml_sha256"]
+                == hashlib.sha256(prefix.with_suffix(".xml").read_bytes()).hexdigest()
+                and row["log_sha256"]
+                == hashlib.sha256(prefix.with_suffix(".log").read_bytes()).hexdigest()
+                and identity["native_sha256"] == historical["native_sha256"]["dim1"],
+                f"4bb0639 M10 rank {rank} result changed")
+    m15_id = "m15-4bb0639-dim1-mpi2"
+    m15 = read_json(historical_root / m15_id / "result.json")
+    interrupted = read_json(historical_root / m15_id / "interruption.json")
+    m15_before = read_json(historical_root / m15_id / "before/identity.json")
+    m15_after = read_json(historical_root / m15_id / "after/identity.json")
+    require(m15["status"] == historical_registry["statuses"][m15_id] == "failed"
+            and m15["returncode"] == 15 and m15["dimension"] == 1 and m15["ranks"] == 2
+            and m15["correct_backend"] is False
+            and m15["scientific_receipt_sha256"] is None
+            and not (historical_root / m15_id / "states/receipt.json").exists()
+            and interrupted["status"] == "interrupted_after_diagnosed_collective_mismatch"
+            and m15_before["source_commit"] == m15_after["source_commit"] == source_commit
+            and m15_before["source_files_sha256"] == m15_after["source_files_sha256"]
+            and m15_before["native_sha256"] == m15_after["native_sha256"]
+            == m15["native_sha256"] == historical["native_sha256"]["dim1"],
+            "4bb0639 interrupted M15 promoted or changed")
+    for sample, digest_value in interrupted["samples"].items():
+        relative = f"{m15_id}/{sample}"
+        require(historical_files[relative]["sha256"] == digest_value
+                == historical["scientific_interrupted"]["sample_sha256"][sample],
+                f"4bb0639 M15 sample changed: {sample}")
+    require("WorldCommunicator::allgather_bytes" in
+            (historical_root / m15_id / "rank0.sample.txt").read_text()
+            and "System<1>::step" in
+            (historical_root / m15_id / "rank1.sample.txt").read_text()
+            and "collective_step_rejection_phase" in
+            (historical_root / m15_id / "rank1.sample.txt").read_text(),
+            "4bb0639 M15 collective mismatch evidence changed")
+    partial = historical_root / historical["scientific_interrupted"]["saved_partial_state"]
+    with zipfile.ZipFile(partial) as archive:
+        require(archive.testzip() is None
+                and archive.namelist()
+                == [f"{name}.npy" for name in
+                    ("initial", "final", "oracle", "order", "time", "dt", "cells")],
+                "4bb0639 partial M15 state archive changed")
+    diagnostics = historical["source_host_diagnostics"]
+    require("BlockRegistry' object is not subscriptable" in
+            (historical_root / diagnostics["initial_fixture_error"]).read_text()
+            and "conflicting parameter metadata for 'gain'" in
+            (historical_root / diagnostics["repaired_fixture_real_failure"]).read_text()
+            and diagnostics["status"] == "failed",
+            "4bb0639 qualified-parameter diagnostic overstated")
     total_scoped = sum(len(read_json(HERE / data["manifest"])["receipts"])
                        for scope, data in corpus["scoped_receptions"].items()
                        if scope in expected_scopes)
     print(f"40 contracts, 28 models, 12 witnesses; {len(manifest['receipts'])} historical, "
-          f"{total_scoped} earlier scoped, 5 cfef849 selected receipt snapshots consistent")
-    print("No native, numerical, MPI, or global acceptance implied.")
+          f"{total_scoped} earlier scoped, 5 cfef849 and 3 final-4bb0639 "
+          "selected receipt snapshots consistent")
+    print("No corpus-wide native, numerical, MPI, or global acceptance implied.")
 
 
 if __name__ == "__main__":

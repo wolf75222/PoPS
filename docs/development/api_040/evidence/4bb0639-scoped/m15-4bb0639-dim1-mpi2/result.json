@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "case": "m15-axial-b1",
+  "status": "failed",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m15_hyqmom_axial_b1.py"
+  ],
+  "returncode": 15,
+  "seconds": 598.9494854160585,
+  "ranks": 2,
+  "dimension": 1,
+  "phases": [
+    {
+      "settings": {},
+      "returncode": 15,
+      "timeout": false,
+      "seconds": 598.9491507080384
+    }
+  ],
+  "threads": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "example_sources_unchanged": true,
+  "same_native": true,
+  "same_shipped_sources": true,
+  "correct_backend": false,
+  "native_sha256": "84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c",
+  "scientific_receipt": "states/receipt.json",
+  "scientific_receipt_sha256": null,
+  "settings": {
+    "OMP_NUM_THREADS": "1",
+    "POPS_THREADS": "1",
+    "POPS_API040_OUTPUT": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/m15-4bb0639-dim1-mpi2/states"
+  }
+}
