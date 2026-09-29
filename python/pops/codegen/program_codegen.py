@@ -624,6 +624,10 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
             % (v.op, v.name, sorted(_ALLOWED_OPS), sorted(_MODEL_OPS))
         )
     if v.op in ("coupled_rate", "solve_coupled_implicit"):
+        if v.attrs.get("problem_kind") == "local_residual_product":
+            from .program_emit_local_product import product_components
+            product_components(v)
+            return
         # A coupled_rate (collisions / ionization, Spec 3 criterion 27) lowers to ONE multi-state
         # for_each_cell kernel (see _emit_coupled_rate_kernel). The lowering reaches the operator
         # body (its per-block component formulas) through the BOUND registry, and binds each input

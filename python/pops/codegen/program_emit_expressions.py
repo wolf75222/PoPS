@@ -29,9 +29,6 @@ def expression_cpp(node, inputs):
 
 def checked_pointwise_rows(value, inputs):
     """Restore the closed DAG into the common CSE emitter and observe every result."""
-    from pops._ir import expr as ir
-    from pops._ir.control_expr import Where, Rounded
-    from pops.codegen.cpp_writer import _cse_emit
     from pops.time.expressions import component_names
     if len(inputs) != len(value.inputs):
         raise ValueError("pointwise expression input arity changed")
@@ -41,13 +38,21 @@ def checked_pointwise_rows(value, inputs):
     expressions = value.attrs["expressions"]
     if len(expressions) != len(component_names(value)):
         raise ValueError("pointwise expression output Space changed")
+    return checked_expression_dag(expressions, value.attrs["expression_nodes"], inputs)
+
+
+def checked_expression_dag(expressions, nodes, inputs):
+    """One checked, lazy evaluation policy for scalar fields and local products."""
+    from pops._ir import expr as ir
+    from pops._ir.control_expr import Where, Rounded
+    from pops.codegen.cpp_writer import _cse_emit
     binary = {"add": ir.Add, "sub": ir.Sub, "mul": ir.Mul, "div": ir.Div,
               "pow": ir.Pow, "minimum": ir.Minimum, "maximum": ir.Maximum,
               "and": ir.BooleanAnd, "or": ir.BooleanOr}
     unary = {"neg": ir.Neg, "abs": ir.Abs, "sqrt": ir.Sqrt, "sign": ir.Sign,
              "not": ir.BooleanNot, "rounded": Rounded}
     restored, bindings = [], {}
-    for index, node in enumerate(value.attrs["expression_nodes"]):
+    for index, node in enumerate(nodes):
         if not isinstance(node, (tuple, list)) or not node:
             raise TypeError("pointwise expression requires a closed DAG")
         operation = node[0]

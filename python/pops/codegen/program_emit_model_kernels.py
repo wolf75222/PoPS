@@ -333,7 +333,8 @@ def _prepared_local_control_lines(attrs: Any, *, indent: str = "    ") -> list[s
 
 def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any,
                                         scratch: Any, status: str, *, controls: Any,
-                                        coefficient: Any) -> list:
+                                        coefficient: Any, original_residual=None,
+                                        all_inputs=None) -> list:
     """Emit one fail-closed prepared nonlinear solve over a coupled ``RateBundle``.
 
     Every output block is an unknown; additional signed inputs are frozen catalysts.  Results land
@@ -347,7 +348,8 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     for block in blocks:
         offsets[block] = total
         total += len(components[block])
-    referenced = {name for rows in components.values() for expr in rows for name in expr.deps()}
+    referenced = (set() if original_residual is not None else
+                  {name for rows in components.values() for expr in rows for name in expr.deps()})
     sources = _component_sources(
         referenced,
         by_block,
@@ -357,7 +359,20 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     )
     driver = scratch[blocks[0]]
     coefficient_cpp = scalar_cpp(coefficient)
-    lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
+    all_inputs = tuple(by_block.values()) if all_inputs is None else tuple(all_inputs)
+    lines = ["{"]
+    lines.append("int product_layout_error_ = 0;")
+    for state in all_inputs:
+        token = var[state.id]
+        lines.append(
+            "product_layout_error_ |= (%s.layout() != %s.layout() || "
+            "%s.distribution() != %s.distribution() || "
+            "%s.local_rank() != %s.local_rank());"
+            % (token, driver, token, driver, token, driver))
+    lines += [
+        "if (pops::all_reduce_max(product_layout_error_, ctx.prepared_execution_lane()))",
+        '  throw std::runtime_error("local product requires co-located layouts, distributions and ranks");',
+        "for (int li = 0; li < %s.local_size(); ++li) {" % driver]
     for block in blocks:
         lines.append(
             "  const pops::FieldView<pops::Real, pops::kNativeDimension> %sA = "
@@ -368,7 +383,7 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
         "%s.fab(li).view();" % (status, status)
     )
     seen = set()
-    for state in by_block.values():
+    for state in all_inputs:
         token = var[state.id]
         if token not in seen:
             seen.add(token)
@@ -399,15 +414,18 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
                                  % (component, source[1], source[2]))
     lines += binding_lines
     from ._native_solve_cpp import evaluate_residual_expressions, coupled_jacobian_expressions
-    expressions = [expr for rows in components.values() for expr in rows]
-    residual_lines, residual_values = evaluate_residual_expressions(expressions)
-    lines += residual_lines
-    for slot, value in enumerate(residual_values):
-        lines.append(
-            "      rout[%d] = Ueval[%d] - G_[%d] - "
-            "static_cast<pops::Real>(%s) * dt * (%s);"
-            % (slot, slot, slot, coefficient_cpp, value))
-    lines.append("      return pops::LocalNonlinearEvaluationResult::ok();")
+    if original_residual is not None:
+        lines += original_residual
+    else:
+        expressions = [expr for rows in components.values() for expr in rows]
+        residual_lines, residual_values = evaluate_residual_expressions(expressions)
+        lines += residual_lines
+        for slot, value in enumerate(residual_values):
+            lines.append(
+                "      rout[%d] = Ueval[%d] - G_[%d] - "
+                "static_cast<pops::Real>(%s) * dt * (%s);"
+                % (slot, slot, slot, coefficient_cpp, value))
+        lines.append("      return pops::LocalNonlinearEvaluationResult::ok();")
     lines.append("    };")
     lines += _prepared_local_control_lines(controls)
     route = controls.get("derivative_contract", {}).get("route", "finite_difference")
@@ -458,7 +476,7 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
         "      %sA(index, 9) = pops::Real(0);" % status,
         "    }",
     ]
-    lines += ["  });", "}"]
+    lines += ["  });", "}", "}"]
     return lines
 
 

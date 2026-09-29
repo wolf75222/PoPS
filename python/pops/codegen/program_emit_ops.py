@@ -635,8 +635,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         (coupled_in,) = v.inputs
         var[v.id] = var[("coupled_scratch", coupled_in.id, v.attrs["out_block"])]
     elif v.op == "solve_coupled_implicit":
-        components = _coupled_rate_components(program, v, model)
-        by_block = {state.block: state for state in v.inputs}
+        product = v.attrs.get("problem_kind") == "local_residual_product"
+        from .program_emit_local_product import product_components, product_residual_lines
+        components = product_components(v) if product else _coupled_rate_components(program, v, model)
+        initial_inputs = v.inputs[:v.attrs["output_count"]] if product else v.inputs
+        by_block = {state.block: state for state in initial_inputs}
         if target == "system":
             for block in components:
                 index = _required_block_index(
@@ -656,7 +659,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (status, int(v.id), prototype))
         lines += _emit_solve_coupled_implicit_kernel(
             components, by_block, var, scratch, status,
-            controls=v.attrs, coefficient=v.attrs["coefficient"])
+            controls=v.attrs, coefficient=v.attrs.get("coefficient", 1),
+            original_residual=product_residual_lines(v, var) if product else None,
+            all_inputs=v.inputs)
         report = "ci_report_%d" % v.id
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(
