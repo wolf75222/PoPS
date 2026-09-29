@@ -102,3 +102,30 @@ def test_parabolic_step_scaling_is_not_uniform_ssprk2_hall_stability():
         log_gains.append(.5*(FINAL_TIME/dt)*np.log1p(y**4/4))
     np.testing.assert_allclose(np.asarray(log_gains[1:])/log_gains[:-1], 4., atol=2e-15)
     assert log_gains[0] > 0.
+
+
+@pytest.mark.parametrize("order", ((0, 1, 2), (2, 0, 1)))
+def test_tensor_gradient_face_composition_preserves_skew_and_symmetric_energy(order):
+    # Independently translate the G/H face formula read in PreparedDiffusion.
+    # This is an algebraic stencil check, not execution of that C++ kernel.
+    state = np.random.default_rng(432).normal(size=(3, 17))
+    d = np.array(((.3, -.1, 0.), (-.1, .3, 0.), (0., 0., 0.)))
+    r = np.array(((0., -.4, .7), (.4, 0., -.2), (-.7, .2, 0.)))
+    state = state[list(order)]
+    d, r = d[np.ix_(order, order)], r[np.ix_(order, order)]
+    h = 2*np.pi/state.shape[1]
+
+    def face_rhs(matrix):
+        variable = matrix @ state
+        g = (np.roll(variable, -1, axis=1)-np.roll(variable, 1, axis=1))/(2*h)
+        second = (np.roll(variable, -1, axis=1)-2*variable+np.roll(variable, 1, axis=1))/(2*h)
+        upper = .5*(g+np.roll(g, -1, axis=1)+second-np.roll(second, -1, axis=1))
+        return (upper-np.roll(upper, 1, axis=1))/h
+
+    laplace = (np.roll(state, -1, axis=1)-2*state+np.roll(state, 1, axis=1))/h**2
+    np.testing.assert_allclose(face_rhs(d+r), (d+r) @ laplace, atol=3e-14, rtol=0.)
+    assert abs(np.sum(state*face_rhs(r))*h) < 4e-14
+    differences = (np.roll(state, -1, axis=1)-state)/h
+    expected_loss = -np.sum(differences*(d @ differences))*h
+    assert expected_loss < 0.
+    assert np.sum(state*face_rhs(d))*h == pytest.approx(expected_loss, abs=6e-14)

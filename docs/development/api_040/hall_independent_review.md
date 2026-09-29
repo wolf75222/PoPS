@@ -68,3 +68,74 @@ mechanism still needs review of occurrence ownership, captures, component/axis
 orientation, runtime domains, explicit stage authority and actual numerical
 restriction. No claim about nonlinear Hall, AMR, full MHD, or multidimensional
 physical Hall follows from this one-dimensional linear witness.
+
+## Independent implementation review of 97f4c77c
+
+The frozen author commit is `97f4c77c` in the separate
+`PoPS-degenerate-diffusion` checkout. The reviewer changed no production code.
+The additional public tests live in
+`tests/python/unit/numerics/test_coupled_gradient_independent_review.py`.
+
+The declaration retains the exact state owner and separate constant component
+matrices D and R in its physical identity. A foreign state's identical names do
+not authenticate it. RuntimeParam entries are explicitly rejected by this first
+constant-matrix realization; they are not captured as frozen default values.
+The numerical selection and native provider are distinct from TensorDiffusion.
+The latter's component-Jacobian SPD test is bypassed only for the distinct
+coupled provider, while finiteness and the spatial identity tensor remain
+checked. No extra positive diagonal is introduced.
+
+The inherited one-dimensional face formula reduces algebraically to
+`(W[i+1]-W[i])/h`, with `W=(D+R)U`. Two additional independent NumPy tests use
+three components, dense skew coupling, rank-deficient positive dissipation, and
+a component permutation. They compare the gradient/Hessian face assembly with
+the direct component-matrix Laplacian, and check zero skew energy and the
+separate negative dissipative quadratic form. These are algebraic checks, not
+an execution of the C++ kernel.
+
+An actual source defect was caught before the author's freeze: the accepted-face
+filter omitted the new `coupled_gradient` occurrence. Public validate/resolve/
+Program emission produced zero `stage_accepted_exchanges` calls for SSPRK2.
+The independent test failed with `0 == 2` (1 failed, 1.26 s). The corrected
+97f4c77c produces both accepted stage exchanges. A separate test emits the
+complete native state-storage loader, without a fabricated hyperbolic flux or
+wave speed. The first coherent independent suite passed **17/17 in 2.10 s**.
+
+Review also identified rank-local fixture hazards: conversion of root-owned
+gathers on peers, root-only records returned to all-rank assertions, unchecked
+bind/run/status exceptions before another collective, and root receipt writes
+that could bypass a final broadcast. The frozen example converges these
+operations, sends identical records to every rank, and its fixture checks files
+only on rank 0 before broadcasting the verdict. This is a source review; it does
+not prove termination of the native collectives themselves.
+
+### PSD admission counterexample
+
+An additional public test on 97f4c77c rejects the exact constant matrix
+`D=ones((3,3))`, although `v.T D v=(sum(v))**2 >= 0` and it has two legitimate
+null modes. The implementation tests the minimum numerical eigenvalue against
+zero without an error model; on the review host `eigvalsh` returns a minimum
+of approximately `-5.48266979e-16`. The public declaration raises
+`ValueError: dissipative component matrix must be positive semidefinite`.
+The paired negative test uses `diag(1,1,-2**-50)` and must continue to reject it;
+simply adding a tolerance or projecting/clamping D is not an acceptable fix.
+The discriminating run was **1 failed, 1 passed in 0.48 s**. This remains an
+admission defect of the general declared PSD class, even though the M23 witness
+uses D=0 and does not encounter it.
+
+Follow-up `3fc51ec8dcb06094f5b12bcb6f430127f66fae77` replaces this eigensolver
+decision by exact rational symmetric Schur complements of the represented
+constants. A negative pivot refuses; a zero pivot requires its residual row to
+vanish. No coefficient is changed, no small negative mode is admitted, and no
+component-count limit is introduced. Inspection of the symmetric update and
+replay of both adversaries confirms the correction.
+
+Final independent result on `97f4c77c` + `3fc51ec8`: **19/19 passed in 4.92 s**
+(seven public source/loader tests and twelve pure NumPy mathematical tests).
+Ruff passes for both test files. These tests ran with `env -u PYTHONPATH` in
+`pops-api040-c11`, with pytest `-o pythonpath` explicitly pointing to the frozen
+author's Python source and absolute paths to the independent test files.
+Verdict: favorable within this source and mathematical scope, with the two
+initial defects retained above. No native build, JIT compilation, installed
+run, GPU or AMR qualification was performed by this review; an authenticated
+Dim1 installed run remains necessary for runtime qualification.
