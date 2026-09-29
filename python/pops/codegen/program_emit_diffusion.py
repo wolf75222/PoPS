@@ -161,7 +161,7 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
     _,selected,_=_selected(v,node_model)
     if selected.get("coupled") and target != "system":
         raise NotImplementedError(
-            "coupled gradient v1 requires a periodic Uniform route; "
+            "coupled gradient requires a periodic Uniform route; "
             "AMR composite face transfer remains an implementation obligation")
     preparation = "%s, %s, %s" % (
         state_var, _boundary_cpp(selected["physical"]),
@@ -190,9 +190,9 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     impl,selected,rows=_selected(v,node_model)
     if selected.get("coupled") and target != "system":
-        raise NotImplementedError("coupled gradient v1 has no AMR composite face route")
+        raise NotImplementedError("coupled gradient has no AMR composite face route")
     if selected.get("coupled") and prepared_var is not None:
-        raise NotImplementedError("coupled gradient v1 has no implicit spatial solver certificate")
+        raise NotImplementedError("coupled gradient has no implicit spatial solver certificate")
     state_var=var[v.inputs[0].id]
     out="diffusive_rhs_%d" % v.id
     var[v.id]=out

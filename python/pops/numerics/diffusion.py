@@ -189,8 +189,8 @@ class TensorDiffusion(Diffusion):
 class CoupledGradient(Diffusion):
     """Selected periodic component-coupled gradient route, distinct from SPD diffusion.
 
-    The physical law retains D and R separately. This first realization is one
-    Cartesian periodic axis with constant component matrices. Its semidiscrete
+    The physical law retains D and R separately. This realization supports
+    one to three periodic Cartesian axes with constant component matrices. Its semidiscrete
     spatial operator has a skew part; no monotone diffusion CFL is asserted for
     an explicit temporal method.
     """
@@ -209,9 +209,9 @@ class CoupledGradient(Diffusion):
         from pops.physics.diffusion import CoupledGradientLaw
         if type(self.law) is not CoupledGradientLaw:
             raise TypeError("coupled gradient law identity changed")
-        if self.law.dimension != 1 or any(
+        if self.law.dimension not in (1, 2, 3) or any(
                 boundary.kind != "periodic" for boundary in self.law.boundaries):
-            raise ValueError("first coupled gradient realization requires one periodic axis")
+            raise ValueError("coupled gradient realization requires periodic Cartesian axes in dimensions 1 through 3")
         return True
 
     def validate_balance_view(self, view):

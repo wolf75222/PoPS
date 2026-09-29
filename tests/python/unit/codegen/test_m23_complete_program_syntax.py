@@ -25,7 +25,7 @@ from pops import math
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
 from pops.domain import CartesianDomain
-from pops.frames import Cartesian1D
+from pops.frames import Cartesian1D, Cartesian2D, Cartesian3D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
@@ -35,9 +35,11 @@ from pops.numerics import CoupledGradient, DiscretizationPlan
 from pops.projection import ConservativeCellAverage
 from pops.time import FixedDt
 
-n, reverse, repeated = int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+n, reverse, repeated, dimension = (int(arg) for arg in sys.argv[3:7])
 order = tuple(reversed(range(n))) if reverse else tuple(range(n))
-frame = CartesianDomain("periodic", lower=(0.,), upper=(6.283185307179586,)).frame(Cartesian1D())
+frame = CartesianDomain("periodic", lower=(0.,)*dimension,
+    upper=(6.283185307179586,)*dimension).frame(
+    (Cartesian1D, Cartesian2D, Cartesian3D)[dimension-1]())
 model = pops.Model("independent_coupled_gradient", frame=frame)
 labels = ("north", "east", "third")[:n]
 state = model.state("field", components=tuple(labels[i] for i in order))
@@ -66,7 +68,8 @@ program.step_strategy(FixedDt(.00001))
 case.program(program)
 case.initials.add(InitialCondition(state=block[state], value=BindArray(),
     projection=ConservativeCellAverage()))
-layout = Uniform(CartesianGrid(frame=frame, cells=(32,), periodic=PeriodicAxes(frame.axes)))
+layout = Uniform(CartesianGrid(frame=frame, cells=(32,)*dimension,
+    periodic=PeriodicAxes(frame.axes)))
 resolved = pops.resolve(pops.validate(case), layout=layout)
 graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
 source = emit_cpp_program(resolved.time, model_graph=graph)
@@ -81,11 +84,13 @@ print("source_import=" + pops.__file__)
 '''
 
 
-@pytest.mark.parametrize("components,reverse,repeated", [
-    (2, False, False), (2, True, False), (3, False, False), (3, True, False),
-    (3, True, True),
+@pytest.mark.parametrize("dimension,components,reverse,repeated", [
+    (1, 2, False, False), (1, 2, True, False), (1, 3, False, False),
+    (1, 3, True, False), (1, 3, True, True),
+    (2, 2, False, True), (2, 3, True, False), (3, 2, False, False),
+    (3, 3, True, True),
 ])
-def test_m23_complete_ssprk2_program_syntax(tmp_path, components, reverse, repeated):
+def test_m23_complete_ssprk2_program_syntax(tmp_path, dimension, components, reverse, repeated):
     root = Path(os.environ.get("POPS_M23_SOURCE_ROOT", Path(__file__).resolve().parents[4])).resolve()
     compiler = shutil.which("clang++")
     kokkos = Path(sys.prefix) / "include"
@@ -96,14 +101,15 @@ def test_m23_complete_ssprk2_program_syntax(tmp_path, components, reverse, repea
     source = tmp_path / "complete_m23_program.cpp"
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
-    env["POPS_NATIVE_DIM"] = "1"
+    env["POPS_NATIVE_DIM"] = str(dimension)
     emitted = subprocess.run(
         [sys.executable, "-I", "-c", EMIT_WORKER, str(root), str(source),
-         str(components), str(int(reverse)), str(int(repeated))],
+         str(components), str(int(reverse)), str(int(repeated)), str(dimension)],
         env=env, capture_output=True, text=True, timeout=90,
     )
     assert emitted.returncode == 0, emitted.stdout + emitted.stderr
-    flags = ["-std=c++20", "-fsyntax-only", "-fno-fast-math", "-DPOPS_NATIVE_DIM=1",
+    flags = ["-std=c++20", "-fsyntax-only", "-fno-fast-math",
+             "-DPOPS_NATIVE_DIM=" + str(dimension),
              "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI", "-DPOPS_HAS_KOKKOS",
              "-DKOKKOS_DEPENDENCE", "-DPOPS_HAS_MPI",
              "-I" + str(root / "include"), "-I" + str(kokkos)]

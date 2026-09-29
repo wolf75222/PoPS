@@ -3,7 +3,7 @@ import pytest
 import pops
 from pops import math
 from pops.domain import CartesianDomain
-from pops.frames import Cartesian1D, Cartesian2D
+from pops.frames import Cartesian1D, Cartesian2D, Cartesian3D
 from pops.numerics import CoupledGradient, Diffusion, TensorDiffusion, DiscretizationPlan
 from pops.lib.time import ForwardEuler
 from pops.time import FixedDt
@@ -19,7 +19,7 @@ def hall_case(*, hall=.3, dimension=1, components=("transverse_a", "transverse_b
               weights=(1,)):
     frame = CartesianDomain(
         "periodic", lower=(0.,) * dimension, upper=(6.283185307179586,) * dimension
-    ).frame((Cartesian1D, Cartesian2D)[dimension - 1]())
+    ).frame((Cartesian1D, Cartesian2D, Cartesian3D)[dimension - 1]())
     model = pops.Model("hall_fourier", frame=frame)
     state = model.state("w", components=components)
     flux = model.coupled_gradient_flux(
@@ -103,9 +103,35 @@ def test_hall_zero_and_component_names_do_not_change_scientific_sign():
     assert b.reversible_components[1][0] == .3
 
 
-def test_physical_law_general_but_v1_realization_rejects_second_axis():
-    with pytest.raises(ValueError, match="one periodic axis"):
-        hall_case(dimension=2)
+@pytest.mark.parametrize("dimension", (2, 3))
+def test_periodic_multiaxis_law_resolves_to_the_same_native_component_provider(dimension):
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_models import ProgramModelGraph
+    _, case, layout, flux, _ = hall_case(dimension=dimension)
+    assert CoupledGradient(flux=flux).validate()
+    resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production())
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    source = emit_cpp_program(resolved.time, model_graph=graph)
+    assert "PreparedCoupledGradient<pops::kNativeDimension, 2>" in source
+    assert source.count(".stage_accepted_exchanges(") == 1
+    assert "pops::kNativeDimension" in source
+
+
+def test_multiaxis_extension_does_not_admit_unprepared_physical_traces():
+    from pops.physics.diffusion import DiffusiveBoundary
+    model = pops.Model("boundary_obligation", frame=Cartesian2D())
+    state = model.state("w", components=("a", "b"))
+    faces = (DiffusiveBoundary(0, "lower", "periodic"),
+             DiffusiveBoundary(0, "upper", "periodic"),
+             DiffusiveBoundary(1, "lower", "value", 0.),
+             DiffusiveBoundary(1, "upper", "value", 0.))
+    flux = model.coupled_gradient_flux(
+        "with_traces", state=state,
+        dissipative=((1., 0.), (0., 1.)),
+        reversible=((0., -.2), (.2, 0.)),
+        boundaries={component: faces for component in state.components})
+    with pytest.raises(ValueError, match="requires periodic Cartesian axes"):
+        CoupledGradient(flux=flux)
 
 
 @pytest.mark.parametrize("matrix", [

@@ -465,7 +465,8 @@ class PreparedDiffusion {
       maximum_j = all_reduce_max(maximum_j, *lane_);
       for (int axis = 0; axis < Dim; ++axis)
         tensor_frequency +=
-            Real(2.5) * maximum_a * maximum_j / (geometry.spacing(axis) * geometry.spacing(axis));
+            (Coupled ? Real(4) : Real(2.5)) * maximum_a * maximum_j /
+            (geometry.spacing(axis) * geometry.spacing(axis));
     }
     const auto geometry = geometry_;
     const auto physical = physical_;
@@ -764,12 +765,16 @@ class PreparedDiffusion {
   const auto& geometry() const { return geometry_; }
 };
 
-/// Version-one signed component-gradient provider. Physical D and R are retained
-/// separately by the authored law; the prepared Jacobian of W=(D+R)U may be skew.
-/// It does not inherit TensorDiffusion's SPD energy or monotone CFL assertion.
+/// Periodic signed component-gradient provider. Physical D and R are retained
+/// separately by the authored law; W=(D+R)U and the identity spatial tensor
+/// give a two-point flux on each Cartesian axis. Its reported frequency bounds
+/// the infinity norm of the semidiscrete operator by
+/// 4 ||D+R||_infinity sum_axis h_axis^-2; it is not a monotone CFL certificate
+/// for the skew part.
 template <int Dim, int Components>
 class PreparedCoupledGradient final : public PreparedDiffusion<Dim, Components, true, true> {
-  static_assert(Dim == 1, "coupled gradient v1 realizes one periodic Cartesian axis");
+  static_assert(Dim >= 1 && Dim <= 3,
+                "coupled gradient requires one to three Cartesian axes");
  public:
   using PreparedDiffusion<Dim, Components, true, true>::PreparedDiffusion;
 };
