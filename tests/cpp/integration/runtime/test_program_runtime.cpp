@@ -2670,6 +2670,7 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
   const auto accepted_state = sim.get_state("gas");
   sim.set_program_block_map({0});
   auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ctx->configure_primary_clock("test.nested-duration-rollback");
   ctx->register_history("gas.U", 2, kGasComponents);
   ctx->cache_store_scratch(node, ctx->state(0));
   ctx->cache_accumulate_dt(node, Real(skipped_dt));
@@ -2677,19 +2678,35 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
 
   bool fail_after_effective_dt = true;
   std::vector<Real> observed_effective_dt;
+  std::vector<std::string> observed_exchange_contexts;
+  bool duplicate_rejected = false;
   ctx->install([&](double dt) {
     ctx->begin_step(dt);
     const Real effective_dt = ctx->cache_effective_dt(node, Real(dt));
     observed_effective_dt.push_back(effective_dt);
     MultiFab<kNativeDimension>& state = ctx->state(0);
     MultiFab<kNativeDimension> bump = state;
-    bump.set_val(Real(1));
-    ctx->axpy(state, Real(1), bump);
+    // A duration-dependent contribution is deliberately computed from this attempt's
+    // accumulated native duration, rather than from an author-side date-keyed value.
+    bump.set_val(effective_dt);
+    ctx->axpy(state, Real(dt), bump);
     ctx->store_history("gas.U", state);
     ctx->rotate_histories();
     ctx->cache_store_scratch(node, state);
-    sim.stage_program_exchange(runtime::program::ExchangeRecord{
-        "transport.face", "face.0", "stage.0", "euler", 1, 1.0, 2.0, dt, 1});
+    const runtime::program::ExchangeRecord contribution{
+        "transport.face", "face.0", "stage.0", "euler", 1, 1.0,
+        static_cast<double>(effective_dt), dt, 1};
+    ctx->stage_exchange(contribution);
+    const auto staged = sim.program_exchange_records();
+    observed_exchange_contexts.push_back(staged.empty() ? std::string{}
+                                                        : staged.back().evaluation_context);
+    if (dt == 0.3) {
+      try {
+        ctx->stage_exchange(contribution);
+      } catch (const std::exception&) {
+        duplicate_rejected = true;
+      }
+    }
     if (fail_after_effective_dt)
       throw runtime::program::StepAttemptRejected(
           SolveStatus::kIterationLimit, "injected",
@@ -2713,24 +2730,83 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
   sim.begin_step_transaction();
   sim.begin_nested_step_transaction();
   EXPECT_THROW(sim.step(0.1), runtime::program::StepAttemptRejected);
-  ASSERT_EQ(observed_effective_dt.size(), 1u);
-  EXPECT_DOUBLE_EQ(observed_effective_dt.back(), Real(skipped_dt + 0.1));
+  EXPECT_EQ(observed_effective_dt.size(), 1u);
+  if (!observed_effective_dt.empty())
+    EXPECT_DOUBLE_EQ(observed_effective_dt.back(), Real(skipped_dt + 0.1));
+  EXPECT_EQ(observed_exchange_contexts.size(), 1u);
   expect_initial();
 
   fail_after_effective_dt = false;
-  sim.step(0.1);
-  ASSERT_EQ(observed_effective_dt.size(), 2u);
-  EXPECT_DOUBLE_EQ(observed_effective_dt.back(), Real(skipped_dt + 0.1));
+  sim.step(0.2);
+  EXPECT_EQ(observed_effective_dt.size(), 2u);
+  if (!observed_effective_dt.empty())
+    EXPECT_DOUBLE_EQ(observed_effective_dt.back(), Real(skipped_dt + 0.2));
+  EXPECT_EQ(observed_exchange_contexts.size(), 2u);
+  if (observed_exchange_contexts.size() == 2u)
+    EXPECT_NE(observed_exchange_contexts[0], observed_exchange_contexts[1]);
   EXPECT_EQ(sim.macro_step(), 1);
-  EXPECT_DOUBLE_EQ(sim.time(), 0.1);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.2);
   EXPECT_TRUE(sim.history_initialized("gas.U"));
   EXPECT_EQ(sim.history_fill_count("gas.U"), 1);
   EXPECT_DOUBLE_EQ(sim.program_cache().accumulated_dt_of(node), 0.0);
-  ASSERT_EQ(sim.program_exchange_records().size(), 1u);
+  const auto child_records = sim.program_exchange_records();
+  EXPECT_EQ(child_records.size(), 1u);
+  if (child_records.size() == 1u) {
+    if (observed_exchange_contexts.size() == 2u)
+      EXPECT_EQ(child_records[0].evaluation_context, observed_exchange_contexts[1]);
+    EXPECT_DOUBLE_EQ(child_records[0].numerical_flux, skipped_dt + 0.2);
+    EXPECT_DOUBLE_EQ(child_records[0].temporal_weight, 0.2);
+    EXPECT_DOUBLE_EQ(child_records[0].integrated_amount(), (skipped_dt + 0.2) * 0.2);
+  }
+  const auto child_state = sim.get_state("gas");
+  EXPECT_EQ(child_state.size(), accepted_state.size());
+  for (std::size_t i = 0; i < std::min(child_state.size(), accepted_state.size()); ++i)
+    EXPECT_DOUBLE_EQ(child_state[i], accepted_state[i] + Real(0.2) * Real(skipped_dt + 0.2));
+  EXPECT_EQ(sim.history_global("gas.U", 1), child_state);
+  EXPECT_EQ(sim.program_cache_global(node), child_state);
   sim.commit_step_transaction();
   sim.finalize_step_transaction();
   EXPECT_EQ(sim.step_transaction_depth(), 1u);
   sim.rollback_step_transaction();
   EXPECT_EQ(sim.step_transaction_depth(), 0u);
   expect_initial();
+
+  // The parent rejection revokes the accepted child contribution. A fresh root attempt with
+  // another duration must use the restored skipped interval and a distinct runtime exchange key.
+  sim.step(0.3);
+  EXPECT_EQ(observed_effective_dt.size(), 3u);
+  if (!observed_effective_dt.empty())
+    EXPECT_DOUBLE_EQ(observed_effective_dt.back(), Real(skipped_dt + 0.3));
+  EXPECT_EQ(observed_exchange_contexts.size(), 3u);
+  if (observed_exchange_contexts.size() == 3u) {
+    const auto encoded_dt = [](double duration) {
+      return "/" + std::to_string(std::bit_cast<std::uint64_t>(duration)) + "/";
+    };
+    EXPECT_NE(observed_exchange_contexts[0].find(encoded_dt(0.1)), std::string::npos);
+    EXPECT_NE(observed_exchange_contexts[1].find(encoded_dt(0.2)), std::string::npos);
+    EXPECT_NE(observed_exchange_contexts[2].find(encoded_dt(0.3)), std::string::npos);
+    EXPECT_NE(observed_exchange_contexts[2], observed_exchange_contexts[0]);
+    EXPECT_NE(observed_exchange_contexts[2], observed_exchange_contexts[1]);
+  }
+  EXPECT_TRUE(duplicate_rejected);
+  EXPECT_EQ(sim.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.3);
+  EXPECT_TRUE(sim.history_initialized("gas.U"));
+  EXPECT_EQ(sim.history_fill_count("gas.U"), 1);
+  EXPECT_DOUBLE_EQ(sim.program_cache().accumulated_dt_of(node), 0.0);
+  const auto accepted_records = sim.program_exchange_records();
+  EXPECT_EQ(accepted_records.size(), 1u);
+  if (accepted_records.size() == 1u) {
+    if (observed_exchange_contexts.size() == 3u)
+      EXPECT_EQ(accepted_records[0].evaluation_context, observed_exchange_contexts[2]);
+    EXPECT_DOUBLE_EQ(accepted_records[0].numerical_flux, skipped_dt + 0.3);
+    EXPECT_DOUBLE_EQ(accepted_records[0].temporal_weight, 0.3);
+    EXPECT_DOUBLE_EQ(accepted_records[0].integrated_amount(), (skipped_dt + 0.3) * 0.3);
+  }
+  const auto retried_state = sim.get_state("gas");
+  EXPECT_EQ(retried_state.size(), accepted_state.size());
+  for (std::size_t i = 0; i < std::min(retried_state.size(), accepted_state.size()); ++i)
+    EXPECT_DOUBLE_EQ(retried_state[i], accepted_state[i] + Real(0.3) * Real(skipped_dt + 0.3));
+  EXPECT_EQ(sim.history_global("gas.U", 1), retried_state);
+  EXPECT_EQ(sim.program_cache_global(node), retried_state);
 }
