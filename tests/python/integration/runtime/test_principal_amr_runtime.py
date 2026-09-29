@@ -84,7 +84,8 @@ def test_principal_amr_joint_faces_preserve_composite_components_and_rebind(
         report = pops.run(runtime,t_end=DT,max_steps=1,console=False)
         after = _snapshot(runtime,widths,levels,world)
         def check_result():
-            assert report.accepted_steps == 1 and runtime.time == pytest.approx(DT)
+            assert report.accepted_steps == 1 and runtime.time() == pytest.approx(DT)
+            assert report.rejected_steps == 0 and runtime.macro_step() == 1
             assert tuple(runtime.patch_boxes()) == boxes
             np.testing.assert_allclose(_mass(runtime,after),_mass(runtime,before),rtol=0,atol=2.e-11)
             for level,values in enumerate(after):
@@ -125,7 +126,8 @@ def test_principal_amr_active_singular_flux_rolls_back_all_rows_levels_and_time(
     pops.run(valid,t_end=DT,max_steps=1,console=False)
     runtime=_bind(artifact,handles,gates,(.07,.19),(.6,.9),threshold=2.12)
     before=_snapshot(runtime,widths,levels,world)
-    boxes,time,step=tuple(runtime.patch_boxes()),runtime.time,runtime.macro_step
+    boxes,time,step=tuple(runtime.patch_boxes()),runtime.time(),runtime.macro_step()
+    assert (time,step) == (0.,0)
     error=None
     try:
         pops.run(runtime,t_end=DT,max_steps=1,console=False)
@@ -138,7 +140,7 @@ def test_principal_amr_active_singular_flux_rolls_back_all_rows_levels_and_time(
         failures=[error]
     assert all(failures), failures
     after=_snapshot(runtime,widths,levels,world)
-    assert runtime.time == time and runtime.macro_step == step
+    assert runtime.time() == time and runtime.macro_step() == step
     def check():
         assert tuple(runtime.patch_boxes()) == boxes
         for actual,expected in zip(after,before):
