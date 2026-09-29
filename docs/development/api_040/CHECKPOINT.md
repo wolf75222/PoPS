@@ -3,7 +3,63 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Current reception: finite supports and exact AMR local storage
+## Current reception: component gradients, M05 and implicit-state inspection
+
+Both incremental native builds pass with SDK
+`62398f3c13c193eb48db07518735fe755e6d108821adffc37acccd8fcea290eb`,
+Dim1 SHA256 `42436a0ccef7c5504273c9e459f4bd946652597aa6ee025bc484ac595ad7ca02`
+and Dim2 SHA256 `1afb920397c7fca0d683444c8c21b3fbc908847bdd7e8906457e6dd384c44c27`.
+The installed runner authenticates 1089 shipped Python/header files, the real
+site-packages PoPS import, selected dimension, compiler and native binary.
+This is a separate evidence window from SDK396719 below.
+
+- `installed-m23-source`, source `22ae844`: **74/74** source/math/host checks
+  pass, including five complete C++ Program translation units and existing
+  diffusion generation checks. The first native reception has **three bind
+  failures**: both fixtures supplied legacy `initial_state` in addition to an
+  `InitialConditionPlan`. The production guard correctly refused this duplicate
+  authority. `a52e580` uses `initial_values` with exact qualified subjects.
+- `installed-m23-native-bind-repaired`: **3/3 native tests pass** in 80.86 s:
+  five Hall Fourier trajectories (N32/N64, two component orders and Hall zero),
+  and two three-component dissipative/skew matrix variants. Their 384 accepted
+  records each retain both stages, both positive weighted occurrences and each
+  oriented incidence. Two finite-input overflow retries preserve state, clock
+  and ledger. `15a776c6` then authenticates stages directly and converges fixture
+  preparation; `installed-m23-native-mpi2` passes **3/3 on each rank** in 54.87 s,
+  including the required empty peer and before/after package/source parity.
+- Root's `outputs/recheck_m23_saved_states.py` independently reopens ten Hall
+  and four matrix NPZ files plus four raw ledgers across serial/MPI2. Maximum
+  complex saved-state error is **4.122e-15** and ledger/increment error
+  **1.275e-17**. Observed Hall phases are −.236931781 (N32) and −.239230156
+  (N64), against continuous −.24. The measured norm growth about 4e-10 matches
+  the selected SSPRK2 polynomial; this is not an imaginary-axis stability
+  certificate or complete Hall MHD qualification.
+- The closed M05 periodic shear reduction, nu=.03, sin(2*pi*x), T=.1, receives
+  N32/N64/N128 with Forward Euler. Its first serial/MPI receipts pass, but an
+  independent checker counterexample found that NaN face metadata could be
+  hidden by max/comparison. `f0047269` refuses every nonfinite ledger field and
+  saves/reopens raw ledger JSON. `installed-m05-reviewed-serial` passes
+  **19/19** (18 source/math and one native three-grid test) in 8.04 s;
+  `installed-m05-reviewed-mpi2` passes **1/1 on each rank** in 9.34 s.
+  `outputs/recheck_m05_saved_states.py` independently checks all six NPZ/ledger
+  pairs: maximum discrete state error **1.222e-15**, ledger/increment error
+  **1.681e-18**. Semidiscrete dissipative work and the separate positive FE
+  energy correction are both tested. This is not compressible NS, thermal
+  conduction or a Couette-wall reception.
+- `installed-m23-diffusion-nonregression` has **four passes and one failure**:
+  implicit tensor/transport bind confused the private Newton candidate with a
+  physical State read. Its exact-state guard dates from `629a2126`, before M23.
+  `0cd16d01` excludes only the actual solver-owned candidate while retaining
+  the refusal of an anonymous homonym. The Python refresh passes with unchanged
+  SDK/native binaries. `installed-implicit-state-reviewed-unit` passes
+  **33/33** installed checks; the five-case native rerun is in progress.
+
+The source and raw evidence bundle for this window is being assembled. Earlier
+failed receipts remain immutable. IntegralState is under implementation and
+independent review; the whole migration, general mixed spatial solves, computed
+frontiers, GPU and full scientific corpus remain open.
+
+## Received finite supports and exact AMR local storage (SDK396719)
 
 The first installed reception at `70c4724` used SDK
 `396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c`,
