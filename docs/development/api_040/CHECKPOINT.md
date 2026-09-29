@@ -5,6 +5,18 @@ failures and next actions; it is not acceptance of the complete specification.
 
 ## Latest completed reception: periodic collective core and qualified inputs
 
+The subsequent converged matrix at `941afec2` passes **26/26 serial checks
+(six test-harness checks and twenty native checks)** and **23/23 native checks
+on each of two MPI ranks**, with zero failures/skips. MPI authentication before
+and after, selected test-source hashes and rank test parity all match. Receipts
+are `installed-local-affine-serial-converged` (418.896 s) and
+`installed-local-affine-m11-m18-mpi2` (505.306 s). The latter adds both W10
+permutations and M18 to the twenty-case product/H05/readonly/affine suite.
+`installed-selected-state-waves-unit` also passes 28/28 installed source tests.
+The installed common Python includes `071352f1`; the two native binaries and SDK
+remain the hashes below. These selected receipts qualify their exact cases,
+not every nonlinear problem or AMR realization.
+
 The package rebuilt through `7b35ffd` has the same SDK
 `02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e`,
 with new native Dim1 SHA256
@@ -59,8 +71,9 @@ workspace's `outputs/`; immutable evidence bundles retain earlier reds.
   the library conditional consumer and the independent particle comparison
   pass. Two older consumer tests fail only because the root MPI fixture compared
   the exact class name `RuntimeError`, rejecting its valid `StepAttemptRejected`
-  subclass. The semantic `isinstance` check and all-rank assertions are being
-  restored before repeating that suite; the red receipt remains intact.
+  subclass. The semantic `isinstance` check and all-rank assertions were restored
+  in `9c9dd579/941afec2`; the converged serial/MPI matrix above passes. The red
+  receipt remains intact.
 
 The qualified BindSchema is now the parameter report authority (`d16b2e4`).
 Current-State reads, including nested branches and dt-bound regions, are required
@@ -69,11 +82,14 @@ These repair existing contracts without an ABI change. Public `exp` has its own
 expression opcode; affine push-forward and entropy quadrature compose through
 the common algebra. Their versioned extension notes remain authoritative.
 
-Next integration: selected-State wave routing (`071352f1`, source tested,
-installed refresh in progress), the corrected MPI reception fixtures, then the
-full product/affine/M11/M18 MPI matrix. Astra Protocols begins an explicit finite
-support/application extension for the true M09/W06 witness; it is distinct from
-the still-open global meshed/distributed residual capability. See
+Next integration: Astra Protocols develops explicit finite support/application
+and reconstruction for the true M09/W06 witness; this is distinct from the
+still-open global meshed/distributed residual capability. Sol Native ports exact
+StateStorage authority to AMR resolution without adding fictitious zero fluxes.
+Sol Reference develops a distinct reversible component-flux realization for M23;
+Astra's independent oracle (`3b52036a`) retains phase -0.24 and separates the
+semidiscrete invariant from temporal amplification. None of these new increments
+is yet a received native capability. See
 [the independent mission gap audit](mission_gap_audit_a458113.md) for remaining
 T1–T6 obligations and scientific cases whose physical closure is not specified.
 No complete migration, remote CI, GPU or new external HPC acceptance is claimed.

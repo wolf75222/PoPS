@@ -63,7 +63,7 @@ Earlier bounded assignments at source `4bb0639` (same real GPT-6/high agents):
 - Sol Reference: independent MPI dimension-runner review and authenticated native/scientific receipt bundles, preserving all earlier failures.
 - Primary: serial integration and native builds; installed Dim1/Dim2, MPI2, failure injection and numerical reception. Cross-reviews remain required before accepting shared mechanisms.
 
-Current follow-ups after the periodic-core native reception (same callable agents):
+Follow-ups after the periodic-core native reception (same callable agents):
 
 - Astra Semantics independently reviewed qualified parameter authority, Exp/M18,
   and nested read-only inputs; now converges the Uniform MPI reception fixtures.
@@ -77,3 +77,10 @@ Current follow-ups after the periodic-core native reception (same callable agent
   saved M15 states without reclassifying earlier failures.
 - Primary owns integration, package rebuilds, C++/MPI tests, scientific campaigns,
   fixture corrections found during reception, and the final acceptance boundary.
+
+After the converged `941afec2` serial/MPI matrix, Astra Semantics archives its
+exact receipts while independently reviewing M23's signed phase and temporal
+stability. Sol Reference authors the reversible component-flux mechanism;
+Sol Native ports StateStorage resolution to AMR and reviews M09; Astra Protocols
+authors finite-support applications and reconstruction for M09. Primary keeps
+native builds/reception centralized. No model or profile has changed.
