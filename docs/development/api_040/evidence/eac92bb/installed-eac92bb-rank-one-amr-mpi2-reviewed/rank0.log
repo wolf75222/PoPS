@@ -1,0 +1,11 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 1 item
+
+tests/python/integration/runtime/test_rank_one_owned_amr_invalid.py::test_rank_one_owned_invalid_body_collectively_rolls_back PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-eac92bb-rank-one-amr-mpi2-reviewed/rank0.xml -
+============================== 1 passed in 45.85s ==============================

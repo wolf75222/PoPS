@@ -1,0 +1,251 @@
+{
+  "schema": "pops.api040.selected-native-evidence/v1",
+  "production_commit": "eac92bb",
+  "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+  "scope": "Dim2 OpenMP/MPICH; selected AMR reception only, including retained failures",
+  "receipts": [
+    {
+      "id": "installed-a085890-amr-routes",
+      "status": "passed",
+      "counts": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "ranks": 1
+    },
+    {
+      "id": "installed-eac92bb-rank-one-amr-mpi2",
+      "status": "failed",
+      "counts": null,
+      "ranks": 2,
+      "per_rank_counts": [
+        {
+          "tests": 1,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 0
+        },
+        {
+          "tests": 1,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 0
+        }
+      ]
+    },
+    {
+      "id": "installed-eac92bb-rank-one-amr-mpi2-diagnostics",
+      "status": "failed",
+      "counts": null,
+      "ranks": 2,
+      "per_rank_counts": [
+        {
+          "tests": 1,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 0
+        },
+        {
+          "tests": 1,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 0
+        }
+      ]
+    },
+    {
+      "id": "installed-eac92bb-rank-one-amr-mpi2-reviewed",
+      "status": "passed",
+      "counts": null,
+      "ranks": 2,
+      "per_rank_counts": [
+        {
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        {
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "installed-a085890-amr-routes/result.json",
+      "bytes": 1561,
+      "sha256": "b00eca74b636192b81559bd14af1ac8246e6074d86a684c7788d21f9aac2b0cb"
+    },
+    {
+      "path": "installed-a085890-amr-routes/identity.json",
+      "bytes": 2724,
+      "sha256": "d52ca7795a341204e03fe8ef79b47e49c3337e4e052dfddcb79139deccce37a3"
+    },
+    {
+      "path": "installed-a085890-amr-routes/pytest.xml",
+      "bytes": 1613,
+      "sha256": "84382d2f04d1f3d38fea61e9aff353326000aa807848e4c5b2235adb3bcb4b1f"
+    },
+    {
+      "path": "installed-a085890-amr-routes/pytest.log",
+      "bytes": 1778,
+      "sha256": "fbc0f8644ed353f6673b71e1215f75c17092378168c5dada202ff1c15d159c9a"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2/result.json",
+      "bytes": 2015,
+      "sha256": "d854df7100039bda7a02396c14b9f35aad2517c8968c1fed301b1f1e360fd83a"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2/before/identity.json",
+      "bytes": 2724,
+      "sha256": "1b8663f64a792474703d48f90be785c8a7c70cb3dc494c3cb3905c5d5c618440"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2/after/identity.json",
+      "bytes": 2724,
+      "sha256": "1b8663f64a792474703d48f90be785c8a7c70cb3dc494c3cb3905c5d5c618440"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2/rank0.xml",
+      "bytes": 1667,
+      "sha256": "a5141a70d5d385a21dc4e0f6541d839140bfd7eea8ce3447d7f2b46bf298bab3"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2/rank1.xml",
+      "bytes": 1667,
+      "sha256": "c64ced77d2bca97afe43aa629956b8dcf0c2e72b8fed79c7a813d4e0efc71e93"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2/rank0.log",
+      "bytes": 2121,
+      "sha256": "8c428ec920a129a9ffb2be3e9302caa745d70b0dd6eac187f44e1d971941dd86"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2/rank1.log",
+      "bytes": 2131,
+      "sha256": "9bc1b9e15d3677bf850cbeea96bdf70554711ceeaeb63308d51bbc23eb18a501"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2/test-sources.json",
+      "bytes": 392,
+      "sha256": "c35a9fc96d95d8c874df728b91a8696837181cbd3ed9660f5471533663f6146d"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-diagnostics/result.json",
+      "bytes": 2027,
+      "sha256": "116b50a6ba051d14495d543073ebe42e3bcccde243300fee3c8ddd86131663fa"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-diagnostics/before/identity.json",
+      "bytes": 2724,
+      "sha256": "40ff36b5cecbfc6c2bef811440f52ddb3d416b9e51d8334eb0fce5afaefe5728"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-diagnostics/after/identity.json",
+      "bytes": 2724,
+      "sha256": "40ff36b5cecbfc6c2bef811440f52ddb3d416b9e51d8334eb0fce5afaefe5728"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-diagnostics/rank0.xml",
+      "bytes": 10821,
+      "sha256": "ee91e75b7bd1fe998826c58395ebc57ef5857dd43d35e121bd1c9f8be22ed92f"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-diagnostics/rank1.xml",
+      "bytes": 10821,
+      "sha256": "c9bba51ff89373985b08c6f8120f04eeb28ba4361426de6bcb48db180baaf371"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-diagnostics/rank0.log",
+      "bytes": 6705,
+      "sha256": "9ba49e6d78e55733ff7e195d0ad41b80b16bb98fa5a4adf15ed28c6858bab6af"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-diagnostics/rank1.log",
+      "bytes": 6715,
+      "sha256": "306c64e77f940cbec693200e63312b21621d21ced070fbcfe23a50777543d10d"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-diagnostics/test-sources.json",
+      "bytes": 392,
+      "sha256": "538ec1039e7763fa28f140b0d4d382ea3994d76e4b2e3d490f7e3626b9b592dc"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-reviewed/result.json",
+      "bytes": 2024,
+      "sha256": "eb2e1a0d11ab4843e3fb20526411e0592de5e3f4e7f20e596c492e6024c2ab8d"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-reviewed/before/identity.json",
+      "bytes": 2724,
+      "sha256": "2c5885b62817a439e56af8f212be4c7276d4d2713fee6635cd42636f4051f0ba"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-reviewed/after/identity.json",
+      "bytes": 2724,
+      "sha256": "2c5885b62817a439e56af8f212be4c7276d4d2713fee6635cd42636f4051f0ba"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-reviewed/rank0.xml",
+      "bytes": 419,
+      "sha256": "fe1cba966fb644319cb8cde6805cb620e070f2eb97237484deeac22105a10e2f"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-reviewed/rank1.xml",
+      "bytes": 419,
+      "sha256": "4f536e2123e0e4cee11895bb6852df4de6fe1ece2fb259d1e6da6c0eac4b42df"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-reviewed/rank0.log",
+      "bytes": 761,
+      "sha256": "8fd2bd86a8988720867a12560625a818a5451d4f530936a13e1282d0bbed035c"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-reviewed/rank1.log",
+      "bytes": 761,
+      "sha256": "bb77a240a597bb748976b1fb75e3491f567009c48794ec5d1442430596df9485"
+    },
+    {
+      "path": "installed-eac92bb-rank-one-amr-mpi2-reviewed/test-sources.json",
+      "bytes": 392,
+      "sha256": "4ab504d184309b83a1b35cacd5975e6ebe23ba82daa999c0826b0d6fe7fcbac4"
+    },
+    {
+      "path": "native-user-amr-c38-owner.xml",
+      "bytes": 89564,
+      "sha256": "33b263ae64cb556235f361d15bf7e8f465f55ac015aa155eeae12b72e855c4a9"
+    },
+    {
+      "path": "native-user-amr-c38-owner-ctest.log",
+      "bytes": 33191,
+      "sha256": "c47831b8e03727bd4f99cabd6fe65cbfe8c12e72f06d5125a14553ec99b8e84c"
+    },
+    {
+      "path": "native-user-amr-c38-owner-build.log",
+      "bytes": 9389,
+      "sha256": "9adf3dafdd610613356d54de844fe40320c5d219786d4ed2a9a0187470bbf1bb"
+    }
+  ],
+  "ctest": {
+    "rows": 73,
+    "status_counts": {
+      "run": 69,
+      "notrun": 2,
+      "fail": 2
+    },
+    "build_source_commit": "ca78d29",
+    "header_signature": "dfcd85eba73c963aaceeaf85738296e5a46272e3f76aff1890a2f7850c4b94d8",
+    "binaries": {
+      "test_generated_amr_system_block": "8f6dd15253e77c43d820a4d94ef56e91eab349768641e5e4b6a691306b5b4be2",
+      "test_amr_synthetic_program_loader_transaction": "42e8331124a3e1da604d932acd21b53e37d33265ffa67f6797ddea5bf36a381a",
+      "test_amr_history_ring": "ffa0bc1672a632e12248818c34fb874b9ff4d28e5b2bedabbed35c64416149da"
+    }
+  }
+}
