@@ -8844,6 +8844,9 @@ struct AmrSystem<Dim>::Impl {
         image.initialized = program.hist_.initialized.at(key);
         image.fill_count = program.hist_.fill_count.at(key);
         image.store_pending = program.hist_.store_pending.at(key);
+        if (image.store_pending)
+          throw std::logic_error(
+              "AMR history migration cannot capture an unaccepted pending store");
         image.owner = program.hist_.owner.at(key);
         image.state_identity = program.hist_.state_identity.at(key);
         image.space_identity = program.hist_.space_identity.at(key);
@@ -17242,7 +17245,16 @@ bool AmrSystem<Dim>::regrid_from_prepared_tagging(int parent_level) {
 template <int Dim>
 void AmrSystem<Dim>::begin_restart_regrid_history_sequence() {
   p_->ensure_engine();
-  if (p_->history_regrid_sequence_sources)
+  const ExecutionLane& lane = p_->require_prepared_engine_lane(
+      "AMR restart history regrid sequence");
+  const long invalid = !p_->restart_transaction || p_->restart_transaction_committed ||
+                               p_->external_step_transaction
+                           ? 1L
+                           : 0L;
+  if (all_reduce_max(invalid, lane) != 0)
+    throw std::logic_error(
+        "AMR restart history regrid sequence requires an uncommitted restart transaction");
+  if (all_reduce_max(p_->history_regrid_sequence_sources ? 1L : 0L, lane) != 0)
     throw std::logic_error("AMR restart history regrid sequence is already active");
   p_->history_regrid_sequence_sources = p_->prepare_history_hierarchy_images();
 }
@@ -18385,6 +18397,7 @@ void AmrSystem<Dim>::finalize_restart_transaction() noexcept {
   p_->restart_history_authority_restored = false;
   p_->restart_history_authority.clear();
   p_->restart_history_restored_slots.clear();
+  p_->history_regrid_sequence_sources.reset();
 }
 
 template <int Dim>
@@ -18403,6 +18416,7 @@ void AmrSystem<Dim>::rollback_restart_transaction() {
   p_->restart_history_authority_restored = false;
   p_->restart_history_authority.clear();
   p_->restart_history_restored_slots.clear();
+  p_->history_regrid_sequence_sources.reset();
   std::exception_ptr restore_error;
   try {
     p_->restart_transaction->restore(*p_);

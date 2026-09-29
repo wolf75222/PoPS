@@ -70,13 +70,13 @@ std::size_t cell_count(const pops::Extent<Dim>& shape) {
   return count;
 }
 
-pops::AmrSystemConfig<Dim> config() {
+pops::AmrSystemConfig<Dim> config(int levels = 2) {
   pops::AmrSystemConfig<Dim> result;
   const int width = Dim == 3 ? 12 : 24;
-  result.level_count = 2;
-  result.transition_ratios.resize(1);
-  result.transition_buffers.resize(1);
-  result.transition_lookaheads.resize(1);
+  result.level_count = levels;
+  result.transition_ratios.resize(static_cast<std::size_t>(levels - 1));
+  result.transition_buffers.resize(static_cast<std::size_t>(levels - 1));
+  result.transition_lookaheads.resize(static_cast<std::size_t>(levels - 1));
   result.regrid_every = 0;
   result.explicit_bootstrap = true;
   result.distribute_coarse = true;
@@ -86,9 +86,11 @@ pops::AmrSystemConfig<Dim> config() {
     result.upper[axis] = pops::Real(1);
     result.periodicity[axis] = true;
     result.coarse_max_grid[axis] = width / 2;
-    result.transition_ratios[0][axis] = 2;
-    result.transition_buffers[0][axis] = 1;
-    result.transition_lookaheads[0][axis] = 1;
+    for (int transition = 0; transition + 1 < levels; ++transition) {
+      result.transition_ratios[static_cast<std::size_t>(transition)][axis] = 2;
+      result.transition_buffers[static_cast<std::size_t>(transition)][axis] = 1;
+      result.transition_lookaheads[static_cast<std::size_t>(transition)][axis] = 1;
+    }
   }
   return result;
 }
@@ -201,7 +203,10 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
   system.add_native_block(
       kBlock, shared_object, "2222222222222222222222222222222222222222222222222222222222222222",
       authenticated.binary_identity(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1);
-  system.set_temporal_relations({synchronous ? 1 : 2}, {1}, {"integral_only"});
+  const std::size_t transitions = static_cast<std::size_t>(system.configured_n_levels() - 1);
+  system.set_temporal_relations(std::vector<std::int64_t>(transitions, synchronous ? 1 : 2),
+                                std::vector<std::int64_t>(transitions, 1),
+                                std::vector<std::string>(transitions, "integral_only"));
   system.bind_bootstrap_subject(kStateRoute, kBlock, "bound_level_zero");
   system.stage_bootstrap_array(kStateRoute, kBlock, "cell", "cell", 1, system.spatial_shape(),
                                state);
@@ -225,13 +230,15 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
   system.begin_bootstrap_plan();
   (void)system.materialize_bootstrap_action(kStateRoute, "initialize_level_zero",
                                             "bound_level_zero", 0);
-  if (!system.bootstrap_next_level()) {
-    system.rollback_bootstrap_level();
-    throw std::runtime_error("synthetic loader fixture did not create its refined level");
+  for (int level = 1; level < system.configured_n_levels(); ++level) {
+    if (!system.bootstrap_next_level()) {
+      system.rollback_bootstrap_level();
+      throw std::runtime_error("synthetic loader fixture did not create its refined level");
+    }
+    (void)system.materialize_bootstrap_action(kStateRoute, "prolong_from_parent",
+                                              "conservative_linear", level);
+    system.commit_bootstrap_level();
   }
-  (void)system.materialize_bootstrap_action(kStateRoute, "prolong_from_parent",
-                                            "conservative_linear", 1);
-  system.commit_bootstrap_level();
   system.mark_bound();
 }
 
@@ -1295,6 +1302,129 @@ TEST(test_amr_synthetic_program_loader_transaction,
   EXPECT_EQ(fixture.allocated_attempt(), 1u);
   ASSERT_NO_THROW(system.step(.01));
   EXPECT_EQ(fixture.accepted_attempt(), 2u);
+}
+
+TEST(test_amr_synthetic_program_loader_transaction,
+     RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements) {
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_three_level_history_restart_" +
+                           std::to_string(pops::my_rank()) + "_" +
+                           std::to_string(static_cast<long>(std::clock()));
+  const std::string shared_object = stem + ".so";
+  auto artifact_lane =
+      pops::ExecutionLane::duplicate_world_collectively("test.three-level-history.artifact");
+  ASSERT_NO_THROW((void)prepare_exact_loader_artifact(stem + ".cpp", shared_object,
+                                                     artifact_lane, false, true));
+  const auto settings = config(3);
+  pops::AmrSystem<Dim> system(settings);
+  ASSERT_NO_THROW(build_refined_system(system, shared_object, initial_state(settings.shape), true));
+  ASSERT_EQ(system.installed_program_hash(), "tests.synthetic-loader/program/history-restart-v1");
+  ASSERT_EQ(system.n_levels(), 3);
+  constexpr double dt = 0.125;
+  ASSERT_NO_THROW(system.step(dt));
+  const auto old_boxes = system.patch_boxes();
+  const auto old_epoch = system.checkpoint_topology_epoch();
+  const auto accepted = system.program_accepted_state();
+  const auto exchanges = system.checkpoint_program_exchanges();
+  const auto regrid_count = system.checkpoint_regrid_count();
+  const auto old_time = system.time();
+  const auto old_step = system.macro_step();
+  const std::vector<std::string> names{"tracer.first", "tracer.second"};
+  std::vector<int> owners;
+  std::vector<std::vector<double>> states;
+  for (int level = 0; level < 3; ++level) {
+    const auto level_owners = system.level_owner_ranks(level);
+    owners.insert(owners.end(), level_owners.begin(), level_owners.end());
+    states.push_back(system.block_level_state_global(kBlock, level));
+  }
+  struct HistoryImage {
+    std::string name;
+    int level;
+    int fill;
+    bool initialized;
+    std::vector<std::vector<double>> values;
+    std::vector<double> dt;
+    std::vector<std::uint8_t> sample;
+  };
+  std::vector<HistoryImage> histories;
+  for (const auto& name : names)
+    for (int level = 0; level < 3; ++level) {
+      HistoryImage row{name, level, system.history_fill_count(name, level),
+                       system.history_initialized(name, level), {}, {},
+                       system.history_sample_identity(name, level)};
+      ASSERT_TRUE(row.initialized);
+      ASSERT_EQ(row.fill, 1);
+      for (int slot = 0; slot < system.history_depth(name); ++slot) {
+        row.values.push_back(system.history_global(name, level, slot));
+        row.dt.push_back(system.history_slot_dt(name, level, slot));
+      }
+      histories.push_back(std::move(row));
+    }
+  const auto covered_cells = [&]() {
+    const auto domain = system.prepared_amr_level_geometry(2).domain();
+    std::set<std::size_t> cells;
+    for (const auto& box : system.prepared_amr_block_state(0, 2).layout().boxes())
+      for (std::int64_t ordinal = 0; ordinal < box.numPts(); ++ordinal) {
+        std::int64_t remaining = ordinal;
+        std::size_t linear = 0, stride = 1;
+        for (int axis = 0; axis < Dim; ++axis) {
+          const auto coordinate = box.lo[axis] + remaining % box.length(axis);
+          remaining /= box.length(axis);
+          linear += static_cast<std::size_t>(coordinate - domain.lo[axis]) * stride;
+          stride *= static_cast<std::size_t>(domain.length(axis));
+        }
+        cells.insert(linear);
+      }
+    return cells;
+  };
+  const auto old_descendant_coverage = covered_cells();
+  ASSERT_FALSE(old_descendant_coverage.empty());
+
+  system.begin_restart_transaction();
+  ASSERT_NO_THROW(system.rebuild_hierarchy(old_boxes, owners));
+  ASSERT_NO_THROW(system.restore_checkpoint_counters(regrid_count, old_epoch));
+  ASSERT_NO_THROW(
+      system.materialize_program_restart_histories(accepted, names, {2, 2}, {1, 1}));
+  for (int level = 0; level < 3; ++level)
+    ASSERT_NO_THROW(system.set_block_level_state(kBlock, level, states.at(level)));
+  ASSERT_NO_THROW(system.restore_program_cadence_window(0.0, 0, 0.0, dt, old_time, old_step));
+  ASSERT_NO_THROW(system.set_clock(old_time, old_step));
+  for (const auto& row : histories) {
+    for (int slot = 0; slot < static_cast<int>(row.values.size()); ++slot)
+      ASSERT_NO_THROW(system.restore_history(row.name, row.level, slot, row.values.at(slot)));
+    ASSERT_NO_THROW(system.restore_history_provenance(row.name, row.level, row.dt,
+                                                      row.initialized, row.fill));
+    ASSERT_NO_THROW(system.restore_history_sample_identity(row.name, row.level, row.sample));
+  }
+  ASSERT_NO_THROW(system.restore_checkpoint_program_exchanges(exchanges));
+  ASSERT_NO_THROW(system.restore_checkpoint_accepted_state(accepted));
+  ASSERT_NO_THROW(system.preflight_regrid_on_restart());
+  ASSERT_NO_THROW(system.regrid_on_restart());
+  ASSERT_GT(system.checkpoint_topology_epoch(), old_epoch);
+  const auto new_boxes = system.patch_boxes();
+  const auto boxes_at_level = [](const std::vector<pops::AmrPatch<Dim>>& patches, int level) {
+    std::vector<pops::Box<Dim>> result;
+    for (const auto& patch : patches)
+      if (patch.level == level)
+        result.push_back(patch.box);
+    return result;
+  };
+  ASSERT_NE(boxes_at_level(new_boxes, 1), boxes_at_level(old_boxes, 1));
+  ASSERT_NE(boxes_at_level(new_boxes, 2), boxes_at_level(old_boxes, 2));
+  const auto new_descendant_coverage = covered_cells();
+  ASSERT_TRUE(std::includes(new_descendant_coverage.begin(), new_descendant_coverage.end(),
+                            old_descendant_coverage.begin(), old_descendant_coverage.end()));
+  for (const auto& row : histories) {
+    EXPECT_EQ(system.history_fill_count(row.name, row.level), row.fill);
+    EXPECT_EQ(system.history_sample_identity(row.name, row.level), row.sample);
+    if (row.level == 2)
+      for (int slot = 0; slot < static_cast<int>(row.values.size()); ++slot) {
+        const auto after = system.history_global(row.name, row.level, slot);
+        for (const std::size_t cell : old_descendant_coverage)
+          EXPECT_DOUBLE_EQ(after.at(cell), row.values.at(slot).at(cell));
+      }
+  }
+  ASSERT_NO_THROW(system.commit_restart_transaction());
+  system.finalize_restart_transaction();
 }
 
 TEST(test_amr_synthetic_program_loader_transaction,

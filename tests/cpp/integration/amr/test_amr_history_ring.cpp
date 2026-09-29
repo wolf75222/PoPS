@@ -191,6 +191,42 @@ TEST(test_amr_history_ring, FacadeTransactionRestoresAcceptedHistoryImage) {
   EXPECT_EQ(pops::reduce_max_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(3));
 }
 
+TEST(test_amr_history_ring, RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction) {
+  constexpr int Dim = pops::kNativeDimension;
+  Fixture<Dim> fixture;
+  fixture.register_history();
+  auto sample = fixture.context->scratch_state_like(fixture.context->state(0));
+  sample.set_val(pops::Real(7));
+  const auto epoch = fixture.system.checkpoint_topology_epoch();
+
+  fixture.system.begin_restart_transaction();
+  fixture.context->begin_step(0.125);
+  fixture.context->store_history("tracer.rate", sample, 0);
+  EXPECT_ANY_THROW(fixture.system.begin_restart_regrid_history_sequence());
+  fixture.system.rollback_restart_transaction();
+  EXPECT_EQ(fixture.system.checkpoint_topology_epoch(), epoch);
+  EXPECT_FALSE(fixture.system.history_initialized("tracer.rate", 0));
+
+  // An accepted sample is a valid source. Aborting its restart must release the frozen image;
+  // the next restart is a new authority even when its topology epoch is numerically identical.
+  fixture.context->begin_step(0.125);
+  fixture.context->store_history("tracer.rate", sample, 0);
+  fixture.context->rotate_histories("clock.macro");
+  fixture.system.begin_restart_transaction();
+  ASSERT_NO_THROW(fixture.system.begin_restart_regrid_history_sequence());
+  fixture.system.rollback_restart_transaction();
+  fixture.system.begin_restart_transaction();
+  EXPECT_NO_THROW(fixture.system.begin_restart_regrid_history_sequence());
+  fixture.system.commit_restart_transaction();
+  fixture.system.finalize_restart_transaction();
+
+  fixture.system.begin_restart_transaction();
+  EXPECT_NO_THROW(fixture.system.begin_restart_regrid_history_sequence());
+  fixture.system.rollback_restart_transaction();
+  EXPECT_EQ(fixture.system.checkpoint_topology_epoch(), epoch);
+  EXPECT_EQ(pops::reduce_min_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(7));
+}
+
 TEST(test_amr_history_ring, RegisteredHistoryRejectsTopologyPublicationBeforeMutation) {
   constexpr int Dim = pops::kNativeDimension;
   Fixture<Dim> fixture;
