@@ -3,12 +3,20 @@
 This directory tracks the integration into the production PoPS package. The
 provided specification is version 0.4.0; it is not the production package's
 version. The production additions use package 1.1.0, public API revision 2 and
-semantic IR revision 2. Release native ABI 3, generated System package protocol 5,
+semantic IR revision 2. Release native ABI 3, generated System package protocol 6,
 and component interface 1 are separate authorities. Joint primitive coordinates
-use artifact manifest schema 10. See the [native boundary decision](c26_c27_native_boundary_decision_v1.md).
+use artifact manifest schema 10. The [native boundary decision](c26_c27_native_boundary_decision_v1.md)
+records the original protocol 5 decision; the [prepared boundary extension](m07_prepared_boundary_route.md)
+records its protocol 6 successor.
 Exact artifact identities invalidate incompatible compiled plans.
 
-## Registry audit at 83b2b12
+The migration remains in progress. Start with the [current checkpoint](CHECKPOINT.md)
+for actual source/native identities, completed receptions, failures and next work.
+The [independent mission audit](mission_gap_audit_a458113.md) distinguishes the
+remaining implementation, numerical and backend obligations. Historical receipts
+below remain scoped to their own source and binary, even after fixes are integrated.
+
+## Historical registry audit at 83b2b12
 
 `contracts.csv` and `corpus.json` now distinguish the inspected source at
 `83b2b1239973f3e744f9e3975734a40a3abf65d6` from each historical receipt's exact
@@ -22,7 +30,7 @@ results and XML with SHA-256 digests. Original workspace locations are recorded;
 large native state archives remain there. The bounded audit did not rerun any
 numerical campaign. It records these completed receipts separately:
 
-* Current native `4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb`,
+* Native used by that audit `4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb`,
   1,079 verified source files, source digest
   `c1f5d8141ac858aa80efc7e24ca1c2960b2733b83084b97b7715fb08ffeacaf5`:
   initial critical run **50 passed / 21 setup errors** (Kokkos root absent).
@@ -144,6 +152,32 @@ compares all tracked package/SDK files with the checkout, requires a healthy doc
 and writes imports, hashes, commands, pytest XML and exit status. It does not
 promote skipped checks to successful runtime coverage.
 
+Build `--dim 1 --mpi` as well to receive true Dim1 examples; the repository
+script preserves the sibling extension while refreshing common Python files.
+Receive an explicit native group on two MPI ranks with per-rank XML, dimension
+selection and package/source authentication before and after execution:
+
+```sh
+env -u PYTHONPATH PYTHONNOUSERSITE=1 CONDA_PREFIX="$POPS_PREFIX" \
+  Kokkos_ROOT="$POPS_PREFIX" POPS_KOKKOS_ROOT="$POPS_PREFIX" \
+  CMAKE_PREFIX_PATH="$POPS_PREFIX" \
+  POPS_INCLUDE="$POPS_PREFIX/lib/python3.12/site-packages/pops/include" \
+  OMP_PROC_BIND=false "$POPS_PREFIX/bin/python" \
+  docs/development/api_040/run_installed_mpi_checks.py \
+  --dimension 2 --ranks 2 --threads 1 --timeout 900 \
+  --output /tmp/pops-api040-local-products-mpi2 \
+  --test tests/python/integration/runtime/test_local_residual_product_runtime.py \
+  --test tests/python/integration/runtime/test_local_product_operators_runtime.py \
+  --test tests/python/integration/runtime/test_local_product_readonly_runtime.py \
+  --test tests/python/integration/runtime/test_m11_w10_constrained_runtime.py \
+  --test tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py
+```
+
+For the owner-only periodic rejection, select `--dimension 1` and
+`test_m15_mpi_collective_rejection.py`. A PASS on each rank is one shared test,
+not two independent experiments. Freeze production and test sources until the
+runner has completed its final authentication.
+
 Full scientific examples use the same identity check before and after the run:
 
 ```sh
@@ -178,5 +212,5 @@ targeted builds and CTest labels. Keep its source frozen during compilation;
 a header edit during one earlier rebuild was detected by `doctor.headers_sync`
 and that installation was excluded from native acceptance.
 
-GPU execution, other spatial specializations, distributed failure tolerance and
-full scientific corpus qualification are not implied by a Dim=2 CPU/MPI build.
+GPU execution, untested spatial specializations, process-loss tolerance and
+full scientific corpus qualification are not implied by these CPU/MPI receipts.
