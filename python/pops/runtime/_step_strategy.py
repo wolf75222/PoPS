@@ -690,29 +690,34 @@ class ExternalTimeGridController(StepController[ExternalTimeGrid]):
         super().__init__(strategy, {strategy.grid_id: grid})
         self.grid = grid
 
-    @staticmethod
-    def _same_time(left: float, right: float) -> bool:
-        scale = max(1.0, abs(left), abs(right))
-        return abs(left - right) <= 4.0 * math.ulp(scale)
-
     def prepare_attempts(
         self, engine: Any, native: Any, *, t_end: float,
     ) -> _PreparedStepAttempts:
         now = float(native.time())
+        step = int(native.macro_step())
         index = bisect.bisect_left(self.grid, now)
-        if index == len(self.grid) or not self._same_time(self.grid[index], now):
-            if index and self._same_time(self.grid[index - 1], now):
-                index -= 1
-            else:
-                raise RuntimeError("ExternalTimeGrid current time is not a declared grid point")
+        # These are authored binary64 points, not approximate samples of another clock.
+        # A tolerance here can skip a distinct nearby point or cross the run frontier.
+        if index == len(self.grid) or self.grid[index] != now:
+            raise RuntimeError("ExternalTimeGrid current time is not a declared grid point")
         if index + 1 >= len(self.grid):
             raise RuntimeError("ExternalTimeGrid is exhausted")
         next_time = self.grid[index + 1]
-        if next_time > t_end and not self._same_time(next_time, t_end):
+        if next_time > t_end:
             raise RuntimeError("ExternalTimeGrid final time is not a declared grid point")
+        dt = next_time - now
+        if not math.isfinite(dt) or not dt > 0.0 or now + dt != next_time:
+            raise RuntimeError("ExternalTimeGrid has no representable native interval to its next point")
+
+        def advance() -> None:
+            native.step(dt)
+            if float(native.time()) != next_time or int(native.macro_step()) != step + 1:
+                raise RuntimeError("ExternalTimeGrid reached clock differs from its declared next point")
 
         def attempt() -> None:
-            _native_attempt(engine, native, lambda: native.step(next_time - now))
+            # Check inside the collective attempt, before temporal acceptance. The enclosing
+            # RuntimeInstance transaction restores every rank on a wrong native landing.
+            _native_attempt(engine, native, advance)
 
         return _PreparedStepAttempts(
             engine=engine,
