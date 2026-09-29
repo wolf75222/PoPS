@@ -1718,6 +1718,9 @@ class PreparedLinearPreconditioner {
 template <int Dim>
 class PreparedAffineLinearProblem {
  public:
+  [[nodiscard]] std::weak_ptr<void> solve_outcome_lifetime() const noexcept {
+    return solve_outcome_lifetime_;
+  }
   static_assert(std::is_nothrow_move_constructible_v<PreparedLinearPreconditioner<Dim>>);
   static_assert(std::is_nothrow_move_constructible_v<PreparedNullspacePolicy<Dim>>);
   static_assert(std::is_nothrow_move_constructible_v<OperatorSnapshotProbe>);
@@ -1808,6 +1811,7 @@ class PreparedAffineLinearProblem {
     detail::PreparedProblemConstructionFailure local_construction_failure =
         detail::PreparedProblemConstructionFailure::None;
     try {
+      solve_outcome_lifetime_ = std::make_shared<int>(0);
       // Replica validation is part of the prepared problem's persistent communication footprint.
       // Materialize it under the constructor's common failure gate; prepare() owns the exclusive
       // mutation reservation while reusing it and therefore never allocates or frees pinned storage.
@@ -2726,6 +2730,7 @@ class PreparedAffineLinearProblem {
   std::optional<OperatorEvaluationSnapshot> snapshot_{};
   std::optional<NullspaceCertificateIdentity> nullspace_certificate_identity_cache_{};
   mutable std::atomic<std::size_t> active_use_reservations_{0};
+  std::shared_ptr<void> solve_outcome_lifetime_;
 };
 
 namespace detail {

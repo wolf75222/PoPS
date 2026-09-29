@@ -1594,6 +1594,7 @@ class ProgramContext {
                                      KrylovWorkspace<Dim>& workspace, field_type& solution,
                                      const field_type& rhs,
                                      const KrylovControls<Dim>& controls) const {
+    system_->require_solve_outcome_creation_(3);
     const ExecutionLane& runtime_lane = prepared_execution_lane();
     const ExecutionLane& workspace_lane =
         ::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace);
@@ -1642,7 +1643,8 @@ class ProgramContext {
             runtime_lane))
       throw std::invalid_argument(
           "Program prepared linear solve workspace lane contract differs across MPI ranks");
-    return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
+    return system_->track_solve_outcome(
+        pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls));
   }
 
   OperatorEvaluationSnapshot operator_evaluation_snapshot(OperatorFingerprint authority,

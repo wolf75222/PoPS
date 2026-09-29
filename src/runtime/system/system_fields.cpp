@@ -700,6 +700,7 @@ SolveOutcome System<Dim>::run_field_publication_outcome_(
 
 template <int Dim>
 void System<Dim>::begin_field_publication_outcome_() {
+  require_solve_outcome_creation_(1);
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   const bool active = p_->active_field_ || p_->active_field_provider_candidate_ ||
                       p_->active_field_auxiliary_publication_ ||
@@ -725,7 +726,7 @@ SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
   }
   if (!report.solved_value_available()) {
     rollback_field_publication_transaction();
-    return SolveOutcome::collective_lane(std::move(report), lane);
+    return track_solve_outcome(SolveOutcome::collective_lane(std::move(report), lane));
   }
   try {
     stage_field_publication_candidate();
@@ -733,35 +734,40 @@ SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
     rollback_field_publication_transaction();
     throw;
   }
-  return SolveOutcome::collective_lane(
+  return track_solve_outcome(SolveOutcome::collective_lane(
       std::move(report), lane,
       SolveOutcome::PublicationHooks{
-          this,
+          solve_outcome_authority_.get(),
           [](void* context) noexcept {
-            static_cast<System<Dim>*>(context)->accept_field_publication_candidate();
+            static_cast<System<Dim>*>(static_cast<SolveOutcomeAttemptAuthority*>(context)->owner)
+                ->accept_field_publication_candidate();
           },
           nullptr,
           [](void* context) noexcept {
             try {
-              static_cast<System<Dim>*>(context)->rollback_field_publication_transaction();
+              static_cast<System<Dim>*>(static_cast<SolveOutcomeAttemptAuthority*>(context)->owner)
+                  ->rollback_field_publication_transaction();
             } catch (...) {
               std::terminate();
             }
           },
           {},
           [](void* context) {
-            static_cast<System<Dim>*>(context)->validate_field_publication_candidate();
-          }});
+            static_cast<System<Dim>*>(static_cast<SolveOutcomeAttemptAuthority*>(context)->owner)
+                ->validate_field_publication_candidate();
+          }}));
 }
 
 template <int Dim>
 void System<Dim>::prepare_default_field_publication_storage_() {
+  require_solve_outcome_creation_(1);
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   (void)prepare_default_field<Dim>(*p_, lane);
 }
 
 template <int Dim>
 void System<Dim>::prepare_named_field_publication_storage_(const std::string& field) {
+  require_solve_outcome_creation_(1);
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-publication", field}}, lane))
     throw std::invalid_argument("System named field request differs between MPI ranks");

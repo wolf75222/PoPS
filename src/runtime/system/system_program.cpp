@@ -1182,6 +1182,7 @@ void System<Dim>::block_source_into(int block, MultiFab<Dim>& state, MultiFab<Di
 template <int Dim>
 SolveOutcome System<Dim>::solve_block_source(int block, MultiFab<Dim>& state, Real dt,
                                              const NewtonOptions& options) {
+  require_solve_outcome_creation_(2);
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System implicit-source block index is out of range");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
@@ -1189,7 +1190,8 @@ SolveOutcome System<Dim>::solve_block_source(int block, MultiFab<Dim>& state, Re
     throw std::runtime_error("System block '" + selected.name +
                              "' lacks a prepared implicit-source Newton provider");
   validate_newton_options(options, "System::solve_block_source");
-  return selected.solve_implicit_source(state, dt, options, prepared_boundary_execution_lane());
+  return track_solve_outcome(
+      selected.solve_implicit_source(state, dt, options, prepared_boundary_execution_lane()));
 }
 
 template <int Dim>

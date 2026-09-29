@@ -30,40 +30,86 @@ template <int Dim>
 System<Dim>::System(const SystemConfig<Dim>& config) {
   validate_system_config(config);
   p_ = std::make_unique<Impl>(config);
+  solve_outcome_authority_ = std::make_shared<SolveOutcomeAttemptAuthority>();
+  solve_outcome_authority_->owner = this;
 }
 
 // User-provided: GCC rejects an out-of-line `= default` when the same special members are
 // also explicitly instantiated for kNativeDimension.
 template <int Dim>
-System<Dim>::~System() {}
+System<Dim>::~System() {
+  if (solve_outcome_authority_) {
+    solve_outcome_authority_->owner = nullptr;
+    ++solve_outcome_authority_->incarnation;
+  }
+}
 
 template <int Dim>
 System<Dim>::System(System&& other) noexcept
     : prepared_boundary_execution_lane_(std::move(other.prepared_boundary_execution_lane_)),
-      p_(std::move(other.p_)) {}
+      p_(std::move(other.p_)),
+      solve_outcome_authority_(std::move(other.solve_outcome_authority_)) {
+  if (solve_outcome_authority_)
+    solve_outcome_authority_->owner = this;
+}
 
 template <int Dim>
 System<Dim>& System<Dim>::operator=(System&& other) noexcept {
   if (this != &other) {
+    if (solve_outcome_authority_) {
+      solve_outcome_authority_->owner = nullptr;
+      ++solve_outcome_authority_->incarnation;
+    }
     // Destroy Impl first: installed field solvers and boundary transports may hold
     // ImmutableBorrow pins on the destination lane. Releasing the lane first terminates.
     p_ = std::move(other.p_);
     prepared_boundary_execution_lane_ = std::move(other.prepared_boundary_execution_lane_);
+    solve_outcome_authority_ = std::move(other.solve_outcome_authority_);
+    if (solve_outcome_authority_)
+      solve_outcome_authority_->owner = this;
   }
   return *this;
 }
 
 template <int Dim>
+SolveOutcome System<Dim>::track_solve_outcome(SolveOutcome outcome) const noexcept {
+  outcome.bind_native_attempt_(solve_outcome_authority_, prepared_boundary_execution_lane_);
+  return outcome;
+}
+
+template <int Dim>
+void System<Dim>::require_solve_outcome_creation_(long solve_kind) const {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  runtime::program::require_step_transaction_control(
+      lane, 20 + solve_kind, static_cast<long>(step_transaction_depth()),
+      !p_->external_step_transaction_committed_,
+      "System cannot start a solve result after the parent transaction was committed");
+}
+
+template <int Dim>
 void System<Dim>::step(double dt) {
   p_->program_.require_step_installed("System::step");
-  runtime::program::ProfileScope scope(p_->program_.profiler_, "step");
-  p_->program_.profiler_.count("steps");
   const auto communicator = prepared_boundary_execution_lane_
                                 ? prepared_boundary_execution_lane_->communicator()
                                 : world_communicator_view();
+  if (all_reduce_max(
+          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0 &&
+                  !p_->external_step_transaction_committed_
+              ? 0L
+              : 1L,
+          communicator) != 0)
+    throw std::runtime_error("System::step has a pending solve or committed parent transaction");
+  runtime::program::ProfileScope scope(p_->program_.profiler_, "step");
+  p_->program_.profiler_.count("steps");
   p_->execute_step_transaction(communicator, [&] {
     p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System", communicator);
+    if (solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
+      throw std::logic_error("System Program step left a native solve result unconsumed");
+  }, [&] {
+    ++solve_outcome_authority_->attempt;
+    rollback_field_publication_transaction();
   });
+  ++solve_outcome_authority_->attempt;
 }
 
 template <int Dim>
@@ -73,6 +119,10 @@ std::string System<Dim>::advance_program_region(double dt) {
       lane, 8, static_cast<long>(step_transaction_depth()),
       p_->external_step_transaction_ && !p_->external_step_transaction_committed_,
       "System::advance_program_region");
+  runtime::program::require_step_transaction_control(
+      lane, 9, static_cast<long>(step_transaction_depth()),
+      solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0,
+      "System::advance_program_region.solve_results");
   std::string port;
   try {
     runtime::program::collective_step_rejection_phase(
@@ -84,7 +134,17 @@ std::string System<Dim>::advance_program_region(double dt) {
         });
   } catch (...) {
     p_->program_.cancel_cadence_continuation();
+    ++solve_outcome_authority_->attempt;
+    rollback_field_publication_transaction();
     throw;
+  }
+  if (all_reduce_max(
+          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0 ? 0L : 1L,
+          lane) != 0) {
+    p_->program_.cancel_cadence_continuation();
+    ++solve_outcome_authority_->attempt;
+    rollback_field_publication_transaction();
+    throw std::logic_error("System Program region left a native solve result unconsumed");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("system-program-region-port"), port}}, lane))
@@ -105,7 +165,9 @@ template <int Dim>
 void System<Dim>::begin_step_transaction() {
   const auto& lane = prepared_boundary_execution_lane();
   runtime::program::require_step_transaction_control(
-      lane, 0, static_cast<long>(step_transaction_depth()), !p_->external_step_transaction_,
+      lane, 0, static_cast<long>(step_transaction_depth()),
+      !p_->external_step_transaction_ &&
+          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0,
       "System::begin_step_transaction");
   Kokkos::fence();
   std::unique_ptr<typename Impl::AcceptedSnapshot> candidate;
@@ -124,6 +186,7 @@ void System<Dim>::begin_step_transaction() {
   p_->external_step_transaction_committed_ = false;
   p_->program_.accepted_exchanges_.clear();
   p_->program_.begin_step_projection_report();
+  ++solve_outcome_authority_->attempt;
 }
 
 template <int Dim>
@@ -132,7 +195,8 @@ void System<Dim>::begin_nested_step_transaction() {
   runtime::program::require_step_transaction_control(
       lane, 1, static_cast<long>(step_transaction_depth()),
       p_->external_step_transaction_ && !p_->external_step_transaction_committed_ &&
-          !p_->external_restart_transaction_,
+          !p_->external_restart_transaction_ &&
+          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0,
       "System::begin_nested_step_transaction");
   Kokkos::fence();
   std::unique_ptr<typename Impl::AcceptedSnapshot> candidate;
@@ -150,6 +214,7 @@ void System<Dim>::begin_nested_step_transaction() {
   }
   p_->parent_step_transactions_.push_back(std::move(p_->external_step_transaction_));
   p_->external_step_transaction_ = std::move(candidate);
+  ++solve_outcome_authority_->attempt;
 }
 
 template <int Dim>
@@ -216,10 +281,12 @@ template <int Dim>
 void System<Dim>::commit_step_transaction() {
   runtime::program::require_step_transaction_control(
       prepared_boundary_execution_lane(), 2, static_cast<long>(step_transaction_depth()),
-      p_->external_step_transaction_ && !p_->external_step_transaction_committed_,
+      p_->external_step_transaction_ && !p_->external_step_transaction_committed_ &&
+          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0,
       "System::commit_step_transaction");
   Kokkos::fence();
   p_->external_step_transaction_committed_ = true;
+  ++solve_outcome_authority_->attempt;
 }
 
 template <int Dim>
@@ -247,7 +314,8 @@ template <int Dim>
 void System<Dim>::finalize_step_transaction() {
   runtime::program::require_step_transaction_control(
       prepared_boundary_execution_lane(), 3, static_cast<long>(step_transaction_depth()),
-      p_->external_step_transaction_ && p_->external_step_transaction_committed_,
+      p_->external_step_transaction_ && p_->external_step_transaction_committed_ &&
+          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0,
       "System::finalize_step_transaction");
   Kokkos::fence();
   p_->external_step_transaction_.reset();
@@ -257,13 +325,16 @@ void System<Dim>::finalize_step_transaction() {
   }
   p_->external_step_transaction_committed_ = false;
   p_->external_restart_transaction_ = false;
+  ++solve_outcome_authority_->attempt;
 }
 
 template <int Dim>
 void System<Dim>::rollback_step_transaction() {
   runtime::program::require_step_transaction_control(
       prepared_boundary_execution_lane(), 4, static_cast<long>(step_transaction_depth()),
-      static_cast<bool>(p_->external_step_transaction_), "System::rollback_step_transaction");
+      static_cast<bool>(p_->external_step_transaction_) &&
+          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0,
+      "System::rollback_step_transaction");
   Kokkos::fence();
   p_->program_.cancel_cadence_continuation();
   p_->external_step_transaction_->restore(*p_);
@@ -274,6 +345,7 @@ void System<Dim>::rollback_step_transaction() {
   }
   p_->external_step_transaction_committed_ = false;
   p_->external_restart_transaction_ = false;
+  ++solve_outcome_authority_->attempt;
 }
 
 template <int Dim>
@@ -295,12 +367,14 @@ void System<Dim>::commit_restart_transaction() {
 
 template <int Dim>
 void System<Dim>::finalize_restart_transaction() noexcept {
-  // Only a committed restart owns this no-throw publication finalizer.
+  // Commit refused every pending result and new solve creation is barred while committed. This
+  // finalizer runs after external effects publish, so it must remain total and non-throwing.
   if (!p_->external_restart_transaction_ || !p_->external_step_transaction_committed_)
     return;
   p_->external_step_transaction_.reset();
   p_->external_step_transaction_committed_ = false;
   p_->external_restart_transaction_ = false;
+  ++solve_outcome_authority_->attempt;
 }
 
 template <int Dim>
@@ -314,6 +388,11 @@ void System<Dim>::rollback_restart_transaction() {
 template <int Dim>
 double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
+  runtime::program::require_step_transaction_control(
+      lane, 10, static_cast<long>(step_transaction_depth()),
+      solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0 &&
+          !p_->external_step_transaction_committed_,
+      "System::step_cfl.solve_results");
   std::string request_contract;
   std::exception_ptr request_error;
   try {
@@ -542,12 +621,18 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     p_->execute_step_transaction(lane.communicator(), [&] {
       p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System",
                                          lane.communicator());
+      if (solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
+        throw std::logic_error("System Program CFL step left a native solve result unconsumed");
+    }, [&] {
+      ++solve_outcome_authority_->attempt;
+      rollback_field_publication_transaction();
     });
   } catch (...) {
     p_->active_program_step_courant_ = prior_courant;
     throw;
   }
   p_->active_program_step_courant_ = prior_courant;
+  ++solve_outcome_authority_->attempt;
   return selected;
 }
 
@@ -716,6 +801,8 @@ template System<kNativeDimension>::System(const SystemConfig<kNativeDimension>&)
 template System<kNativeDimension>::~System();
 template System<kNativeDimension>::System(System&&) noexcept;
 template System<kNativeDimension>& System<kNativeDimension>::operator=(System&&) noexcept;
+template SolveOutcome System<kNativeDimension>::track_solve_outcome(SolveOutcome) const noexcept;
+template void System<kNativeDimension>::require_solve_outcome_creation_(long) const;
 template void System<kNativeDimension>::step(double);
 template void System<kNativeDimension>::advance(double, int);
 template std::string System<kNativeDimension>::advance_program_region(double);

@@ -748,7 +748,8 @@ class _SystemIO(_System):
         self._s._commit_restart_transaction()
 
     def _finalize_checkpoint_restart(self) -> None:
-        # Native finalization is noexcept and only releases the already-committed snapshot.
+        # Native commit already refused open solves, and new solves cannot start before this
+        # non-throwing finalization releases the accepted snapshot.
         self._s._finalize_restart_transaction()
         del self._checkpoint_restart_python_snapshot
         self._last_continuation_transition_report = self._prepared_continuation_restart_receipt

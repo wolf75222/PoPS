@@ -854,8 +854,9 @@ struct System<Dim>::Impl {
       block.state_identity = installed->state_identity;
   }
 
-  template <class Function>
-  void execute_step_transaction(const CommunicatorView& communicator, Function&& function) {
+  template <class Function, class RejectSolveResults>
+  void execute_step_transaction(const CommunicatorView& communicator, Function&& function,
+                                RejectSolveResults&& reject_solve_results) {
     std::unique_ptr<AcceptedSnapshot> snapshot;
     runtime::program::collective_step_rejection_phase(
         communicator, {"pops.system-step-snapshot.v1", "pops.system-step-snapshot", false, false},
@@ -876,6 +877,11 @@ struct System<Dim>::Impl {
     } catch (...) {
       // Every rank takes this branch, including peers whose local work succeeded.
       program_.reject_resource_work();
+      runtime::program::collective_step_rejection_phase(
+          communicator,
+          {"pops.system-step-solve-revoke.v1", "pops.system-step-solve-revoke", false, false},
+          "System solve-result revocation failed collectively",
+          [&] { std::forward<RejectSolveResults>(reject_solve_results)(); });
       runtime::program::collective_step_rejection_phase(
           communicator, {"pops.system-step-restore.v1", "pops.system-step-restore", false, false},
           "System step rollback failed collectively", [&] { snapshot->restore(*this); });

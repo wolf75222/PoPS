@@ -7,14 +7,27 @@
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/execution_lane.hpp>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <stdexcept>
 #include <utility>
 
 namespace pops {
+
+template <int Dim> class System;
+
+/// Runtime-owned identity for the exact native attempt that produced a solve result.
+/// Outcomes retain this small control object, never the System or its buffers.
+struct SolveOutcomeAttemptAuthority {
+  void* owner = nullptr;
+  std::uint64_t incarnation = 1;
+  std::uint64_t attempt = 1;
+  std::atomic<std::size_t> pending{0};
+};
 
 /// Exact disposition selected by the consumer of one prepared solve.
 enum class SolveConsumption {
@@ -54,6 +67,11 @@ class [[nodiscard]] SolveOutcome final {
     /// Optional action-aware failure callback. When present it replaces @ref reject so diagnostics
     /// can distinguish RejectAttempt from FailRun without creating a second outcome type.
     FailureHook consume_failure = nullptr;
+    /// Prepared external workspaces use these weak owner identities before any raw lane/callback.
+    /// They do not extend the lifetime of caller-owned problem or workspace objects.
+    std::weak_ptr<void> workspace_lifetime{};
+    std::weak_ptr<void> problem_lifetime{};
+    bool require_external_lifetimes = false;
   };
 
   SolveOutcome(const SolveOutcome&) = delete;
@@ -65,6 +83,10 @@ class [[nodiscard]] SolveOutcome final {
         hooks_(other.hooks_),
         lane_(other.lane_),
         collective_(other.collective_),
+        attempt_authority_(std::move(other.attempt_authority_)),
+        attempt_lane_(std::move(other.attempt_lane_)),
+        attempt_incarnation_(other.attempt_incarnation_),
+        attempt_ordinal_(other.attempt_ordinal_),
         consumed_(std::exchange(other.consumed_, true)) {
     other.hooks_ = empty_hooks_();
     other.lane_ = nullptr;
@@ -111,11 +133,38 @@ class [[nodiscard]] SolveOutcome final {
     if (consumed_)
       throw std::logic_error("SolveOutcome has already been consumed");
 
+    if (attempt_authority_) {
+      const bool external_alive = !hooks_.require_external_lifetimes ||
+                                  (!hooks_.workspace_lifetime.expired() &&
+                                   !hooks_.problem_lifetime.expired());
+      const bool current = external_alive && attempt_authority_->owner != nullptr &&
+                           attempt_authority_->incarnation == attempt_incarnation_ &&
+                           attempt_authority_->attempt == attempt_ordinal_;
+      const long stale = current ? 0L : 1L;
+      const long stale_anywhere = attempt_lane_ ? all_reduce_max(stale, *attempt_lane_) : stale;
+      if (stale_anywhere != 0) {
+        // The owner can have been destroyed or replaced. No raw lane or publication callback may
+        // be used on such a rank. A live peer still releases its candidate before everyone fails.
+        consumed_ = true;
+        if (external_alive && hooks_.require_external_lifetimes && hooks_.release != nullptr)
+          hooks_.release(hooks_.context);
+        else if (current && hooks_.release != nullptr)
+          hooks_.release(hooks_.context);
+        hooks_ = empty_hooks_();
+        release_attempt_();
+        throw std::logic_error("SolveOutcome belongs to a revoked native solve attempt");
+      }
+    }
+
     if (!collective_report_disposition_agrees_()) {
       // An inconsistent distributed report cannot ever be consumed safely. Roll its candidate back
       // uniformly and close the transaction before surfacing the contract error; unlike a
       // caller-action mismatch, retrying this same outcome cannot repair its authored disposition.
       consumed_ = true;
+      struct AttemptRelease {
+        SolveOutcome* outcome;
+        ~AttemptRelease() { outcome->release_attempt_(); }
+      } attempt_release{this};
       struct Release {
         PublicationHooks* hooks;
         ~Release() {
@@ -149,6 +198,10 @@ class [[nodiscard]] SolveOutcome final {
     // Validation and collective agreement are complete. From here onward a callback may mutate the
     // published state, so retrying the same outcome is forbidden even if that callback throws.
     consumed_ = true;
+    struct AttemptRelease {
+      SolveOutcome* outcome;
+      ~AttemptRelease() { outcome->release_attempt_(); }
+    } attempt_release{this};
     struct Release {
       PublicationHooks* hooks;
       ~Release() {
@@ -173,6 +226,26 @@ class [[nodiscard]] SolveOutcome final {
   }
 
  private:
+  template <int Dim> friend class System;
+
+  void bind_native_attempt_(std::shared_ptr<SolveOutcomeAttemptAuthority> authority,
+                            std::shared_ptr<ExecutionLane> lane) noexcept {
+    attempt_incarnation_ = authority->incarnation;
+    attempt_ordinal_ = authority->attempt;
+    authority->pending.fetch_add(1, std::memory_order_acq_rel);
+    attempt_authority_ = std::move(authority);
+    attempt_lane_ = std::move(lane);
+  }
+
+  void release_attempt_() noexcept {
+    if (attempt_authority_) {
+      if (attempt_authority_->pending.fetch_sub(1, std::memory_order_acq_rel) == 0)
+        std::terminate();
+      attempt_authority_.reset();
+      attempt_lane_.reset();
+    }
+  }
+
   enum class Collective {
     kSerial,
     kWorld,
@@ -254,6 +327,10 @@ class [[nodiscard]] SolveOutcome final {
   PublicationHooks hooks_ = empty_hooks_();
   const ExecutionLane* lane_ = nullptr;
   Collective collective_ = Collective::kSerial;
+  std::shared_ptr<SolveOutcomeAttemptAuthority> attempt_authority_;
+  std::shared_ptr<ExecutionLane> attempt_lane_;
+  std::uint64_t attempt_incarnation_ = 0;
+  std::uint64_t attempt_ordinal_ = 0;
   bool consumed_ = false;
 };
 

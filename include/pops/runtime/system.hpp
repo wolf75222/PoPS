@@ -261,6 +261,7 @@ class System {
   System(System&&) noexcept;
   System& operator=(System&&) noexcept;
 
+
   /// Adds an equation block (one species).
   /// @param model    composition of bricks (transport/source/elliptic + parameters)
   /// @param limiter  reconstruction: "none" | "minmod" | "vanleer" | "weno5" | "mc" |
@@ -1520,6 +1521,9 @@ class System {
   void prepare_bound_physical_group_();
   friend class runtime::program::ProgramContext<Dim>;
   friend class PreparedSystemLayoutTransfer<Dim>;
+  POPS_EXPORT void require_solve_outcome_creation_(long solve_kind) const;
+  /// Internal result boundary shared by field, local-source and Program prepared-linear solves.
+  [[nodiscard]] POPS_EXPORT SolveOutcome track_solve_outcome(SolveOutcome outcome) const noexcept;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
   /// private to ProgramContext and is deliberately absent from Python bindings.
   POPS_EXPORT void record_program_balance_term(const std::string& route, const std::string& term,
@@ -1592,6 +1596,7 @@ class System {
   // destroyed before the owning communicator is released.
   std::shared_ptr<ExecutionLane> prepared_boundary_execution_lane_;
   std::unique_ptr<Impl> p_;
+  std::shared_ptr<SolveOutcomeAttemptAuthority> solve_outcome_authority_;
 };
 
 /// Persistent System-to-System transfer session with no per-step field allocation or Python staging.

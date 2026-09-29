@@ -43,6 +43,8 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -295,6 +297,68 @@ TEST(ProgramContextContract, SystemMoveTransfersPreparedExecutionLane) {
   assigned = std::move(moved);
   EXPECT_EQ(assigned.prepared_boundary_execution_lane().identity(), "pops.test.system-move");
   EXPECT_THROW(static_cast<void>(moved.prepared_boundary_execution_lane()), std::logic_error);
+}
+
+TEST(ProgramContextContract, PendingRealFieldSolveRefusesTransactionExitBeforeMutation) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.pending-field-transaction");
+  add_gas(sim);
+  sim.set_state("gas", ic(4));
+  const auto accepted = sim.get_state("gas");
+  sim.begin_step_transaction();
+  auto pending = sim.solve_fields();
+  ASSERT_TRUE(pending.report().solved_value_available()) << pending.report().reason;
+  const auto before_refusal = sim.get_state("gas");
+  EXPECT_THROW(sim.rollback_step_transaction(), std::runtime_error);
+  EXPECT_THROW(sim.commit_step_transaction(), std::runtime_error);
+  EXPECT_THROW(sim.begin_nested_step_transaction(), std::runtime_error);
+  EXPECT_EQ(sim.step_transaction_depth(), 1u);
+  EXPECT_EQ(sim.get_state("gas"), before_refusal);
+  EXPECT_NO_THROW((void)pending.consume(SolveConsumption::kAccept));
+  EXPECT_THROW((void)pending.consume(SolveConsumption::kAccept), std::logic_error);
+  EXPECT_NO_THROW(sim.rollback_step_transaction());
+  EXPECT_EQ(sim.get_state("gas"), accepted);
+  EXPECT_EQ(sim.step_transaction_depth(), 0u);
+}
+
+TEST(ProgramContextContract, RealFieldSolveOutcomeSurvivesMoveAndRevokesAfterOwnerDeath) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem source(native_config(4));
+  install_execution_lane(source, "pops.test.solve-outcome-move");
+  add_gas(source);
+  source.set_state("gas", ic(4));
+  auto moved_outcome = source.solve_fields();
+  ASSERT_TRUE(moved_outcome.report().solved_value_available()) << moved_outcome.report().reason;
+  NativeSystem destination(std::move(source));
+  EXPECT_NO_THROW((void)moved_outcome.consume(SolveConsumption::kAccept));
+  EXPECT_THROW((void)moved_outcome.consume(SolveConsumption::kAccept), std::logic_error);
+
+  std::optional<SolveOutcome> orphan;
+  {
+    auto owner = std::make_unique<NativeSystem>(native_config(4));
+    install_execution_lane(*owner, "pops.test.solve-outcome-owner-death");
+    add_gas(*owner);
+    owner->set_state("gas", ic(4));
+    orphan.emplace(owner->solve_fields());
+    ASSERT_TRUE(orphan->report().solved_value_available()) << orphan->report().reason;
+  }
+  EXPECT_THROW((void)orphan->consume(SolveConsumption::kAccept), std::logic_error);
+  EXPECT_THROW((void)orphan->consume(SolveConsumption::kAccept), std::logic_error);
+
+  NativeSystem replaced(native_config(4));
+  install_execution_lane(replaced, "pops.test.solve-outcome-replaced");
+  add_gas(replaced);
+  replaced.set_state("gas", ic(4));
+  auto stale = replaced.solve_fields();
+  ASSERT_TRUE(stale.report().solved_value_available()) << stale.report().reason;
+  NativeSystem replacement(native_config(4));
+  install_execution_lane(replacement, "pops.test.solve-outcome-replacement");
+  replaced = std::move(replacement);
+  EXPECT_THROW((void)stale.consume(SolveConsumption::kAccept), std::logic_error);
+  EXPECT_THROW((void)stale.consume(SolveConsumption::kAccept), std::logic_error);
 }
 
 TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
@@ -699,11 +763,15 @@ TEST(ProgramContextContract, PreparedLinearSolveAcceptsDistinctCongruentWorkspac
                    problem, legacy_workspace, solution, rhs,
                    KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4}),
                std::invalid_argument);
+  sim.begin_step_transaction();
   SolveOutcome outcome = context.solve_prepared_linear(
       problem, workspace, solution, rhs,
       KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4});
   ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
+  EXPECT_THROW(sim.rollback_step_transaction(), std::runtime_error);
+  EXPECT_EQ(sim.step_transaction_depth(), 1u);
   (void)outcome.consume(SolveConsumption::kAccept);
+  EXPECT_NO_THROW(sim.rollback_step_transaction());
   for (int component = 0; component < solution.ncomp(); ++component)
     EXPECT_DOUBLE_EQ(context.sum_component(solution, component),
                      context.sum_component(rhs, component));
@@ -2512,3 +2580,5 @@ TEST(ProgramContextContract,
   // Quiescence before a retry snapshot remains legal after numerical rejection.
   EXPECT_NO_THROW(state.drain_resource_work());
 }
+
+#include "solve_outcome_attempt_review.inc"

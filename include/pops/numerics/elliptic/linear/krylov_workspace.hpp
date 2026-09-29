@@ -101,6 +101,9 @@ struct KrylovControls {
 template <int Dim>
 class KrylovWorkspace {
  public:
+  [[nodiscard]] std::weak_ptr<void> solve_outcome_lifetime() const noexcept {
+    return solve_outcome_lifetime_;
+  }
   static int max_batched_basis_extent() {
     return max_krylov_batched_basis_extent(detail::PreparedFieldAlgebra::kRobustDotPayloadWidth);
   }
@@ -187,6 +190,15 @@ class KrylovWorkspace {
         vector_distribution_(std::move(vector_distribution)),
         metric_(std::move(metric)),
         lane_(ExecutionLane::duplicate_collectively(execution_communicator, lane_identity)) {
+    long lifetime_failure_local = 0;
+    try {
+      solve_outcome_lifetime_ = std::make_shared<int>(0);
+    } catch (...) {
+      lifetime_failure_local = 1;
+    }
+    if (all_reduce_max(lifetime_failure_local, lane_) != 0)
+      throw std::runtime_error(
+          "prepared Krylov workspace solve-result lifetime allocation failed collectively");
     long materialization_token_failure_local = 0;
     try {
       if (owner_supplied_materialization_token && materialization_token.empty())
@@ -965,6 +977,7 @@ class KrylovWorkspace {
   bool publication_active_ = false;
   ExactSolveReportConsensusScratch provider_report_consensus_{};
   std::atomic<ReservationState> reservation_state_{ReservationState::Idle};
+  std::shared_ptr<void> solve_outcome_lifetime_;
 };
 
 }  // namespace pops

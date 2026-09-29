@@ -2350,7 +2350,11 @@ inline SolveOutcome solve_prepared_affine_outcome(const PreparedAffineLinearProb
                                      [](void* context) {
                                        detail::KrylovWorkspaceAccess::validate_publication(
                                            *static_cast<KrylovWorkspace<Dim>*>(context));
-                                     }});
+                                     },
+                                     nullptr,
+                                     workspace.solve_outcome_lifetime(),
+                                     problem.solve_outcome_lifetime(),
+                                     true});
 }
 
 }  // namespace pops
