@@ -51,7 +51,8 @@ def worker(output: Path, ranks: int, dimension: int, tests: list[str]) -> int:
         sys.path.insert(0, str(ROOT))  # only repository helpers; never ROOT/python
         import pytest
         code = int(pytest.main(["-v", "--tb=short", "-o", "pythonpath=",
-                               f"--junitxml={output / f'rank{world.rank}.xml'}", *tests]))
+                               f"--junitxml={output / f'rank{world.rank}.xml'}",
+                               f"--basetemp={output / f'rank{world.rank}-tmp'}", *tests]))
         sys.stdout.flush()
         sys.stderr.flush()
     return max(allgather_value(world, code))
@@ -145,6 +146,7 @@ def main() -> int:
     passed = (code == 0 and before_code == after_code == 0 and unchanged
               and same_installation and rank_parity and clean)
     receipt = {"schema_version": 2, "status": "passed" if passed else "failed",
+               "pytest_base_temps": [f"rank{rank}-tmp" for rank in range(args.ranks)],
                "command": command, "returncode": code, "timeout": timed_out,
                "seconds": elapsed, "ranks": args.ranks, "threads": args.threads,
                "dimension": args.dimension,

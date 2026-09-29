@@ -129,7 +129,8 @@ def main() -> int:
         "import pytest; raise SystemExit(pytest.main(sys.argv[1:]))"
     )
     command = [sys.executable, "-c", bootstrap, "-v", "--tb=short", "-o", "pythonpath=",
-               f"--junitxml={output / 'pytest.xml'}", *(args.tests or TESTS)]
+               f"--junitxml={output / 'pytest.xml'}",
+               f"--basetemp={output / 'pytest-tmp'}", *(args.tests or TESTS)]
     start = time.monotonic()
     with (output / "pytest.log").open("w") as log:
         result = subprocess.run(command, cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT)
@@ -139,6 +140,7 @@ def main() -> int:
         counts = {key: sum(int(suite.attrib.get(key, 0)) for suite in suites.iter("testsuite"))
                   for key in ("tests", "failures", "errors", "skipped")}
     receipt = {"schema_version": 1, "command": command, "returncode": result.returncode,
+               "pytest_base_temp": "pytest-tmp",
                "duration_seconds": time.monotonic() - start, "counts": counts,
                "status": "passed" if result.returncode == 0 and counts.get("skipped") == 0 else "failed",
                "identity_sha256": digest(output / "identity.json"), "log_sha256": digest(output / "pytest.log")}
