@@ -41,3 +41,27 @@ def test_native_asymmetric_face_matches_independent_oracle_and_preserves_transve
     np.testing.assert_allclose(actual,
         np.broadcast_to(actual[:, :1, :], actual.shape), rtol=0., atol=4.e-13)
     assert np.max(np.abs(actual-initial)) > 1.e-5
+
+
+def test_one_coordinated_artifact_two_bind_time_dissipations_match_separate_oracles(
+        isolated_native_cache, native_cxx, kokkos_root):
+    del isolated_native_cache, native_cxx, kokkos_root
+    cells, beta, gamma, dt = 8, .7, -.4, .05/8
+    case, layout, _, parameter = _case(dimension=2, runtime_margin=True)
+    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    line = initial_cell_means(cells)
+    initial = np.broadcast_to(line[:, None, :], (3, cells, cells)).copy()
+    results = []
+    for margin in (.5, 1.5):
+        runtime = pops.bind(artifact, initial_state={"transport": initial.copy()},
+                            params={parameter: margin},
+                            resources={"execution_context": artifact_execution_context(artifact)})
+        report = pops.run(runtime, t_end=dt, max_steps=1)
+        assert report.accepted_steps == 1
+        actual = np.asarray(runtime.state_global("transport")).reshape(initial.shape)
+        expected_line = forward_euler(cells, beta=beta, gamma=gamma, steps=1,
+                                      margin=margin)
+        expected = np.broadcast_to(expected_line[:, None, :], actual.shape)
+        np.testing.assert_allclose(actual, expected, rtol=0., atol=4.e-13)
+        results.append(actual)
+    assert np.max(np.abs(results[0]-results[1])) > 1.e-6

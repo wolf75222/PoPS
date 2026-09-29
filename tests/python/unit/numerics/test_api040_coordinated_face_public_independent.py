@@ -21,7 +21,8 @@ from pops.time import FixedDt
 from tests.python.support.api040_coordinated_face_oracle_independent import face as oracle_face
 
 
-def _case(order=("c", "p", "r"), *, beta=.7, gamma=-.4, dimension=1):
+def _case(order=("c", "p", "r"), *, beta=.7, gamma=-.4, dimension=1,
+          runtime_margin=False):
     assert set(order) == {"c", "p", "r"} and len(order) == 3
     assert dimension in (1, 2)
     frame = CartesianDomain("three_state", (0.,)*dimension,
@@ -30,6 +31,12 @@ def _case(order=("c", "p", "r"), *, beta=.7, gamma=-.4, dimension=1):
     axis = frame.axes[0]
     model = pops.Model("asymmetric_product", frame=frame)
     state = model.state("U", components=order)
+    if runtime_margin:
+        from pops.params import RuntimeParam
+        parameter = model.param(RuntimeParam("face_margin", default=.5))
+        margin = model.value(parameter)
+    else:
+        parameter, margin = None, 0.
     c, p, r = (state[name] for name in ("c", "p", "r"))
     physical_flux = tuple({"c": c, "p": p/2, "r": -r}[name] for name in order)
     flux = model.flux("transport", state=state, frame=frame,
@@ -52,7 +59,7 @@ def _case(order=("c", "p", "r"), *, beta=.7, gamma=-.4, dimension=1):
         rc, rp, rr = (right[index[name]] for name in ("c", "p", "r"))
         integral = {"c": 0., "p": beta*(lr+rr)*(rc-lc)/2,
                     "r": gamma*(lc+rc)*(rp-lp)/2}
-        speed = 1 + maximum(abs(beta)*maximum(abs(lr), abs(rr)),
+        speed = 1 + margin + maximum(abs(beta)*maximum(abs(lr), abs(rr)),
                             abs(gamma)*maximum(abs(lc), abs(rc)))
         fl = {"c": lc, "p": lp/2, "r": -lr}
         fr = {"c": rc, "p": rp/2, "r": -rr}
@@ -71,8 +78,9 @@ def _case(order=("c", "p", "r"), *, beta=.7, gamma=-.4, dimension=1):
     program = ForwardEuler(block[state], rate=rate)
     program.step_strategy(FixedDt(.05/8))
     case.program(program)
-    return case, Uniform(CartesianGrid(frame=frame, cells=(8,)*dimension,
-                                      periodic=PeriodicAxes(frame.axes))), face
+    result = (case, Uniform(CartesianGrid(frame=frame, cells=(8,)*dimension,
+                                          periodic=PeriodicAxes(frame.axes))), face)
+    return (*result, block[parameter]) if runtime_margin else result
 
 
 def test_public_three_state_permutation_resolves_and_emits_distinct_face_policy():
@@ -138,3 +146,14 @@ def test_authored_face_expr_matches_separate_three_state_oracle(order):
     expected = oracle_face(left, right, beta=.7, gamma=-.4, order=order)
     for observed, reference in zip(actual, expected, strict=True):
         np.testing.assert_allclose(observed, reference, rtol=0., atol=2.e-15)
+
+
+def test_public_face_runtime_margin_survives_exact_owner_resolution():
+    case, layout, _, parameter = _case(dimension=2, runtime_margin=True)
+    assert parameter is not None
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    brick = graph.model_for_block("transport")._m.emit_cpp_brick()
+    assert "RuntimeParams params" in brick
+    assert "params.get(" in brick
+    assert "coordinated_face_contract_version = 1" in brick

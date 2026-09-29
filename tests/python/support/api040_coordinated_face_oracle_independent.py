@@ -44,9 +44,12 @@ def path_integral(left: np.ndarray, right: np.ndarray, beta: float, gamma: float
 
 
 def face(left: np.ndarray, right: np.ndarray, *, beta: float, gamma: float,
-         order: tuple[str, str, str] = COMPONENTS) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+         order: tuple[str, str, str] = COMPONENTS,
+         margin: float = 0.) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
     if len(order) != 3 or set(order) != set(COMPONENTS):
         raise ValueError("face storage order must permute c,p,r")
+    if not np.isfinite(margin) or margin < 0.:
+        raise ValueError("finite nonnegative numerical margin required")
     canonical = [order.index(name) for name in COMPONENTS]
     left_c = np.asarray(left)[canonical]
     right_c = np.asarray(right)[canonical]
@@ -54,7 +57,7 @@ def face(left: np.ndarray, right: np.ndarray, *, beta: float, gamma: float,
     # ||DF||_inf + max_path ||B||_inf bounds the composed DF+B, and leaves
     # dissipation for the intentionally unequal side split (not a full theorem
     # of FE stability for arbitrary states).
-    speed = 1.0 + max(abs(beta)*max(abs(left_c[2]), abs(right_c[2])),
+    speed = 1.0 + margin + max(abs(beta)*max(abs(left_c[2]), abs(right_c[2])),
                       abs(gamma)*max(abs(left_c[0]), abs(right_c[0])))
     common = 0.5*(physical_flux(left_c)+physical_flux(right_c)) - 0.5*speed*(right_c-left_c)
     left_source = -SPLIT_LEFT*integral
@@ -64,11 +67,12 @@ def face(left: np.ndarray, right: np.ndarray, *, beta: float, gamma: float,
 
 
 def rhs(state: np.ndarray, *, beta: float, gamma: float,
-        order: tuple[str, str, str] = COMPONENTS) -> np.ndarray:
+        order: tuple[str, str, str] = COMPONENTS, margin: float = 0.) -> np.ndarray:
     if np.shape(state)[0] != 3 or not np.isfinite(state).all():
         raise ValueError("finite three-component periodic state required")
     cells = state.shape[1]
-    interfaces = [face(state[:, i], state[:, (i+1) % cells], beta=beta, gamma=gamma, order=order)
+    interfaces = [face(state[:, i], state[:, (i+1) % cells], beta=beta, gamma=gamma,
+                       order=order, margin=margin)
                   for i in range(cells)]
     common = np.stack([entry[0] for entry in interfaces], axis=1)
     left = np.stack([entry[1] for entry in interfaces], axis=1)
@@ -78,12 +82,13 @@ def rhs(state: np.ndarray, *, beta: float, gamma: float,
 
 
 def forward_euler(cells: int, *, beta: float, gamma: float,
-                  order: tuple[str, str, str] = COMPONENTS, steps: int = 8) -> np.ndarray:
+                  order: tuple[str, str, str] = COMPONENTS, steps: int = 8,
+                  margin: float = 0.) -> np.ndarray:
     canonical = initial_cell_means(cells)
     state = canonical[[COMPONENTS.index(name) for name in order]].copy()
     dt = 0.05/cells
     for _ in range(steps):
-        state += dt*rhs(state, beta=beta, gamma=gamma, order=order)
+        state += dt*rhs(state, beta=beta, gamma=gamma, order=order, margin=margin)
         if not np.isfinite(state).all():
             raise ValueError("nonfinite FE state")
     return state
