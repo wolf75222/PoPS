@@ -2,11 +2,11 @@
 /// @brief Closed-form device inverse of a small dense block, with a PINNED operation order.
 ///
 /// ``pops::detail::block_inverse<N>`` inverts a 2x2 or 3x3 ``Real[N][N]`` block by the
-/// analytic adjugate/determinant formula, with EVERY floating-point operation written out in a
-/// fixed order so the result does not depend on the compiler's freedom to reassociate. N>3 (and any
-/// runtime request for a larger block) falls through to the generic Gauss-Jordan
-/// ``pops::detail::mat_inverse<N>`` (dense_eig.hpp) -- so the intrinsic is a bit-stable FAST PATH for
-/// the small blocks, never a new capability.
+/// analytic adjugate/determinant formula in its safe exponent range, with each floating-point
+/// operation written in a pinned order. All sizes first equilibrate rows and use partial-pivot
+/// Gauss-Jordan to decide numerical admissibility. Outside the closed-form range, that balanced
+/// inverse supplies the result. The relative pivot threshold is max(tol, N*epsilon), never a
+/// determinant threshold carrying physical units. See docs/development/api_040/block_inverse_scaling_v1.md.
 ///
 /// WHY A SEPARATE, PINNED-ORDER INTRINSIC. The condensed-implicit codegen (ADC-637) assembles the
 /// tensor elliptic coefficient ``A = I + c*rho*M^{-1}`` from a per-cell block ``M = I - theta*dt*J``
@@ -20,9 +20,9 @@
 /// bit-identity holds independently of ``-O`` level (fast-math stays forbidden on the elliptic TUs).
 ///
 /// DEVICE / ALLOCATION CONTRACT (mirrors mat_inverse): POPS_HD, stack-only fixed buffers, bounded
-/// loops, no allocation, no std:: call on the closed-form paths -- capturable by value in a
-/// Kokkos/CUDA/HIP kernel. Returns false (``inv`` untouched-meaningful) when the determinant/pivot is
-/// below @p tol (singular); the closed-form paths never throw.
+/// loops, no allocation -- capturable by value in a Kokkos/CUDA/HIP kernel. Returns false with
+/// the destination untouched for invalid input, relative pivot refusal or a nonrepresentable
+/// result. These device functions never throw. Host execution does not qualify a GPU backend.
 ///
 /// APPLYING THE INVERSE TO A VECTOR (``block_apply_inverse<N>``). Assembling the tensor COEFFICIENT
 /// ``A = I + c*rho*M^{-1}`` reads the four entries of ``M^{-1}`` directly, so ``block_inverse<2>`` (each
@@ -45,18 +45,142 @@
 namespace pops {
 namespace detail {
 
+// Version 1 numerical admission: scale each nonzero finite row to unit max norm,
+// then use partial pivoting with a relative floor N*epsilon. Both the closed-form
+// and scaled output paths share this decision, independently of row units.
+template <int N>
+POPS_HD inline bool block_equilibrated_inverse(const Real (&A)[N][N],
+                                               Real (&inverse)[N][N], Real (&scales)[N],
+                                               Real tolerance) {
+  if (!std::isfinite(tolerance) || tolerance < Real(0))
+    return false;
+  Real normalized[N][N];
+  for (int row = 0; row < N; ++row) {
+    scales[row] = Real(0);
+    for (int column = 0; column < N; ++column) {
+      if (!std::isfinite(A[row][column]))
+        return false;
+      const Real magnitude = std::fabs(A[row][column]);
+      if (magnitude > scales[row])
+        scales[row] = magnitude;
+    }
+    if (scales[row] == Real(0))
+      return false;
+    for (int column = 0; column < N; ++column)
+      normalized[row][column] = A[row][column] / scales[row];
+  }
+  const Real floor = Real(N) * std::numeric_limits<Real>::epsilon();
+  if (!mat_inverse<N>(normalized, inverse, tolerance > floor ? tolerance : floor))
+    return false;
+  for (int row = 0; row < N; ++row)
+    for (int column = 0; column < N; ++column)
+      if (!std::isfinite(inverse[row][column]))
+        return false;
+  return true;
+}
+
+template <int N>
+POPS_HD inline bool block_closed_form_range(const Real (&scales)[N]) {
+  // N=2/3 adjugate, determinant and factored-vector expressions have degree at
+  // most four. Fourth-root normal bounds, with room for their sums, keep their
+  // intermediate products away from representational overflow/underflow.
+  const Real upper = std::sqrt(std::sqrt(std::numeric_limits<Real>::max())) / Real(N + 1);
+  const Real lower = std::sqrt(std::sqrt(std::numeric_limits<Real>::min())) * Real(N + 1);
+  for (int row = 0; row < N; ++row)
+    if (!std::isfinite(scales[row]) || scales[row] < lower || scales[row] > upper)
+      return false;
+  return true;
+}
+
+template <int N>
+POPS_HD inline bool block_publish_scaled_inverse(const Real (&normalized_inverse)[N][N],
+                                                  const Real (&scales)[N], Real (&out)[N][N]) {
+  Real candidate[N][N];
+  for (int row = 0; row < N; ++row)
+    for (int column = 0; column < N; ++column) {
+      candidate[row][column] = normalized_inverse[row][column] / scales[column];
+      if (!std::isfinite(candidate[row][column]))
+        return false;
+    }
+  for (int row = 0; row < N; ++row)
+    for (int column = 0; column < N; ++column)
+      out[row][column] = candidate[row][column];
+  return true;
+}
+
+// Apply R^-1 D^-1 v without materializing A^-1. A representable solution can
+// exist when the inverse itself is not representable. Each row is accumulated
+// by decreasing binary exponent, renormalizing after cancellation. In
+// particular a small independent component is not lost by one global RHS scale.
+template <int N>
+POPS_HD inline bool block_publish_scaled_apply(const Real (&inverse)[N][N],
+                                                const Real (&scales)[N], const Real (&v)[N],
+                                                Real (&out)[N]) {
+  for (int column = 0; column < N; ++column)
+    if (!std::isfinite(v[column]))
+      return false;
+  Real candidate[N];
+  for (int row = 0; row < N; ++row) {
+    Real fractions[N]{};
+    int exponents[N]{};
+    for (int column = 0; column < N; ++column) {
+      if (inverse[row][column] == Real(0) || v[column] == Real(0))
+        continue;
+      int ei = 0, ev = 0, es = 0, adjustment = 0;
+      const Real fi = std::frexp(inverse[row][column], &ei);
+      const Real fv = std::frexp(v[column], &ev);
+      const Real fs = std::frexp(scales[column], &es);
+      fractions[column] = std::frexp((fi * fv) / fs, &adjustment);
+      exponents[column] = ei + ev - es + adjustment;
+    }
+    for (int first = 0; first < N; ++first)
+      for (int second = first + 1; second < N; ++second)
+        if (exponents[second] > exponents[first]) {
+          const int exponent = exponents[first];
+          exponents[first] = exponents[second];
+          exponents[second] = exponent;
+          const Real fraction = fractions[first];
+          fractions[first] = fractions[second];
+          fractions[second] = fraction;
+        }
+    Real sum = Real(0);
+    int sum_exponent = 0;
+    for (int column = 0; column < N; ++column) {
+      if (fractions[column] == Real(0))
+        continue;
+      if (sum == Real(0)) {
+        sum = fractions[column];
+        sum_exponent = exponents[column];
+      } else {
+        const int common = sum_exponent > exponents[column] ? sum_exponent : exponents[column];
+        const Real combined = std::ldexp(sum, sum_exponent - common) +
+                              std::ldexp(fractions[column], exponents[column] - common);
+        int adjustment = 0;
+        sum = std::frexp(combined, &adjustment);
+        sum_exponent = common + adjustment;
+      }
+    }
+    candidate[row] = std::ldexp(sum, sum_exponent);
+    if (!std::isfinite(candidate[row]))
+      return false;
+  }
+  for (int row = 0; row < N; ++row)
+    out[row] = candidate[row];
+  return true;
+}
+
 /// Closed-form inverse of a small dense block into @p inv, with a pinned operation order.
 ///
-/// N == 2, 3: analytic adjugate / determinant (each entry a DIRECT division by @p det, so the
-/// rotation-block case reduces bit-for-bit to LorentzEliminator -- see the file header). N > 3:
-/// delegates to ``mat_inverse<N>`` (Gauss-Jordan, partial pivot). Returns false without touching
-/// @p inv when the block is singular (|det| < @p tol on the closed-form paths, the pivot test in the
-/// fallback); the closed-form paths are branch-free otherwise (no throw on device).
+/// N == 2, 3: retain the pinned direct divisions when row scales are in the closed-form range.
+/// All sizes use the same row-equilibrated partial-pivot admission, with relative threshold
+/// max(tol, N*epsilon). @p tol must be finite and nonnegative. Return false without touching
+/// @p inv on refusal, invalid input, or an inverse outside Real's representable range.
 template <int N>
 POPS_HD inline bool block_inverse(const Real (&A)[N][N], Real (&inv)[N][N],
                                   Real tol = Real(1e-300)) {
-  return mat_inverse<N>(A, inv,
-                        tol);  // N != 2, 3: the generic dense solve (specializations below).
+  Real normalized_inverse[N][N], scales[N];
+  return block_equilibrated_inverse(A, normalized_inverse, scales, tol) &&
+         block_publish_scaled_inverse(normalized_inverse, scales, inv);
 }
 
 /// 2x2 closed form. A = [[a, b], [c, d]], det = a*d - b*c, A^{-1} = (1/det) [[d, -b], [-c, a]].
@@ -72,18 +196,27 @@ POPS_HD inline bool block_inverse(const Real (&A)[N][N], Real (&inv)[N][N],
 /// -- and compiles to the same two roundings as the eliminator when contraction is off.
 template <>
 POPS_HD inline bool block_inverse<2>(const Real (&A)[2][2], Real (&inv)[2][2], Real tol) {
+  Real normalized_inverse[2][2], scales[2];
+  if (!block_equilibrated_inverse(A, normalized_inverse, scales, tol))
+    return false;
+  if (!block_closed_form_range(scales))
+    return block_publish_scaled_inverse(normalized_inverse, scales, inv);
   const Real a = A[0][0];
   const Real b = A[0][1];
   const Real c = A[1][0];
   const Real d = A[1][1];
   const Real t = a * d;  // hoisted: exact for the rotation block (1*1), own rounding otherwise
   const Real det = t - b * c;  // = 1 - (-w)*w == 1 + w*w (fma pairs on b*c, matching 1 + w*w)
-  if (det < tol && det > -tol)
-    return false;
-  inv[0][0] = d / det;
-  inv[0][1] = -b / det;
-  inv[1][0] = -c / det;
-  inv[1][1] = a / det;
+  if (!std::isfinite(det) || det == Real(0))
+    return block_publish_scaled_inverse(normalized_inverse, scales, inv);
+  const Real candidate[2][2] = {{d / det, -b / det}, {-c / det, a / det}};
+  for (int row = 0; row < 2; ++row)
+    for (int column = 0; column < 2; ++column)
+      if (!std::isfinite(candidate[row][column]))
+        return block_publish_scaled_inverse(normalized_inverse, scales, inv);
+  for (int row = 0; row < 2; ++row)
+    for (int column = 0; column < 2; ++column)
+      inv[row][column] = candidate[row][column];
   return true;
 }
 
@@ -93,6 +226,11 @@ POPS_HD inline bool block_inverse<2>(const Real (&A)[2][2], Real (&inv)[2][2], R
 /// 2x2 sub-block matches the 2x2 case above and the z row/col reduces to the identity.
 template <>
 POPS_HD inline bool block_inverse<3>(const Real (&A)[3][3], Real (&inv)[3][3], Real tol) {
+  Real normalized_inverse[3][3], scales[3];
+  if (!block_equilibrated_inverse(A, normalized_inverse, scales, tol))
+    return false;
+  if (!block_closed_form_range(scales))
+    return block_publish_scaled_inverse(normalized_inverse, scales, inv);
   const Real a00 = A[0][0], a01 = A[0][1], a02 = A[0][2];
   const Real a10 = A[1][0], a11 = A[1][1], a12 = A[1][2];
   const Real a20 = A[2][0], a21 = A[2][1], a22 = A[2][2];
@@ -107,40 +245,34 @@ POPS_HD inline bool block_inverse<3>(const Real (&A)[3][3], Real (&inv)[3][3], R
   const Real c21 = a02 * a10 - a00 * a12;
   const Real c22 = a00 * a11 - a01 * a10;
   const Real det = a00 * c00 + a01 * c01 + a02 * c02;
-  if (det < tol && det > -tol)
-    return false;
+  if (!std::isfinite(det) || det == Real(0))
+    return block_publish_scaled_inverse(normalized_inverse, scales, inv);
   // inv = adj / det = cofactor^T / det.
-  inv[0][0] = c00 / det;
-  inv[0][1] = c10 / det;
-  inv[0][2] = c20 / det;
-  inv[1][0] = c01 / det;
-  inv[1][1] = c11 / det;
-  inv[1][2] = c21 / det;
-  inv[2][0] = c02 / det;
-  inv[2][1] = c12 / det;
-  inv[2][2] = c22 / det;
+  const Real candidate[3][3] = {{c00 / det, c10 / det, c20 / det},
+                               {c01 / det, c11 / det, c21 / det},
+                               {c02 / det, c12 / det, c22 / det}};
+  for (int row = 0; row < 3; ++row)
+    for (int column = 0; column < 3; ++column)
+      if (!std::isfinite(candidate[row][column]))
+        return block_publish_scaled_inverse(normalized_inverse, scales, inv);
+  for (int row = 0; row < 3; ++row)
+    for (int column = 0; column < 3; ++column)
+      inv[row][column] = candidate[row][column];
   return true;
 }
 
 /// Apply ``M^{-1}`` to the vector @p v into @p out, in the FACTORED order ``out = (1/det) * (adj . v)``
-/// (one reciprocal outside the bracket). N == 2, 3: closed-form adjugate. N > 3: delegates to
-/// ``block_inverse<N>`` (the dense inverse) and multiplies out -- no factored guarantee there, but the
-/// small blocks the condensed solve uses are always N in {2, 3}. Returns false without touching @p out
-/// when the block is singular. See the file header: for the Lorentz block this is ``apply_Binv``
-/// bit-for-bit (``inv*(vx + w*vy)``), the parity the RHS-flux / reconstruct kernels rest on.
+/// (one reciprocal outside the bracket) within the N=2/3 closed-form range. Otherwise apply the
+/// balanced inverse using binary-scaled products and sums, without materializing M^-1. A finite
+/// solution can therefore succeed even when M^-1 is not representable. The same relative pivot
+/// admission governs both paths. Return false without touching @p out for invalid input, refusal
+/// or a nonrepresentable solution. The ordinary rotation-block operation tree remains pinned.
 template <int N>
 POPS_HD inline bool block_apply_inverse(const Real (&M)[N][N], const Real (&v)[N], Real (&out)[N],
                                         Real tol = Real(1e-300)) {
-  Real inv[N][N];
-  if (!block_inverse<N>(M, inv, tol))
-    return false;
-  for (int r = 0; r < N; ++r) {
-    Real acc = Real(0);
-    for (int c = 0; c < N; ++c)
-      acc += inv[r][c] * v[c];
-    out[r] = acc;
-  }
-  return true;
+  Real normalized_inverse[N][N], scales[N];
+  return block_equilibrated_inverse(M, normalized_inverse, scales, tol) &&
+         block_publish_scaled_apply(normalized_inverse, scales, v, out);
 }
 
 /// 2x2 factored apply. adj = [[d, -b], [-c, a]], inv = 1/det, out = inv*(adj . v). For the rotation
@@ -160,20 +292,34 @@ POPS_HD inline bool block_apply_inverse(const Real (&M)[N][N], const Real (&v)[N
 template <>
 POPS_HD inline bool block_apply_inverse<2>(const Real (&M)[2][2], const Real (&v)[2],
                                            Real (&out)[2], Real tol) {
+  Real normalized_inverse[2][2], scales[2];
+  if (!block_equilibrated_inverse(M, normalized_inverse, scales, tol))
+    return false;
+  Real vector_scales[2];
+  for (int row = 0; row < 2; ++row)
+    vector_scales[row] = v[row] == Real(0) ? Real(1) : std::fabs(v[row]);
+  if (!block_closed_form_range(scales) || !block_closed_form_range(vector_scales))
+    return block_publish_scaled_apply(normalized_inverse, scales, v, out);
   const Real a = M[0][0];
   const Real b = M[0][1];
   const Real c = M[1][0];
   const Real d = M[1][1];
   const Real t = a * d;        // hoisted det shape, same as block_inverse<2> (fma pairs on b*c)
   const Real det = t - b * c;  // = 1 + w*w for the Lorentz rotation block
-  if (det < tol && det > -tol)
-    return false;
+  if (!std::isfinite(det) || det == Real(0))
+    return block_publish_scaled_apply(normalized_inverse, scales, v, out);
   const Real inv = Real(1) / det;
   const Real t0 =
       d * v[0];  // hoisted: exact for the rotation block (d = 1), own rounding otherwise
   const Real t1 = a * v[1];
-  out[0] = inv * (t0 + (-b) * v[1]);  // inv*(vx + w*vy) for the rotation block (fma pairs on -b*v1)
-  out[1] = inv * ((-c) * v[0] + t1);  // inv*(vy - w*vx)                       (fma pairs on -c*v0)
+  const Real candidate[2] = {
+      inv * (t0 + (-b) * v[1]),  // pinned fma pairing on -b*v1
+      inv * ((-c) * v[0] + t1)}; // pinned fma pairing on -c*v0
+  for (int row = 0; row < 2; ++row)
+    if (!std::isfinite(candidate[row]))
+      return block_publish_scaled_apply(normalized_inverse, scales, v, out);
+  for (int row = 0; row < 2; ++row)
+    out[row] = candidate[row];
   return true;
 }
 
@@ -182,6 +328,14 @@ POPS_HD inline bool block_apply_inverse<2>(const Real (&M)[2][2], const Real (&v
 template <>
 POPS_HD inline bool block_apply_inverse<3>(const Real (&M)[3][3], const Real (&v)[3],
                                            Real (&out)[3], Real tol) {
+  Real normalized_inverse[3][3], scales[3];
+  if (!block_equilibrated_inverse(M, normalized_inverse, scales, tol))
+    return false;
+  Real vector_scales[3];
+  for (int row = 0; row < 3; ++row)
+    vector_scales[row] = v[row] == Real(0) ? Real(1) : std::fabs(v[row]);
+  if (!block_closed_form_range(scales) || !block_closed_form_range(vector_scales))
+    return block_publish_scaled_apply(normalized_inverse, scales, v, out);
   const Real a00 = M[0][0], a01 = M[0][1], a02 = M[0][2];
   const Real a10 = M[1][0], a11 = M[1][1], a12 = M[1][2];
   const Real a20 = M[2][0], a21 = M[2][1], a22 = M[2][2];
@@ -195,13 +349,19 @@ POPS_HD inline bool block_apply_inverse<3>(const Real (&M)[3][3], const Real (&v
   const Real c21 = a02 * a10 - a00 * a12;
   const Real c22 = a00 * a11 - a01 * a10;
   const Real det = a00 * c00 + a01 * c01 + a02 * c02;
-  if (det < tol && det > -tol)
-    return false;
+  if (!std::isfinite(det) || det == Real(0))
+    return block_publish_scaled_apply(normalized_inverse, scales, v, out);
   const Real inv = Real(1) / det;
   // adj = cofactor^T: adj[r][c] = C[c][r]. out[r] = inv * sum_c adj[r][c] * v[c].
-  out[0] = inv * (c00 * v[0] + c10 * v[1] + c20 * v[2]);
-  out[1] = inv * (c01 * v[0] + c11 * v[1] + c21 * v[2]);
-  out[2] = inv * (c02 * v[0] + c12 * v[1] + c22 * v[2]);
+  const Real candidate[3] = {
+      inv * (c00 * v[0] + c10 * v[1] + c20 * v[2]),
+      inv * (c01 * v[0] + c11 * v[1] + c21 * v[2]),
+      inv * (c02 * v[0] + c12 * v[1] + c22 * v[2])};
+  for (int row = 0; row < 3; ++row)
+    if (!std::isfinite(candidate[row]))
+      return block_publish_scaled_apply(normalized_inverse, scales, v, out);
+  for (int row = 0; row < 3; ++row)
+    out[row] = candidate[row];
   return true;
 }
 

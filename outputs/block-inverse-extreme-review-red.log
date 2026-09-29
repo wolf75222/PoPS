@@ -1,0 +1,149 @@
+FAIL diagonal N=1 scale=-308.000000 accepted
+FAIL diagonal N=1 scale=-308.000000 solve accepted
+FAIL diagonal N=2 scale=308.000000 inverse
+FAIL diagonal N=2 scale=308.000000 inverse
+FAIL diagonal N=2 scale=308.000000 solve
+FAIL diagonal N=2 scale=308.000000 solve
+FAIL diagonal N=2 scale=-308.000000 accepted
+FAIL diagonal N=2 scale=-308.000000 solve accepted
+FAIL diagonal N=3 scale=308.000000 inverse
+FAIL diagonal N=3 scale=308.000000 inverse
+FAIL diagonal N=3 scale=308.000000 inverse
+FAIL diagonal N=3 scale=308.000000 solve
+FAIL diagonal N=3 scale=308.000000 solve
+FAIL diagonal N=3 scale=308.000000 solve
+FAIL diagonal N=3 scale=-308.000000 accepted
+FAIL diagonal N=3 scale=-308.000000 solve accepted
+FAIL diagonal N=5 scale=-308.000000 accepted
+FAIL diagonal N=5 scale=-308.000000 solve accepted
+FAIL dense N=5 inverse accepted
+FAIL dense N=5 solve accepted
+FAIL dense N=5 permuted inverse accepted
+FAIL dense N=5 permuted solve accepted
+FAIL infinite matrix refusal
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL NaN rhs refusal
+FAIL NaN rhs sentinel
+FAIL NaN rhs sentinel
+FAIL infinite matrix refusal
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL NaN rhs refusal
+FAIL NaN rhs sentinel
+FAIL NaN rhs sentinel
+FAIL NaN rhs sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL singular inverse sentinel
+FAIL infinite matrix refusal
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL infinite matrix sentinel
+FAIL NaN rhs refusal
+FAIL NaN rhs sentinel
+FAIL NaN rhs sentinel
+FAIL NaN rhs sentinel
+FAIL NaN rhs sentinel
+FAIL NaN rhs sentinel
+FAIL finite cancellation value
+FAIL finite cancellation value
+FAIL representable solve accepted without representable inverse
+FAIL representable solve accepted without representable inverse
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL unrepresentable inverse sentinel
+FAIL representable solve accepted without representable inverse
+FAIL unrepresentable solution refused
+FAIL unrepresentable solution not partly published
+FAIL relative tolerance invariant under row scaling
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance invariant under row scaling
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance invariant under row scaling
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance refusal sentinel
+FAIL relative tolerance refusal sentinel
+343 checks, 148 failures
