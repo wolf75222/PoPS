@@ -31,7 +31,8 @@ CAPACITY, LATENT, MELTING = 2., 3., 1.
 DT = .125
 CRITERIA = {"energy_max_error": 2.e-13, "temperature_max_error": 2.e-13,
             "phase_max_error": 2.e-13, "time_error": 1.e-14,
-            "initial_max_error": 1.e-14, "phase_bound_slack": 1.e-14}
+            "initial_max_error": 1.e-14, "phase_bound_slack": 1.e-14,
+            "constitution_max_error": 5.e-13}
 SCENARIOS = (("sensible", 1.5, .25, 1.),
              ("melting_plateau", 1.5, 4., .5),
              ("fully_melted", 1.5, 4., 1.),
@@ -75,15 +76,19 @@ def build_case(frame, *, name="M06_enthalpy", capacity=CAPACITY,
     t_expr, f_expr = _symbolic_thermometer(candidate[0], capacity, latent, melting)
     temperature = program.value("temperature_from_H", (t_expr,), at=candidate.point)
     fraction = program.value("liquid_fraction_from_H", (f_expr,), at=candidate.point)
-    # Materialize the derived relation in the native Program before publication.
+    residual = program.value("enthalpy_constitution_defect",
+                             (candidate[0]-capacity*temperature[0]-latent*fraction[0],),
+                             at=candidate.point)
+    # A native certificate consumes both derived fields before publication.
     candidate = program.guard("liquid_fraction_lower", candidate,
                               program.min(fraction) >= 0., action=FailRun())
     candidate = program.guard("liquid_fraction_upper", candidate,
                               program.max(fraction) <= 1., action=FailRun())
-    candidate = program.guard("finite_temperature", candidate,
-                              program.max(temperature) < 1.e300, action=FailRun())
-    candidate = program.guard("finite_temperature_lower", candidate,
-                              program.min(temperature) > -1.e300, action=FailRun())
+    candidate = program.guard("enthalpy_constitution", candidate,
+                              program.norm_inf(residual) <= CRITERIA["constitution_max_error"],
+                              action=FailRun())
+    program.store_history("M06_temperature", temperature, depth=1)
+    program.store_history("M06_liquid_fraction", fraction, depth=1)
     program.commit(h.next, candidate)
     program.step_strategy(FixedDt(DT))
     case.program(program)
@@ -127,37 +132,42 @@ def main():
             bound = np.asarray(simulation.state_global("material"))
             report = pops.run(simulation, t_end=t_end, max_steps=16)
             gathered = np.asarray(simulation.state_global("material"))
+            gathered_t = np.asarray(simulation.history_global("M06_temperature", 0))
+            gathered_f = np.asarray(simulation.history_global("M06_liquid_fraction", 0))
             failure = b""
             if world.rank == 0:
                 try:
-                    exact_h, _, _ = enthalpy_exact(initial, input_rate, t_end,
-                                                    capacity=CAPACITY, latent=LATENT,
-                                                    melting=MELTING)
-                    if bound.size != initial.size or gathered.size != initial.size:
+                    exact_h, exact_t, exact_f = enthalpy_exact(
+                        initial, input_rate, t_end, capacity=CAPACITY,
+                        latent=LATENT, melting=MELTING)
+                    if any(array.size != initial.size for array in
+                           (bound, gathered, gathered_t, gathered_f)):
                         raise RuntimeError("incomplete native global state")
                     saved = destination / ("state_%d_%d_%s.npz" % (*cells, label))
                     destination.mkdir(parents=True, exist_ok=True)
                     np.savez_compressed(saved, initial=bound.reshape(initial.shape),
                                         final=gathered.reshape(initial.shape),
-                                        exact_enthalpy=exact_h, time=simulation.time(),
+                                        native_temperature=gathered_t.reshape(initial.shape),
+                                        native_fraction=gathered_f.reshape(initial.shape),
+                                        exact_enthalpy=exact_h, exact_temperature=exact_t,
+                                        exact_fraction=exact_f, time=simulation.time(),
                                         input_rate=input_rate, cells=cells)
                     with np.load(saved) as data:
                         actual_h = data["final"]
-                        actual_t, actual_f = enthalpy_thermometer(
-                            actual_h, capacity=CAPACITY, latent=LATENT, melting=MELTING)
-                        oracle_t, oracle_f = enthalpy_thermometer(
-                            data["exact_enthalpy"], capacity=CAPACITY,
-                            latent=LATENT, melting=MELTING)
+                        actual_t, actual_f = data["native_temperature"], data["native_fraction"]
                         metrics = {"initial_max_error": float(np.max(np.abs(data["initial"]-initial))),
                                    "energy_max_error": float(np.max(np.abs(actual_h-data["exact_enthalpy"]))),
-                                   "temperature_max_error": float(np.max(np.abs(actual_t-oracle_t))),
-                                   "phase_max_error": float(np.max(np.abs(actual_f-oracle_f))),
+                                   "temperature_max_error": float(np.max(np.abs(actual_t-data["exact_temperature"]))),
+                                   "phase_max_error": float(np.max(np.abs(actual_f-data["exact_fraction"]))),
+                                   "constitution_max_error": float(np.max(np.abs(
+                                       actual_h-CAPACITY*actual_t-LATENT*actual_f))),
                                    "phase_min": float(actual_f.min()),
                                    "phase_max": float(actual_f.max()),
                                    "time_error": abs(float(data["time"])-t_end)}
                     accepted = (all(metrics[key] <= CRITERIA[key] for key in
                                     ("initial_max_error", "energy_max_error",
-                                     "temperature_max_error", "phase_max_error", "time_error"))
+                                     "temperature_max_error", "phase_max_error",
+                                     "constitution_max_error", "time_error"))
                                 and metrics["phase_min"] >= -CRITERIA["phase_bound_slack"]
                                 and metrics["phase_max"] <= 1.+CRITERIA["phase_bound_slack"]
                                 and report.accepted_steps == round(t_end/DT)

@@ -121,4 +121,13 @@ def test_programs_validate_and_resolve_source_only():
             assert validated.resolve(parameter) is not None
         layout = Uniform(CartesianGrid(frame=frame, cells=cells,
                                        periodic=PeriodicAxes(frame.axes)))
-        assert pops.resolve(validated, layout=layout) is not None
+        resolved = pops.resolve(validated, layout=layout)
+        assert resolved is not None
+        if label == "M06":
+            from pops.codegen.program_codegen import emit_cpp_program
+            from pops.codegen.program_models import ProgramModelGraph
+            source = emit_cpp_program(resolved.time,
+                model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
+            assert 'ctx.store_history("M06_temperature"' in source
+            assert 'ctx.store_history("M06_liquid_fraction"' in source
+            assert "enthalpy_constitution" in source and "ctx.norm_inf(" in source
