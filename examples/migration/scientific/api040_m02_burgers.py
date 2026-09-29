@@ -91,11 +91,14 @@ def godunov_face(left, right, flux_left, flux_right, speed):
     return (where(ul > ur, lambda: shock, lambda: rarefaction),)
 
 
-if not hasattr(riemann, "User") or not {"body", "state"}.issubset(
+if not hasattr(riemann, "User") or not {"body", "state", "stability"}.issubset(
         inspect.signature(riemann.User).parameters):
-    raise RuntimeError("M02 requires installed riemann.User(body=..., state=...); "
+    raise RuntimeError("M02 requires installed riemann.User(body=..., state=..., stability=...); "
                        "the legacy C++ brick selector is insufficient")
-godunov = riemann.User(body=godunov_face, state=U)
+# For scalar Burgers Godunov, max(|uL|, |uR|) bounds the numerical face speed.
+# The physical y flux is zero and supplies a zero bound on that native axis.
+godunov = riemann.User(body=godunov_face, state=U,
+                       stability=lambda left, right, flux_left, flux_right, speed: speed)
 numerics = DiscretizationPlan()
 numerics.rates.add(rate, FiniteVolume(
     flux=F, variables=variables.Conservative(U),
@@ -269,11 +272,12 @@ if world.rank == 0:
             errors[i + 1] < errors[i] for i in range(len(errors) - 1))
         from pops import _pops  # Provenance only; evolution uses public APIs.
         native = Path(_pops.__file__).resolve()
-        receipt = {"schema_version": 1, "case": "M02", "variant": label,
+        receipt = {"schema_version": 2, "case": "M02", "variant": label,
                    "status": "passed" if accepted else "failed", "criteria": CRITERIA,
                    "scope": "Dim=2 NxN; y-invariant Burgers; no Dim=1 qualification",
                    "equation": "u_t + (u*u/2)_x = 0", "conserved_quantity": "u",
                    "method": "authored riemann.User Godunov; FirstOrder; ForwardEuler",
+                   "numerical_stability": "max(abs(u_left),abs(u_right)) in x; zero in y",
                    "resolutions": RESOLUTIONS, "t_end": T_END, "cfl": CFL,
                    "first_step_dx_ratio": FIRST_STEP_DX_RATIO,
                    "package_file": str(package), "package_version": pops.__version__,
