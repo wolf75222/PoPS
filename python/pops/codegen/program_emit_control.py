@@ -378,6 +378,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     histories_ncomp = getattr(program, "_histories_ncomp", {})
     temporal = program.temporal_manifest()
     prelude.append("ctx.configure_primary_clock(%s);" % json.dumps(temporal["primary_clock"]))
+    from .program_integral_transfers import emit_integral_declarations
+    prelude.extend(emit_integral_declarations(program))
     for relation in temporal["subcycles"]:
         prelude.append(
             "ctx.declare_clock_relation(%s, %s, %d);"
@@ -503,6 +505,10 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         partition_stability_checked=var.get(("partition_stability_checked",), ())))
     from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
     lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model))
+    from .program_integral_transfers import emit_integral_transfers
+    integral_transfers = emit_integral_transfers(program, var)
+    if target == "system":
+        lines.extend(integral_transfers)
     # All outputs stay provisional until the one atomic publication group.
     lines.extend(_emit_commit_group(program._commits, bases, var, phase=0))
     # Rotate the history rings ONCE at the very end of the step (after the commit), so the next step
@@ -524,6 +530,14 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         field_plans=field_plans,
         has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
     )
+    if target == "amr_system" and integral_transfers:
+        # The accepted exchange mailbox spans the hierarchy/subcycles. A covered coarse
+        # exterior face can contribute zero while a later fine level supplies the same trace.
+        # Consume once after every level has staged its active faces, still inside the native
+        # parent attempt and before that attempt can publish.
+        post_sync_lines.extend(["if (ctx.level() == 0) {"])
+        post_sync_lines.extend(integral_transfers)
+        post_sync_lines.append("}")
     prelude_src = "\n".join("  " + ln for ln in prelude)
     body_src = "\n".join("    " + ln for ln in lines)
     post_sync_src = "\n".join("        " + ln for ln in post_sync_lines)

@@ -179,7 +179,7 @@ class _ProgramSerialization(_ProgramBase):
         order = self._block_indices()
         result = {
             "name": self.name,
-            "version": 4,
+            "version": 5,
             "clock": self.clock.to_data(),
             "nodes": [self._serialize_node(
                 value, include_provenance=include_provenance) for value in self._values],
@@ -195,6 +195,16 @@ class _ProgramSerialization(_ProgramBase):
             "block_order": [handle_data(block) for block in sorted(
                 order, key=lambda block: order[block])],
         }
+        if self._integral_states:
+            result["integral_states"] = [
+                {"name": name, "initial": initial}
+                for name, initial in sorted(self._integral_states.items())
+            ]
+            result["external_trace_transfers"] = [
+                {"state": name, "rate": rate_id, "axis": axis, "side": side,
+                 "component": component, "scale": scale}
+                for name, rate_id, axis, side, component, scale in self._integral_transfers
+            ]
         post_sync_commits = getattr(self, "_post_sync_commits", {})
         if post_sync_commits:
             result["post_synchronization_commits"] = [

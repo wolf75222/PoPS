@@ -624,6 +624,7 @@ struct ProgramRuntimeState {
     std::vector<int> block_map;
     std::map<int, RuntimeParams> block_params;
     std::map<std::string, Real> diagnostics;
+    AcceptedExchangeLedger accepted_exchanges;
     CacheManager<Dim> cache;
     HistoryManager<Dim> history;
     bool artifact_backed = false;
@@ -818,6 +819,7 @@ struct ProgramRuntimeState {
                                        block_map_,
                                        block_params_,
                                        diagnostics_,
+                                       accepted_exchanges_,
                                        cache_,
                                        hist_,
                                        artifact_backed_};
@@ -830,6 +832,7 @@ struct ProgramRuntimeState {
   /// candidate restores the snapshot above.
   void reset_artifact_candidate_state() {
     diagnostics_.clear();
+    accepted_exchanges_.reset_artifact();
     cache_.clear();
     hist_ = HistoryManager<Dim>{};
   }
@@ -855,6 +858,7 @@ struct ProgramRuntimeState {
     block_map_ = std::move(snapshot.block_map);
     block_params_ = std::move(snapshot.block_params);
     diagnostics_ = std::move(snapshot.diagnostics);
+    accepted_exchanges_.swap(snapshot.accepted_exchanges);
     cache_ = std::move(snapshot.cache);
     hist_ = std::move(snapshot.history);
     artifact_backed_ = snapshot.artifact_backed;

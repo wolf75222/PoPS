@@ -91,6 +91,7 @@ def rebuild_program(
     out._post_sync_recording = False
     out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
     out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
+    out._integral_states = dict(getattr(self, "_integral_states", {}))
     if project_states and (self._dt_bound is not None or out._acceptance_guards):
         raise ValueError(
             "state-partitioned Program rebuild requires global dt bounds and guards to be lowered "
@@ -393,6 +394,13 @@ def rebuild_program(
     for v in kept:
         clone(v)
     out._values = [idmap[v.id] for v in kept]
+    source_by_id = {value.id: value for value in self._values}
+    out._integral_transfers = [
+        (name, idmap[rep(source_by_id[rate_id]).id].id,
+         axis, side, component, scale)
+        for name, rate_id, axis, side, component, scale
+        in getattr(self, "_integral_transfers", ())
+    ]
     out._commits = {
         reference_of(state_ref): idmap[rep(value).id]
         for state_ref, value in self._commits.items()

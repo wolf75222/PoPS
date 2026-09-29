@@ -681,6 +681,14 @@ class RuntimeInstance:
     def macro_step(self) -> int:
         return int(self._executor.macro_step())
 
+    def integral_state(self, state) -> float:
+        """Read one installed Program's persistent scalar integral from native accepted state."""
+        from pops.time._program.integrals import IntegralState
+
+        if type(state) is not IntegralState:
+            raise TypeError("integral_state requires an exact Program IntegralState handle")
+        return float(self._executor._program_integral(state.identity))
+
     def block_names(self) -> tuple[str, ...]:
         return tuple(self._executor.block_names())
 

@@ -101,6 +101,27 @@ class AmrProgramContext {
     stage_exchange_batch([&](auto&& stage) { stage(std::move(record)); });
   }
 
+  void declare_integral_state(const std::string& identity, Real initial) const {
+    facade_->declare_program_integral(identity, initial);
+  }
+  Real integral_state(const std::string& identity) const {
+    return static_cast<Real>(facade_->program_integral(identity));
+  }
+  Real consume_external_trace(const std::string& integral_identity,
+                              const AcceptedExchangeLedger::TraceSelection& selection,
+                              Real scale) const {
+    return static_cast<Real>(facade_->consume_program_external_trace(
+        integral_identity, selection, scale));
+  }
+  bool is_external_trace_face(int axis, int side, const Index<Dim>& cell) const {
+    if (axis < 0 || axis >= Dim || (side != 0 && side != 1))
+      throw std::invalid_argument("external trace face has invalid axis or side");
+    const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+    return !facade_->prepared_amr_boundary_topology().is_periodic(Face<Dim>{axis, boundary}) &&
+           cell[axis] == (side == 0 ? geometry().domain().lo[axis]
+                                   : geometry().domain().hi[axis]);
+  }
+
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) const {
     auto records = prepare_exchange_batch(

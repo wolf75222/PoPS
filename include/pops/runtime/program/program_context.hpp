@@ -329,6 +329,26 @@ class ProgramContext {
     stage_exchange_batch([&](auto&& stage) { stage(std::move(record)); });
   }
 
+  void declare_integral_state(const std::string& identity, Real initial) const {
+    system_->declare_program_integral(identity, initial);
+  }
+  Real integral_state(const std::string& identity) const {
+    return system_->program_integral(identity);
+  }
+  Real consume_external_trace(const std::string& integral_identity,
+                              const AcceptedExchangeLedger::TraceSelection& selection,
+                              Real scale) const {
+    return system_->consume_program_external_trace(integral_identity, selection, scale);
+  }
+  bool is_external_trace_face(int axis, int side, const Index<Dim>& cell) const {
+    if (axis < 0 || axis >= Dim || (side != 0 && side != 1))
+      throw std::invalid_argument("external trace face has invalid axis or side");
+    const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+    return !scalar_boundary_topology_().is_periodic(Face<Dim>{axis, boundary}) &&
+           cell[axis] == (side == 0 ? geometry().domain().lo[axis]
+                                   : geometry().domain().hi[axis]);
+  }
+
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) const {
     auto records = prepare_exchange_batch(

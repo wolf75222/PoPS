@@ -68,7 +68,8 @@ def emit_transport_exchanges(
         '            : quadrature + "/component:" + std::to_string(component);',
         "        stage_exchange(pops::runtime::program::ExchangeRecord{%s, %s, %s, component_quadrature,"
         % (json.dumps(operation), json.dumps(occurrence), json.dumps(evaluation)),
-        "            side == 0 ? 1 : -1, measure, face_values.axes[axis](face, component)/measure, %s, 1});"
+        "            side == 0 ? 1 : -1, measure, face_values.axes[axis](face, component)/measure, %s, 1,"
+        " axis, side, component, ctx.is_external_trace_face(axis, side, cell)});"
         % weight,
         "        }",
         "      }",

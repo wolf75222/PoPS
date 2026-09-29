@@ -2102,6 +2102,82 @@ TEST(ProgramContextContract, AcceptedExchangeIdentityRetainsMathematicalMultipli
   EXPECT_EQ(snapshot.records().size(), 1u);
 }
 
+TEST(ProgramContextContract, IntegralStateConsumesExactAcceptedTraceAndRollsBackParent) {
+  using Ledger = runtime::program::AcceptedExchangeLedger;
+  using Record = runtime::program::ExchangeRecord;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.integral-accepted-trace");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(8));
+  sim.declare_program_integral("program/integral/q", 0.7);
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 0.7);
+  const auto legacy_image = Ledger{}.checkpoint();
+  EXPECT_EQ(legacy_image[7], static_cast<std::uint8_t>('1'));
+  EXPECT_THROW(sim.validate_checkpoint_program_exchanges(legacy_image), std::invalid_argument);
+
+  const auto selector = [](const std::string& evaluation) {
+    return Ledger::TraceSelection{"flux", "balance/occurrence", 0, 1, 0, evaluation};
+  };
+  const auto stage = [&](NativeSystem& system) {
+    std::vector<Record> local;
+    if (my_rank() == 0) {
+      for (const auto& [evaluation, weight] :
+           std::vector<std::pair<std::string, double>>{{"stage/a", 0.1}, {"stage/b", 0.2}}) {
+        Record record{"flux", "balance/occurrence", evaluation, "face/x+", -1, 1.0,
+                      2.0, weight, 1};
+        record.trace_axis = 0;
+        record.trace_side = 1;
+        record.trace_component = 0;
+        record.exterior_trace = true;
+        record.source_evaluation_identity = evaluation;
+        local.push_back(std::move(record));
+      }
+    }
+    system.stage_program_exchanges(local);
+  };
+
+  sim.begin_step_transaction();
+  sim.begin_nested_step_transaction();
+  stage(sim);
+  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/a"), -1.0), 0.9);
+  EXPECT_THROW(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/a"), -1.0), std::invalid_argument);
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 0.9);
+  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/b"), -1.0), 1.3);
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 1.3);
+  sim.rollback_step_transaction();
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 0.7);
+  EXPECT_TRUE(sim.program_exchange_records().empty());
+  EXPECT_EQ(sim.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.0);
+
+  sim.begin_step_transaction();
+  stage(sim);
+  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/a"), -1.0), 0.9);
+  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/b"), -1.0), 1.3);
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 1.3);
+  const auto image = sim.checkpoint_program_exchanges();
+  ASSERT_GE(image.size(), 8u);
+  EXPECT_EQ(image[7], static_cast<std::uint8_t>('2'));
+  sim.begin_restart_transaction();
+  EXPECT_NO_THROW(sim.restore_checkpoint_program_exchanges(image));
+  sim.commit_restart_transaction();
+  sim.finalize_restart_transaction();
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 1.3);
+  EXPECT_THROW(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/a"), -1.0), std::invalid_argument);
+}
+
 TEST(ProgramContextContract, TransactionScopeDivergenceRefusesBeforeMutation) {
   ensure_kokkos();
   comm_init();

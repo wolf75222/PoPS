@@ -691,6 +691,7 @@ void bind_system_program(py::class_<System>& cls) {
       // retrievable AFTER sim.step. program_diagnostic(name) reads one (raises if never recorded);
       // program_diagnostics() returns the whole name -> value dict.
       .def("program_diagnostic", &System::program_diagnostic, py::arg("name"))
+      .def("_program_integral", &System::program_integral, py::arg("identity"))
       .def("program_diagnostics", &System::program_diagnostics)
       .def("_accepted_balance_terms", &System::accepted_balance_terms, py::arg("route"))
       .def("_selected_accepted_balance_terms", &System::selected_accepted_balance_terms,
@@ -1149,11 +1150,11 @@ void bind_system_stepping(py::class_<System>& cls) {
              return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
            })
       .def("_validate_checkpoint_program_exchanges",
-           [](const System&, py::bytes payload) {
+           [](const System& system, py::bytes payload) {
              const std::string_view bytes(
                  PyBytes_AS_STRING(payload.ptr()),
                  static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
-             (void)pops::runtime::program::AcceptedExchangeLedger::from_checkpoint(
+             system.validate_checkpoint_program_exchanges(
                  std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
                                                bytes.size()));
            })

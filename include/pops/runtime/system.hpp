@@ -852,7 +852,13 @@ class System {
   POPS_EXPORT void stage_program_exchange(runtime::program::ExchangeRecord record);
   POPS_EXPORT void stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records);
   POPS_EXPORT std::vector<runtime::program::ExchangeRecord> program_exchange_records() const;
+  POPS_EXPORT void declare_program_integral(const std::string& identity, Real initial);
+  POPS_EXPORT Real program_integral(const std::string& identity) const;
+  POPS_EXPORT Real consume_program_external_trace(
+      const std::string& integral_identity,
+      const runtime::program::AcceptedExchangeLedger::TraceSelection& selection, Real scale);
   POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges() const;
+  POPS_EXPORT void validate_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) const;
   POPS_EXPORT void restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes);
   /// Seal the native state while retaining its accepted snapshot until external effects publish.
   void commit_step_transaction();

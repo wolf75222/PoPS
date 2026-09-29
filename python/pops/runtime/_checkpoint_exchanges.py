@@ -33,7 +33,7 @@ def capture_checkpoint_continuation(owner, payload):
         plan.require("restart")
         plan_json = plan._json
         local = owner._s._checkpoint_program_exchanges()
-        if type(local) is not bytes or not local.startswith(b"POPSEX01"):
+        if type(local) is not bytes or not local.startswith((b"POPSEX01", b"POPSEX02")):
             raise RuntimeError("checkpoint accepted exchange mailbox is not an exact native image")
     except BaseException as exc:
         error = exc
@@ -143,8 +143,16 @@ def exchange_checkpoint_byte_capacity(program, *, cells, dimension, rank_capacit
         * (2 * dimension) * clock_ticks
     max_text = max((len(text.encode("utf-8")) for text in strings), default=1)
     # Four identifiers, including the runtime-qualified context and cell/axis/side quadrature.
-    record_bytes = 72 + 4 * max_text + 512
-    capacity = rank_capacity * (16 + record_count * record_bytes) + 8 * (rank_capacity + 1)
+    # POPSEX02 carries four support words per record, one consumed-key copy per selected record,
+    # and the explicitly authored persistent scalar states. POPSEX01 remains valid for plans with
+    # no integral declarations; native preflight checks that distinction against the installed plan.
+    record_bytes = 72 + 4 * max_text + 512 + 32 + 8 + max_text + 32 + 4 * max_text
+    integrals = getattr(program, "_integral_states", {})
+    from pops.codegen.program_integral_transfers import integral_identity
+    state_bytes = sum(32 + len(integral_identity(program, name).encode("utf-8"))
+                      for name in integrals)
+    capacity = rank_capacity * (24 + record_count * record_bytes + state_bytes) \
+        + 8 * (rank_capacity + 1)
     if capacity > (1 << 63) - 1:
         raise OverflowError("resolved accepted exchange checkpoint capacity exceeds int64")
     return capacity

@@ -1010,11 +1010,11 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
              return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
            })
       .def("_validate_checkpoint_program_exchanges",
-           [](const AmrSystem&, py::bytes payload) {
+           [](const AmrSystem& system, py::bytes payload) {
              const std::string_view bytes(
                  PyBytes_AS_STRING(payload.ptr()),
                  static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
-             (void)pops::runtime::program::AcceptedExchangeLedger::from_checkpoint(
+             system.validate_checkpoint_program_exchanges(
                  std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
                                                bytes.size()));
            })
@@ -1224,6 +1224,7 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // one, program_diagnostics() the whole map; record_program_diagnostic is the sink the diagnostics
       // driver records a measured scalar into each cadence tick.
       .def("program_diagnostic", &AmrSystem::program_diagnostic, py::arg("name"))
+      .def("_program_integral", &AmrSystem::program_integral, py::arg("identity"))
       .def("program_diagnostics", &AmrSystem::program_diagnostics)
       .def("_accepted_balance_terms", &AmrSystem::accepted_balance_terms, py::arg("route"))
       .def("_selected_accepted_balance_terms", &AmrSystem::selected_accepted_balance_terms,

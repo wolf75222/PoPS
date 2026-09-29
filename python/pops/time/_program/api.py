@@ -28,6 +28,7 @@ from pops.time._program.passes import _ProgramPasses
 from pops.time._program.solve import _ProgramSolve
 from pops.time._program.time_handles import _ProgramTimeHandles
 from pops.time._program.physical_maps import _ProgramPhysicalMaps
+from pops.time._program.integrals import _ProgramIntegrals
 from pops.time.references import bind_program_block, block_name
 from pops.time._step.transaction import (
     ALL_PROVISIONAL_STORES,
@@ -46,6 +47,7 @@ class Program(
     _ProgramAffineMoments,
     _ProgramTimeHandles,
     _ProgramPhysicalMaps,
+    _ProgramIntegrals,
     _ProgramCore,
     _ProgramLocal,
     _ProgramCondensed,
@@ -147,6 +149,8 @@ class Program(
         # so the main step can still commit the same state exactly once before synchronization.
         self._post_sync_commits = {}
         self._post_sync_recording = False
+        self._integral_states = {}
+        self._integral_transfers = []
         self._transaction_stores = ALL_PROVISIONAL_STORES
         self._acceptance_guards = ()
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After

@@ -253,8 +253,36 @@ std::vector<runtime::program::ExchangeRecord> System<Dim>::program_exchange_reco
 }
 
 template <int Dim>
+void System<Dim>::declare_program_integral(const std::string& identity, Real initial) {
+  runtime::program::declare_integral_collectively(p_->program_.accepted_exchanges_, identity,
+                                                  initial, prepared_boundary_execution_lane());
+}
+
+template <int Dim>
+Real System<Dim>::program_integral(const std::string& identity) const {
+  return static_cast<Real>(p_->program_.accepted_exchanges_.integral(identity));
+}
+
+template <int Dim>
+Real System<Dim>::consume_program_external_trace(
+    const std::string& identity,
+    const runtime::program::AcceptedExchangeLedger::TraceSelection& selection, Real scale) {
+  return static_cast<Real>(runtime::program::consume_external_trace_collectively(
+      p_->program_.accepted_exchanges_, identity, selection, scale,
+      prepared_boundary_execution_lane()));
+}
+
+template <int Dim>
 std::vector<std::uint8_t> System<Dim>::checkpoint_program_exchanges() const {
   return p_->program_.accepted_exchanges_.checkpoint();
+}
+
+template <int Dim>
+void System<Dim>::validate_checkpoint_program_exchanges(
+    std::span<const std::uint8_t> bytes) const {
+  const auto candidate = runtime::program::AcceptedExchangeLedger::from_checkpoint(bytes);
+  if (!candidate.same_integral_declarations(p_->program_.accepted_exchanges_))
+    throw std::invalid_argument("accepted exchange checkpoint lacks exact integral-state authority");
 }
 
 template <int Dim>
@@ -266,6 +294,8 @@ void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint
     if (!p_->external_restart_transaction_)
       throw std::logic_error("accepted exchange restore requires the native restart transaction");
     candidate.emplace(runtime::program::AcceptedExchangeLedger::from_checkpoint(bytes));
+    if (!candidate->same_integral_declarations(p_->program_.accepted_exchanges_))
+      throw std::invalid_argument("accepted exchange checkpoint lacks exact integral-state authority");
   } catch (...) {
     error = std::current_exception();
   }
@@ -274,6 +304,7 @@ void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint
       std::rethrow_exception(error);
     throw std::runtime_error("accepted exchange restore preparation failed collectively");
   }
+  runtime::program::require_integral_values_agree_collectively(*candidate, lane);
   p_->program_.accepted_exchanges_.swap(*candidate);
 }
 
@@ -814,7 +845,14 @@ template void System<kNativeDimension>::stage_program_exchanges(
     std::span<runtime::program::ExchangeRecord>);
 template std::vector<runtime::program::ExchangeRecord>
 System<kNativeDimension>::program_exchange_records() const;
+template void System<kNativeDimension>::declare_program_integral(const std::string&, Real);
+template Real System<kNativeDimension>::program_integral(const std::string&) const;
+template Real System<kNativeDimension>::consume_program_external_trace(
+    const std::string&,
+    const runtime::program::AcceptedExchangeLedger::TraceSelection&, Real);
 template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_program_exchanges() const;
+template void System<kNativeDimension>::validate_checkpoint_program_exchanges(
+    std::span<const std::uint8_t>) const;
 template void System<kNativeDimension>::restore_checkpoint_program_exchanges(
     std::span<const std::uint8_t>);
 

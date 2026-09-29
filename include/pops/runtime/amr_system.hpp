@@ -1019,8 +1019,14 @@ class AmrSystem {
   POPS_EXPORT void stage_program_exchange(runtime::program::ExchangeRecord record);
   POPS_EXPORT void stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records);
   POPS_EXPORT std::vector<runtime::program::ExchangeRecord> program_exchange_records() const;
+  POPS_EXPORT void declare_program_integral(const std::string& identity, double initial);
+  POPS_EXPORT double program_integral(const std::string& identity) const;
+  POPS_EXPORT double consume_program_external_trace(
+      const std::string& integral_identity,
+      const runtime::program::AcceptedExchangeLedger::TraceSelection& selection, double scale);
   POPS_EXPORT std::vector<std::vector<std::string>> continuation_transition_rows() const;
   POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges() const;
+  POPS_EXPORT void validate_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) const;
   POPS_EXPORT void restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes);
   void commit_step_transaction();
   void finalize_step_transaction();

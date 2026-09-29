@@ -93,6 +93,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             for w in self._subblock_value_refs(v):
                 by_id.setdefault(w.id, w)
         roots = [s.id for s in self._commits.values()]
+        roots.extend(row[1] for row in getattr(self, "_integral_transfers", ()))
         for v in self._values:
             if v.op not in self._REMOVABLE_OPS:
                 roots.append(v.id)

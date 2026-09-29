@@ -18176,6 +18176,27 @@ std::vector<runtime::program::ExchangeRecord> AmrSystem<Dim>::program_exchange_r
 }
 
 template <int Dim>
+void AmrSystem<Dim>::declare_program_integral(const std::string& identity, double initial) {
+  runtime::program::declare_integral_collectively(
+      p_->program.accepted_exchanges_, identity, initial,
+      p_->require_prepared_engine_lane("AMR integral state declaration"));
+}
+
+template <int Dim>
+double AmrSystem<Dim>::program_integral(const std::string& identity) const {
+  return p_->program.accepted_exchanges_.integral(identity);
+}
+
+template <int Dim>
+double AmrSystem<Dim>::consume_program_external_trace(
+    const std::string& identity,
+    const runtime::program::AcceptedExchangeLedger::TraceSelection& selection, double scale) {
+  return runtime::program::consume_external_trace_collectively(
+      p_->program.accepted_exchanges_, identity, selection, scale,
+      p_->require_prepared_engine_lane("AMR external trace integral transfer"));
+}
+
+template <int Dim>
 std::vector<std::vector<std::string>> AmrSystem<Dim>::continuation_transition_rows() const {
   return p_->last_continuation_transition_rows;
 }
@@ -18183,6 +18204,14 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::continuation_transition_ro
 template <int Dim>
 std::vector<std::uint8_t> AmrSystem<Dim>::checkpoint_program_exchanges() const {
   return p_->program.accepted_exchanges_.checkpoint();
+}
+
+template <int Dim>
+void AmrSystem<Dim>::validate_checkpoint_program_exchanges(
+    std::span<const std::uint8_t> bytes) const {
+  const auto candidate = runtime::program::AcceptedExchangeLedger::from_checkpoint(bytes);
+  if (!candidate.same_integral_declarations(p_->program.accepted_exchanges_))
+    throw std::invalid_argument("accepted exchange checkpoint lacks exact integral-state authority");
 }
 
 template <int Dim>
@@ -18194,6 +18223,8 @@ void AmrSystem<Dim>::restore_checkpoint_program_exchanges(std::span<const std::u
     if (!p_->restart_transaction)
       throw std::logic_error("accepted exchange restore requires the native restart transaction");
     candidate.emplace(runtime::program::AcceptedExchangeLedger::from_checkpoint(bytes));
+    if (!candidate->same_integral_declarations(p_->program.accepted_exchanges_))
+      throw std::invalid_argument("accepted exchange checkpoint lacks exact integral-state authority");
   } catch (...) {
     error = std::current_exception();
   }
@@ -18202,6 +18233,7 @@ void AmrSystem<Dim>::restore_checkpoint_program_exchanges(std::span<const std::u
       std::rethrow_exception(error);
     throw std::runtime_error("accepted exchange restore preparation failed collectively");
   }
+  runtime::program::require_integral_values_agree_collectively(*candidate, lane);
   p_->program.accepted_exchanges_.swap(*candidate);
 }
 
@@ -22578,10 +22610,17 @@ template void AmrSystem<kNativeDimension>::stage_program_exchanges(
     std::span<runtime::program::ExchangeRecord>);
 template std::vector<runtime::program::ExchangeRecord>
 AmrSystem<kNativeDimension>::program_exchange_records() const;
+template void AmrSystem<kNativeDimension>::declare_program_integral(const std::string&, double);
+template double AmrSystem<kNativeDimension>::program_integral(const std::string&) const;
+template double AmrSystem<kNativeDimension>::consume_program_external_trace(
+    const std::string&,
+    const runtime::program::AcceptedExchangeLedger::TraceSelection&, double);
 template std::vector<std::vector<std::string>>
 AmrSystem<kNativeDimension>::continuation_transition_rows() const;
 template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::checkpoint_program_exchanges()
     const;
+template void AmrSystem<kNativeDimension>::validate_checkpoint_program_exchanges(
+    std::span<const std::uint8_t>) const;
 template void AmrSystem<kNativeDimension>::restore_checkpoint_program_exchanges(
     std::span<const std::uint8_t>);
 
