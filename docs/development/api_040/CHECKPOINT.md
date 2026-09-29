@@ -3,17 +3,49 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Integrated persistent state, native reception pending
+## Persistent state: first native reception and AMR double count
 
 `1adbb10a` integrates Program-owned IntegralState, accepted exterior-face delivery,
 collective scalar publication, exact stage selection, parent rollback and restart.
-Independent source/host tests and report are `34f9d509` / `6f60f5a8`; installed
-native/MPI/AMR qualification is still required. The first Dim1 build fails on a
+Independent source/host tests and report are `34f9d509` / `6f60f5a8`. The first Dim1 build fails on a
 real release-contract drift: `module_capabilities.hpp` retains native ABI 3 while
 the generated contract is ABI 4. `e39761e0` aligns the declaration; repository
 `release_preflight.py` passes. The failed build is preserved as
-`outputs/build-integral-state-dim1.log`; the repaired build is running. No earlier
-native receipt is promoted across this ABI boundary.
+`outputs/build-integral-state-dim1.log`; both repaired builds pass with SDK
+`b7b9b5bf115b91275e4edc0d1e600df5b34fbd01879ff1ec826b2bd20ad1de86`.
+Native Dim1 SHA256 is `2b567d4ae172b38c6e637aa84e37c93edefb4919fc8c1556fe3a71f75c0bf7af`,
+Dim2 is `cbbe8095294980811e2f8cf4127cd2fbccf4eda1f21f293cdc67d2b398c3953d`;
+the installed import and 1091 shipped sources are authenticated.
+
+- `installed-integral-contract-units`: 147 pass / 1 fail of 148, no skips. The
+  failed assertion still expected package 1.0.0; `7443b830` updates it and pins
+  API3/semantic3/native4. `installed-integral-release-assertions` then passes 7/7.
+- Both C++ runtime/context targets rebuild. `native-integral-transaction-ctest`
+  passes 8/8 entries, including two MPI2 aggregates. Tests receive q0=.7,
+  accepted child then parent rollback, exact consumption/restart, a rank with
+  no selected record, differing selectors/initial signed zero/replicated restart
+  values, overflow refusal and successful retry. This is native transaction
+  evidence, not a complete PDE surface-current proof.
+- `installed-integral-native-author-serial` receives Uniform and AMR1, but
+  **AMR2 fails**: q=.724 instead of unchanged oracle .712. The independent
+  `outputs/integral-amr-duration-probe` reopens actual POPSEX02 consumption and
+  all 23552 records. Both fine substeps correctly use dt=.005 and supply -.006
+  each. Another 32 coarse x+ faces supply -.012 despite the saved composite
+  mask having no active coarse cell on that boundary. All 160 keys were consumed.
+  The pointwise mask used for accepted exchanges supplies embedded-boundary
+  activity, without the separate coarse/fine coverage authority. A correction
+  to accepted exchange filtering is under implementation and independent review;
+  PDE updates and reflux must retain their own rules. The failed receipt, native identity, states,
+  compressed ledger, wire image and decoder report remain preserved.
+
+`046236ed` independently refuses NUL in integral names after reproducing native
+identity truncation; valid Unicode is retained. `4be1e060` adds public restart,
+SSPRK2 trace, collective refusal and retry receptions with saved evidence. They
+are not yet received on an updated installed package. The reviewed periodic
+CoupledGradient Dim2/3 extension is integrated through `b2635a9e`; its native
+reception also remains pending. Installed SDK b7b9 now predates those source
+additions and must be refreshed before another authenticated production run.
+No earlier native receipt is promoted across an SDK/ABI boundary.
 
 ## Received component gradients, M05 and implicit-state inspection (SDK623)
 
