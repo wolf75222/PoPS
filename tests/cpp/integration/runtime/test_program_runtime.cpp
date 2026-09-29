@@ -2764,8 +2764,15 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
   EXPECT_EQ(child_state.size(), accepted_state.size());
   for (std::size_t i = 0; i < std::min(child_state.size(), accepted_state.size()); ++i)
     EXPECT_DOUBLE_EQ(child_state[i], accepted_state[i] + Real(0.2) * Real(skipped_dt + 0.2));
-  EXPECT_EQ(sim.history_global("gas.U", 1), child_state);
-  EXPECT_EQ(sim.program_cache_global(node), child_state);
+  // History/cache snapshots are replicated; get_state returns its global array
+  // only on rank zero. Every rank must still enter both snapshot collectives.
+  const auto child_history = sim.history_global("gas.U", 1);
+  const auto child_cache = sim.program_cache_global(node);
+  EXPECT_EQ(child_history, child_cache);
+  if (sim.prepared_boundary_execution_lane().rank() == 0) {
+    EXPECT_EQ(child_state.size(), initial.size());
+    EXPECT_EQ(child_history, child_state);
+  }
   sim.commit_step_transaction();
   sim.finalize_step_transaction();
   EXPECT_EQ(sim.step_transaction_depth(), 1u);
@@ -2811,6 +2818,11 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
   EXPECT_EQ(retried_state.size(), accepted_state.size());
   for (std::size_t i = 0; i < std::min(retried_state.size(), accepted_state.size()); ++i)
     EXPECT_DOUBLE_EQ(retried_state[i], accepted_state[i] + Real(0.3) * Real(skipped_dt + 0.3));
-  EXPECT_EQ(sim.history_global("gas.U", 1), retried_state);
-  EXPECT_EQ(sim.program_cache_global(node), retried_state);
+  const auto retried_history = sim.history_global("gas.U", 1);
+  const auto retried_cache = sim.program_cache_global(node);
+  EXPECT_EQ(retried_history, retried_cache);
+  if (sim.prepared_boundary_execution_lane().rank() == 0) {
+    EXPECT_EQ(retried_state.size(), initial.size());
+    EXPECT_EQ(retried_history, retried_state);
+  }
 }
