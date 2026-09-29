@@ -102,13 +102,18 @@ env -u PYTHONPATH PYTHONNOUSERSITE=1 CONDA_PREFIX="$POPS_PREFIX" \
 ```
 
 The output directory must be empty. Cases are `m01`, `m02-shock`,
-`m02-rarefaction`, `m03-ideal`, `m03-stiffened` and `m04`. Availability in the
+`m02-rarefaction`, `m03-ideal`, `m03-stiffened`, `m04` and `m04-isotropic`. Availability in the
 runner does not imply acceptance: M02 requires the authored face-body tranche;
 M04 awaits the directional stability-frequency correction. M03 stiffened passes
 receipt schema 2, which independently reconstructs the discrete incoming
 boundary integral from saved native states. Its previous far-field-budget
 failure is retained in the checkpoint. Grids, final times and criteria are
 fixed in each linear example.
+M04 receipt schema 2 uses the exact tensor `diag(.01, 0)` for the requested
+x-only law. `m04-isotropic` retains the previous `diag(.01, .01)` variant to
+reproduce and repair its directional-frequency failure. Both retain the same
+error, conservation and bound criteria, with the combined step computed from
+their actual constitutive tensor. Neither is a native Dim=1 qualification.
 Saved native states, exact/independent references, measurements, hashes and logs
 remain in the output directory. `--threads 4 --ranks 1` selects the local OpenMP
 configuration; the runtime log reports the native execution concurrency.

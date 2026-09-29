@@ -39,6 +39,14 @@ def test_actual_2d_bound_sums_both_diffusion_axes(n):
     assert dt <= .9 / parts["physical_1d"]
 
 
+@pytest.mark.parametrize("n", (32, 64, 128))
+def test_exact_zero_transverse_coefficient_has_no_transverse_restriction(n):
+    parts = oracle.frequencies(n, transverse_diffusivity=0.)
+    assert parts["diffusion_y"] == 0.
+    assert parts["installed_2d"] == parts["physical_1d"]
+    assert parts["installed_2d"] == pytest.approx(n + .02 * n * n)
+
+
 def test_individually_acceptable_bounds_have_negative_combined_impulse_center():
     n = 32
     dt = .75 / n  # a=1, c=.75, D=.01 gives r=.24

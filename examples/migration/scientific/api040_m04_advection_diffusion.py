@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """M04/W02: authored scalar advection-diffusion, exact cosine cell means.
 
-The installed Dim=2 equation is u_t + a u_x = D(u_xx+u_yy). The initial state,
-exact solution, and expected native state are y-invariant, so their trajectory
-solves the requested 1D equation. The stability bound nevertheless counts both
-native diffusion axes. This does not qualify Dim=1 or a degenerate D_y=0 law.
+The default native Dim=2 law is u_t + a u_x = D u_xx, with exactly zero y
+diffusion. POPS_API040_M04_DIFFUSION=isotropic replays the earlier D(u_xx+u_yy)
+variant whose valid combined step exposed the directional-frequency defect.
+Both use y-invariant exact cell averages; their different full constitutive
+laws and bounds are recorded explicitly. Neither qualifies native Dim=1.
 Run with installed PoPS, PYTHONPATH unset, and POPS_NATIVE_DIM=2.
 """
 # ruff: noqa: E402
@@ -26,7 +27,7 @@ from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.lib.time import ForwardEuler
-from pops.math import ddt, div, grad
+from pops.math import CoeffGradient, ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import Diffusion, DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
@@ -41,6 +42,10 @@ from api040_receipts import receipt_json
 # These are fixed before compilation or native data are observed.
 VELOCITY = 1.
 DIFFUSIVITY = .01
+DIFFUSION_VARIANT = os.environ.get("POPS_API040_M04_DIFFUSION", "x_only")
+if DIFFUSION_VARIANT not in ("x_only", "isotropic"):
+    raise ValueError("M04 diffusion variant must be x_only or isotropic")
+TRANSVERSE_DIFFUSIVITY = 0. if DIFFUSION_VARIANT == "x_only" else DIFFUSIVITY
 AMPLITUDE = .2
 T_END = .1
 RESOLUTIONS = (32, 64, 128)
@@ -57,7 +62,7 @@ CRITERIA = {"density_l1_max": {32: .009, 64: .0048, 128: .0024},
 
 def author_case(step: float):
     """Physical law, discrete method, time method, and acceptance stay distinct."""
-    # Physics: the constitutive diffusion has positive D on both native axes.
+    # Physics: the tensor is explicit, including its exact zero axis.
     frame = Rectangle("periodic_square", lower=(0., 0.), upper=(1., 1.)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
     model = pops.Model("scalar_advection_diffusion", frame=frame)
@@ -68,7 +73,8 @@ def author_case(step: float):
                            components={x_axis: (VELOCITY * u,), y_axis: (0 * u,)},
                            waves={x_axis: (VELOCITY,), y_axis: (0.,)})
     diffusive = model.diffusive_flux("physical_diffusion", state=state,
-                                     value=DIFFUSIVITY * grad(u))
+                                     value=CoeffGradient(u, ((DIFFUSIVITY, 0.),
+                                                            (0., TRANSVERSE_DIFFUSIVITY))))
     rate = model.rate("physical_balance", equation=ddt(state) ==
                       -div(advective) + div(diffusive))
 
@@ -91,7 +97,8 @@ def author_case(step: float):
 destination = Path(os.environ.get("POPS_API040_OUTPUT", "outputs/api040_m04"))
 records = []
 for n in RESOLUTIONS:
-    parts = frequencies(n, velocity=VELOCITY, diffusivity=DIFFUSIVITY)
+    parts = frequencies(n, velocity=VELOCITY, diffusivity=DIFFUSIVITY,
+                        transverse_diffusivity=TRANSVERSE_DIFFUSIVITY)
     dt = SAFETY_FACTOR / parts["installed_2d"]
     if not (dt * parts["installed_2d"] <= SAFETY_FACTOR + 1.e-14
             and dt <= SAFETY_FACTOR / parts["physical_1d"]):
@@ -151,7 +158,8 @@ for n in RESOLUTIONS:
             state_path = destination / ("state_%d.npz" % n)
             np.savez_compressed(state_path, initial=gathered_initial, final=actual,
                                 exact=exact, time=simulation.time(), cells=n,
-                                dt=dt, velocity=VELOCITY, diffusivity=DIFFUSIVITY)
+                                dt=dt, velocity=VELOCITY, diffusivity=DIFFUSIVITY,
+                                transverse_diffusivity=TRANSVERSE_DIFFUSIVITY)
             # Compute acceptance exclusively from reopened actual state bytes.
             with np.load(state_path) as saved:
                 observed = saved["final"]
@@ -199,10 +207,12 @@ if os.environ.get("POPS_API040_M04_AUTHORING_ONLY") != "1":
                         bool(np.all(orders >= CRITERIA["minimum_observed_order"])))
             from pops import _pops  # Provenance only; evolution uses public APIs.
             native = Path(_pops.__file__).resolve()
-            receipt = {"schema_version": 1, "case": "M04/W02",
+            receipt = {"schema_version": 2, "case": "M04/W02",
                        "status": "passed" if accepted else "failed",
-                       "scope": "Dim=2 isotropic PDE, y-invariant exact 1D trajectory; not Dim=1",
-                       "equation_2d": "u_t+a*u_x=D*(u_xx+u_yy)",
+                       "scope": "Dim=2 authored diagonal tensor, y-invariant exact trajectory; not Dim=1",
+                       "diffusion_variant": DIFFUSION_VARIANT,
+                       "diffusion_tensor": [[DIFFUSIVITY, 0.], [0., TRANSVERSE_DIFFUSIVITY]],
+                       "equation_2d": "u_t+a*u_x=Dx*u_xx+Dy*u_yy",
                        "reduced_equation": "u_t+a*u_x=D*u_xx for y-invariant state",
                        "method": "combined first-order Rusanov+two-point diffusion, ForwardEuler",
                        "criteria": CRITERIA, "resolutions": RESOLUTIONS,

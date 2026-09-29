@@ -23,7 +23,10 @@ CASES = {
                   {"POPS_API040_M03_CASE": "ideal"}),
     "m03-stiffened": ("api040_m03_euler_eos.py", "stiffened/receipt.json",
                       {"POPS_API040_M03_CASE": "stiffened"}),
-    "m04": ("api040_m04_advection_diffusion.py", "receipt.json", {}),
+    "m04": ("api040_m04_advection_diffusion.py", "receipt.json",
+            {"POPS_API040_M04_DIFFUSION": "x_only"}),
+    "m04-isotropic": ("api040_m04_advection_diffusion.py", "receipt.json",
+                      {"POPS_API040_M04_DIFFUSION": "isotropic"}),
 }
 
 

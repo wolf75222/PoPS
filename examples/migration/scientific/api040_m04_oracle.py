@@ -15,13 +15,18 @@ def exact_cell_means(n: int, t: float, *, velocity: float = 1.,
             np.cos(2 * np.pi * (centers - velocity * t)))
 
 
-def frequencies(n: int, *, velocity: float = 1., diffusivity: float = .01) -> dict[str, float]:
-    """Separate physical 1D and installed isotropic-2D stability frequencies."""
-    if n <= 0 or diffusivity < 0:
-        raise ValueError("n > 0 and diffusivity >= 0 required")
+def frequencies(n: int, *, velocity: float = 1., diffusivity: float = .01,
+                transverse_diffusivity: float | None = None) -> dict[str, float]:
+    """Separate physical 1D and native diagonal-2D stability frequencies."""
+    if transverse_diffusivity is None:
+        transverse_diffusivity = diffusivity
+    if n <= 0 or not all(np.isfinite(v) for v in
+                         (velocity, diffusivity, transverse_diffusivity)) or min(
+                             diffusivity, transverse_diffusivity) < 0:
+        raise ValueError("finite velocity, n > 0 and nonnegative diffusivities required")
     advective = abs(velocity) * n
     diffusion_x = 2 * diffusivity * n * n
-    diffusion_y = diffusion_x
+    diffusion_y = 2 * transverse_diffusivity * n * n
     return {"advection_x": advective, "diffusion_x": diffusion_x,
             "diffusion_y": diffusion_y, "physical_1d": advective + diffusion_x,
             "installed_2d": advective + diffusion_x + diffusion_y}
