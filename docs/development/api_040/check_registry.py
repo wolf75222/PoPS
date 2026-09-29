@@ -27,6 +27,15 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def pytest_counts(path):
+    cases = list(ET.parse(path).getroot().iter("testcase"))
+    return {"tests": len(cases), **{
+        name: sum(case.find(tag) is not None for case in cases)
+        for name, tag in (("failures", "failure"), ("errors", "error"),
+                          ("skipped", "skipped"))
+    }}
+
+
 def main():
     with (HERE / "contracts.csv").open(newline="") as source:
         contracts = list(csv.DictReader(source))
@@ -53,7 +62,8 @@ def main():
             "mixed mapping revisions")
     manifest_path = HERE / corpus["evidence_manifest"]
     manifest = read_json(manifest_path)
-    require(manifest["mapping_source_commit"] == corpus["current_head"], "mapping/evidence mismatch")
+    require(manifest["mapping_source_commit"] == corpus["mapping_baseline_head"],
+            "historical mapping/evidence mismatch")
     evidence_root = manifest_path.parent
     for receipt in manifest["receipts"]:
         files = {Path(item["path"]).name: item for item in receipt["files"]}
@@ -101,7 +111,75 @@ def main():
     cases = ET.parse(evidence_root / ctest["files"][0]["path"]).getroot().findall("testcase")
     require(len(cases) == ctest["total"] and dict(Counter(case.get("status") for case in cases))
             == ctest["counts"], "CTest inventory mismatch")
-    print(f"40 contracts, 28 models, 12 witnesses; {len(manifest['receipts'])} authenticated receipt snapshots consistent")
+    require(corpus["production_evidence_schema"] == 3, "unsupported reception registry schema")
+    expected_scopes = {
+        "selected_amr": ("pops.api040.selected-native-evidence/v1", "production_commit"),
+        "scientific": ("pops.api040.scientific-reception-evidence/v1", "production_source"),
+    }
+    for scope, (schema, source_key) in expected_scopes.items():
+        scoped_path = HERE / corpus["scoped_receptions"][scope]["manifest"]
+        scoped = read_json(scoped_path)
+        require(scoped["schema"] == schema and scoped[source_key] == "eac92bb",
+                f"wrong {scope} reception identity")
+        files = {item["path"]: item for item in scoped["files"]}
+        for relative, item in files.items():
+            path = scoped_path.parent / relative
+            require(path.is_file() and path.stat().st_size == item["bytes"]
+                    and hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"],
+                    f"{scope} receipt bytes changed: {relative}")
+        statuses = {}
+        for receipt in scoped["receipts"]:
+            result_path = f"{receipt['id']}/result.json"
+            require(result_path in files, f"{scope} missing receipt result: {result_path}")
+            result = read_json(scoped_path.parent / result_path)
+            status = receipt.get("status", receipt.get("runner_status"))
+            require(result["status"] == status, f"{scope} receipt status changed: {receipt['id']}")
+            require(result.get("native_sha256", scoped.get("native_sha256"))
+                    == corpus["scoped_receptions"][scope]["native_sha256"],
+                    f"{scope} native identity changed: {receipt['id']}")
+            if scope == "selected_amr" and receipt["counts"] is not None:
+                require(result["counts"] == receipt["counts"],
+                        f"AMR counts changed: {receipt['id']}")
+                require(pytest_counts(scoped_path.parent / f"{receipt['id']}/pytest.xml")
+                        == receipt["counts"], f"AMR XML counts changed: {receipt['id']}")
+            elif scope == "selected_amr":
+                require([rank["counts"] for rank in result["rank_results"]]
+                        == receipt["per_rank_counts"],
+                        f"AMR MPI rank counts changed: {receipt['id']}")
+                for rank, counts in enumerate(receipt["per_rank_counts"]):
+                    require(pytest_counts(scoped_path.parent
+                                          / f"{receipt['id']}/rank{rank}.xml") == counts,
+                            f"AMR MPI XML counts changed: {receipt['id']} rank{rank}")
+            if scope == "scientific":
+                science_path = f"{receipt['id']}/{receipt['scientific_receipt']}"
+                if status == "passed":
+                    require(science_path in files, f"missing scientific result: {science_path}")
+                if science_path in files:
+                    science = read_json(scoped_path.parent / science_path)
+                    require(science["status"] == status,
+                            f"scientific status changed: {receipt['id']}")
+                    require(result["scientific_receipt_sha256"] == files[science_path]["sha256"],
+                            f"scientific receipt identity changed: {receipt['id']}")
+            statuses[receipt["id"]] = status
+        require(statuses == corpus["scoped_receptions"][scope]["statuses"],
+                f"{scope} receipt selection changed")
+    require(corpus["scoped_receptions"]["selected_amr"]["native_sha256"]
+            == corpus["scoped_receptions"]["scientific"]["native_sha256"],
+            "selected receptions use different native artifacts")
+    ctest_path = (HERE / corpus["scoped_receptions"]["selected_amr"]["manifest"]).parent
+    ctest_path /= "native-user-amr-c38-owner.xml"
+    ctest_cases = list(ET.parse(ctest_path).getroot().iter("testcase"))
+    # The selected-AMR manifest is inspected directly because `scoped` now
+    # refers to the scientific manifest after the loop.
+    amr_manifest = read_json(HERE / corpus["scoped_receptions"]["selected_amr"]["manifest"])
+    scoped_ctest = amr_manifest["ctest"]
+    require(len(ctest_cases) == scoped_ctest["rows"]
+            and dict(Counter(case.get("status") for case in ctest_cases))
+            == scoped_ctest["status_counts"], "selected AMR CTest inventory changed")
+    total_scoped = sum(len(read_json(HERE / data["manifest"])["receipts"])
+                       for scope, data in corpus["scoped_receptions"].items()
+                       if scope in expected_scopes)
+    print(f"40 contracts, 28 models, 12 witnesses; {len(manifest['receipts'])} historical and {total_scoped} scoped receipt snapshots consistent")
     print("No native, numerical, MPI, or global acceptance implied.")
 
 

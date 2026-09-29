@@ -1,8 +1,8 @@
 {
   "source": "PoPS_Codex_handoff_0.4.0/reference/PoPS_API_v0.4.0/results/corpus_matrix.json",
   "witness_source": "PoPS_Codex_handoff_0.4.0/context/CORPUS_ORIGINAL.md:278-289",
-  "current_head": "83b2b1239973f3e744f9e3975734a40a3abf65d6",
-  "mapping_kind": "source and receipt audit; historical identities retained; no global acceptance",
+  "current_head": "5d1126811ff72fbe54d8686682ff2eb1ca6254d1",
+  "mapping_kind": "source and receipt reconciliation through 5d11268; historical 83b2b12 and failed eac92bb attempts retained; no global acceptance",
   "models": [
     {
       "id": "M01",
@@ -137,13 +137,16 @@
       "reference_limit": "Calcul d’accumulation possible; relation de phase et front de Stefan non construits.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
-      "production_status": "source_and_oracle_checked_native_pending",
-      "qualification": "Authored conserved enthalpy with piecewise temperature/phase relation, native named diagnostics and predeclared saved-state criteria. M06/M13 eleven source/oracle cases pass in installed unit044fade; no full scientific receipt located in this window.",
-      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
-      "remaining_gap": "Homogeneous H evolution does not establish nonlinear accumulation in T or moving Stefan interface.",
+      "production_status": "scoped_native_pass",
+      "qualification": "Eight homogeneous enthalpy scenarios pass on installed eac92bb/native 6b5f452e after observing the accepted history slot. The original import and one-step-lag failures remain archived; H, T and phase are checked against independent saved-state criteria.",
+      "assessment_kind": "scoped_native_receipt_reconciled_at_5d11268",
+      "remaining_gap": "Homogeneous H accumulation does not establish nonlinear accumulation in T or a moving Stefan interface; other dimensions/MPI and later source are unexecuted.",
       "production_evidence": [
         "evidence/83b2b12/installed-38faddb-unit",
-        "m06_m13_scientific.md"
+        "m06_m13_scientific.md",
+        "evidence/scientific-eac92bb/m06-eac92bb-openmp1-accepted-history",
+        "evidence/scientific-eac92bb/m06-eac92bb-openmp1",
+        "evidence/scientific-eac92bb/m06-eac92bb-openmp1-reviewed"
       ]
     },
     {
@@ -177,13 +180,15 @@
       "reference_limit": "Solve et gradient disponibles; assemblage centre-guide 2D compatible non construit.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/fields/poisson.py;python/pops/time/_program/calls.py",
-      "production_status": "source_and_oracle_checked_native_pending",
-      "qualification": "Two separate charge/tracer states and blocks, SSPRK2 stage Poisson solves, same-time distinct probe, exact field-frontier negative tests and independent FFT/FV oracle integrated. Installed unit044fade contains14 field/M08 authoring/oracle checks. Fresh/stale discrimination requires3e-11 plus20x separation; old3e-7 is invalid for this purpose.",
-      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
-      "remaining_gap": "No saved native state receipt for the complete variant in this window. Stage/cache correctness is not established by source emission alone.",
+      "production_status": "partial_native_final_state_pass_stage_rerun_pending",
+      "qualification": "The installed eac92bb/native 6b5f452e Dim2 N32/N64 run passes final-state and current-field checks. A subsequent audit proves its saved stage0 diagnostic read the previous history slot, so that diagnostic and the complete stage/cache claim are not accepted by this receipt.",
+      "assessment_kind": "scoped_native_receipt_reconciled_at_5d11268",
+      "remaining_gap": "Rerun the corrected slot-1 observation with the independent SSPRK2 stage oracle; original stage/cache witness W04 and other dimensions/MPI remain open.",
       "production_evidence": [
         "evidence/83b2b12/installed-38faddb-unit",
-        "m08_scientific_variant.md"
+        "m08_scientific_variant.md",
+        "evidence/scientific-eac92bb/m08-eac92bb-openmp1",
+        "history_post_run_observation_audit.md"
       ]
     },
     {
@@ -279,13 +284,14 @@
         "N11"
       ],
       "production_candidate_symbols": "python/pops/physics/_authoring_sources.py:source_term;python/pops/time/_program/local.py:solve",
-      "production_status": "source_and_oracle_checked_native_pending",
-      "qualification": "A→B→C SSPRK2 source chain, qualified live parameters/rebind, component permutation, independent closed-form and expm oracle, prescribed native negative-rate rollback prepared. Eleven combined M06/M13 source checks pass in installed unit044fade.",
-      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
-      "remaining_gap": "Native full trajectory receipt not located. This source chain does not realize streamer transport, Poisson coupling or nonlocal photoionization/photon budgets.",
+      "production_status": "scoped_native_pass",
+      "qualification": "Eight installed eac92bb/native 6b5f452e homogeneous A→B→C runs pass independent exponential and conservation criteria across two grids, nonzero-rate combinations, zero rate and component order.",
+      "assessment_kind": "scoped_native_receipt_reconciled_at_5d11268",
+      "remaining_gap": "This source chain does not realize streamer transport, Poisson coupling or nonlocal photoionization/photon budgets; other dimensions/MPI and later source unexecuted.",
       "production_evidence": [
         "evidence/83b2b12/installed-38faddb-unit",
-        "m06_m13_scientific.md"
+        "m06_m13_scientific.md",
+        "evidence/scientific-eac92bb/m13-eac92bb-openmp1"
       ]
     },
     {
@@ -367,15 +373,17 @@
         "N10_fan_li"
       ],
       "production_candidate_symbols": "python/pops/physics/_board_rate.py:nonconservative_product;python/pops/numerics/nonconservative.py:PathConservativeFiniteVolume",
-      "production_status": "failed_historical_reception_fix_pending",
-      "qualification": "Full Fan-Li source example and oracle exist. Native220b full run failed old FixedDt active-step_cfl restriction. Generic consumer-stability v2 and exact SSP budgets integrated; source path/oracle checks pass in unit044fade. Old CTest AMR budget expectation failed and was adapted in db486be.",
-      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
-      "remaining_gap": "New native full M17 and adapted C++ witness receipt pending; no source-only or reduced path witness is promoted to full scientific qualification.",
+      "production_status": "scoped_native_pass",
+      "qualification": "The full authored Fan–Li15 Uniform Dim2 x-dependent extrusion passes eight SSPRK2 steps in canonical and reversed component order on installed eac92bb/native 6b5f452e. Independent DOP853/Gauss24 error is 4.461e-10, nonconservative contribution 7.564e-3 and permutation error zero; the prior FixedDt admission failure is retained.",
+      "assessment_kind": "scoped_native_receipt_reconciled_at_5d11268",
+      "remaining_gap": "Dim1, AMR, higher-order interior contribution and later unbuilt source remain unqualified; this scoped run does not establish them.",
       "production_evidence": [
         "evidence/83b2b12/m17-220b-openmp1",
         "evidence/83b2b12/installed-38faddb-unit",
         "evidence/83b2b12/manifest.json",
-        "path_consumer_stability_v2.md"
+        "path_consumer_stability_v2.md",
+        "evidence/scientific-eac92bb/m17-eac92bb-openmp1",
+        "evidence/scientific-eac92bb/m17-eac92bb-openmp1-reviewed"
       ]
     },
     {
@@ -622,12 +630,14 @@
       "title": "Poisson au vrai stage",
       "related_model": "M08",
       "production_candidate_symbols": "python/pops/time/_program/clocks.py:stage;python/pops/fields/poisson.py",
-      "production_status": "source_checked_native_pending",
-      "qualification": "M08 exact same-time probe and fresh/stale second-field oracle discriminate erroneous reuse; native saved-state trajectory remains pending.",
-      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception.",
+      "production_status": "partial_native_final_state_stage_rerun_pending",
+      "qualification": "M08 final-state/current-field Dim2 N32/N64 checks pass on native 6b5f452e, but its saved stage diagnostic used the prior history slot; the original same-time stage/cache witness is not qualified.",
+      "remaining_gap": "Corrected slot-1 stage diagnostic and independent stage oracle require a fresh native receipt; cross-stage reuse remains open.",
       "production_evidence": [
         "evidence/83b2b12/installed-38faddb-unit",
-        "m08_scientific_variant.md"
+        "m08_scientific_variant.md",
+        "evidence/scientific-eac92bb/m08-eac92bb-openmp1",
+        "history_post_run_observation_audit.md"
       ]
     },
     {
@@ -668,12 +678,14 @@
       "title": "Fan-Li réellement non conservatif",
       "related_model": "M17",
       "production_candidate_symbols": "python/pops/numerics/nonconservative.py:PathConservativeFiniteVolume",
-      "production_status": "failed_historical_reception_fix_pending",
-      "qualification": "True nonconservative Fan-Li case source/oracle present;220b failed old FixedDt admission; consumer-v2 full rerun pending.",
-      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception.",
+      "production_status": "scoped_native_pass",
+      "qualification": "M17/W08 full authored nonconservative Fan–Li15 Dim2 x-dependent Uniform case passes canonical and reversed eight-step SSPRK2 runs on native 6b5f452e; old FixedDt failure remains archived.",
+      "remaining_gap": "Dim1/AMR and general nonconservative schemes are not established by this scoped witness.",
       "production_evidence": [
         "evidence/83b2b12/m17-220b-openmp1",
-        "path_consumer_stability_v2.md"
+        "path_consumer_stability_v2.md",
+        "evidence/scientific-eac92bb/m17-eac92bb-openmp1",
+        "evidence/scientific-eac92bb/m17-eac92bb-openmp1-reviewed"
       ]
     },
     {
@@ -713,7 +725,7 @@
       "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
     }
   ],
-  "production_evidence_schema": 2,
+  "production_evidence_schema": 3,
   "evidence_manifest": "evidence/83b2b12/manifest.json",
   "reception_window": {
     "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
@@ -726,7 +738,7 @@
       "failures": 0,
       "status": "failed"
     },
-    "qualification": "Both completed83 receipts retained separately; no global acceptance. Further reruns excluded. Other dimensions/GPU/OpenMPI unqualified.",
+    "qualification": "Historical 83b2b12 window retained, including all failures. Later scoped eac92bb receipts are recorded separately; no global acceptance or GPU/OpenMPI qualification.",
     "corrected_pde_receipt": {
       "tests": 21,
       "passed": 12,
@@ -745,7 +757,38 @@
     {
       "commit": "3d06cab",
       "change": "Do not instantiate group User policies on constituent Program-only storage carriers; principal helper retains policies.",
-      "reception": "pending; seven83 generated compilation failures retained"
+      "reception": "Seven selected installed AMR routes pass on native 6b5f452e; earlier seven critical83 failures remain in historical evidence. See scoped_receptions.selected_amr."
     }
-  ]
+  ],
+  "mapping_baseline_head": "83b2b1239973f3e744f9e3975734a40a3abf65d6",
+  "scoped_receptions": {
+    "selected_amr": {
+      "manifest": "evidence/eac92bb/manifest.json",
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "statuses": {
+        "installed-a085890-amr-routes": "passed",
+        "installed-eac92bb-rank-one-amr-mpi2": "failed",
+        "installed-eac92bb-rank-one-amr-mpi2-diagnostics": "failed",
+        "installed-eac92bb-rank-one-amr-mpi2-reviewed": "passed"
+      },
+      "limit": "Seven selected installed AMR routes and one rank-one invalid-body MPI2 rollback test; no full C38/AND9 or general AMR acceptance."
+    },
+    "scientific": {
+      "manifest": "evidence/scientific-eac92bb/manifest.json",
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "statuses": {
+        "m06-eac92bb-openmp1": "failed",
+        "m06-eac92bb-openmp1-reviewed": "failed",
+        "m06-eac92bb-openmp1-accepted-history": "passed",
+        "m13-eac92bb-openmp1": "passed",
+        "m08-eac92bb-openmp1": "passed",
+        "m17-eac92bb-openmp1": "failed",
+        "m17-eac92bb-openmp1-reviewed": "passed",
+        "cattaneo-eac92bb-openmp1": "failed",
+        "cattaneo-eac92bb-openmp1-named-grid": "passed"
+      },
+      "limit": "M06/M13/M17/Cattaneo pass in their declared Dim2 OpenMP1 scopes; M08 final state passes but its archived stage diagnostic is invalid pending corrected rerun."
+    },
+    "source_after_executed_package": "5d1126811ff72fbe54d8686682ff2eb1ca6254d1 includes coordinated faces, products and C38 AND9 under build; no eac92bb runtime result is assigned to them."
+  }
 }
