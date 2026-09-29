@@ -121,6 +121,9 @@ def _ledger_metrics(rows: list[dict], before: np.ndarray, after: np.ndarray,
     if len(rows) != 2 * cells:
         raise AssertionError("M05 last accepted ledger must contain two incidences per cell")
     for row in rows:
+        if not all(math.isfinite(row[name]) for name in (
+                "numerical_flux", "face_measure", "temporal_weight", "integrated_amount")):
+            raise AssertionError("M05 ledger contains a nonfinite numerical field")
         cell_token, axis_token, side_token = row["quadrature_identity"].split("/")
         cell = int(cell_token.split(":")[1])
         axis = int(axis_token.split(":")[1])
@@ -314,6 +317,10 @@ def run_and_archive(destination: Path) -> list[dict]:
                     final=np.asarray(final_global).reshape(initial.shape),
                     dt=last_dt, cells=cells, time=simulation.time())
                 rows = [row for piece in gathered_rows for row in json.loads(piece)]
+                ledger_path = destination / f"ledger_{cells}.json"
+                ledger_path.write_text(receipt_json(rows)+"\n")
+                # The oracle checks the serialized evidence, not just live rows.
+                rows = json.loads(ledger_path.read_text())
                 metrics = _assess_saved_state(
                     saved, rows, cells, first_report, last_report)
                 metrics.update({
@@ -324,6 +331,8 @@ def run_and_archive(destination: Path) -> list[dict]:
                     "execution_context": execution.to_data(),
                     "saved_state": saved.name,
                     "saved_state_sha256": hashlib.sha256(saved.read_bytes()).hexdigest(),
+                    "saved_ledger": ledger_path.name,
+                    "saved_ledger_sha256": hashlib.sha256(ledger_path.read_bytes()).hexdigest(),
                     "first_run_report": first_report.to_data(),
                     "last_run_report": last_report.to_data(),
                 })
@@ -344,6 +353,9 @@ def run_and_archive(destination: Path) -> list[dict]:
                 "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
                 "mpi_ranks": world.size,
                 "threads_requested": int(os.environ.get("POPS_THREADS", "1")),
+                "example_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "oracle_sha256": hashlib.sha256(
+                    Path(__file__).with_name("api040_m05_shear_oracle.py").read_bytes()).hexdigest(),
             })+"\n").encode()
             (destination / "receipt.json").write_bytes(payload)
         except Exception as exception:

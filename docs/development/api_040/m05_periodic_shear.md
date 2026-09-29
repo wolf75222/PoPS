@@ -50,6 +50,12 @@ ranks participate in bind/run/gather/status; `BindArray` is supplied through
 legacy `initial_state` authority). Only rank zero writes NPZ and
 receipt, then broadcasts the verdict. Package prefix, native file hash,
 artifact identity/ABI, execution context and each NPZ hash enter the receipt.
+The complete last-step ledger is also saved as `ledger_N.json`, reopened
+before its numerical checks, and hashed in the receipt. Example and independent
+oracle source hashes are retained. Every ledger numeric field must be finite
+before any tolerance or maximum calculation; a NaN cannot disappear inside
+`max` or an ordered comparison. The pytest wrapper converges its local
+receipt assertions before the following broadcast.
 All Python/NumPy authoring, oracle and installed-package preflight decisions
 are agreed by the bootstrap world before compilation or bind; rank-local
 errors cannot let a peer enter the next native collective alone. The runtime
