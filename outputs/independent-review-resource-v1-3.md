@@ -1,0 +1,9 @@
+# Independent review: resource companion v1.3 (4138aea)
+
+This reviews the frozen three-file change in `PoPS-resource-lifetime`; no profiling campaign or native build was run here. The v1.2 failure remains a failed receipt, not a resource measurement.
+
+The v1.2→v1.3 script diff changes its description, result schema, plan's directory metadata, and the two directory arguments in `_driver`. Metadata workers now write under `preflight/`, profiling workers under `profiling/`. `_invoke` still calls exclusive `cache.mkdir(parents=True)` and `codegen.mkdir(parents=True)`, so an occupied profiling directory is not silently reused. The preflight ABI/SDK/artifact comparison still completes before any profiling worker is launched. All worker, profiling, invocation, identity and counter-aggregation function ASTs are identical across versions; the case protocol SHA, snapshot identities, warmup/profile counts and profile boundary remain pinned.
+
+I independently reran `test_joint_resource_v1_3_driver.py` with `env -u PYTHONPATH` under `pops-api040`: **6/6 passed in 1.15 s**. The tests call the actual versioned drivers and `_invoke` functions through real subprocesses and directories, with an explicitly synthetic child payload. They reproduce the v1.2 collision after two metadata children; v1.3 reaches two metadata and two profiling children with separate empty-at-entry paths. Dirty profiling cache, mismatched preflight metadata, mismatched saved states and restart of a completed output all refuse publication. These are orchestration checks, not solver, JIT, native-counter or performance results.
+
+The correction is source-level acceptable for a new central campaign against the **retained 3d06cab→cf6dace** snapshots. Only a real v1.3 `result.json` with authenticated native identities, equivalent saved states and available counters can support a comparative resource statement. An absent counter must remain unavailable, not zero.
