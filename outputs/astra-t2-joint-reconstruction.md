@@ -1,5 +1,39 @@
 # T2 joint/vector reconstruction delivery
 
+## Follow-up to 72b336c: source storage halo
+
+Independent review identified a blocking allocation gap in the first delivery:
+the generated group policy declared its maximum halo, but each conservative
+StateStorage still allocated only its own row's requirement. `pack_prepared`
+copies at most the source's ghost extent, so a wide read of another row reached
+unfilled packed entries. Primitive rows already promoted the complete group.
+
+The correction promotes **every input in every principal group** to the maximum
+of all its methods. It changes only `state_storage_lowering.py` and the matching
+resolved-plan projection/nesting in `numerics/plan.py`. The compatibility method
+name `joint_primitive_ghost_depth` forwards to the generalized requirement.
+There is no fabricated padding, new physical bound or native-header change.
+
+New source witness `test_user_joint_reconstruction_storage.py` uses the actual
+public Case/resolve/ProgramModelGraph route, checks generated
+`program_state_ghost_depth`, runtime primary storage depth and AMR
+`minimum_buffer` for each block. It covers both block creation orders and both
+vector/vector and vector/legacy-scalar rows. The decisive mixed case reads V at
+offset +3 from U while V's own reconstruction only reads offset 0.
+Baseline 72b336c: **4 failed**, either block0=2<3 or block1=1<4, recorded in
+`outputs/t2-joint-storage-red.xml`. The first test drafts had import/fixture errors;
+that receipt was replaced only after all four cases reached these allocation
+assertions. No such setup error is counted as evidence for the storage defect.
+
+Final affected-area suite: **49 passed in 94.10 s**. Receipt:
+`outputs/t2-joint-storage-green.xml`. Coverage includes the new four-case
+allocation witness, joint emission/captures, existing Primitive group storage,
+generic diffusion and source-only storage. Ruff and `git diff --check` pass.
+Independent Sol recheck: three halo variants **3/3 passed**, separate authoring
+counter-tests **5/5 passed**, mixed System/AMR emission accepted. Native public
+mesh execution remains pending the central rebuild; Sol's `e153b74` extends the
+independent runtime oracle to joint + legacy scalar rows.
+
 Base: MAIN `83b2b1239973f3e744f9e3975734a40a3abf65d6`, isolated branch
 `codex/api040-joint-reconstruction` in `PoPS-resource-lifetime`.
 No shared checkout edit, package installation, or heavy build.

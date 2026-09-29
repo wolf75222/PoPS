@@ -34,7 +34,7 @@ def test_cross_two_plus_three_body_is_a_real_vector_not_componentwise():
     assert policy.options["component_counts"] == (2, 3)
 
 
-def joint_case(*, reverse=False, foreign=False, mixed=False):
+def joint_case(*, reverse=False, foreign=False, mixed=False, cross_offset=1):
     from pops.layouts import Uniform
     from pops.math import ddt, div
     from pops.mesh import CartesianGrid, PeriodicAxes
@@ -70,7 +70,7 @@ def joint_case(*, reverse=False, foreign=False, mixed=False):
     policies = (
         reconstruction.User(
             lambda s: (
-                s(0)[0] + coefficient * (s(1, b)[2] - s(-1, b)[0]),
+                s(0)[0] + coefficient * (s(cross_offset, b)[2] - s(-1, b)[0]),
                 s(0)[1] + coefficient * (s(1, b)[1] - s(-1)[0]),
             ),
             state=a,

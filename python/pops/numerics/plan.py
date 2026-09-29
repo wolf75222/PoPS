@@ -388,11 +388,14 @@ class ResolvedDiscretizationPlan:
     def to_data(self) -> dict[str, Any]:
         return {**self._payload(), "identity": self.identity.token}
 
-    def joint_primitive_ghost_depth(self) -> int:
-        """Every joint recovery samples every conservative row at the active offset."""
+    def joint_ghost_depth(self) -> int:
+        """Every packed input covers all row stencils, in either coordinate system."""
         return max((method.ghost_depth for group in self.principal_groups
-                    if group.methods[0].variables.scheme == "primitive"
                     for method in group.methods), default=1)
+
+    def joint_primitive_ghost_depth(self) -> int:
+        """Compatibility name for the shared conservative/primitive storage requirement."""
+        return self.joint_ghost_depth()
 
     def primary_spatial(self) -> Any:
         """Project independently evaluated rates onto one native transport installation.
@@ -425,7 +428,7 @@ class ResolvedDiscretizationPlan:
         installed = [index for index, depth in enumerate(storage_depths) if depth is None]
         if not installed:
             selected = methods[max(range(len(methods)), key=storage_depths.__getitem__)]
-            joint_depth = self.joint_primitive_ghost_depth()
+            joint_depth = self.joint_ghost_depth()
             if joint_depth > selected.ghost_depth:
                 from .state_storage import StateStorage
                 return StateStorage(ghost_depth=joint_depth)
@@ -445,7 +448,7 @@ class ResolvedDiscretizationPlan:
 
         if isinstance(dimension, bool) or dimension not in (1, 2, 3):
             raise ValueError("AMR stencil dimension must be 1, 2, or 3")
-        ghost_depth = max(self.joint_primitive_ghost_depth(),
+        ghost_depth = max(self.joint_ghost_depth(),
                           *(row.method.ghost_depth for row in self.rates))
         lookahead = max(row.method.formal_order - 1 for row in self.rates)
         evidence = {

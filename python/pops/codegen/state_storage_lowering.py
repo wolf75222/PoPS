@@ -21,11 +21,12 @@ def prepare_state_storage_requirements(
 
         emitter = native_formula_view(emitter, module)
         impl = getattr(emitter, "_m", emitter)
-    # Primitive conversion at a sampled offset reads the complete conservative group,
-    # even when the requesting row alone owns the wider reconstruction stencil.
+    # Every packed group row can be sampled by another row's joint reconstruction.
+    # Primitive recovery also reads the complete group. Allocate the union stencil
+    # on every input: a wider packed destination cannot invent absent source ghosts.
     depth = max((depth, *(method.ghost_depth
                  for entry in getattr(impl, "_principal_groups", ())
-                 if entry["conversion"] is not None for method in entry["group"].methods)))
+                 for method in entry["group"].methods)))
     object.__setattr__(impl, "_program_state_ghost_depth", depth)
     return emitter
 
