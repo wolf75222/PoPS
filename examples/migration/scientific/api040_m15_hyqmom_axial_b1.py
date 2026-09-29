@@ -164,9 +164,12 @@ if __name__ == "__main__":
                                     "saved_state_sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
                 except Exception as error:
                     failure = (type(error).__name__+": "+str(error)).encode()
-                    (destination / "receipt.json").write_text(receipt_json({
-                        "case": "M15_axial_B1_order4_fixed_fe", "status": "failed",
-                        "reason": failure.decode(), "criteria": CRITERIA, "records": records})+"\n")
+                    try:
+                        (destination / "receipt.json").write_text(receipt_json({
+                            "case": "M15_axial_B1_order4_fixed_fe", "status": "failed",
+                            "reason": failure.decode(), "criteria": CRITERIA, "records": records})+"\n")
+                    except Exception as receipt_error:
+                        failure += ("; failure receipt unavailable: "+str(receipt_error)).encode()
             failure = world.broadcast_bytes(failure, root=0)
             if failure:
                 raise RuntimeError(failure.decode())
@@ -209,17 +212,17 @@ if __name__ == "__main__":
                         raise RuntimeError(failure.decode())
     failure = b""
     if world.rank == 0:
-        receipt = {"schema_version": 1, "case": "M15_axial_B1_order4_fixed_fe", "status": "passed",
-                   "scope": "genuine Dim=1 periodic five-moment B.1; not Fox-Laurent multiorder",
-                   "resolutions": RESOLUTIONS, "t_end": T_END, "orders": ORDERS,
-                   "spatial_method": "FirstOrder/HLL exact signed Jacobian eigenvalue bounds",
-                   "temporal_method": "ForwardEuler FixedDt=1/(100N)", "criteria": CRITERIA,
-                   "records": records, "inadmissible_initial_rejections": rejections,
-                   "package_file": str(package), "package_version": pops.__version__,
-                   "native_file": str(native_file),
-                   "native_sha256": hashlib.sha256(native_file.read_bytes()).hexdigest(),
-                   "threads_requested": os.environ.get("POPS_THREADS", "1")}
         try:
+            receipt = {"schema_version": 1, "case": "M15_axial_B1_order4_fixed_fe", "status": "passed",
+                       "scope": "genuine Dim=1 periodic five-moment B.1; not Fox-Laurent multiorder",
+                       "resolutions": RESOLUTIONS, "t_end": T_END, "orders": ORDERS,
+                       "spatial_method": "FirstOrder/HLL exact signed Jacobian eigenvalue bounds",
+                       "temporal_method": "ForwardEuler FixedDt=1/(100N)", "criteria": CRITERIA,
+                       "records": records, "inadmissible_initial_rejections": rejections,
+                       "package_file": str(package), "package_version": pops.__version__,
+                       "native_file": str(native_file),
+                       "native_sha256": hashlib.sha256(native_file.read_bytes()).hexdigest(),
+                       "threads_requested": os.environ.get("POPS_THREADS", "1")}
             (destination / "receipt.json").write_text(receipt_json(receipt)+"\n")
             print(receipt_json(receipt))
         except Exception as error:
