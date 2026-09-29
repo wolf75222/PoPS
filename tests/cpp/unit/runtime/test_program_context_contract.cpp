@@ -2178,6 +2178,67 @@ TEST(ProgramContextContract, IntegralStateConsumesExactAcceptedTraceAndRollsBack
       "program/integral/q", selector("stage/a"), -1.0), std::invalid_argument);
 }
 
+TEST(ProgramContextContract, IntegralStateCollectiveRefusalsPreserveValueAndConsumption) {
+  using Ledger = runtime::program::AcceptedExchangeLedger;
+  using Record = runtime::program::ExchangeRecord;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.integral-collective-refusals");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(8));
+  sim.declare_program_integral("q", 0.7);
+  const auto declared = sim.checkpoint_program_exchanges();
+  if (n_ranks() > 1) {
+    EXPECT_THROW(sim.declare_program_integral("another", my_rank() == 0 ? 0.0 : -0.0),
+                 std::runtime_error);
+    EXPECT_EQ(sim.checkpoint_program_exchanges(), declared);
+  }
+
+  const auto face = [] {
+    Record record{"flux", "occurrence", "stage", "face/x+", -1, 1.0, 2.0, 1.0, 1};
+    record.trace_axis = 0;
+    record.trace_side = 1;
+    record.trace_component = 0;
+    record.exterior_trace = true;
+    record.source_evaluation_identity = "stage";
+    return record;
+  };
+  const Ledger::TraceSelection selector{"flux", "occurrence", 0, 1, 0, "stage"};
+  sim.begin_step_transaction();
+  std::vector<Record> records;
+  if (my_rank() == 0) records.push_back(face());
+  sim.stage_program_exchanges(records);
+  const auto staged = sim.checkpoint_program_exchanges();
+  if (n_ranks() > 1) {
+    auto divergent = selector;
+    if (my_rank() != 0) divergent.side = 0;
+    EXPECT_THROW(sim.consume_program_external_trace("q", divergent, -0.5), std::runtime_error);
+    EXPECT_EQ(sim.checkpoint_program_exchanges(), staged);
+  }
+  EXPECT_THROW(sim.consume_program_external_trace("q", selector, 1.e308), std::runtime_error);
+  EXPECT_EQ(sim.checkpoint_program_exchanges(), staged);
+  EXPECT_DOUBLE_EQ(sim.program_integral("q"), 0.7);
+  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace("q", selector, -0.5), 1.7);
+  sim.rollback_step_transaction();
+  EXPECT_EQ(sim.checkpoint_program_exchanges(), declared);
+
+  if (n_ranks() > 1) {
+    // Both wire images are individually valid, but replicated q disagrees. The
+    // restore must vote before publishing either rank's candidate image.
+    Ledger candidate;
+    candidate.declare_integral("q", 0.7);
+    candidate.stage(face());
+    const auto trace = candidate.prepare_trace(selector);
+    candidate.apply_trace("q", trace, my_rank() == 0 ? -2.0 : -4.0, -0.5);
+    sim.begin_restart_transaction();
+    EXPECT_THROW(sim.restore_checkpoint_program_exchanges(candidate.checkpoint()),
+                 std::runtime_error);
+    EXPECT_EQ(sim.checkpoint_program_exchanges(), declared);
+    sim.rollback_restart_transaction();
+  }
+}
+
 TEST(ProgramContextContract, TransactionScopeDivergenceRefusesBeforeMutation) {
   ensure_kokkos();
   comm_init();
