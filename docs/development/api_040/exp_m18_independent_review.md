@@ -67,9 +67,13 @@ rollback condition was weakened. The author incorporated this fix as `bfb22b5`.
 The original six-unknown product contains three identity equations for the target
 state. That is not necessary mathematically; it worked around a read-only capture
 being omitted from artifact bind inputs. Root is repairing that separate generic
-input-discovery route, and the author is simplifying M18 to three dual unknowns
-with an external immutable target capture. The follow-up source review must name
-that later SHA; the evidence above concerns the original two author commits.
+input-discovery route. Author follow-up `ab5ecbd` was independently reread and
+rerun: **17/17 source/host tests passed in 3.80 seconds**. It retains three dual
+unknowns with the external immutable target capture, one dual commit, and the
+unchanged original residual. The emitted host solve now has width three and checks
+its reported original-residual norm. The MPI-converged fixture assertions remain.
+No target identity equation or target publication is used to force bind discovery.
+The review alias `ef15715` need not be integrated alongside the author's SHA.
 
 The handoff distinguishes infeasibility on the retained quadrature from a feasible
 boundary target with no finite dual multiplier. The pure oracle implements that
