@@ -528,8 +528,14 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
       auto& state = *states[block];
       auto& result = *residuals[block];
       const bool only_flux = !flux_only.empty() && flux_only[block] != 0;
-      if (!selected.boundary && (retained_faces.empty() || retained_faces[block] == nullptr)) {
-        owner->blocks_.evaluate_rhs_core(point, block, state, result, only_flux);
+      const bool prepared_periodic = only_flux
+                                         ? static_cast<bool>(selected.periodic_flux_at_point_prepared)
+                                         : static_cast<bool>(selected.periodic_full_at_point_prepared);
+      if (!selected.boundary && !prepared_periodic) {
+        runtime::program::collective_boundary_provider_phase(
+            *lane, "System shared-interface unprepared core failed collectively", [&] {
+              owner->blocks_.evaluate_rhs_core(point, block, state, result, only_flux);
+            });
         continue;
       }
       const auto& transport = *sessions[block];
@@ -574,15 +580,16 @@ void System<Dim>::prepare_bound_physical_group_() {
   const bool physical = !p_->boundary_registry_.boundaries().empty();
   if (!physical && !prepared_boundary_execution_lane_)
     return;
-  if (!physical && std::none_of(p_->sp.begin(), p_->sp.end(), [](const auto& block) {
-        return static_cast<bool>(block.periodic_flux_at_point_prepared);
-      }))
+  const bool periodic_prepared = std::any_of(p_->sp.begin(), p_->sp.end(), [](const auto& block) {
+    return static_cast<bool>(block.periodic_flux_at_point_prepared) &&
+           static_cast<bool>(block.periodic_full_at_point_prepared);
+  });
+  if (!physical && !periodic_prepared)
     return;
   // Native finalization has published the exact complete block/boundary graph. Prepare the
   // transport scratch once before bound-state publication; grouped calls subsequently borrow it.
   auto core = prepare_interface_core_evaluator_(&p_->prepared_boundary_group_faces_);
-  if (physical)
-    p_->prepared_boundary_group_core_ = std::move(core);
+  p_->prepared_boundary_group_core_ = std::move(core);
 }
 
 template <int Dim>
