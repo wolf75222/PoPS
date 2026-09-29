@@ -11,8 +11,8 @@ from pops.codegen.program_models import ProgramModelGraph
 from pops.mesh._amr._transfer_contracts import COARSE_FINE_FILL
 from pops.numerics import StateStorage
 from tests.python.support.affine_push_forward_amr_case import (
-    CELLS, affine_amr_case, expected_level_cell_averages, mapped_particle_moments,
-    raw_particle_moments,
+    CELLS, REFINE_DENSITY_LOWER, REFINE_DENSITY_UPPER, affine_amr_case,
+    expected_level_cell_averages, mapped_particle_moments, raw_particle_moments,
 )
 
 
@@ -77,10 +77,12 @@ def test_independent_particle_oracle_has_exact_amr_cell_axes():
         assert expected[0, -1, -1] == pytest.approx(1.0 + .6 * (width - .5) / width)
 
 
-def test_authored_density_tag_selects_only_half_the_coarse_columns():
+def test_authored_density_band_selects_interior_coarse_columns():
     initial = expected_level_cell_averages(raw_particle_moments(), 0)
-    tagged_columns = tuple(value > 1.3 for value in initial[0, 0])
-    assert tagged_columns == (False,) * (CELLS // 2) + (True,) * (CELLS // 2)
+    tagged_columns = tuple(i for i, value in enumerate(initial[0, 0])
+                           if REFINE_DENSITY_LOWER < value <= REFINE_DENSITY_UPPER)
+    assert tagged_columns == (7, 8)
+    assert min(tagged_columns) > 0 and max(tagged_columns) < CELLS - 1
 
 
 def test_transfer_does_not_reduce_a_deeper_exact_storage_halo():

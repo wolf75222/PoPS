@@ -26,10 +26,11 @@ from pops.solvers.nonlinear import LocalNewton
 from pops.time import FailRun, FixedDt, LocalResidual
 
 
-# The native patch generator rounded the former 8x8 witness to full fine
-# coverage. Sixteen coarse cells leave a real coarse/fine interface for the
-# x > 1/2 tag while retaining the same physical profile and step duration.
+# A tag band in the interior avoids wrapping the periodic x seam when the
+# native hierarchy grows/nests tagged patches. This is a geometry selection;
+# the linear particle density and its exact cell-average oracle are unchanged.
 CELLS, DT = 16, .01
+REFINE_DENSITY_LOWER, REFINE_DENSITY_UPPER = 1.25, 1.35
 INDICES = tuple(index for index in itertools.product(range(3), repeat=2)
                 if sum(index) <= 2)
 PARTICLES = np.asarray(((-.4, .2), (-.1, -.3), (.25, .45), (.6, -.15)), dtype=float)
@@ -97,14 +98,16 @@ def affine_amr_case(*, levels=1, case_name="affine_amr_public_body",
                                                       for raw in raw_particle_moments())),
         projection=ConservativeCellAverage(),
     ))
-    threshold = case.param(RuntimeParam("refine_density", default=1.3))
+    lower = case.param(RuntimeParam("refine_density_lower", default=REFINE_DENSITY_LOWER))
+    upper = case.param(RuntimeParam("refine_density_upper", default=REFINE_DENSITY_UPPER))
+    indicator = ValueExpr(subject)[state.components[0]]
     transfer = AMRTransfer()
     transfer.state(subject, StateTransfer())
     layout = AMR(
         grid=CartesianGrid(frame=frame, cells=(CELLS, CELLS), periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,)*(levels-1)),
         tagging=AMRTagging(
-            rules=(Tag(ValueExpr(subject)[state.components[0]] > case.value(threshold)),
+            rules=(Tag((indicator > case.value(lower)) & ~(indicator > case.value(upper))),
                    Buffer(cells=0)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
