@@ -915,6 +915,13 @@ class ProgramContext {
     return system_->prepared_program_block_active_mask_(runtime_block, field, lane);
   }
 
+  /// Uniform faces have no coarse coverage to exclude. Accepted-exchange producers
+  /// query this separately from the embedded-boundary mask so the AMR route can
+  /// enforce both physical activity and finest-owner coverage.
+  const field_type* pointwise_exchange_coverage_mask(int, const field_type&) const noexcept {
+    return nullptr;
+  }
+
   /// Reduce one generated per-cell status on the same authenticated lane and layout used by its
   /// pointwise kernel.  Empty ranks contribute negative infinity, normalized to success only when
   /// the entire collective layout is empty.

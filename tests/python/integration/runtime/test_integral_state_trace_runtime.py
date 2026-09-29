@@ -7,6 +7,7 @@ double consumption, retry, and POPSEX02 restore on the same native ledger.
 import numpy as np
 import pops
 import pytest
+import re
 
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import Outflow
@@ -21,6 +22,7 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.projection import ConservativeCellAverage
 from pops.time import FixedDt
+from pops._native_collectives import allgather_value
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.integral_state_receipts import collective_directory, save_public_snapshot
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -146,6 +148,40 @@ def test_native_accepted_face_amount_and_initial_read(
                 np.savez(directory / "composite-ownership.npz", coarse_active=coarse)
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     save_public_snapshot(world, runtime, artifact, quantity, directory, "accepted", amr=kind != "uniform")
+    if kind == "amr2":
+        def physical_right_faces():
+            selected = []
+            for row in runtime._executor._program_exchange_records():
+                match = re.match(r"pops\.exchange\.frame\.v1/\d+:[^/]+/\d+/(\d+)/(\d+)/",
+                                 row["evaluation_context"])
+                if match is None:
+                    raise AssertionError("accepted AMR exchange lacks its exact level/substep")
+                level, substep = map(int, match.groups())
+                tokens = row["quadrature_identity"].split("/")
+                cell_x = int(tokens[0].split(":")[1])
+                axis, side = (int(token.split(":")[1]) for token in tokens[1:3])
+                if axis == 0 and side == 1 and cell_x == n * 2**level - 1:
+                    selected.append((level, substep, row))
+            return selected
+
+        local = collective_call(world, physical_right_faces)
+        rows = (local if world is None else
+                [row for batch in allgather_value(world, local) for row in batch])
+        with collective_check(world):
+            assert len({row["operation_identity"] for _, _, row in rows}) == 1
+            groups = {}
+            for level, substep, row in rows:
+                groups.setdefault((level, substep), []).append(row)
+            assert set(groups) == {(1, 0), (1, 1)}, {
+                key: (len(group), sum(row["integrated_amount"] for row in group))
+                for key, group in groups.items()}
+            for group in groups.values():
+                assert len(group) == n * 2
+                assert {row["temporal_weight"] for row in group} == {DT / 2}
+                assert {row["face_measure"] for row in group} == {1 / (n * 2)}
+                assert {row["numerical_flux"] for row in group} == {right_value}
+                assert abs(sum(row["integrated_amount"] for row in group) +
+                           right_value * DT / 2) < 2e-14
     with collective_check(world):
         assert abs(runtime.integral_state(quantity) - (.7 + right_value * DT)) < 2e-13
         assert runtime.macro_step() == 1

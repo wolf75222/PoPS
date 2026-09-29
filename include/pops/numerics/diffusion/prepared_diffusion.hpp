@@ -685,18 +685,22 @@ class PreparedDiffusion {
                                 Real temporal_weight, bool physical_boundary_only = false) const {
     (void)explicit_frequency();
     const Field* active = nullptr;
+    const Field* coverage = nullptr;
     std::exception_ptr active_error;
     long active_layout_error = 0;
     try {
       sync_host();
       active = ctx.pointwise_active_mask(program_block, variable_);
-      if (active != nullptr) {
+      coverage = ctx.pointwise_exchange_coverage_mask(program_block, variable_);
+      for (const Field* mask : {active, coverage}) {
+        if (mask == nullptr)
+          continue;
         sync_host();
-        if (active->local_size() != variable_.local_size())
+        if (mask->local_size() != variable_.local_size())
           active_layout_error = 1;
         else
           for (std::size_t local = 0; local < variable_.local_size(); ++local)
-            if (active->box(local) != variable_.box(local))
+            if (mask->box(local) != variable_.box(local))
               active_layout_error = 1;
       }
     } catch (...) {
@@ -717,6 +721,8 @@ class PreparedDiffusion {
         const auto faces = faces_[local].view();
         const auto active_values = active == nullptr ? FieldView<const Real, Dim>{}
                                                      : std::as_const(*active).fab(local).view();
+        const auto coverage_values = coverage == nullptr ? FieldView<const Real, Dim>{}
+                                                         : std::as_const(*coverage).fab(local).view();
         for (std::int64_t ordinal = 0; ordinal < box.numPts(); ++ordinal) {
           auto remainder = ordinal;
           Index<Dim> cell = box.lo;
@@ -725,6 +731,8 @@ class PreparedDiffusion {
             remainder /= extent[axis];
           }
           if (active != nullptr && active_values(cell, 0) < Real(0.5))
+            continue;
+          if (coverage != nullptr && coverage_values(cell, 0) < Real(0.5))
             continue;
           for (int axis = 0; axis < Dim; ++axis) {
             Real measure = 1;

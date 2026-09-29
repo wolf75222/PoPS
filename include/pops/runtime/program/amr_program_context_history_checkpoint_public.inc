@@ -299,6 +299,21 @@ const field_type* pointwise_active_mask(int program_block, const field_type& fie
   return active;
 }
 
+/// Finest-owner coverage is independent of the embedded-boundary activity mask.
+/// A covered coarse cell must not contribute another accepted exterior face
+/// when its fine descendants already stage the same physical trace.
+const field_type* pointwise_exchange_coverage_mask(int program_block,
+                                                    const field_type& field) const {
+  refresh_resources_();
+  const int runtime_block = sys_block(program_block);
+  const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, active_level_);
+  require_same_layout_(field, accepted, "AMR Program accepted exchange coverage");
+  const field_type& coverage =
+      facade_->prepared_amr_block_level_coverage_mask(runtime_block, active_level_);
+  require_same_layout_(coverage, accepted, "AMR Program accepted exchange coverage mask");
+  return &coverage;
+}
+
 /// Reduce generated per-cell status over every live owner level.  Inactive values, including
 /// inactive NaNs, are ignored.  An active negative or non-finite status is failure code 3; a
 /// globally empty active domain is 0; otherwise the lane maximum finite severity is returned.

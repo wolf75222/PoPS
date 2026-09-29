@@ -76,6 +76,21 @@ def test_two_stage_trace_has_two_exact_evaluations_and_one_persistent_identity(t
     assert resolved.time._integral_transfers == program._integral_transfers
 
 
+def test_amr_accepted_trace_intersects_finest_owner_coverage_with_physical_activity():
+    case, layout, _, _ = _case()
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    source = emit_cpp_program(resolved.time,
+                              model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks),
+                              target="amr_system")
+    # Both accepted evaluations retain their own dt and check coverage before
+    # staging a physical face. The EB mask alone is null on an ordinary mesh.
+    assert source.count("ctx.pointwise_active_mask(") == 2
+    assert source.count("ctx.pointwise_exchange_coverage_mask(") == 2
+    assert source.count("coverage_values(cell,0) < 0.5") == 2
+    assert source.count("active_values(cell,0) < 0.5") == 2
+    assert source.count("(pops::Real(1) / pops::Real(2)) * dt), 1, axis, side, component") == 2
+
+
 def test_unaccepted_rate_cannot_supply_a_persistent_integral():
     case, layout, _, _ = _case(extra_unaccepted=True)
     resolved = pops.resolve(pops.validate(case), layout=layout)
