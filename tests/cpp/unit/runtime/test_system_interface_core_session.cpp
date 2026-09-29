@@ -14,6 +14,10 @@ namespace {
 struct NativeFactoryProbe {
   pops::SystemBlockClosures<pops::kNativeDimension>::ExternalGhostBoundary ghost;
   std::function<void(const void*)> observe_transport;
+  bool path_only = false;
+  bool omit_path = false;
+  bool unknown_boundary_route = false;
+  bool incomplete_legacy = false;
 };
 thread_local NativeFactoryProbe* native_factory_probe = nullptr;
 }  // namespace
@@ -28,14 +32,38 @@ PreparedSystemBlock<Dim> prepare_exact_system_block(
       // Instrument the real generated hook and transport. The System issuer and all of its
       // collective ownership checks remain production code; external ABI is covered in Python.
       *prepared.closures.external_ghost_boundary = native_factory_probe->ghost;
-      auto physical = prepared.closures.boundary_flux_full_at_point_prepared;
-      auto observe = native_factory_probe->observe_transport;
-      prepared.closures.boundary_flux_full_at_point_prepared =
-          [physical, observe](const auto& point, auto& state, auto& output, const auto& boundary,
-                              const auto& lane, const auto& transport) {
-            observe(&transport);
-            physical(point, state, output, boundary, lane, transport);
-          };
+      if (native_factory_probe->path_only) {
+        prepared.physical_boundary_route =
+            pops::PreparedPhysicalBoundaryRoute::path_residual;
+        prepared.closures.boundary_full_at_point_prepared = {};
+        prepared.closures.boundary_core_at_point_prepared = {};
+        prepared.closures.boundary_flux_full_at_point_prepared = {};
+        prepared.closures.boundary_flux_core_at_point_prepared = {};
+        prepared.closures.boundary_residual_at_point_prepared = {};
+        prepared.closures.boundary_jvp_at_point_prepared = {};
+        if (!native_factory_probe->omit_path)
+          prepared.closures.path_rhs_at_point_prepared =
+              [](const auto&, auto&, auto& output, const auto* boundary, const auto&, const auto&) {
+                if (boundary == nullptr)
+                  throw std::invalid_argument("path test lost its physical boundary");
+                output.set_val(pops::Real(0));
+                return pops::Real(0);
+              };
+      } else if (native_factory_probe->incomplete_legacy) {
+        prepared.closures.boundary_jvp_at_point_prepared = {};
+      } else {
+        auto physical = prepared.closures.boundary_flux_full_at_point_prepared;
+        auto observe = native_factory_probe->observe_transport;
+        prepared.closures.boundary_flux_full_at_point_prepared =
+            [physical, observe](const auto& point, auto& state, auto& output,
+                                const auto& boundary, const auto& lane, const auto& transport) {
+              observe(&transport);
+              physical(point, state, output, boundary, lane, transport);
+            };
+      }
+      if (native_factory_probe->unknown_boundary_route)
+        prepared.physical_boundary_route =
+            static_cast<pops::PreparedPhysicalBoundaryRoute>(99);
     }
   }
   return prepared;
@@ -375,6 +403,34 @@ struct NativeFixture {
   }
 };
 }  // namespace
+
+TEST(SystemInterfaceCoreSession, path_only_boundary_installs_without_legacy_linearization) {
+  NativeFactoryProbe probe;
+  probe.path_only = true;
+  NativeFixture fixture("path-only-boundary", false, &probe);
+  EXPECT_TRUE(fixture.system->requires_block_boundary_session(0));
+  EXPECT_FALSE(fixture.system->has_block_boundary_linearization(0));
+  EXPECT_TRUE(fixture.system->requires_block_boundary_session(1));
+  EXPECT_FALSE(fixture.system->has_block_boundary_linearization(1));
+}
+
+TEST(SystemInterfaceCoreSession, path_and_legacy_boundary_routes_still_require_their_authority) {
+  NativeFactoryProbe missing_path;
+  missing_path.path_only = true;
+  missing_path.omit_path = true;
+  EXPECT_THROW(NativeFixture("missing-path-boundary", false, &missing_path),
+               std::exception);
+
+  NativeFactoryProbe incomplete_legacy;
+  incomplete_legacy.incomplete_legacy = true;
+  EXPECT_THROW(NativeFixture("incomplete-legacy-boundary", false, &incomplete_legacy),
+               std::exception);
+
+  NativeFactoryProbe unknown_route;
+  unknown_route.unknown_boundary_route = true;
+  EXPECT_THROW(NativeFixture("unknown-boundary-route", false, &unknown_route),
+               std::exception);
+}
 
 TEST(SystemInterfaceCoreSession, real_system_exact_request_after_move_and_stale_refusal) {
   NativeFixture fixture("interface-real-system");

@@ -721,7 +721,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
 
   auto prepare_state_with_transport =
       [model, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan,
-       geometry](MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
+       geometry](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
+                 const PreparedHyperbolicBoundary<Dim>* boundary,
                  const ExecutionLane& lane,
                  const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         prepared_boundary_collective_phase(
@@ -749,7 +750,9 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
               lane,
               [&] {
                 transport.with_characteristic_candidate(state, [&](MultiFab<Dim>& candidate) {
-                  boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate);
+                  boundary->fill_physical_model_qualified(
+                      state, geometry, model, lane, candidate,
+                      static_cast<Real>(point.physical_time));
                 });
               },
               "generated prepared physical boundary fill failed collectively");
@@ -804,7 +807,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
           const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
           const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
           const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
-        prepare_state_with_transport(state, boundary, lane, transport);
+        prepare_state_with_transport(point, state, boundary, lane, transport);
         if (boundary != nullptr && *external_ghost_boundary)
           (*external_ghost_boundary)(point, state, geometry, lane);
       };
@@ -1242,6 +1245,7 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   };
   result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
   if constexpr (path_conservative_model<Model>) {
+    result.physical_boundary_route = PreparedPhysicalBoundaryRoute::path_residual;
     const auto spatial = nd::prepare_cartesian_operator<
         Dim, Model, NoSlope, ModelPathFlux<Model>,
         nd::ReconstructionVariables::Conservative>(
@@ -1296,8 +1300,9 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
                 lane,
                 [&] {
                   transport.with_characteristic_candidate(state, [&](MultiFab<Dim>& candidate) {
-                    boundary->fill_physical_model_qualified(state, geometry, model, lane,
-                                                             candidate);
+                    boundary->fill_physical_model_qualified(
+                        state, geometry, model, lane, candidate,
+                        static_cast<Real>(point.physical_time));
                   });
                 },
                 "generated Uniform path physical boundary failed collectively");

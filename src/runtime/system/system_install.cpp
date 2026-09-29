@@ -741,6 +741,13 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
                         "primitive");
 
   const auto& closures = block.closures;
+  if (block.physical_boundary_route != PreparedPhysicalBoundaryRoute::legacy_spatial &&
+      block.physical_boundary_route != PreparedPhysicalBoundaryRoute::path_residual)
+    throw std::invalid_argument("prepared System block has an unknown physical boundary route");
+  if (block.physical_boundary_route == PreparedPhysicalBoundaryRoute::path_residual &&
+      !closures.path_rhs_at_point_prepared)
+    throw std::invalid_argument(
+        "prepared System path boundary route lacks its staged path residual");
   if (!closures.rhs_into || !closures.rhs_flux_only || !closures.source_only ||
       !closures.rhs_at_point || !closures.rhs_flux_only_at_point || !closures.rhs_core_at_point ||
       !closures.rhs_flux_only_core_at_point || !closures.rhs_core_at_point_prepared ||
@@ -880,17 +887,21 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   candidate.external_ghost_boundary = std::move(prepared.closures.external_ghost_boundary);
   candidate.boundary = boundary;
   candidate.state_identity = state_identity;
+  const bool complete_legacy_boundary =
+      candidate.boundary_full_at_point_prepared && candidate.boundary_core_at_point_prepared &&
+      candidate.boundary_flux_full_at_point_prepared &&
+      candidate.boundary_flux_core_at_point_prepared &&
+      candidate.boundary_residual_at_point_prepared &&
+      candidate.boundary_jvp_at_point_prepared && candidate.external_boundary_flux &&
+      candidate.external_field_boundary_residual && candidate.external_field_boundary_jvp &&
+      candidate.prepare_generated_state_with_transport_prepared &&
+      candidate.external_ghost_boundary;
   if (candidate.boundary &&
-      (!candidate.boundary_full_at_point_prepared || !candidate.boundary_core_at_point_prepared ||
-       !candidate.boundary_flux_full_at_point_prepared ||
-       !candidate.boundary_flux_core_at_point_prepared ||
-       !candidate.boundary_residual_at_point_prepared ||
-       !candidate.boundary_jvp_at_point_prepared || !candidate.external_boundary_flux ||
-       !candidate.external_field_boundary_residual || !candidate.external_field_boundary_jvp ||
-       !candidate.prepare_generated_state_with_transport_prepared ||
-       !candidate.external_ghost_boundary))
+      (prepared.physical_boundary_route == PreparedPhysicalBoundaryRoute::legacy_spatial
+           ? !complete_legacy_boundary
+           : !candidate.path_rhs_at_point_prepared))
     throw std::invalid_argument(
-        "prepared System boundary lacks its complete full/core/residual/JVP authority");
+        "prepared System boundary lacks its selected full/core/residual/JVP or path authority");
 
   return {std::move(candidate), prepared.name, std::move(boundary)};
 }
