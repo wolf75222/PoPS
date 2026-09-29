@@ -39,7 +39,8 @@ from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riem
 from pops.solvers import CG
 from pops.time import FailRun, FixedDt
 
-from api040_m08_oracle import cell_means, field_metrics, ssprk2_reference
+from api040_m08_oracle import (cell_means, field_metrics, negative_laplacian,
+                              poisson_discrete, ssprk2_reference)
 if os.environ.get("POPS_API040_M08_AUTHORING_ONLY") != "1":
     from api040_receipts import receipt_json
 
@@ -249,6 +250,10 @@ for n in RESOLUTIONS:
                 probe_residual = float(np.max(np.abs(
                     # The probe is a 1.1-scaled RHS at unchanged physical time.
                     saved["probe_phi"] - PROBE_FACTOR * saved["stage0_phi"])))
+                probe_field_residual = float(np.max(np.abs(
+                    negative_laplacian(saved["probe_phi"]) - saved["probe_q"])))
+                probe_fft_error = float(np.max(np.abs(
+                    saved["probe_phi"] - poisson_discrete(saved["probe_q"]))))
                 probe_separation = float(np.max(np.abs(
                     saved["probe_phi"] - saved["stage0_phi"])))
                 stage_separation = float(np.max(np.abs(
@@ -263,8 +268,10 @@ for n in RESOLUTIONS:
                 and abs(saved_time - T_END) <= CRITERIA["time_error_max"]
                 and max(m["poisson_residual_max"] for m in metrics.values()) <=
                     CRITERIA["field_residual_max"]
+                and probe_field_residual <= CRITERIA["field_residual_max"]
                 and max(m["fft_potential_max_error"] for m in metrics.values()) <=
                     CRITERIA["fft_potential_max_error"]
+                and probe_fft_error <= CRITERIA["fft_potential_max_error"]
                 and max(m["gradient_max_error"] for m in metrics.values()) <=
                     CRITERIA["gradient_max_error"]
                 and max(m["velocity_divergence_max"] for m in metrics.values()) <=
@@ -276,6 +283,8 @@ for n in RESOLUTIONS:
                 and mass_defect <= CRITERIA["mean_defect_max"])
             record = {"cells": [n, n], "time": saved_time, "accepted_steps": report.accepted_steps,
                 "field_metrics": metrics, "same_time_probe_error": probe_residual,
+                "probe_poisson_residual_max": probe_field_residual,
+                "probe_fft_potential_max_error": probe_fft_error,
                 "same_time_probe_separation": probe_separation,
                 "physical_stage_field_separation": stage_separation,
                 "independent_fv_max_error": fv_error, "mass_defect": mass_defect,
