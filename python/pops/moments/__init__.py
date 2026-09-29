@@ -26,7 +26,8 @@ from .model_builder import (
 from .sources import (MOMENT_VELOCITY_DIMENSION, lorentz_sources, maxwellian_moments, bgk_source,
                       VlasovSources, MagneticMomentSource)
 from .closures import (gaussian_closure, closure, Closure, LocalClosure,
-                       apply_local_closure, HyQMOM15Closure, hyqmom_b1_axial_flux)
+                       apply_local_closure, HyQMOM15Closure, hyqmom_b1_axial_flux,
+                       DiscreteEntropyQuadrature)
 
 # --- facade API (thin wrappers over the generator) -------------------------
 from .hierarchy import CartesianVelocityMoments, CompositeMean, MomentModel, MomentHierarchy
@@ -85,6 +86,7 @@ __all__ = [
     "apply_local_closure",
     "HyQMOM15Closure",
     "hyqmom_b1_axial_flux",
+    "DiscreteEntropyQuadrature",
     # generic construction vocabulary (ADC-543): inert handles + typed aliases
     "VelocitySpace",
     "MomentState",

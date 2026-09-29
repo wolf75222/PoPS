@@ -14,6 +14,7 @@ from typing import Any
 
 from .protocol import Closure, LocalClosure, apply_local_closure
 from .gaussian import gaussian_closure
+from .discrete_entropy import DiscreteEntropyQuadrature
 
 
 def closure(order: Any) -> Any:
@@ -45,4 +46,5 @@ from .hyqmom_axial_b1 import hyqmom_b1_axial_flux  # noqa: E402
 __all__ = [
     "closure", "Closure", "LocalClosure", "apply_local_closure",
     "gaussian_closure", "HyQMOM15Closure", "hyqmom_b1_axial_flux",
+    "DiscreteEntropyQuadrature",
 ]
