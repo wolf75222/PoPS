@@ -490,7 +490,14 @@ def _module_to_model(module: Any, state_space: Any = None,
     # physical flux axes.  A Module deliberately stores those two declarations
     # independently, so materialize all grid operators before attaching the
     # exact-ranked eigenvalue provider.
-    if module._eigenvalues is not None and not principal_rates:
+    # A multi-StateSpace Module retains the authored wave law at Module scope,
+    # while the exact operator signatures above select the grid fluxes for
+    # this compiler view. A different State's wave law must not be rebound
+    # into a storage-only view.
+    # Preserve the single-StateSpace validation of a wave declaration without
+    # a flux; that declaration remains an error instead of disappearing.
+    if (module._eigenvalues is not None and not principal_rates
+            and (len(states) == 1 or applicable_grid_names)):
         m.eigenvalues(**{
             axis: _body_for_state(values)
             for axis, values in module._eigenvalues.items()
