@@ -400,13 +400,7 @@ def _build_aux_arguments(
     return aux_args
 
 
-def _build_arguments(
-    compiled: Any,
-    program: Any,
-    model_rows: Any,
-    *,
-    program_name: Any = None,
-) -> Arguments:
+def _required_state_refs(program: Any) -> set[Any]:
     # A current-State read requires its exact initial value even when that block is never
     # committed. Keep this input authority separate from the Program's publication authority.
     state_refs = set()
@@ -419,11 +413,38 @@ def _build_arguments(
         dt_bound = getattr(program, "_dt_bound", None)
         if dt_bound is not None:
             roots.extend(dt_bound[0])
-        for value in _walk_program_nodes(roots):
+        nodes = tuple(_walk_program_nodes(roots))
+        # The spatial Newton residual contains a private candidate called
+        # ``spatial_iterate``.  It is a State-shaped operand supplied by the
+        # solver, not a read of the block's current State at bind time.  Match
+        # its exact node through the owning solve; a name or block match could
+        # conceal an unrelated State read with missing authority.
+        internal_iterates = {
+            id(iterate)
+            for token in nodes if token.op == "solve_spatial_nonlinear"
+            for iterate in (token.attrs.get("iterate"),)
+            if iterate is not None and iterate.op == "state" and iterate.state_ref is None
+            and iterate.prog is program and iterate.block is token.block
+            and any(iterate is node for node in token.attrs.get("residual_block", ()))
+        }
+        for value in nodes:
             if value.op == "state":
+                if id(value) in internal_iterates:
+                    continue
                 if value.state_ref is None:
                     raise ValueError("compiled Program State read has no exact state identity")
                 state_refs.add(value.state_ref)
+    return state_refs
+
+
+def _build_arguments(
+    compiled: Any,
+    program: Any,
+    model_rows: Any,
+    *,
+    program_name: Any = None,
+) -> Arguments:
+    state_refs = _required_state_refs(program)
     instances = {}
     from pops.time.references import block_name as _block_name, handle_data
     by_block = {row.block_name: row for row in model_rows if row.block_name is not None}
