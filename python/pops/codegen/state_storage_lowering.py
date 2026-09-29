@@ -3,20 +3,21 @@ from collections.abc import Mapping
 
 from pops._cartesian_axes import canonical_axis_mapping
 
+MIN_NATIVE_STATE_STORAGE_GHOST_DEPTH = 1
 
-def prepare_local_state_storage_carrier(emitter, module, frame, *, state_space=None):
-    """Qualify a flux-free local State from its authored placement, never a fake PDE.
+
+def local_state_storage_axes(module, frame, *, state_space=None):
+    """Read the exact selected State's local storage admission without mutating it.
 
     A named grid operator must retain its own transport realization. An absent
     physical frame is not a request to choose the installed backend's dimension.
     """
-    impl = getattr(emitter, "_m", emitter)
-    if impl._flux or getattr(impl, "_program_only_storage_axes", ()) or frame is None:
-        return
+    if frame is None:
+        return None
     states = module.state_spaces()
     if state_space is None:
         if len(states) != 1:
-            return
+            return None
         state_space = next(iter(states.values()))
     elif isinstance(state_space, str):
         if state_space not in states:
@@ -27,13 +28,53 @@ def prepare_local_state_storage_carrier(emitter, module, frame, *, state_space=N
     for operator in module.operator_registry():
         state_inputs = tuple(space for space in operator.signature.inputs
                              if getattr(space, "kind", None) == "state")
-        if operator.kind == "grid_operator" and (not state_inputs or state_space in state_inputs):
-            return
+        if state_inputs and state_space not in state_inputs:
+            continue
+        if operator.kind == "grid_operator" or "diffusive_law" in operator.lowering:
+            return None
+        balance = operator.lowering.get("physical_balance")
+        if balance is not None:
+            from pops._ir.balance import source_balance_supported
+
+            if not source_balance_supported(balance):
+                return None
     if (state_space.frame != frame.canonical_id or state_space.layout != "cell"
             or state_space.centering != "cell" or state_space.storage != "multifab"):
         raise ValueError("local State storage requires its exact authored cell/multifab frame")
-    axes = tuple(canonical_axis_mapping(
+    return tuple(canonical_axis_mapping(
         {axis.name: axis for axis in frame.axes}, where="local State storage frame"))
+
+
+def resolve_local_state_storage(model, *, state_space):
+    """Publish local storage in the resolved block, before compile/bind inspection."""
+    from pops.codegen._compiler_lowering import require_compiler_lowering
+    from pops.numerics import StateStorage
+
+    lowering = require_compiler_lowering(model)
+    module = lowering.source_module
+    # A reusable multi-state emitter may carry another State's transport. Its
+    # canonical selected operator signatures, not that shared emitter, decide.
+    impl = getattr(lowering.emit_model, "_m", lowering.emit_model)
+    if len(module.state_spaces()) == 1 and impl._flux:
+        return None
+    axes = local_state_storage_axes(module, getattr(lowering.facade, "frame", None),
+                                    state_space=state_space)
+    if axes is None:
+        return None
+    return StateStorage(ghost_depth=MIN_NATIVE_STATE_STORAGE_GHOST_DEPTH)
+
+
+def prepare_local_state_storage_carrier(emitter, module, frame, *, state_space=None):
+    """Qualify the same selected local storage in its private native carrier."""
+    impl = getattr(emitter, "_m", emitter)
+    if impl._flux:
+        return
+    axes = local_state_storage_axes(module, frame, state_space=state_space)
+    if axes is None:
+        return
+    previous = getattr(impl, "_program_only_storage_axes", axes)
+    if previous != axes:
+        raise ValueError("local State storage differs from the selected physical frame")
     object.__setattr__(impl, "_program_only_storage_axes", axes)
 
 
@@ -42,7 +83,7 @@ def prepare_state_storage_requirements(
 ):
     """Carry the resolved neighborhood into the private native storage model."""
     impl = getattr(emitter, "_m", emitter)
-    depth = 1  # Minimum native state-storage extent, including pointwise source Programs.
+    depth = MIN_NATIVE_STATE_STORAGE_GHOST_DEPTH
     if resolved_operations is not None:
         from pops.codegen.resolved_operations import ResolvedOperationPlan
 

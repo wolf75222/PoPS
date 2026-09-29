@@ -214,6 +214,10 @@ def resolve(
             if spatial is not None:
                 raise ValueError("block %r has competing spatial and DiscretizationPlan authorities" % name)
             spatial = numerics.primary_spatial()
+        elif spatial is None:
+            from pops.codegen.state_storage_lowering import resolve_local_state_storage
+
+            spatial = resolve_local_state_storage(spec["model"], state_space=state_spaces[0])
         block = block_handles[name]
         state_handles = tuple(
             problem.resolve(state, block=block) for state in spec["states"])
