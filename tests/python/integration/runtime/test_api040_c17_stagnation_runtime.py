@@ -119,7 +119,7 @@ def test_original_residual_is_required_before_publication_and_history_rotation(
                         resources={"execution_context": artifact_execution_context(artifact)})
     before = _state(runtime, world)
     before_history = runtime._executor.history_fill_count("provisional_seed")
-    before_diagnostics = dict(runtime.program_diagnostics())
+    before_diagnostics = dict(runtime._executor.program_diagnostics())
     before_clock = (runtime.time(), runtime.macro_step())
     if accepted:
         result = pops.run(runtime, t_end=DT, max_steps=1, console=False)
@@ -137,7 +137,7 @@ def test_original_residual_is_required_before_publication_and_history_rotation(
                    "safeguard_failure" in item and "action=fail_run" in item
                    for item in failures), failures
         assert runtime._executor.history_fill_count("provisional_seed") == before_history
-        assert dict(runtime.program_diagnostics()) == before_diagnostics
+        assert dict(runtime._executor.program_diagnostics()) == before_diagnostics
         assert (runtime.time(), runtime.macro_step()) == before_clock
 
     after = _state(runtime, world)
