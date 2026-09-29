@@ -508,7 +508,6 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
                   (other < block && residuals[block] == residuals[other]))
                 throw std::invalid_argument(
                     "prepared physical group outputs must not alias states or outputs");
-            const auto& selected = owner->sp[block];
             require_same_block_field(*states[block], selected.U, "shared-interface core state");
             require_same_block_field(*residuals[block], selected.U, "shared-interface core result");
             if (&sessions[block]->lane() != lane)
