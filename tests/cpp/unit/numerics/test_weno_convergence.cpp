@@ -206,6 +206,25 @@ struct PrimitiveTestModel {
   }
 };
 
+struct JointCrossPolicy {
+  static constexpr int n_components = 2;
+  static constexpr int formal_order = 1;
+  static constexpr int n_ghost = 2;
+  static constexpr int stencil_min_offset = -1;
+  static constexpr int stencil_max_offset = 1;
+  template <class Sample>
+  POPS_HD std::array<Real, 2> stencil_face_state(const Sample& sample) const {
+    // Read the other component at an oriented offset; no scalar-per-component policy can do this.
+    const Real first = sample(0, 0);
+    const int selected = first > Real(0) ? -1 : 1;
+    return {first + sample(selected, 1), sample(selected, 0)};
+  }
+};
+static_assert(JointStencilReconstruction<JointCrossPolicy>);
+static_assert(StencilReconstruction<JointCrossPolicy>);
+static_assert(ReconstructionPolicy<JointCrossPolicy>);
+static_assert(!ScalarStencilReconstruction<JointCrossPolicy>);
+
 static_assert(SlopeReconstruction<WideSlopePolicy>);
 static_assert(ReconstructionPolicy<MC>);
 static_assert(ReconstructionPolicy<Superbee>);
@@ -567,6 +586,35 @@ TEST(test_weno_convergence, primitive_sampled_policy_converts_only_the_selected_
       model, state, Index<1>{5}, GuardedSamplePolicy{});
   EXPECT_EQ(rejected.status, nd::StateConversionStatus::NonPositiveDensity);
   EXPECT_EQ(recover_calls, 4) << "the active conversion must fail without reading other offsets";
+}
+
+TEST(test_weno_convergence, joint_stencil_cross_components_preserve_lazy_primitive_status) {
+  const Box<1> valid = Box<1>::from_extents(Extent<1>{11});
+  Fab<1> values(valid, 2, Extent<1>{2});
+  auto host = values.create_host_mirror();
+  for (int i = values.grown_box().lo[0]; i <= values.grown_box().hi[0]; ++i) {
+    host(host_offset(values.grown_box(), Index<1>{i}, 0)) = Real(i == 6 ? -1 : i == 4 ? 3 : 2);
+    host(host_offset(values.grown_box(), Index<1>{i}, 1)) = Real(10 + i);
+  }
+  values.copy_from_host(host);
+  int calls = 0;
+  const PrimitiveTestModel model{&calls, true};
+  const auto state = static_cast<const Fab<1>&>(values).view();
+  const auto conservative =
+      nd::reconstruct_face_state<0, 1>(model, state, Index<1>{5}, JointCrossPolicy{});
+  EXPECT_EQ(conservative.value[0], Real(16));
+  EXPECT_EQ(conservative.value[1], Real(3));
+  const auto selected = nd::reconstruct_face_state<0, 1, nd::ReconstructionVariables::Primitive>(
+      model, state, Index<1>{5}, JointCrossPolicy{});
+  ASSERT_TRUE(selected.succeeded());
+  EXPECT_NEAR(selected.value[0], std::sqrt(Real(18)),
+              Real(8) * std::numeric_limits<Real>::epsilon());
+  EXPECT_EQ(selected.value[1], Real(9));
+  EXPECT_EQ(calls, 2) << "each selected offset converts once for all components";
+  const auto invalid = nd::reconstruct_face_state<0, -1, nd::ReconstructionVariables::Primitive>(
+      model, state, Index<1>{5}, JointCrossPolicy{});
+  EXPECT_EQ(invalid.status, nd::StateConversionStatus::NonPositiveDensity);
+  EXPECT_EQ(calls, 4);
 }
 
 template <int Dim>

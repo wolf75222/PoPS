@@ -43,6 +43,11 @@ def _resolved_brick(value: Any, resolver: Any) -> Any:
     if hasattr(result, "_frozen"):
         object.__setattr__(result, "_frozen", False)
     object.__setattr__(result, "options", _resolved_value(dict(options), resolver))
+    if getattr(value, "_joint_state_sources", None) is not None:
+        from pops.numerics.reconstruction.user import authenticated_user_reconstruction
+        authenticated_user_reconstruction(value)
+        object.__setattr__(result, "_joint_state_sources",
+                           _resolved_value(value._joint_state_sources, resolver))
     return result
 
 

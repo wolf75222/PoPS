@@ -16,13 +16,19 @@ def prepare_user_reconstruction_carrier(emitter: Any, numerics: Any) -> Any:
     from pops.numerics.reconstruction.user import authenticated_user_reconstruction
 
     selected = []
+    owners = []
     for row in numerics.rates:
         method = row.method
-        if not isinstance(method, FiniteVolume):
+        if not isinstance(method, FiniteVolume) or method.sampling:
             continue
         descriptor = method.reconstruction
         if getattr(descriptor, "scheme", None) == "source_stencil":
-            selected.append(authenticated_user_reconstruction(descriptor))
+            authored = authenticated_user_reconstruction(descriptor)
+            if authored.capabilities.get("vector_row"):
+                if authored.options["state"] != method.variables.options.get("state") or authored.options["sampling"]:
+                    raise ValueError("joint reconstruction inputs differ from the selected finite-volume state")
+            selected.append(authored)
+            owners.append(method.variables.options.get("state"))
     if not selected:
         return emitter
     identities = {item.options["source_identity"] for item in selected}
@@ -32,14 +38,19 @@ def prepare_user_reconstruction_carrier(emitter: Any, numerics: Any) -> Any:
     registry = getattr(emitter, "_param_registry", None)
     from pops._ir.values import RuntimeParamRef
     from pops._ir.visitors import _children
-    for descriptor in selected:
-        pending, seen = [descriptor.expression], set()
+    for descriptor, owner in zip(selected, owners, strict=True):
+        if descriptor.capabilities.get("vector_row") and descriptor.options["component_counts"][0] != len(impl.cons_names):
+            raise ValueError("joint reconstruction width differs from the compiled model state")
+        pending, seen = list(descriptor.expression) if isinstance(descriptor.expression, tuple) else [descriptor.expression], set()
         while pending:
             node = pending.pop()
             if id(node) in seen:
                 continue
             seen.add(id(node))
             if isinstance(node, RuntimeParamRef):
+                if node.handle.is_instance and (owner is None or
+                        node.handle.block_ref._resolved() != owner.block_ref._resolved()):
+                    raise ValueError("user reconstruction runtime capture belongs to another block instance")
                 handle = node.handle.declaration_ref if node.handle.is_instance else node.handle
                 if registry is None:
                     raise ValueError("user reconstruction runtime read has no model parameter authority")
@@ -72,6 +83,9 @@ def emit_user_reconstruction_policy(emitter: Any) -> str:
     options = descriptor.options
     if options["runtime_captures"]:
         impl.assign_runtime_indices()
+    joint = descriptor.capabilities.get("vector_row", False)
+    if joint:
+        return _emit_joint_policy(impl, descriptor)
     sample_bindings = {}
     for offset in options["sample_offsets"]:
         spelling = "m%d" % -offset if offset < 0 else "p%d" % offset
@@ -113,3 +127,56 @@ def user_reconstruction_source_identity(emitter: Any) -> str | None:
     from pops.numerics.reconstruction.user import authenticated_user_reconstruction
 
     return authenticated_user_reconstruction(descriptor).options["source_identity"]
+
+
+def _emit_joint_policy(impl, descriptor):
+    from pops.codegen.cpp_writer import _cse_emit
+
+    options = descriptor.options
+    counts = options["component_counts"]
+    starts, cursor = [], 0
+    for count in counts:
+        starts.append(cursor)
+        cursor += count
+    bindings = {}
+    for offset, row, component in options["sample_reads"]:
+        spelling = "m%d" % -offset if offset < 0 else "p%d" % offset
+        bindings["pops_recon_joint_%s_r%d_c%d" % (spelling, row, component)] = "sample(%d, %d)" % (
+            offset,
+            starts[row] + component,
+        )
+    expression_lines, rendered, observed = _cse_emit(
+        descriptor.expression,
+        "pops::Real",
+        "    ",
+        materialize_all=True,
+        return_names=True,
+        scalar_bindings=bindings,
+    )
+    finite = " && ".join("std::isfinite(%s)" % value for value in (*observed, *rendered))
+    lines = [
+        "namespace pops_generated {",
+        "struct UserReconstructionPolicy {",
+        *(["  pops::RuntimeParams params{};"] if options["runtime_captures"] else []),
+        "  static constexpr int n_components = %d;" % counts[0],
+        "  static constexpr int formal_order = %d;" % options["formal_order"],
+        "  static constexpr int n_ghost = %d;" % options["ghost_depth"],
+        "  static constexpr int stencil_min_offset = %d;" % options["stencil_min_offset"],
+        "  static constexpr int stencil_max_offset = %d;" % options["stencil_max_offset"],
+        '  static constexpr const char* source_identity = "%s";' % options["source_identity"],
+        "  template<class Sample>",
+        "  POPS_HD std::array<pops::Real,n_components> stencil_face_state(const Sample& sample) const {",
+        *expression_lines,
+        "    if (!(%s)) {" % finite,
+        "      std::array<pops::Real,n_components> invalid{};",
+        "      for (auto& value : invalid) value = std::numeric_limits<pops::Real>::quiet_NaN();",
+        "      return invalid;",
+        "    }",
+        "    return {{%s}};" % ", ".join(rendered),
+        "  }",
+        "};",
+        "static_assert(pops::ReconstructionPolicy<UserReconstructionPolicy>);",
+        "static_assert(pops::stencil_envelope_fits_storage<UserReconstructionPolicy>);",
+        "} // namespace pops_generated",
+    ]
+    return "\n".join(lines) + "\n"

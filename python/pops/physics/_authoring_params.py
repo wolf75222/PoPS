@@ -65,7 +65,8 @@ class _RuntimeParamsMixin(_HyperbolicModel):
             out.extend(value for row in principal["row_expressions"] for value in row)
         authored_reconstruction = getattr(self, "_user_reconstruction", None)
         if authored_reconstruction is not None:
-            out.append(authored_reconstruction.expression)
+            out.extend(authored_reconstruction.expression if isinstance(authored_reconstruction.expression, tuple)
+                       else (authored_reconstruction.expression,))
         authored_face = getattr(self, "_user_face", None)
         if authored_face is not None:
             out.extend(authored_face.expression)

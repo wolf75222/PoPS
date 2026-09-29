@@ -115,7 +115,8 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     elif v.op == "rhs":
         authored_reconstruction = getattr(impl, "_user_reconstruction", None)
         if authored_reconstruction is not None:
-            out.append(authored_reconstruction.expression)
+            out.extend(authored_reconstruction.expression if isinstance(authored_reconstruction.expression, tuple)
+                       else (authored_reconstruction.expression,))
         authored_face = getattr(impl, "_user_face", None)
         if authored_face is not None:
             out.extend(authored_face.expression)

@@ -17,6 +17,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
+#include <array>
 #include <cmath>
 #include <concepts>
 #include <limits>
@@ -316,9 +317,10 @@ concept SlopeReconstruction =
 
 /// Minimal compile-time probe for the sampled-stencil protocol.  Production reconstruction passes
 /// an equally small POD sampler backed by ConstArray4.  Policies are expected to use only
-/// `sample(integer_offset)`; they never receive a mesh, direction, component, or host callback.
+/// `sample(integer_offset)` or the joint `sample(offset, component)`; no host callback or mesh.
 struct ReconstructionSamplerProbe {
   POPS_HD Real operator()(int) const { return Real(0); }
+  POPS_HD Real operator()(int, int) const { return Real(0); }
 };
 
 /// SFINAE envelope trait keeps cell-value and slope policies completely free of stencil metadata.
@@ -342,7 +344,7 @@ struct ReconstructionStencilEnvelope<Reconstruction,
 };
 
 template <class Reconstruction>
-concept StencilReconstruction =
+concept ScalarStencilReconstruction =
     ReconstructionStencilEnvelope<Reconstruction>::declared &&
     ReconstructionStencilEnvelope<Reconstruction>::ordered &&
     requires(const Reconstruction& reconstruction, const ReconstructionSamplerProbe& sample) {
@@ -350,10 +352,26 @@ concept StencilReconstruction =
     };
 
 template <class Reconstruction>
+concept JointStencilReconstruction =
+    ReconstructionStencilEnvelope<Reconstruction>::declared &&
+    ReconstructionStencilEnvelope<Reconstruction>::ordered &&
+    requires(const Reconstruction& reconstruction, const ReconstructionSamplerProbe& sample) {
+      requires Reconstruction::n_components > 0;
+      {
+        reconstruction.stencil_face_state(sample)
+      } -> std::same_as<std::array<Real, Reconstruction::n_components>>;
+    };
+
+template <class Reconstruction>
+concept StencilReconstruction =
+    ScalarStencilReconstruction<Reconstruction> || JointStencilReconstruction<Reconstruction>;
+
+template <class Reconstruction>
 inline constexpr int reconstruction_protocol_count =
     static_cast<int>(CellValueReconstruction<Reconstruction>) +
     static_cast<int>(SlopeReconstruction<Reconstruction>) +
-    static_cast<int>(StencilReconstruction<Reconstruction>);
+    static_cast<int>(ScalarStencilReconstruction<Reconstruction>) +
+    static_cast<int>(JointStencilReconstruction<Reconstruction>);
 
 template <class Reconstruction>
 concept ReconstructionMetadata = requires {

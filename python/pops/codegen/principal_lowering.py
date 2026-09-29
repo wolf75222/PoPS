@@ -11,7 +11,8 @@ def principal_row_expressions(entry):
         roots = [_wrap(value) for values in body.values() for value in values]
         roots.extend(_wrap(value) for value in waves)
         if method.reconstruction.scheme == "source_stencil":
-            roots.append(method.reconstruction.expression)
+            roots.extend(method.reconstruction.expression if isinstance(method.reconstruction.expression, tuple)
+                         else (method.reconstruction.expression,))
         if method.riemann.scheme == "source_face":
             roots.extend(method.riemann.expression)
         conversion = entry.get("conversion")
@@ -31,7 +32,13 @@ def _authenticate_numerical_captures(module, group):
     for state, method in zip(group.states, group.methods, strict=True):
         roots = []
         if method.reconstruction.scheme == "source_stencil":
-            roots.append(authenticated_user_reconstruction(method.reconstruction).expression)
+            descriptor = authenticated_user_reconstruction(method.reconstruction)
+            if descriptor.capabilities.get("vector_row"):
+                if descriptor.options["state"] != state or any(
+                        source not in group.states for source in descriptor.options["sampling"]):
+                    raise ValueError("joint reconstruction inputs differ from the exact principal group")
+            roots.extend(descriptor.expression if isinstance(descriptor.expression, tuple)
+                         else (descriptor.expression,))
         if method.riemann.scheme == "source_face":
             descriptor = authenticated_user_face(method.riemann)
             if descriptor.options["state"] != state:

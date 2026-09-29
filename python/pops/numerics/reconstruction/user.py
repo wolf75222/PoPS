@@ -140,7 +140,8 @@ def _retained_offsets(expression: Expr) -> tuple[int, ...]:
     return tuple(sorted(offsets))
 
 
-def User(body: Any, *, formal_order: int, name: str = "user") -> BrickDescriptor:
+def User(body: Any, *, formal_order: int, name: str = "user", state: Any = None,
+         sampling: tuple = ()) -> BrickDescriptor:
     """Author one scalar trace formula from ``sample(integer_offset)``.
 
     The formula is applied independently to each component and each oriented face.
@@ -148,6 +149,11 @@ def User(body: Any, *, formal_order: int, name: str = "user") -> BrickDescriptor
     scalars are evaluated now and become exact literals in the frozen expression.
     Typed RuntimeParam reads stay live through native block binding. The scalar
     body is applied independently to each state component.
+
+    With ``state=U``, sample(offset) instead returns U's fixed-width expression
+    vector. ``sample(offset, V)`` reads a state declared in ``sampling=(V,...)``.
+    Return exactly one scalar expression per U component; cross-component and
+    cross-state reads are compiled into the common native reconstruction kernel.
     """
     if not callable(body):
         raise TypeError("reconstruction.User(body=) requires a callable symbolic body")
@@ -157,6 +163,11 @@ def User(body: Any, *, formal_order: int, name: str = "user") -> BrickDescriptor
         raise ValueError("reconstruction.User formal_order exceeds native int32 metadata")
     if not isinstance(name, str) or not name:
         raise ValueError("reconstruction.User name must be a non-empty string")
+    if state is not None:
+        from .joint import author_joint
+        return author_joint(body, state=state, sampling=sampling, formal_order=formal_order, name=name)
+    if sampling:
+        raise ValueError("reconstruction.User sampling requires an explicit output state")
     sample = _Sample()
     expression = body(sample)
     if not isinstance(expression, Expr):
@@ -189,6 +200,11 @@ def User(body: Any, *, formal_order: int, name: str = "user") -> BrickDescriptor
 
 def authenticated_user_reconstruction(value: Any) -> BrickDescriptor:
     """Check the retained expression against its immutable package-source claim."""
+    if type(value) is BrickDescriptor and value.category == "reconstruction" and \
+            value.brick_type == "generated" and value.scheme == _SCHEME and \
+            value.native_id == "pops.generated.reconstruction.joint-stencil/v2":
+        from .joint import authenticate_joint
+        return authenticate_joint(value)
     if type(value) is not BrickDescriptor or value.category != "reconstruction" or \
             value.brick_type != "generated" or value.native_id != _NATIVE_ID or \
             value.scheme != _SCHEME or not isinstance(value.expression, Expr):

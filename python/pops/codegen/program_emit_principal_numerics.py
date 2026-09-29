@@ -28,6 +28,8 @@ def emit_principal_reconstruction(entry):
                 "UserReconstructionPolicy", policy))
         policies.append("pops_generated::" + policy)
     descriptors = tuple(selected.reconstruction for selected in group.methods)
+    if any(item.capabilities.get("vector_row") for item in descriptors):
+        return _emit_joint_reconstruction(entry, wrapper, definitions, policies, descriptors)
     lines = ["struct %s {" % wrapper,
         "  static constexpr int formal_order=%d;" % min(item.options["formal_order"] for item in descriptors),
         "  static constexpr int n_ghost=%d;" % max(item.options["ghost_depth"] for item in descriptors),
@@ -105,4 +107,65 @@ def emit_principal_numerical_flux(entry):
             "      for(int i=0;i<%d;++i) output[%d+i]=density[i];" % (count,offset), "    }"]
         offset += count
     lines += ["    return pops::FluxEvaluation<State>::ok(output,bound);", "  }", "};"]
+    return "".join(definitions) + "\n".join(lines) + "\n", wrapper + "{model.parameter_sets}"
+
+
+def _emit_joint_reconstruction(entry, wrapper, definitions, policies, descriptors):
+    group = entry["group"]
+    starts, cursor = {}, 0
+    for state, count in zip(group.states, group.component_counts, strict=True):
+        starts[state] = cursor
+        cursor += count
+    lines = [
+        "struct %s {" % wrapper,
+        "  static constexpr int n_components=%d;" % cursor,
+        "  static constexpr int formal_order=%d;"
+        % min(d.options["formal_order"] for d in descriptors),
+        "  static constexpr int n_ghost=%d;" % max(d.options["ghost_depth"] for d in descriptors),
+        "  static constexpr int stencil_min_offset=%d;"
+        % min(d.options["stencil_min_offset"] for d in descriptors),
+        "  static constexpr int stencil_max_offset=%d;"
+        % max(d.options["stencil_max_offset"] for d in descriptors),
+        "  std::array<pops::RuntimeParams,%d> parameter_sets{};" % len(group.states),
+        "  template<class Sample,int Count> struct MappedSample {",
+        "    const Sample& source; std::array<int,Count> components; int component=0;",
+        "    POPS_HD pops::Real operator()(int offset,int index) const { return source(offset,components[index]); }",
+        "    POPS_HD pops::Real operator()(int offset) const { return (*this)(offset,component); }",
+        "  };",
+        "  template<class Sample> POPS_HD std::array<pops::Real,n_components> stencil_face_state(const Sample& sample) const {",
+        "    std::array<pops::Real,n_components> output{};",
+    ]
+    for row, (state, count, policy, descriptor) in enumerate(
+        zip(group.states, group.component_counts, policies, descriptors, strict=True)
+    ):
+        joint = descriptor.capabilities.get("vector_row", False)
+        sources = (
+            (descriptor.options["state"], *descriptor.options["sampling"]) if joint else (state,)
+        )
+        mapping = [
+            starts[source] + component
+            for source in sources
+            for component in range(group.component_counts[group.states.index(source)])
+        ]
+        lines += ["    {", "      %s policy{};" % policy]
+        if descriptor.options["runtime_captures"]:
+            lines.append("      policy.params=parameter_sets[%d];" % row)
+        lines.append(
+            "      MappedSample<Sample,%d> mapped{sample,{{%s}},0};"
+            % (len(mapping), ",".join(map(str, mapping)))
+        )
+        if joint:
+            lines += [
+                "      const auto trace=policy.stencil_face_state(mapped);",
+                "      for(int i=0;i<%d;++i) output[%d+i]=trace[i];" % (count, starts[state]),
+            ]
+        else:
+            lines += [
+                "      for(int i=0;i<%d;++i) {" % count,
+                "        mapped.component=i; output[%d+i]=policy.stencil_face_value(mapped);"
+                % starts[state],
+                "      }",
+            ]
+        lines.append("    }")
+    lines += ["    return output;", "  }", "};"]
     return "".join(definitions) + "\n".join(lines) + "\n", wrapper + "{model.parameter_sets}"

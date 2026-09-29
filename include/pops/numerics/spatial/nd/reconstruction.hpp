@@ -55,6 +55,9 @@ struct ConservativeComponentSampler {
   POPS_HD Real operator()(int offset) const {
     return state(displaced<Axis, Orientation>(source, offset), component);
   }
+  POPS_HD Real operator()(int offset, int selected_component) const {
+    return state(displaced<Axis, Orientation>(source, offset), selected_component);
+  }
 };
 
 template <int Axis, int Orientation, int Dim, class Model, int MinimumOffset, int MaximumOffset>
@@ -68,7 +71,9 @@ struct PrimitiveComponentSampler {
   StateConversionStatus* status = nullptr;
   int component = 0;
 
-  POPS_HD Real operator()(int offset) const {
+  POPS_HD Real operator()(int offset) const { return (*this)(offset, component); }
+
+  POPS_HD Real operator()(int offset, int selected_component) const {
     const Real invalid = std::numeric_limits<Real>::quiet_NaN();
     if (*status != StateConversionStatus::Success)
       return invalid;
@@ -87,7 +92,7 @@ struct PrimitiveComponentSampler {
       values[slot] = recovered.value;
       ready[slot] = true;
     }
-    return values[slot][component];
+    return values[slot][selected_component];
   }
 };
 
@@ -102,22 +107,31 @@ POPS_HD StateConversion<typename Model::State> reconstruct_conservative(
     const Model& model, const FieldView<const Real, Dim>& state, const Index<Dim>& source,
     const Reconstruction& reconstruction) {
   typename Model::State face = pops::load_state<Model>(state, source);
-  for (int component = 0; component < Model::n_vars; ++component) {
-    if constexpr (CellValueReconstruction<Reconstruction>) {
-      const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
-      const Real center = sample(0);
-      face[component] = reconstruction.cell_face_value(center);
-    } else if constexpr (SlopeReconstruction<Reconstruction>) {
-      // Limiter differences are always formed in canonical axis order. Orientation selects the
-      // side of the resulting centered slope exactly once below.
-      const ConservativeComponentSampler<Axis, 1, Dim> sample{state, source, component};
-      const Real center = sample(0);
-      face[component] =
-          center + Real(0.5) * Real(Orientation) *
-                       reconstruction.limited_slope(center - sample(-1), sample(1) - center);
-    } else {
-      const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
-      face[component] = reconstruction.stencil_face_value(sample);
+  if constexpr (JointStencilReconstruction<Reconstruction>) {
+    static_assert(Reconstruction::n_components == Model::n_vars,
+                  "joint reconstruction output differs from its physical state");
+    const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, 0};
+    const auto reconstructed = reconstruction.stencil_face_state(sample);
+    for (int component = 0; component < Model::n_vars; ++component)
+      face[component] = reconstructed[component];
+  } else {
+    for (int component = 0; component < Model::n_vars; ++component) {
+      if constexpr (CellValueReconstruction<Reconstruction>) {
+        const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
+        const Real center = sample(0);
+        face[component] = reconstruction.cell_face_value(center);
+      } else if constexpr (SlopeReconstruction<Reconstruction>) {
+        // Limiter differences are always formed in canonical axis order. Orientation selects the
+        // side of the resulting centered slope exactly once below.
+        const ConservativeComponentSampler<Axis, 1, Dim> sample{state, source, component};
+        const Real center = sample(0);
+        face[component] =
+            center + Real(0.5) * Real(Orientation) *
+                         reconstruction.limited_slope(center - sample(-1), sample(1) - center);
+      } else {
+        const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
+        face[component] = reconstruction.stencil_face_value(sample);
+      }
     }
   }
   return checked_conservative(model, face);
@@ -168,14 +182,26 @@ POPS_HD StateConversion<typename Model::State> reconstruct_primitive(
     StateConversionStatus status = StateConversionStatus::Success;
 
     Primitive face{};
-    for (int component = 0; component < Model::n_vars; ++component) {
-      // Conversion is shared across components but occurs only for offsets reached by the
-      // policy's control flow.  A failed active conversion cannot be hidden by min/where.
+    if constexpr (JointStencilReconstruction<Reconstruction>) {
+      static_assert(Reconstruction::n_components == Model::n_vars,
+                    "joint reconstruction output differs from its physical state");
       const PrimitiveComponentSampler<Axis, Orientation, Dim, Model, minimum, maximum> sample{
-          model, state, source, values, ready, &status, component};
-      face[component] = reconstruction.stencil_face_value(sample);
+          model, state, source, values, ready, &status, 0};
+      const auto reconstructed = reconstruction.stencil_face_state(sample);
+      for (int component = 0; component < Model::n_vars; ++component)
+        face[component] = reconstructed[component];
       if (status != StateConversionStatus::Success)
         return {{}, status};
+    } else {
+      for (int component = 0; component < Model::n_vars; ++component) {
+        // Conversion is shared across components but occurs only for offsets reached by the
+        // policy's control flow.  A failed active conversion cannot be hidden by min/where.
+        const PrimitiveComponentSampler<Axis, Orientation, Dim, Model, minimum, maximum> sample{
+            model, state, source, values, ready, &status, component};
+        face[component] = reconstruction.stencil_face_value(sample);
+        if (status != StateConversionStatus::Success)
+          return {{}, status};
+      }
     }
     return model.make_conservative(face);
   }
