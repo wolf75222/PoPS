@@ -39,4 +39,4 @@ def make_case(*, reverse=False):
                                           projection=ConservativeCellAverage()))
     layout = Uniform(CartesianGrid(frame=frame, cells=(4, 4),
                                   periodic=PeriodicAxes(frame.axes)))
-    return case, layout
+    return case, layout, subjects

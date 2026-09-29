@@ -12,7 +12,7 @@ from tests.python.support.local_product_readonly_case import make_case
 
 
 def readonly_capture_case(*, reverse=False):
-    case, layout = make_case(reverse=reverse)
+    case, layout, _ = make_case(reverse=reverse)
     return pops.resolve(pops.validate(case), layout=layout)
 
 
