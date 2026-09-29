@@ -2,10 +2,12 @@
 
 
 def transport_frequency_contract(transport):
-    """Sufficient scalar monotonicity and declared-speed restriction for systems.
+    """Select policies with a prepared scalar convex partition certificate.
 
-    This does not prove arbitrary system invariants. Higher-order reconstruction
-    and non-endpoint Riemann waves require their own prepared frequency provider.
+    Observing ``FluxEvaluation.stability`` supplies a frequency but does not
+    prove monotonicity of an arbitrary authored face body in a composed
+    transport--diffusion update. The standalone User face guard consumes its
+    authored frequency separately. This does not prove system invariants.
     """
     from .reconstruction import authenticated_reconstruction_route
     from .riemann._contract import riemann_capability_contract

@@ -403,6 +403,14 @@ class ProgramContext {
 
   double path_rhs_courant() const { return system_->active_program_step_courant(); }
 
+  /// The authored numerical face bound is checked at the actual RHS stage. A
+  /// FixedDt invocation has no CFL proposal, so it uses the unit incident-face
+  /// budget; step_cfl supplies its caller-authored Courant instead.
+  double numerical_face_courant() const {
+    const double active = system_->active_program_step_courant();
+    return std::isfinite(active) && active > 0.0 ? active : 1.0;
+  }
+
   void path_rhs_into(int program_block, field_type& input, field_type& output, int rate_id,
                      std::string_view temporal_family, double courant) const {
     const ExecutionLane& lane = prepared_execution_lane();

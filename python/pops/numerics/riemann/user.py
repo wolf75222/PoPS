@@ -14,7 +14,7 @@ from pops.physics.board_handles import StateHandle as BoardStateHandle
 from pops.model.hash_data import canonical_hash_data
 
 
-_NATIVE_ID = "pops.generated.riemann.face/v1"
+_NATIVE_ID = "pops.generated.riemann.face/v2"
 _SCHEME = "source_face"
 _CAPABILITIES = ("physical_flux", "provider_pack", "stability_bound")
 
@@ -82,23 +82,28 @@ def _check_body(roots: tuple[Expr, ...], variables: dict[str, VectorExpr],
     return _capture_identities(roots)
 
 
-def _source_identity(body: Any, *, width: int, state_name: str,
+def _source_identity(body: Any, stability: Any, *, width: int, state_name: str,
                      captures: tuple[tuple[str, str], ...]) -> str:
-    data = {"schema_version": 1, "kind": _SCHEME, "body": body,
+    data = {"schema_version": 2, "kind": _SCHEME, "body": body,
+            "stability": stability,
             "width": width, "state": state_name, "runtime_captures": captures}
     encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
-def User(body: Any, *, state: StateHandle, name: str = "user_face") -> BrickDescriptor:
+def User(body: Any, *, state: StateHandle, stability: Any = None,
+         name: str = "user_face") -> BrickDescriptor:
     """Author ``face(left,right,flux_left,flux_right,speed) -> tuple[Expr,...]``.
 
     Every state/flux argument is an indexable tuple with the declared state width, including
     width one. ``speed`` is the physical normal spectral-radius majorant. Python runs only now;
-    the frozen expression executes inside the native face kernel.
+    the frozen expression executes inside the native face kernel. ``stability`` has the
+    same arguments and returns the author's finite, nonnegative numerical face bound.
     """
     if not callable(body):
         raise TypeError("riemann.User(body=) requires a callable symbolic face body")
+    if not callable(stability):
+        raise TypeError("riemann.User(body=) requires a callable stability= numerical bound")
     width = _state_width(state)
     if width < 1:
         raise ValueError("riemann.User state has no components")
@@ -111,23 +116,30 @@ def User(body: Any, *, state: StateHandle, name: str = "user_face") -> BrickDesc
     if not isinstance(result, tuple) or len(result) != width:
         raise TypeError("riemann.User body must return a tuple of one Expr per state component")
     roots = tuple(item if isinstance(item, Expr) else Const(item) for item in result)
-    captures = _check_body(roots, variables, speed, exact_objects=True)
+    stability_result = stability(variables["left"], variables["right"],
+                                 variables["flux_left"], variables["flux_right"], speed)
+    if isinstance(stability_result, (tuple, list, VectorExpr)):
+        raise TypeError("riemann.User stability must return one scalar Expr")
+    stability_root = (stability_result if isinstance(stability_result, Expr)
+                      else Const(stability_result))
+    captures = _check_body(roots + (stability_root,), variables, speed, exact_objects=True)
     body_data = canonical_hash_data(roots, where="user face body")
+    stability_data = canonical_hash_data(stability_root, where="user face stability")
     # The declaration fingerprint and block owner path become canonical only
     # after Case.freeze/resolve.  Keep the stable local state name in the source
     # identity; the exact resolved StateHandle is checked against FiniteVolume
     # variables when installing the native policy.
     state_name = state.inspect()["local_id"]
-    identity = _source_identity(body_data, width=width, state_name=state_name,
+    identity = _source_identity(body_data, stability_data, width=width, state_name=state_name,
                                 captures=captures)
     return BrickDescriptor(
         name, "generated", category="riemann", native_id=_NATIVE_ID, scheme=_SCHEME,
         options={"state": state, "state_name": state_name, "width": width,
                  "runtime_captures": captures, "source_identity": identity,
-                 "body": body_data},
+                 "body": body_data, "stability": stability_data},
         requirements={"capabilities": _CAPABILITIES, "source_compiled": True},
         capabilities={"vector_face": True, "conservative_shared_face": True},
-        expression=roots,
+        expression=roots + (stability_root,),
     )
 
 
@@ -138,14 +150,14 @@ def authenticated_user_face(value: Any) -> BrickDescriptor:
         raise TypeError("user face requires an exact source-authored descriptor")
     options = value.options
     if set(options) != {"state", "state_name", "width", "runtime_captures",
-                        "source_identity", "body"}:
+                        "source_identity", "body", "stability"}:
         raise ValueError("user face source contract is incomplete")
     state, width = options["state"], options["width"]
     if type(width) is not int or width != _state_width(state) or width < 1 or \
             state.inspect()["local_id"] != options["state_name"]:
         raise ValueError("user face state/shape authority changed")
     roots = value.expression
-    if not isinstance(roots, tuple) or len(roots) != width or \
+    if not isinstance(roots, tuple) or len(roots) != width + 1 or \
             any(not isinstance(item, Expr) for item in roots):
         raise ValueError("user face body shape changed")
     variables = _variables(width)
@@ -153,10 +165,16 @@ def authenticated_user_face(value: Any) -> BrickDescriptor:
     captures = _check_body(roots, variables, speed, exact_objects=False)
     if tuple(tuple(item) for item in options["runtime_captures"]) != captures:
         raise ValueError("user face runtime captures changed")
-    observed = canonical_hash_data(roots, where="user face body")
-    if observed != canonical_hash_data(options["body"], where="frozen user face body"):
+    body_data = canonical_hash_data(roots[:width], where="user face body")
+    if body_data != \
+            canonical_hash_data(options["body"], where="frozen user face body"):
         raise ValueError("user face body changed after authoring")
-    expected = _source_identity(observed, width=width, state_name=options["state_name"],
+    stability_data = canonical_hash_data(roots[width], where="user face stability")
+    if stability_data != canonical_hash_data(options["stability"],
+                                             where="frozen user face stability"):
+        raise ValueError("user face stability changed after authoring")
+    expected = _source_identity(body_data, stability_data,
+                                width=width, state_name=options["state_name"],
                                 captures=captures)
     if expected != options["source_identity"]:
         raise ValueError("user face source identity changed after authoring")

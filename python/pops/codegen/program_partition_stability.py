@@ -62,8 +62,50 @@ def _affine_terms(value, stops=()):
 
 
 def _is_rate(value):
-    return value.op == "diffusive_rhs" or (
+    return value.op in {"diffusive_rhs", "principal_rate"} or (
         value.op == "rhs" and value.attrs.get("flux", True))
+
+
+def explicit_update_consumers(program):
+    """Identify state combinations that can advance accepted explicit state.
+
+    An RHS is an observation until a state combination consumes it. Follow the
+    accepted result and the stage inputs of rates that feed it, but do not
+    interpret a nonlinear solver's residual or predictor as an explicit step.
+    """
+    updates, seen = set(), set()
+
+    def walk(node):
+        if node.id in seen:
+            return
+        seen.add(node.id)
+        if node.op == "linear_combine":
+            if node.vtype == "state":
+                updates.add(node.id)
+            for child in node.inputs:
+                walk(child)
+        elif _is_rate(node):
+            index = node.attrs.get("target_input", 0)
+            if type(index) is int and 0 <= index < len(node.inputs):
+                walk(node.inputs[index])
+        elif node.op == "branch":
+            for key in ("true_result", "false_result"):
+                child = node.attrs.get(key)
+                if hasattr(child, "op"):
+                    walk(child)
+        elif node.op == "solve_spatial_nonlinear":
+            from pops.time._program.spatial_solve import validate_spatial_commit
+            validate_spatial_commit(program, node)
+            walk(node.inputs[0])
+        elif node.op in {"solve_local_nonlinear", "solve_coupled_implicit",
+                         "solve_implicit_source"}:
+            return
+        elif node.vtype == "state" and len(node.inputs) == 1:
+            walk(node.inputs[0])
+
+    for value in program._commits.values():
+        walk(value)
+    return frozenset(updates)
 
 
 def partition_stability_groups(value, *, include_transport=False):
@@ -82,7 +124,8 @@ def partition_stability_groups(value, *, include_transport=False):
     if not include_transport and not (any(node.op == "rhs" for node in rates)
                                       and any(node.op == "diffusive_rhs" for node in rates)):
         return ()
-    bases = {node.inputs[0].id: node.inputs[0] for node in rates}
+    bases = {node.inputs[node.attrs.get("target_input", 0)].id:
+             node.inputs[node.attrs.get("target_input", 0)] for node in rates}
     terms = _affine_terms(value, bases)
     rates = [(node, weight) for node, weight in terms if _is_rate(node)]
     states = [(node, weight) for node, weight in terms if not _is_rate(node)]
@@ -98,7 +141,7 @@ def partition_stability_groups(value, *, include_transport=False):
     budgets = {node.id: weight[0] for node, weight in states}
     groups = {}
     for rate, weight in rates:
-        state = rate.inputs[0]
+        state = rate.inputs[rate.attrs.get("target_input", 0)]
         if budgets.get(state.id, 0) <= 0 or rate.block != state.block:
             raise ValueError(_DIAGNOSTIC)
         if rate.attrs.get("schedule") is not None:
@@ -148,6 +191,32 @@ def emit_partition_stability(value, var, lines, *, block_index, include_transpor
         key = ("partition_stability_checked",)
         var[key] = var.get(key, frozenset()) | frozenset(
             rate.id for rate, _ in rates if rate.op == "diffusive_rhs")
+
+
+def emit_user_face_stability(value, var, lines, *, block_index):
+    """Check only consumers of authored face rates, using their Shu--Osher budget."""
+    if not any(("user_face_frequency", node.id) in var
+               for node, _ in _affine_terms(value)):
+        return
+    groups = partition_stability_groups(value, include_transport=True)
+    for index, (_, alpha, rates) in enumerate(groups):
+        if not any(("user_face_frequency", rate.id) in var for rate, _ in rates):
+            continue
+        terms = []
+        for rate, beta in rates:
+            token = var.get(("partition_frequency", rate.id))
+            if token is None:
+                raise ValueError(_DIAGNOSTIC + "; numerical face frequency is unavailable")
+            terms.append("%s * %s" % (scalar_cpp(beta), token))
+        frequency = "user_face_update_frequency_%d_%d" % (value.id, index)
+        lines.append("const pops::Real %s = %s;" % (frequency, " + ".join(terms)))
+        lines.append(
+            "ctx.consume_pointwise_evaluation_status(%d,%d,"
+            "(!std::isfinite(%s) || %s < 0 || !std::isfinite(dt) || dt < 0 || "
+            "dt * %s > %s * static_cast<pops::Real>(ctx.numerical_face_courant()) "
+            "* (1 + 32 * std::numeric_limits<pops::Real>::epsilon())) ? 1 : 0,"
+            "\"user_face_numerical_stability\",503);"
+            % (block_index, value.id, frequency, frequency, frequency, scalar_cpp(alpha)))
 
 
 def require_deferred_partition_bounds(var):

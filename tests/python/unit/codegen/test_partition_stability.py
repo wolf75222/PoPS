@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from pops.codegen.program_partition_stability import (
-    emit_partition_stability, partition_stability_groups,
+    emit_partition_stability, emit_user_face_stability, explicit_update_consumers,
+    partition_stability_groups,
 )
 
 
@@ -44,6 +45,39 @@ def test_nested_rate_sum_keeps_each_exact_fraction_and_one_state_budget():
                              lines, block_index=0)
     assert any("transport_budget" in line and "tensor_budget" in line for line in lines)
     assert any("combined_transport_diffusion_stability" in line for line in lines)
+
+
+def test_user_face_guard_uses_consumer_coefficient_and_skips_diagnostic_rate():
+    state = _state(0)
+    accepted_rate = _rate(10, "rhs", state)
+    diagnostic_rate = _rate(11, "rhs", state)
+    accepted = _combine(20, (state, {0: 1}), (accepted_rate, {1: Fraction(1, 100)}))
+    diagnostic = _combine(21, (state, {0: 1}), (diagnostic_rate, {1: 1}))
+    program = SimpleNamespace(_commits={"state": accepted}, _values=(accepted, diagnostic))
+    assert explicit_update_consumers(program) == frozenset({20})
+    lines = []
+    emit_user_face_stability(accepted,
+                             {("user_face_frequency", 10): "face_speed",
+                              ("partition_frequency", 10): "face_speed"},
+                             lines, block_index=0)
+    assert any("pops::Real(1) / pops::Real(100)" in line for line in lines)
+    assert any("face_speed" in line for line in lines)
+    assert any("numerical_face_courant()" in line for line in lines)
+
+
+def test_user_face_guard_follows_explicit_predictor_but_not_implicit_residual():
+    state = _state(0)
+    first = _rate(10, "rhs", state)
+    predictor = _combine(20, (state, {0: 1}), (first, {1: 1}))
+    second = _rate(11, "rhs", predictor)
+    accepted = _combine(21, (state, {0: Fraction(1, 2)}),
+                        (predictor, {0: Fraction(1, 2)}),
+                        (second, {1: Fraction(1, 2)}))
+    assert explicit_update_consumers(SimpleNamespace(_commits={"state": accepted})) == \
+        frozenset({20, 21})
+    implicit = SimpleNamespace(id=30, op="solve_implicit_source", vtype="state",
+                               inputs=(predictor,), attrs={}, block=state.block, point=1)
+    assert explicit_update_consumers(SimpleNamespace(_commits={"state": implicit})) == frozenset()
 
 
 def test_convex_stage_budgets_do_not_accumulate_predictor_ancestry():

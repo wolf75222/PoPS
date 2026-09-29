@@ -152,6 +152,7 @@ sdk-support pops/numerics/spatial/embedded_boundary/operator.hpp
 api pops/numerics/spatial/nd/conservation_law.hpp
 api pops/numerics/spatial/nd/conservation_laws.hpp
 api pops/numerics/spatial/nd/face_field.hpp
+api pops/numerics/spatial/nd/face_frequency.hpp
 api pops/numerics/spatial/nd/finite_volume.hpp
 api pops/numerics/spatial/nd/reconstruction.hpp
 api pops/numerics/spatial/nd/state_conversion.hpp

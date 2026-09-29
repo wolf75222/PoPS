@@ -14380,6 +14380,11 @@ double AmrSystem<Dim>::active_program_step_courant_() const {
 }
 
 template <int Dim>
+double AmrSystem<Dim>::numerical_face_courant_() const {
+  return p_->active_step_courant.value_or(1.0);
+}
+
+template <int Dim>
 typename AmrSystem<Dim>::PreparedLevelEvaluation&
 AmrSystem<Dim>::prepare_prepared_amr_block_level_path_rhs_at(
     int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
@@ -22254,6 +22259,7 @@ AmrSystem<kNativeDimension>::prepare_prepared_amr_block_level_path_rhs_at(
 template std::string AmrSystem<kNativeDimension>::prepared_amr_block_path_operator_identity_(
     int, int) const;
 template double AmrSystem<kNativeDimension>::active_program_step_courant_() const;
+template double AmrSystem<kNativeDimension>::numerical_face_courant_() const;
 template void AmrSystem<kNativeDimension>::validate_prepared_amr_block_level_batch(
     std::span<const std::pair<int, int>>) const;
 template void AmrSystem<kNativeDimension>::publish_prepared_amr_block_level_batch(

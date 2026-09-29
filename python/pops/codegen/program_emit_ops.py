@@ -942,10 +942,28 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             family_suffix = ", " + json.dumps(family) if target == "amr_system" else ""
             from pops.codegen.program_transport_quadrature import declare_transport_faces
             faces = declare_transport_faces(v, node_model, var, lines)
+            authored_face = getattr(_model_impl(node_model), "_user_face", None)
+            user_face_frequency = None
+            if authored_face is not None:
+                from pops.numerics.riemann.user import authenticated_user_face
+                authenticated_user_face(authored_face)
+                user_face_frequency = "user_face_frequency_%d" % v.id
+                lines.append("pops::Real %s=0;" % user_face_frequency)
+                if faces is None:
+                    faces = "user_face_faces_%d" % v.id
+                    lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s;" % faces)
             if faces is not None:
-                lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s);"
+                frequency_suffix = (",&" + user_face_frequency) if user_face_frequency else ""
+                if target == "amr_system" and user_face_frequency:
+                    # The final AMR argument follows temporal family and input trace.
+                    frequency_suffix = (",nullptr,&" + user_face_frequency
+                                        if input_trace is None else ",&" + user_face_frequency)
+                lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s%s);"
                              % (bidx, var[state_in.id], var[v.id], int(v.id), faces,
-                                family_suffix + trace_suffix))
+                                family_suffix + trace_suffix, frequency_suffix))
+                if user_face_frequency:
+                    var[("user_face_frequency", v.id)] = user_face_frequency
+                    var[("partition_frequency", v.id)] = user_face_frequency
                 if want_default_source:
                     source = "transport_source_%d" % v.id
                     lines.append("auto& %s = ctx.rhs_scratch(%d, 2, %s);"
@@ -1461,6 +1479,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 and has_independent_diffusion_transport(node_model)):
             emit_partition_stability(v, var, lines, block_index=bidx, include_transport=True)
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
+        if (not implicit_spatial_residual
+                and v.id in var.get(("explicit_state_updates",), frozenset())):
+            from pops.codegen.program_partition_stability import emit_user_face_stability
+            emit_user_face_stability(v, var, lines, block_index=bidx)
         if v.id in committed_ids:
             # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
             c_base = {0: 0}

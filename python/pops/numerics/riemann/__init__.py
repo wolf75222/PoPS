@@ -25,15 +25,16 @@ def _riemann(name: Any, native_id: Any, caps: Any, **options: Any) -> Any:
 
 
 def _user(brick_id: Any = None, *, body: Any = None, state: Any = None,
+          stability: Any = None,
           name: str = "user_face") -> Any:
     """Dispatch the existing external brick id or a source-authored face body."""
-    if body is None and state is None and isinstance(brick_id, str):
+    if body is None and state is None and stability is None and isinstance(brick_id, str):
         return _external_descriptor(brick_id, expect_category="riemann")
     if brick_id is not None or body is None or state is None:
         raise TypeError("riemann.User requires an external brick id or body= and state=")
     from .user import User as authored_user
 
-    return authored_user(body, state=state, name=name)
+    return authored_user(body, state=state, stability=stability, name=name)
 
 
 def _scalar_upwind(*, velocity: Any) -> Any:

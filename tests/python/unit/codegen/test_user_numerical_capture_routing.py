@@ -44,7 +44,8 @@ def _case(*, foreign=False, face=False, width=1, cross=False):
         (lambda left, right, flux_left, flux_right, speed:
             .5 * (flux_left + flux_right) - .5 * speed * (right - left)
             + alpha * (right - left)))
-    face_recipe = riemann.User(body=face_body, state=U) if face else riemann.Rusanov()
+    face_recipe = riemann.User(body=face_body, state=U,
+                               stability=lambda left, right, fl, fr, speed: speed + alpha) if face else riemann.Rusanov()
     case = pops.Case("captured_numerical_coefficient")
     program = pops.Program("steps")
     for name in ("first", "second"):
@@ -109,7 +110,7 @@ def test_cross_component_face_formula_reaches_both_native_package_targets():
     graph = ProgramModelGraph.from_resolved_blocks(pops.resolve(pops.validate(case), layout=layout).blocks)
     for name in ("first", "second"):
         model = graph.model_for_block(name)
-        assert len(face_recipe.expression) == 2
+        assert len(face_recipe.expression) == 3
         emitted = emit_user_face_policy(model)
         assert "density[1]" in emitted
         assert "right.state[1]" in emitted
@@ -118,3 +119,17 @@ def test_cross_component_face_formula_reaches_both_native_package_targets():
             source = model._m.emit_cpp_native_loader(name="VectorFaceRoute", target=target)
             assert "struct UserFacePolicy" in source
             assert "user_reconstruction, user_face" in source
+
+
+def test_authored_face_frequency_guards_the_exact_default_rhs_on_both_targets():
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    case, layout, _, _, _, _ = _case(face=True, width=1)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    for target in ("system", "amr_system"):
+        source = emit_cpp_program(resolved.time, model=graph, target=target)
+        assert source.count("user_face_numerical_stability") == 2
+        assert source.count("numerical_face_courant()") == 2
+        assert source.count("&user_face_frequency_") == 2
+        assert "ctx.max_wave_speed" not in source

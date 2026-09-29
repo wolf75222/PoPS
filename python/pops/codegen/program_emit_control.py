@@ -354,6 +354,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # IR value id -> C++ token: a MultiFab variable name (states / RHS scratches), a scalar variable
     # name (reductions, ``s{id}``) or a parenthesized boolean expression (compares).
     var = {}
+    from pops.codegen.program_partition_stability import explicit_update_consumers
+    var[("explicit_state_updates",)] = explicit_update_consumers(program)
     if provider_plans is not None:
         var[("program_provider_plans",)] = provider_plans
     prelude = []

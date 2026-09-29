@@ -1,6 +1,8 @@
 /// @file
 /// @brief Explicit diffusion hooks into the existing AMR accepted flux-expression authority.
 
+double numerical_face_courant() const { return facade_->numerical_face_courant_(); }
+
 void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_state,
                                           field_type& rhs, int rate_id,
                                           std::vector<nd::FaceField<Dim>>& faces,
