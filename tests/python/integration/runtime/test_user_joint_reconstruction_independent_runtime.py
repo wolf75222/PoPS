@@ -40,7 +40,7 @@ def _matrices(permutation):
     return tuple(a[np.ix_(permutation, permutation)] for a in (x, y))
 
 
-def _case(permutation, *, guarded=False, primitive=False):
+def _case(permutation, *, guarded=False, primitive=False, mixed=False):
     frame = Rectangle("joint_user_native", (0., 0.), (1., 1.)).frame(Cartesian2D())
     model = pops.Model("joint_user_native_model", frame=frame)
     states = (model.species("first", state=tuple("q%d" % k for k in permutation[:2])),
@@ -92,8 +92,11 @@ def _case(permutation, *, guarded=False, primitive=False):
     # Registration order differs from the physical declaration/packed component order.
     blocks = {row: case.block("block%d" % row, model, states=(states[row],)) for row in (1, 0)}
     for row, body in enumerate((first, second)):
-        policy = reconstruction.User(body, state=states[row], sampling=(states[1-row],),
-                                     formal_order=1)
+        policy = (reconstruction.User(
+            lambda sample: sample(0) + .1 * (sample(1) - sample(-1)), formal_order=1)
+            if mixed and row == 1 else
+            reconstruction.User(body, state=states[row], sampling=(states[1-row],),
+                                formal_order=1))
         variable_policy = (variables.Primitive(states[row]) if primitive
                            else variables.Conservative(states[row]))
         method = FiniteVolume(flux=fluxes[row], variables=variable_policy,
@@ -168,6 +171,23 @@ def _gather(runtime, world):
         return None
     return np.concatenate((np.asarray(rows[0]).reshape(2, N, N),
                            np.asarray(rows[1]).reshape(3, N, N)))
+
+
+@pytest.mark.parametrize("primitive,mixed,depths", ((False, False, (4, 3)),
+                                                  (False, True, (4, 2)),
+                                                  (True, False, (4, 3))))
+def test_joint_cross_row_storage_halo_covers_every_sampled_component(primitive, mixed, depths):
+    """A row with a narrow own stencil still supplies a wider neighbor's samples."""
+    from pops.codegen.program_models import ProgramModelGraph
+
+    case, layout, *_ = _case(tuple(range(5)), primitive=primitive, mixed=mixed)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    for row in range(2):
+        model = graph.model_for_block("block%d" % row)._m
+        group = model._principal_groups[0]["group"]
+        assert tuple(method.ghost_depth for method in group.methods) == depths
+        assert model._program_state_ghost_depth >= 4
 
 
 @pytest.mark.parametrize("permutation,primitive", ((tuple(range(5)), False),
