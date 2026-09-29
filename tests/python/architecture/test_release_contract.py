@@ -79,7 +79,7 @@ def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
                       ROOT / "python" / "pops" / "_generated_release_contract.py")
     source = json.loads((ROOT / "schemas" / "release_contract.v2.json").read_text())
     assert source["release_contract_schema_version"] == 2
-    assert generated.PACKAGE_VERSION == "1.0.0"
+    assert generated.PACKAGE_VERSION == "1.1.0"
     for name in (
         "public_api_version", "semantic_ir_version", "normalization_version",
         "component_catalog_schema_version", "component_manifest_schema_version",
@@ -90,6 +90,9 @@ def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
         "amr_checkpoint_payload_version",
     ):
         assert source[name] >= 1
+    assert source["public_api_version"] == 3
+    assert source["semantic_ir_version"] == 3
+    assert source["native_abi_version"] == 4
     assert source["uniform_checkpoint_payload_version"] == 8
     assert source["amr_checkpoint_payload_version"] == 11
     assert source["checkpoint_spatial_schema_version"] == 1
