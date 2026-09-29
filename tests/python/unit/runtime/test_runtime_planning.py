@@ -518,7 +518,7 @@ def test_multilayout_arguments_and_layout_views_are_complete_and_qualified():
     }
 
 
-def test_multilayout_arguments_reject_conflicting_homonymous_parameter_metadata(monkeypatch):
+def test_multilayout_arguments_use_qualified_schema_not_flat_model_parameter_metadata(monkeypatch):
     artifact = _artifact(("fluid", "solid"), heterogeneous=True)
     from pops.codegen import inspect_compiled
     from pops.codegen._artifact_models import artifact_model_metadata
@@ -530,8 +530,9 @@ def test_multilayout_arguments_reject_conflicting_homonymous_parameter_metadata(
     )
     monkeypatch.setattr(inspect_compiled, "_artifact_model_metadata", lambda _artifact: conflicting)
 
-    with pytest.raises(ValueError, match="conflicting parameter metadata"):
-        artifact.arguments()
+    # Detached BindSchema is the parameter authority. A legacy local-name view
+    # neither introduces a bind slot nor merges homonyms across block owners.
+    assert artifact.arguments().params == {}
 
 
 def test_device_write_followed_by_host_read_derives_one_fence():

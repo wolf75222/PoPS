@@ -102,16 +102,11 @@ def aggregate_model_metadata(compiled: Any) -> tuple[Any, ...]:
     if not rows:
         return [], 0, {}, [], 0, "U"
     cons_names = [name for row in rows for name in row.cons_names]
-    params = {}
-    owners = {}
-    for row in rows:
-        for name, value in row.params.items():
-            if name in params and params[name] != value:
-                raise ValueError(
-                    "compiled blocks %r and %r declare conflicting parameter metadata for %r"
-                    % (owners[name], row.block_name, name))
-            params[name] = value
-            owners.setdefault(name, row.block_name)
+    # Aggregate inspection has the same qualified parameter authority as bind.
+    # Local declaration names cannot merge independently owned block parameters.
+    from ._inspect_params import build_parameter_arguments
+
+    params = build_parameter_arguments(compiled, {})
     provider_components = list(
         dict.fromkeys(component for row in rows for component in row.provider_components)
     )

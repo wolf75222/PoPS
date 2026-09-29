@@ -115,7 +115,8 @@ class Arguments(Report):
 
       - ``instances``: the physics blocks the Program commits (name -> state space / component
         count / required), supplied through ``initial_state=``;
-      - ``params``: the model's declared parameters (name -> type / kind / required), supplied
+      - ``params``: the immutable BindSchema's qualified parameters (identity -> type / kind /
+        required), supplied
         through ``params=`` (only ``kind == "runtime"`` is settable at bind);
       - ``aux``: the static external aux inputs the model declares (name -> layout / required),
         supplied through ``aux=``; channels produced by a resolved field provider are excluded;
@@ -191,7 +192,7 @@ def build_arguments(compiled: Any) -> Arguments:
 
       - instances: the blocks the Program COMMITS (``program.commits()`` -- the blocks it advances);
         each is required and carries the model's conservative state space + component count;
-      - params: the model's declared parameters (``model.params``); ``kind`` is the declared kind
+      - params: the qualified parameters of the immutable BindSchema; ``kind`` is the declared kind
         (``runtime`` settable at bind, ``const`` frozen at compile);
       - provider components: the model's generic external inputs (report-only; exact identity is
         owner-scoped components produced by resolved field plans), each required;
@@ -237,9 +238,7 @@ def build_arguments(compiled: Any) -> Arguments:
             "target": compiled.program_for_layout(layout_id).target,
             "ghost_depth_by_block": depths,
         }
-    from ._inspect_params import build_parameter_arguments
-
-    params = build_parameter_arguments(compiled, _merge_parameter_metadata(model_rows))
+    params = _parameter_arguments(compiled, model_rows)
     return Arguments(
         instances=instances,
         params=params,
@@ -302,6 +301,21 @@ def _merge_parameter_metadata(model_rows: Any) -> dict[str, Any]:
             params[name] = value
             owners.setdefault(name, row.block_name)
     return params
+
+
+def _parameter_arguments(compiled: Any, model_rows: Any) -> dict[str, Any]:
+    """Inspect the qualified BindSchema before considering legacy local names.
+
+    A model metadata row is a reusable declaration surface. Two block instances
+    can legitimately give a homonym distinct defaults, domains, or kinds. The
+    public artifact already owns the complete immutable, qualified BindSchema;
+    flattening declaration names before reading it rejects valid compositions.
+    """
+    from ._inspect_params import build_parameter_arguments
+
+    params = ({} if getattr(compiled, "bind_schema", None) is not None
+              else _merge_parameter_metadata(model_rows))
+    return build_parameter_arguments(compiled, params)
 
 
 def _field_output_components_by_block(compiled: Any) -> dict[str, tuple[str, ...]]:
@@ -393,8 +407,6 @@ def _build_arguments(
     *,
     program_name: Any = None,
 ) -> Arguments:
-    params = _merge_parameter_metadata(model_rows)
-
     # Instances: the blocks the Program commits. A read-only block (never committed) is still a
     # bind input, but the Program only references blocks it commits or reads; the commit set is the
     # authoritative list of advanced blocks (criterion 23: the block is bound by name).
@@ -432,8 +444,7 @@ def _build_arguments(
                 "conservative": list(row.cons_names),
             }
 
-    from ._inspect_params import build_parameter_arguments
-    param_args = build_parameter_arguments(compiled, params)
+    param_args = _parameter_arguments(compiled, model_rows)
 
     produced_by_block = _field_output_components_by_block(compiled)
     aux_args = _build_aux_arguments(model_rows, produced_by_block, _auxiliary_packs_by_block(compiled))
