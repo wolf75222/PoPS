@@ -4,6 +4,33 @@ from collections.abc import Mapping
 from pops._cartesian_axes import canonical_axis_mapping
 
 
+def prepare_local_state_storage_carrier(emitter, module, frame, *, state_space=None):
+    """Qualify a flux-free local State from its authored placement, never a fake PDE.
+
+    A named grid operator must retain its own transport realization. An absent
+    physical frame is not a request to choose the installed backend's dimension.
+    """
+    impl = getattr(emitter, "_m", emitter)
+    if impl._flux or getattr(impl, "_program_only_storage_axes", ()) or frame is None:
+        return
+    states = module.state_spaces()
+    if state_space is None:
+        if len(states) != 1:
+            return
+        state_space = next(iter(states.values()))
+    for operator in module.operator_registry():
+        state_inputs = tuple(space for space in operator.signature.inputs
+                             if getattr(space, "kind", None) == "state")
+        if operator.kind == "grid_operator" and (not state_inputs or state_space in state_inputs):
+            return
+    if (state_space.frame != frame.canonical_id or state_space.layout != "cell"
+            or state_space.centering != "cell" or state_space.storage != "multifab"):
+        raise ValueError("local State storage requires its exact authored cell/multifab frame")
+    axes = tuple(canonical_axis_mapping(
+        {axis.name: axis for axis in frame.axes}, where="local State storage frame"))
+    object.__setattr__(impl, "_program_only_storage_axes", axes)
+
+
 def prepare_state_storage_requirements(
     emitter, module, resolved_operations, *, emitter_is_private=False
 ):

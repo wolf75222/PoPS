@@ -607,6 +607,10 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
             emit_model = _module_to_model(
                 lowering.source_module, state_space=state_space,
                 resolved_operations=resolved_operations)
+            from pops.codegen.state_storage_lowering import prepare_local_state_storage_carrier
+            prepare_local_state_storage_carrier(
+                emit_model, lowering.source_module, getattr(lowering.facade, "frame", None),
+                state_space=state_space)
             from pops.codegen.user_reconstruction_lowering import prepare_user_reconstruction_carrier
 
             prepare_user_reconstruction_carrier(emit_model, numerics)

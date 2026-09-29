@@ -24,8 +24,11 @@ class _BoardCompileMixin(_BoardModel):
         from pops.codegen.diffusion_lowering import prepare_diffusion_carrier
         prepare_diffusion_carrier(emitter, source_module,
                                   quantity_handles=tuple(self._states.values()))
-        from pops.codegen.state_storage_lowering import prepare_source_storage_carrier
+        from pops.codegen.state_storage_lowering import (
+            prepare_local_state_storage_carrier, prepare_source_storage_carrier,
+        )
         prepare_source_storage_carrier(emitter, source_module)
+        prepare_local_state_storage_carrier(emitter, source_module, self.frame)
         return CompilerLowering(
             emit_model=emitter,
             source_module=source_module,
