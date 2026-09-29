@@ -67,3 +67,17 @@ execution of the real generated Path builder. They were read, not run by this
 reviewer. No performance-window CPU tests were started. Final author SHA and native
 M07/stage-time evidence remain integration receipt items; this source verdict must
 not be reported as native acceptance.
+
+Follow-up review of author commits `2ae788d` and `6ba89c6`: the new
+`prepared_analytic_inflow_uses_the_stage_physical_time` test executes both genuine
+generated closures, including the coordinated-face Path carrier, at explicit
+physical times 0 and 0.25. With interior value 1 and Dirichlet value `1+t`, its
+independent mirrored-ghost oracle is `1+2t`. Input opcode zero denotes time.
+The legacy observer now wraps the full callback actually called by the test.
+The session generation advances identically on every MPI rank; each call requires
+exactly one new global observation for its single global box. This resolves the
+two intermediate review findings (wrong observed callback and rank-local session
+generation). Scalar host indexing is consistent with the tested one-component
+field. Source verdict is favorable; this reviewer has not executed the native
+test. Two explicitly supplied evaluation points do not alone qualify a complete
+Program/SSPRK stage trajectory or the scientific M07 case.
