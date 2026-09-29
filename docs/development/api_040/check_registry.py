@@ -111,7 +111,7 @@ def main():
     cases = ET.parse(evidence_root / ctest["files"][0]["path"]).getroot().findall("testcase")
     require(len(cases) == ctest["total"] and dict(Counter(case.get("status") for case in cases))
             == ctest["counts"], "CTest inventory mismatch")
-    require(corpus["production_evidence_schema"] == 3, "unsupported reception registry schema")
+    require(corpus["production_evidence_schema"] == 4, "unsupported reception registry schema")
     expected_scopes = {
         "selected_amr": ("pops.api040.selected-native-evidence/v1", "production_commit"),
         "scientific": ("pops.api040.scientific-reception-evidence/v1", "production_source"),
@@ -176,6 +176,125 @@ def main():
     require(len(ctest_cases) == scoped_ctest["rows"]
             and dict(Counter(case.get("status") for case in ctest_cases))
             == scoped_ctest["status_counts"], "selected AMR CTest inventory changed")
+    supplemental = corpus["supplemental_receptions"]["after_388c323"]
+    bundle_path = HERE / supplemental["manifest"]
+    bundle_root = bundle_path.parent
+    bundle = read_json(bundle_path)
+    require(bundle["schema"] == "pops.api040.scoped-reception-evidence/v1"
+            and bundle["mapping_source_commit"] == "cfef849",
+            "wrong supplemental receipt identity")
+    require(bundle["native_sha256"] == supplemental["native_sha256"],
+            "supplemental native identities changed")
+    bundle_files = {item["path"]: item for item in bundle["files"]}
+    require(len(bundle_files) == len(bundle["files"]), "duplicate bundled path")
+    for relative, item in bundle_files.items():
+        path = bundle_root / relative
+        require(path.is_file() and path.stat().st_size == item["bytes"]
+                and hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"],
+                f"supplemental receipt bytes changed: {relative}")
+    checksum_lines = (bundle_root / "SHA256SUMS").read_text().splitlines()
+    checksums = dict(line.split("  ", 1)[::-1] for line in checksum_lines)
+    expected_paths = set(bundle_files) | {"manifest.json", "README.md"}
+    require(len(checksum_lines) == len(expected_paths) and set(checksums) == expected_paths,
+            "incomplete or duplicate supplemental SHA256SUMS")
+    for relative, digest in checksums.items():
+        require(hashlib.sha256((bundle_root / relative).read_bytes()).hexdigest() == digest,
+                f"supplemental checksum changed: {relative}")
+    for model, expected_resolutions, expected_time, expected_rejections in (
+        ("M07", [40, 80, 160], 1.0, None),
+        ("M15", [32, 64, 128], 0.02, 6),
+    ):
+        science_meta = bundle["scientific"][model]
+        science = read_json(bundle_root / science_meta["path"])
+        result_dir = science_meta["path"].split("/", 1)[0]
+        result = read_json(bundle_root / result_dir / "result.json")
+        before = read_json(bundle_root / result_dir / "before/identity.json")
+        after = read_json(bundle_root / result_dir / "after/identity.json")
+        science_hash = bundle_files[science_meta["path"]]["sha256"]
+        require(science["status"] == result["status"] == science_meta["status"] == "passed"
+                and result["scientific_receipt_sha256"] == science_hash
+                and result["correct_backend"] is True
+                and result["same_native"] is True
+                and result["same_shipped_sources"] is True
+                and result["example_sources_unchanged"] is True
+                and result["authentication_before"] == result["authentication_after"] == 0,
+                f"{model} result/science identity mismatch")
+        require(result["native_sha256"] == science["native_sha256"]
+                == before["native_sha256"] == after["native_sha256"]
+                == bundle["native_sha256"]["dim1"]
+                and before["source_files_sha256"] == after["source_files_sha256"],
+                f"{model} installed native/source identity mismatch")
+        require(len(science["records"]) == science_meta["records"] == 6
+                and sorted({record["cells"][0] for record in science["records"]})
+                == science_meta["resolutions"] == expected_resolutions
+                and len({tuple(record["order"]) for record in science["records"]}) == 2
+                and science_meta["time"] == expected_time,
+                f"{model} scientific case inventory changed")
+        if expected_rejections is not None:
+            require(len(science["inadmissible_initial_rejections"])
+                    == science_meta["inadmissible_rejections"] == expected_rejections,
+                    "M15 refusal inventory changed")
+    for key, dirname, expected in (
+        ("products_and_boundaries", "installed-388c323-products-and-boundaries",
+         {"tests": 15, "failures": 8, "errors": 0, "skipped": 0}),
+        ("c17_stagnation", "installed-3d06cab-storage-newton",
+         {"tests": 12, "failures": 6, "errors": 0, "skipped": 0}),
+    ):
+        receipt = bundle["installed"][key]
+        result = read_json(bundle_root / receipt["path"])
+        identity_path = bundle_root / dirname / "identity.json"
+        require(result["status"] == receipt["status"] == "failed"
+                and result["counts"] == receipt["counts"] == expected
+                and pytest_counts(bundle_root / dirname / "pytest.xml") == expected
+                and result["identity_sha256"]
+                == hashlib.sha256(identity_path.read_bytes()).hexdigest(),
+                f"failed installed receipt promoted or changed: {key}")
+    c17_cases = list(ET.parse(bundle_root / "installed-3d06cab-storage-newton/pytest.xml")
+                     .getroot().iter("testcase"))
+    c17_passes = [case for case in c17_cases
+                  if "stagnation" in case.get("classname", "")
+                  and all(case.find(tag) is None for tag in ("failure", "error", "skipped"))]
+    require(len(c17_passes) == bundle["installed"]["c17_stagnation"]["passing_stagnation_cases"]
+            == 2, "C17 stagnation witness changed")
+    new_ctest = bundle["ctest"]
+    new_cases = list(ET.parse(bundle_root / new_ctest["path"]).getroot().iter("testcase"))
+    require(len(new_cases) == new_ctest["entries"] == 95
+            and dict(Counter(case.get("status") for case in new_cases))
+            == new_ctest["statuses"] == {"run": 92, "notrun": 3}
+            and not any(case.find("failure") is not None for case in new_cases),
+            "boundary/AND9 CTest inventory changed")
+    mpi_passes = [case.get("name") for case in new_cases
+                  if case.get("name", "").endswith("_np2") and case.get("status") == "run"]
+    require(mpi_passes == new_ctest["mpi2_aggregates"] and len(mpi_passes) == 4,
+            "selected MPI2 aggregates changed")
+    resource = read_json(bundle_root / bundle["resource"]["path"])
+    timing_root = HERE / "evidence/performance-t2-v1-2"
+    timing_manifest = read_json(timing_root / "manifest.json")
+    timing_rel = "performance-t2-v1-2-run/result.json"
+    timing_item = next(item for item in timing_manifest["files"]
+                       if item["path"] == timing_rel)
+    timing_path = timing_root / timing_rel
+    require(hashlib.sha256(timing_path.read_bytes()).hexdigest() == timing_item["sha256"],
+            "timing v1.2 receipt changed")
+    timing = read_json(timing_path)
+    require(timing["status"] == "measured"
+            and timing["numerical_equivalence"]["passed"] is True
+            and timing["step_median_s"]
+            == {"baseline": 0.0531579375, "candidate": 0.0519979795}
+            and abs(timing["candidate_over_baseline_median"] - 0.9781790254747939) < 1e-15,
+            "timing v1.2 scope changed")
+    for lane in ("baseline", "candidate"):
+        require(all(resource["identities"][lane][key] == timing["identities"][lane][key]
+                    for key in ("native_sha256", "source_commit")),
+                f"resource/timing {lane} identity mismatch")
+    counters = resource["counter_comparison"]
+    require(resource["status"] == bundle["resource"]["status"] == "observed"
+            and resource["numerical_equivalence"]["passed"] is True
+            and counters["kernels"]["unit"] == "program_kernel_operations_or_batches"
+            and counters["kernels"]["values"]
+            == {"baseline": [36, 36, 36], "candidate": [36, 36, 36]}
+            and all(not entry["available"] for name, entry in counters.items()
+                    if name != "kernels"), "resource observation overstated or changed")
     total_scoped = sum(len(read_json(HERE / data["manifest"])["receipts"])
                        for scope, data in corpus["scoped_receptions"].items()
                        if scope in expected_scopes)

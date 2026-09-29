@@ -1,0 +1,701 @@
+{
+  "abi_environment": {
+    "compiler": "Apple LLVM 21.0.0 (clang-2100.1.1.101)",
+    "dim": "2",
+    "kokkos": "1",
+    "mpi": "1",
+    "mpi_abi": "f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5",
+    "std": "202002L",
+    "stdlib": "libc++_210106"
+  },
+  "abi_key": "7553c50eecb2bc352f276643fad748a168750d3c94badf1dcb3293ed933b343e|/usr/bin/clang++|c++20|dim=2",
+  "compiler": "/usr/bin/clang++",
+  "compiler_provenance": {
+    "available": true,
+    "sources": {
+      "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/resource-t2-v1-3-run/profiling/codegen/candidate/408d79797feffb294d8fa21411cec35d56c056db356938ad3a721add6896aae4.cpp": {
+        "cflags": "-DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5\" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup",
+        "compile_command": "/usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG=\"7553c50eecb2bc352f276643fad748a168750d3c94badf1dcb3293ed933b343e\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5\" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF <compiler-dependencies> -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/resource-t2-v1-3-run/profiling/codegen/candidate/408d79797feffb294d8fa21411cec35d56c056db356938ad3a721add6896aae4.so -I /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/artifacts/cf6dace/pops/include /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/resource-t2-v1-3-run/profiling/codegen/candidate/408d79797feffb294d8fa21411cec35d56c056db356938ad3a721add6896aae4.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/resource-t2-v1-3-run/profiling/codegen/candidate/408d79797feffb294d8fa21411cec35d56c056db356938ad3a721add6896aae4.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so",
+        "cxx": "/usr/bin/clang++",
+        "lflags": "-ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so",
+        "std": "c++20"
+      }
+    }
+  },
+  "cxx_standard": "c++20",
+  "doctor_checks": [
+    "compilateur",
+    "headers_sync",
+    "include",
+    "interpreteur",
+    "kokkos",
+    "kokkos_root",
+    "numpy",
+    "threads"
+  ],
+  "dso_bytes": {
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/resource-t2-v1-3-run/profiling/cache/candidate/d696e36e622ddedeadc4e0d8ae5d0c9fef2adcdf6616fc32f27d543921764b62.so": {
+      "bytes": 1909384,
+      "sha256": "f640401a3b3d56adf0e8d79951fe0b81c8bf2ac241f4580a3b736ccdb4e806f0"
+    },
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/resource-t2-v1-3-run/profiling/codegen/candidate/408d79797feffb294d8fa21411cec35d56c056db356938ad3a721add6896aae4.so": {
+      "bytes": 339088,
+      "sha256": "3d231681d830eb6fa40c698c4aacd0b74bd74c23e34d8d05a14715c017ab293a"
+    }
+  },
+  "header_signature": "7553c50eecb2bc352f276643fad748a168750d3c94badf1dcb3293ed933b343e",
+  "include_root": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/artifacts/cf6dace/pops/include",
+  "lane": "candidate",
+  "loaded_external_images": {
+    "available": true,
+    "images": {
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libbz2.1.0.8.dylib": "1855d01ef9e6fc3332c0e8917da74679ea229ed202843e2d87d2e24d2ddfdb87",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libc++.1.0.dylib": "c54d0f3a5b838359cbe4d359f55065140d4c418beba24860a22ee59c1e201710",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libcom_err.3.0.dylib": "0875ef08520b87c4b63be6beabfe64efe70adb7480b37ac81ea97086776d2ba8",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libcrypto.3.dylib": "0e3d4dd9616225eeaf0b4665fe090f192426a27e68743ddba7738c5ff578381d",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libcurl.4.dylib": "6dcbd847e709fad605c95b61193751cd25ddd08b417343df8ff108d67cf1f396",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libexpat.1.12.1.dylib": "4e54735bf463f628e0d118fb4ba2660519c1f0164786d3f80fae6bff02fe3ac1",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libffi.8.dylib": "61ee17543480360558d19f351df9245064e0ea894e1489584b3dbb956caaef90",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libfftw3.3.dylib": "45677508242e1911727c7db7ea702d732290b685c657e85b1dc175379092899f",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libgcc_s.1.1.dylib": "76632e4d480b45261d63678507c2a606fd2524be85c3e9d3a86604684c87e235",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libgfortran.5.dylib": "9dfbecebc0e92496198d9235acf484b9ce897d90ef4c42885095d6a67eef1d3b",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libgssapi_krb5.2.2.dylib": "e41780fbfdc30b6275dc406f5fea62179fdc48b25a1988dbc3be71850e5eb588",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libhdf5.310.dylib": "97a7933c7c73cb3e3ffba3b39d7fecdefadd7f75ab959f3ccb7d06c2b4f46656",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libicudata.78.3.dylib": "bcd8f7072ee34de722f64bc10f55c86a427abe085ab5a19286465da4310f06f1",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libicuuc.78.3.dylib": "c23ef260d7f5a66513ca2d6f831ce1c841f17279a99b13babce014991a6633c9",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libk5crypto.3.1.dylib": "fe41338febaa1117ee71d84e29df2f950f4804bbf57b33cd5f3ee43532bbe388",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libkokkoscontainers.5.2.0.dylib": "c0c8db330d9d203b8591dec23fa24f76219780fa1edafbd44ec60eec65ab61a2",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libkokkoscore.5.2.0.dylib": "32ee292f9fc0341397c585aa08992d2120429c9221a3ca6e06e34d008201ffc3",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libkrb5.3.3.dylib": "3cf6e974bf5c12689a78d50cdceac12cb53f3318dc3500e7b49b199419afc102",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libkrb5support.1.1.dylib": "b838b4f27101564c7b6004eedde95047cff830603747ee7839c2e1362eff1e10",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/liblzma.5.dylib": "6ecd2f758b723bcafb14bdaa3609ac5366c9969108e2a3a34cb1f8b3f2f0efac",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.12.dylib": "45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.12.dylib": "e1f2b2d281400b976282f2a8c1e540892527ab7cd513e9e501e29ffd2713ab7f",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libnghttp2.14.dylib": "8059262439f7aded99754000a40fa9473c4b4e234176067b7139215fd5d41c89",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libomp.dylib": "844796bbd71a7492d78776fad75a306fbb1206e521c1d4ca593e5c1b83d338f1",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libopenblas.0.dylib": "26e2bd17f9b09827be8284112ec059cbb63901d0908628e9b174c3c60a749476",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.12.dylib": "0d4df449e19170a8d65fd6386b223a76be3bc2176792d075fa8bf198142ea6cd",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpsl.5.dylib": "4c13cfd1309b462398b8ea4510d6966162e1c02ef3319d0dff793e8cab5f8f8a",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libquadmath.0.dylib": "9038a47566b38f4b88ef07b7b825b5d7d776b9b6e1a20d19c4c79d44e8faf6a8",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libssh2.1.0.1.dylib": "18c999de80f58d4e0b7baf1eb5ee1e88dfe0d152e0757cd9995e9f5aa872705c",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libssl.3.dylib": "159ab2079fceb0032f1524bdb2f3473bb56af9633ffd968290f0de1e9938570a",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libsz.2.0.1.dylib": "418c7d818ef8e54de445302bbc017a75394088a972ba152c5541bab12b418585",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libz.1.3.2.dylib": "8020844faf07e3a0a3058cf2eb8cc859ee3981297cdb3f3620db0714e2813b77",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libzstd.1.5.7.dylib": "8ff4ec1f5d58bfa6e8966bfa153797b054e4c955ab6d955ca175a0a280fd1084",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_bisect.cpython-312-darwin.so": "4fff8ecebe43503123d6fd65122fb4cc82052dfd99d07c4368a07c7a111e53e7",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_blake2.cpython-312-darwin.so": "fa7004c250775345dec32dbca9999b2799e5c5978f9a886791774f2d1cc0d301",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_bz2.cpython-312-darwin.so": "b930784afebe8cda38fc367812a7fc0ce5afdd6b26c489b45de8fa5cfc03ae34",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_contextvars.cpython-312-darwin.so": "945fc0b10507a4154aec6985b5dee0936f3bf0ba70bbf1f6265553d1d1cee123",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_ctypes.cpython-312-darwin.so": "157867fd7d25159d466f7ab0db48bed96b0cc67c53ae1de23c650b7d16f1879b",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_datetime.cpython-312-darwin.so": "a3f3de42c6535eb655506b37fe1ca68ec1ad026a3670732352722a881e605857",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_decimal.cpython-312-darwin.so": "b118f3a1de8b45a9771af063240be8aa1fb1425f2c1194969f99e0ca48f642bd",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_elementtree.cpython-312-darwin.so": "ffac1925dc54f431810e76c087104ee9506ee0d7bbf6e29441c2058960f936cf",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_hashlib.cpython-312-darwin.so": "11f0c48d7d06b7877072a8b23f6cf0856930d33db84ffa2b557479e041cb82e6",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_heapq.cpython-312-darwin.so": "4ca55405af56f59570eae8db7adc74cca53d146c6f2f88339eed60cdaeb00113",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_json.cpython-312-darwin.so": "08bb3246067ae0475baeb7420dbfc677f932e690f71e971e60fe4ef43aa50e06",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_lzma.cpython-312-darwin.so": "b65850b25f2266994abee4b47c345cf9d3ed3f0ac9808b2c501d546bc036d3cb",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_opcode.cpython-312-darwin.so": "fc80f40cba8de85d5fa798215303304aef10d36c4ce945d14cc362d7f09567ab",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_pickle.cpython-312-darwin.so": "bd02f979dd4efc388bbb62f7d15c858c9724fe88900ceaae14e4bfef5e017af8",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_posixsubprocess.cpython-312-darwin.so": "637ef2761266fe2c8947bd6921eec396c8d687d185bc504ec297a8ea753f59bb",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_queue.cpython-312-darwin.so": "a67f6981245b3e6a5d3db444088b7d7c07fc2229d458a6ca9cc273632c2b0222",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_random.cpython-312-darwin.so": "1e9459cb324b403d22d4f92d29b4b61f65f9d91bd0d053719f05cf4dda6a29fb",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_sha2.cpython-312-darwin.so": "b173e4c1e77b4806054d21b5ce5a35d757ae142724a7c09fd46983d15e48e4b7",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_statistics.cpython-312-darwin.so": "cd3dfaebd4228bb2284d1ae0f08ecb9071e4b13942ed096f0cc8274d258bbbca",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/_struct.cpython-312-darwin.so": "ee797ee247d33396051be4a6544788df794452c71fed5285a02ee5264e47b408",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/binascii.cpython-312-darwin.so": "f9519355198f50deb872f62629d8a25d03a01bfdb9f232b36f693c892854a7fd",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/fcntl.cpython-312-darwin.so": "a77872fa6cb044b4c1af3b3300ffcd7ba35dce57db85559fb0c85c75c7610a81",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/math.cpython-312-darwin.so": "86e44db60d0d402c7cc44b23b28dadc5295583a8b77485fab1bbe60dfbfd1be5",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/pyexpat.cpython-312-darwin.so": "96aa93734ce1b44361f302d7d359c440e28135b68b261753f7c5dc0a3de59f67",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/resource.cpython-312-darwin.so": "cbd0358d5dfb6a5271a7e645118a36d0537b49e84452a2bcd7d26a73eb131164",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/select.cpython-312-darwin.so": "101b40623727b56bb5199896b62bb85d25f710e8519b514d94c328cc86dbc341",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload/zlib.cpython-312-darwin.so": "0b8a0ee1e5fbf3ea91445a9b54ea9d2e6f9f36e8bba60b0546bda1cbc9850b65",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/numpy/_core/_multiarray_umath.cpython-312-darwin.so": "20f580806db730837fdc9284171636cae38f82e5d44053373a50d0680e45bfd6",
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/numpy/linalg/_umath_linalg.cpython-312-darwin.so": "e7bce094d96e29cc9fcfabadc32bb007dda01d77304873cedf36bdcf268bac38",
+      "/usr/lib/system/libsystem_kernel.dylib": "87efce6fbc4341ac0b39624183a0726d3c4da862b8a9032ff40286898ea50cc1",
+      "/usr/lib/system/libsystem_platform.dylib": "de772d111ba1d766f097fddabb19d1375ba1b0dcc9c13227df8834386255eaa5",
+      "/usr/lib/system/libsystem_pthread.dylib": "fcf47902290572748cb561bfcdbf0a8dadfd67c725c4e7c5eb6341a667326d1b"
+    },
+    "recognized_owned_copies": {
+      "/private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pops-native-IEowEN/image-4n88g2.dylib": "f640401a3b3d56adf0e8d79951fe0b81c8bf2ac241f4580a3b736ccdb4e806f0",
+      "/private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pops-native-mVHTHS/image-UqQkJ8.dylib": "f640401a3b3d56adf0e8d79951fe0b81c8bf2ac241f4580a3b736ccdb4e806f0",
+      "/private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pops-native-oQKNYq/image-mjngtn.dylib": "f640401a3b3d56adf0e8d79951fe0b81c8bf2ac241f4580a3b736ccdb4e806f0"
+    }
+  },
+  "native_abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=7553c50eecb2bc352f276643fad748a168750d3c94badf1dcb3293ed933b343e;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+  "native_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/artifacts/cf6dace/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "4b458dabd54357b8aa3a4659cee8363a9a4510e55aaa81706bfe03a445d27037",
+  "package_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/artifacts/cf6dace/pops/__init__.py",
+  "platform_facts": {
+    "backend": "production",
+    "communicator": "MPI_COMM_WORLD",
+    "device": "cpu",
+    "precision": "float64",
+    "target": "system"
+  },
+  "python_executable": "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python3.12",
+  "samples": [
+    {
+      "native_snapshot": {
+        "counters": [
+          {
+            "name": "steps",
+            "value": 12
+          },
+          {
+            "name": "kernels",
+            "value": 36
+          }
+        ],
+        "enabled": true,
+        "schema_version": 1,
+        "scopes": [
+          {
+            "count": 12,
+            "max_s": 0.000576542,
+            "mean_s": 0.0003938994166666667,
+            "min_s": 0.000348083,
+            "name": "node:rhs1",
+            "total_s": 0.004726793
+          },
+          {
+            "count": 12,
+            "max_s": 6.1791e-05,
+            "mean_s": 5.032641666666667e-05,
+            "min_s": 4.8417e-05,
+            "name": "node:accepted",
+            "total_s": 0.000603917
+          },
+          {
+            "count": 12,
+            "max_s": 0.000729708,
+            "mean_s": 0.00050327775,
+            "min_s": 0.000449458,
+            "name": "step",
+            "total_s": 0.006039333
+          }
+        ],
+        "total_s": 0.011370043
+      },
+      "profile_source": "snapshot",
+      "raw_counters": {
+        "kernels": 36,
+        "steps": 12
+      },
+      "raw_scopes": {
+        "node:accepted": {
+          "count": 12,
+          "max_s": 6.1791e-05,
+          "mean_s": 5.032641666666667e-05,
+          "min_s": 4.8417e-05,
+          "total_s": 0.000603917
+        },
+        "node:rhs1": {
+          "count": 12,
+          "max_s": 0.000576542,
+          "mean_s": 0.0003938994166666667,
+          "min_s": 0.000348083,
+          "total_s": 0.004726793
+        },
+        "step": {
+          "count": 12,
+          "max_s": 0.000729708,
+          "mean_s": 0.00050327775,
+          "min_s": 0.000449458,
+          "total_s": 0.006039333
+        }
+      },
+      "selected_counters": {
+        "halo_exchanges": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "kernel_launches": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "kernels": {
+          "available": true,
+          "unit": "program_kernel_operations_or_batches",
+          "value": 36
+        },
+        "mpi_messages": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "mpi_reductions": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "scratch_allocs": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "scratch_peak_bytes": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        }
+      },
+      "summary": {
+        "counters": {
+          "kernels": 36,
+          "steps": 12
+        },
+        "enabled": true,
+        "profile": "advanced",
+        "schema_version": 1,
+        "scopes": {
+          "node:accepted": {
+            "count": 12,
+            "max_s": 6.1791e-05,
+            "mean_s": 5.032641666666667e-05,
+            "min_s": 4.8417e-05,
+            "total_s": 0.000603917
+          },
+          "node:rhs1": {
+            "count": 12,
+            "max_s": 0.000576542,
+            "mean_s": 0.0003938994166666667,
+            "min_s": 0.000348083,
+            "total_s": 0.004726793
+          },
+          "step": {
+            "count": 12,
+            "max_s": 0.000729708,
+            "mean_s": 0.00050327775,
+            "min_s": 0.000449458,
+            "total_s": 0.006039333
+          }
+        },
+        "source": "snapshot",
+        "total_s": 0.011370043,
+        "views": {
+          "by_amr_mpi": {
+            "available": false,
+            "entries": {},
+            "measure": "by_amr_mpi",
+            "reason": "AMR / MPI phase timings and counters (regrid / fill_boundary / halo_exchange / reflux / average_down / mpi_reductions) populate only under a distributed AMR run; no scope is emitted on a host / non-AMR build"
+          },
+          "by_elliptic": {
+            "available": false,
+            "entries": {},
+            "measure": "by_elliptic",
+            "reason": "elliptic-solver counters need a field-solve under profiling on a _pops build that emits them (mg_cycles / krylov_iters / mg_levels / elliptic_bottom)"
+          },
+          "by_memory": {
+            "available": false,
+            "entries": {},
+            "measure": "by_memory",
+            "reason": "scratch memory counters populate only under a compiled Kokkos step"
+          },
+          "by_native_brick": {
+            "available": false,
+            "entries": {},
+            "measure": "by_native_brick",
+            "reason": "native runtime times program nodes / phases, not individual bricks"
+          },
+          "by_program_node": {
+            "accepted": {
+              "count": 12,
+              "max_s": 6.1791e-05,
+              "mean_s": 5.032641666666667e-05,
+              "min_s": 4.8417e-05,
+              "total_s": 0.000603917
+            },
+            "rhs1": {
+              "count": 12,
+              "max_s": 0.000576542,
+              "mean_s": 0.0003938994166666667,
+              "min_s": 0.000348083,
+              "total_s": 0.004726793
+            }
+          },
+          "by_solver": {}
+        }
+      }
+    },
+    {
+      "native_snapshot": {
+        "counters": [
+          {
+            "name": "steps",
+            "value": 12
+          },
+          {
+            "name": "kernels",
+            "value": 36
+          }
+        ],
+        "enabled": true,
+        "schema_version": 1,
+        "scopes": [
+          {
+            "count": 12,
+            "max_s": 0.000624792,
+            "mean_s": 0.0004558401666666667,
+            "min_s": 0.000372541,
+            "name": "node:rhs1",
+            "total_s": 0.005470082
+          },
+          {
+            "count": 12,
+            "max_s": 5.45e-05,
+            "mean_s": 5.1757083333333336e-05,
+            "min_s": 5.0209e-05,
+            "name": "node:accepted",
+            "total_s": 0.0006210850000000001
+          },
+          {
+            "count": 12,
+            "max_s": 0.000752042,
+            "mean_s": 0.0005706319166666667,
+            "min_s": 0.000479875,
+            "name": "step",
+            "total_s": 0.006847583
+          }
+        ],
+        "total_s": 0.01293875
+      },
+      "profile_source": "snapshot",
+      "raw_counters": {
+        "kernels": 36,
+        "steps": 12
+      },
+      "raw_scopes": {
+        "node:accepted": {
+          "count": 12,
+          "max_s": 5.45e-05,
+          "mean_s": 5.1757083333333336e-05,
+          "min_s": 5.0209e-05,
+          "total_s": 0.0006210850000000001
+        },
+        "node:rhs1": {
+          "count": 12,
+          "max_s": 0.000624792,
+          "mean_s": 0.0004558401666666667,
+          "min_s": 0.000372541,
+          "total_s": 0.005470082
+        },
+        "step": {
+          "count": 12,
+          "max_s": 0.000752042,
+          "mean_s": 0.0005706319166666667,
+          "min_s": 0.000479875,
+          "total_s": 0.006847583
+        }
+      },
+      "selected_counters": {
+        "halo_exchanges": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "kernel_launches": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "kernels": {
+          "available": true,
+          "unit": "program_kernel_operations_or_batches",
+          "value": 36
+        },
+        "mpi_messages": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "mpi_reductions": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "scratch_allocs": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "scratch_peak_bytes": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        }
+      },
+      "summary": {
+        "counters": {
+          "kernels": 36,
+          "steps": 12
+        },
+        "enabled": true,
+        "profile": "advanced",
+        "schema_version": 1,
+        "scopes": {
+          "node:accepted": {
+            "count": 12,
+            "max_s": 5.45e-05,
+            "mean_s": 5.1757083333333336e-05,
+            "min_s": 5.0209e-05,
+            "total_s": 0.0006210850000000001
+          },
+          "node:rhs1": {
+            "count": 12,
+            "max_s": 0.000624792,
+            "mean_s": 0.0004558401666666667,
+            "min_s": 0.000372541,
+            "total_s": 0.005470082
+          },
+          "step": {
+            "count": 12,
+            "max_s": 0.000752042,
+            "mean_s": 0.0005706319166666667,
+            "min_s": 0.000479875,
+            "total_s": 0.006847583
+          }
+        },
+        "source": "snapshot",
+        "total_s": 0.01293875,
+        "views": {
+          "by_amr_mpi": {
+            "available": false,
+            "entries": {},
+            "measure": "by_amr_mpi",
+            "reason": "AMR / MPI phase timings and counters (regrid / fill_boundary / halo_exchange / reflux / average_down / mpi_reductions) populate only under a distributed AMR run; no scope is emitted on a host / non-AMR build"
+          },
+          "by_elliptic": {
+            "available": false,
+            "entries": {},
+            "measure": "by_elliptic",
+            "reason": "elliptic-solver counters need a field-solve under profiling on a _pops build that emits them (mg_cycles / krylov_iters / mg_levels / elliptic_bottom)"
+          },
+          "by_memory": {
+            "available": false,
+            "entries": {},
+            "measure": "by_memory",
+            "reason": "scratch memory counters populate only under a compiled Kokkos step"
+          },
+          "by_native_brick": {
+            "available": false,
+            "entries": {},
+            "measure": "by_native_brick",
+            "reason": "native runtime times program nodes / phases, not individual bricks"
+          },
+          "by_program_node": {
+            "accepted": {
+              "count": 12,
+              "max_s": 5.45e-05,
+              "mean_s": 5.1757083333333336e-05,
+              "min_s": 5.0209e-05,
+              "total_s": 0.0006210850000000001
+            },
+            "rhs1": {
+              "count": 12,
+              "max_s": 0.000624792,
+              "mean_s": 0.0004558401666666667,
+              "min_s": 0.000372541,
+              "total_s": 0.005470082
+            }
+          },
+          "by_solver": {}
+        }
+      }
+    },
+    {
+      "native_snapshot": {
+        "counters": [
+          {
+            "name": "steps",
+            "value": 12
+          },
+          {
+            "name": "kernels",
+            "value": 36
+          }
+        ],
+        "enabled": true,
+        "schema_version": 1,
+        "scopes": [
+          {
+            "count": 12,
+            "max_s": 0.000550875,
+            "mean_s": 0.00040649650000000007,
+            "min_s": 0.000380542,
+            "name": "node:rhs1",
+            "total_s": 0.004877958000000001
+          },
+          {
+            "count": 12,
+            "max_s": 5.4042e-05,
+            "mean_s": 5.089258333333333e-05,
+            "min_s": 4.925e-05,
+            "name": "node:accepted",
+            "total_s": 0.000610711
+          },
+          {
+            "count": 12,
+            "max_s": 0.000693583,
+            "mean_s": 0.0005155521666666666,
+            "min_s": 0.000482417,
+            "name": "step",
+            "total_s": 0.006186626
+          }
+        ],
+        "total_s": 0.011675295
+      },
+      "profile_source": "snapshot",
+      "raw_counters": {
+        "kernels": 36,
+        "steps": 12
+      },
+      "raw_scopes": {
+        "node:accepted": {
+          "count": 12,
+          "max_s": 5.4042e-05,
+          "mean_s": 5.089258333333333e-05,
+          "min_s": 4.925e-05,
+          "total_s": 0.000610711
+        },
+        "node:rhs1": {
+          "count": 12,
+          "max_s": 0.000550875,
+          "mean_s": 0.00040649650000000007,
+          "min_s": 0.000380542,
+          "total_s": 0.004877958000000001
+        },
+        "step": {
+          "count": 12,
+          "max_s": 0.000693583,
+          "mean_s": 0.0005155521666666666,
+          "min_s": 0.000482417,
+          "total_s": 0.006186626
+        }
+      },
+      "selected_counters": {
+        "halo_exchanges": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "kernel_launches": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "kernels": {
+          "available": true,
+          "unit": "program_kernel_operations_or_batches",
+          "value": 36
+        },
+        "mpi_messages": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "mpi_reductions": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "scratch_allocs": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        },
+        "scratch_peak_bytes": {
+          "available": false,
+          "reason": "counter absent from native profile snapshot",
+          "value": null
+        }
+      },
+      "summary": {
+        "counters": {
+          "kernels": 36,
+          "steps": 12
+        },
+        "enabled": true,
+        "profile": "advanced",
+        "schema_version": 1,
+        "scopes": {
+          "node:accepted": {
+            "count": 12,
+            "max_s": 5.4042e-05,
+            "mean_s": 5.089258333333333e-05,
+            "min_s": 4.925e-05,
+            "total_s": 0.000610711
+          },
+          "node:rhs1": {
+            "count": 12,
+            "max_s": 0.000550875,
+            "mean_s": 0.00040649650000000007,
+            "min_s": 0.000380542,
+            "total_s": 0.004877958000000001
+          },
+          "step": {
+            "count": 12,
+            "max_s": 0.000693583,
+            "mean_s": 0.0005155521666666666,
+            "min_s": 0.000482417,
+            "total_s": 0.006186626
+          }
+        },
+        "source": "snapshot",
+        "total_s": 0.011675295,
+        "views": {
+          "by_amr_mpi": {
+            "available": false,
+            "entries": {},
+            "measure": "by_amr_mpi",
+            "reason": "AMR / MPI phase timings and counters (regrid / fill_boundary / halo_exchange / reflux / average_down / mpi_reductions) populate only under a distributed AMR run; no scope is emitted on a host / non-AMR build"
+          },
+          "by_elliptic": {
+            "available": false,
+            "entries": {},
+            "measure": "by_elliptic",
+            "reason": "elliptic-solver counters need a field-solve under profiling on a _pops build that emits them (mg_cycles / krylov_iters / mg_levels / elliptic_bottom)"
+          },
+          "by_memory": {
+            "available": false,
+            "entries": {},
+            "measure": "by_memory",
+            "reason": "scratch memory counters populate only under a compiled Kokkos step"
+          },
+          "by_native_brick": {
+            "available": false,
+            "entries": {},
+            "measure": "by_native_brick",
+            "reason": "native runtime times program nodes / phases, not individual bricks"
+          },
+          "by_program_node": {
+            "accepted": {
+              "count": 12,
+              "max_s": 5.4042e-05,
+              "mean_s": 5.089258333333333e-05,
+              "min_s": 4.925e-05,
+              "total_s": 0.000610711
+            },
+            "rhs1": {
+              "count": 12,
+              "max_s": 0.000550875,
+              "mean_s": 0.00040649650000000007,
+              "min_s": 0.000380542,
+              "total_s": 0.004877958000000001
+            }
+          },
+          "by_solver": {}
+        }
+      }
+    }
+  ],
+  "schema": "pops.api040.joint-reconstruction-resources.v1.3",
+  "sdk_version": {
+    "available": true,
+    "version": "26.5"
+  },
+  "source_commit": "cf6daceaa028df1343a303751ec9ae8f9f5ce6b3",
+  "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/resource-t2-v1-3-run/profiling/candidate.npy",
+  "state_sha256": "8cf7f5e984c443de842ad855afc46a8b61f8cf75af35b9818f279a11d3a31b2f"
+}

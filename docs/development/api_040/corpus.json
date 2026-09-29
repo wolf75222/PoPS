@@ -162,10 +162,13 @@
       "reference_limit": "Association flux–topographie et états sec/mouillé à réaliser sans double comptage.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/physics/_authoring_flux.py:flux_term",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established",
-      "assessment_kind": "prior_mapping_retained_without_new_requalification",
-      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+      "production_status": "scoped_native_dim1_pass",
+      "qualification": "Six installed native Dim1 OpenMP1 runs N40/80/160 in two component orders reach T=1 with equilibrium criterion 1e-12; actual states are saved and hashed in the original workspace. This qualifies the hydrostatic lake-at-rest variant only.",
+      "assessment_kind": "scoped_scientific_receipt_after_388c323",
+      "remaining_gap": "Wet/dry, non-equilibrium dynamics, multi-dimensional and broader boundary cases remain unqualified.",
+      "production_evidence": [
+        "evidence/native-388c323-and-t2-v1-3/manifest.json"
+      ]
     },
     {
       "id": "M08",
@@ -325,13 +328,14 @@
       "reference_limit": "Récurrences héritées seulement. Hiérarchies HyQMOM 1D de plusieurs ordres non assemblées ici.",
       "reference_evidence": [],
       "production_candidate_symbols": "python/pops/moments/closures/hyqmom_axial_b1.py;examples/migration/scientific/api040_m15_hyqmom_axial_b1.py",
-      "production_status": "partial_axial_source_witness",
-      "qualification": "AppendixB.1 nonlinear S50 axial restriction implemented in a library; positive density/variance and Hankel admission in example. Independent nonGaussian mixture discriminates the linearized Eq40 closure. Existing four M15/M16 source checks pass in unit044fade; later independent source review at1937758 is separate.",
-      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
-      "remaining_gap": "A fixed five-moment1V axial restriction is not multi-order Fox-Laurent HyQMOM. Native axial trajectories and arbitrary-order hierarchy remain open.",
+      "production_status": "scoped_native_axial_b1_pass",
+      "qualification": "Six installed native Dim1 axial B.1 order-four runs N32/64/128 to T=0.02 in two component orders pass independent FV/HLL oracle; six invalid initial states refuse. This is five-moment 1V axial only.",
+      "assessment_kind": "scoped_scientific_receipt_after_388c323",
+      "remaining_gap": "Multiorder Fox-Laurent hierarchy, higher moments and general HyQMOM remain unqualified.",
       "production_evidence": [
         "evidence/83b2b12/installed-38faddb-unit",
-        "evidence/83b2b12/source-reviews/astra-m15-m16-independent-review.md"
+        "evidence/83b2b12/source-reviews/astra-m15-m16-independent-review.md",
+        "evidence/native-388c323-and-t2-v1-3/manifest.json"
       ]
     },
     {
@@ -725,7 +729,7 @@
       "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
     }
   ],
-  "production_evidence_schema": 3,
+  "production_evidence_schema": 4,
   "evidence_manifest": "evidence/83b2b12/manifest.json",
   "reception_window": {
     "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
@@ -790,5 +794,20 @@
       "limit": "M06/M13/M17/Cattaneo pass in their declared Dim2 OpenMP1 scopes; M08 final state passes but its archived stage diagnostic is invalid pending corrected rerun."
     },
     "source_after_executed_package": "5d1126811ff72fbe54d8686682ff2eb1ca6254d1 includes coordinated faces, products and C38 AND9 under build; no eac92bb runtime result is assigned to them."
+  },
+  "supplemental_receptions": {
+    "after_388c323": {
+      "manifest": "evidence/native-388c323-and-t2-v1-3/manifest.json",
+      "native_sha256": {
+        "dim1": "84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c",
+        "dim2": "7105935a756fc6f0411c831ea18500f549365a30bc35cdbe340ef4ef11d56011"
+      },
+      "limits": "M07/M15 Dim1 scientific pass; selected C++ C38/C40 MPI2 pass; installed Dim2 products/boundaries 7 pass/8 fail; C17 two pass in older failed package; resource observed only.",
+      "pending": [
+        "T3 native after sparse detach fix",
+        "C22 native after sparse detach fix",
+        "M08 corrected stage reception"
+      ]
+    }
   }
 }

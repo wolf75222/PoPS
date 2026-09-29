@@ -1,0 +1,13 @@
+# Selected native and resource receipts after historical 388c323 bundle
+
+These are byte-for-byte copies of selected workspace receipts; `manifest.json` records their SHA-256 hashes and original root. They do not supersede failed receipts. The M07 and M15 runs use installed Dim1 native `84b7d444…`; the products/boundaries receipt uses Dim2 native `7105935a…`. Both artifacts carry SDK headers `02723ae9…`. At this source revision the generated System package ABI is 6 (`python/pops/codegen/_compile_emit.py` and `include/pops/runtime/system/native_package_capability.hpp`), distinct from release native ABI 3. The C17 receipt instead uses the earlier 3d06cab package and is failed overall: its two original-residual stagnation tests pass, while six other tests fail.
+
+M07 passed six actual Dim1 runs, N=40/80/160, two component orders, T=1, criterion 1e-12. M15 passed six actual Dim1 axial B.1 runs, N=32/64/128, two orders, T=0.02, and recorded six inadmissible-initial-state refusals. This does not qualify wet/dry Saint-Venant or the multiorder Fox–Laurent hierarchy. Scientific state NPZ arrays remain at the original workspace paths; their names and hashes are in copied scientific receipts.
+
+The products/boundaries installed receipt has 15 tests, seven passes and eight failures from the sparse Program detach path at that revision. Its later fix has no result in this bundle. The C++ boundary6/AND9 XML has 95 entries: 92 run/passed and three skipped; four MPI2 aggregate entries passed, including the synthetic C38 second-transition rollback/retry. This is selected C38/C40 evidence, not a complete MPI or restart guarantee.
+
+The timing v1.2 3d06cab→cf6dace comparison remains in sibling `evidence/performance-t2-v1-2`: ratio 0.978179, 53.1579375 versus 51.9979795 ms for a complete 12-step run, despite the receipt field name `step_median_s`. Resource v1.3 is observed on the same pair: its only available comparable counter is 36 program kernel operations/batches in both lanes for each of three fresh samples. Halo exchanges, launches, MPI and scratch counters were absent. No memory/allocation reduction claim follows.
+
+The resource copy contains plan/result, preflight metadata and profiling JSON/logs only. Caches, generated DSOs, arrays and source trees remain in the workspace. T3/C22 native acceptance and corrected M08 stage receipt are pending, not inferred from these files.
+
+Run `shasum -a 256 -c SHA256SUMS` from this directory and `python3 ../../check_registry.py` from this directory's parent path as appropriate. `SHA256SUMS` covers every copied file, README and manifest, excluding itself.

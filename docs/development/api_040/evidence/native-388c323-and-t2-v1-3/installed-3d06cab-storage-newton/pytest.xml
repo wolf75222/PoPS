@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="12" time="338.597" timestamp="2026-09-29T05:01:48.356401+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_api040_c17_stagnation_runtime" name="test_original_residual_is_required_before_publication_and_history_rotation[1.0-False]" time="11.203" /><testcase classname="tests.python.integration.runtime.test_api040_c17_stagnation_runtime" name="test_original_residual_is_required_before_publication_and_history_rotation[0.0-True]" time="10.663" /><testcase classname="tests.python.integration.runtime.test_principal_amr_runtime" name="test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths0-False-1-False]" time="35.387"><failure message="AssertionError: AssertionError: assert set() == {0}&#10;    &#10;    Extra items in the right set:&#10;    0&#10;    &#10;    Full diff:&#10;    + set()&#10;    - {&#10;    -     0,&#10;    - }&#10;assert not 'AssertionError: assert set() == {0}\n  \n  Extra items in the right set:\n  0\n  \n  Full diff:\n  + set()\n  - {\n  -     0,\n  - }'">tests/python/integration/runtime/test_principal_amr_runtime.py:79: in test_principal_amr_joint_faces_preserve_composite_components_and_rebind
+    _root_check(world,check_initial)
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:47: in _root_check
+    assert not failure, failure
+E   AssertionError: AssertionError: assert set() == {0}
+E       
+E       Extra items in the right set:
+E       0
+E       
+E       Full diff:
+E       + set()
+E       - {
+E       -     0,
+E       - }
+E   assert not 'AssertionError: assert set() == {0}\n  \n  Extra items in the right set:\n  0\n  \n  Full diff:\n  + set()\n  - {\n  -     0,\n  - }'</failure></testcase><testcase classname="tests.python.integration.runtime.test_principal_amr_runtime" name="test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths1-False-1-True]" time="35.904"><failure message="AssertionError: AssertionError: assert set() == {0}&#10;    &#10;    Extra items in the right set:&#10;    0&#10;    &#10;    Full diff:&#10;    + set()&#10;    - {&#10;    -     0,&#10;    - }&#10;assert not 'AssertionError: assert set() == {0}\n  \n  Extra items in the right set:\n  0\n  \n  Full diff:\n  + set()\n  - {\n  -     0,\n  - }'">tests/python/integration/runtime/test_principal_amr_runtime.py:79: in test_principal_amr_joint_faces_preserve_composite_components_and_rebind
+    _root_check(world,check_initial)
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:47: in _root_check
+    assert not failure, failure
+E   AssertionError: AssertionError: assert set() == {0}
+E       
+E       Extra items in the right set:
+E       0
+E       
+E       Full diff:
+E       + set()
+E       - {
+E       -     0,
+E       - }
+E   assert not 'AssertionError: assert set() == {0}\n  \n  Extra items in the right set:\n  0\n  \n  Full diff:\n  + set()\n  - {\n  -     0,\n  - }'</failure></testcase><testcase classname="tests.python.integration.runtime.test_principal_amr_runtime" name="test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths2-True-2-True]" time="38.423"><failure message="AssertionError: AssertionError: assert {1} == {0, 1}&#10;    &#10;    Extra items in the right set:&#10;    0&#10;    &#10;    Full diff:&#10;      {&#10;    -     0,&#10;          1,&#10;      }&#10;assert not 'AssertionError: assert {1} == {0, 1}\n  \n  Extra items in the right set:\n  0\n  \n  Full diff:\n    {\n  -     0,\n        1,\n    }'">tests/python/integration/runtime/test_principal_amr_runtime.py:79: in test_principal_amr_joint_faces_preserve_composite_components_and_rebind
+    _root_check(world,check_initial)
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:47: in _root_check
+    assert not failure, failure
+E   AssertionError: AssertionError: assert {1} == {0, 1}
+E       
+E       Extra items in the right set:
+E       0
+E       
+E       Full diff:
+E         {
+E       -     0,
+E             1,
+E         }
+E   assert not 'AssertionError: assert {1} == {0, 1}\n  \n  Extra items in the right set:\n  0\n  \n  Full diff:\n    {\n  -     0,\n        1,\n    }'</failure></testcase><testcase classname="tests.python.integration.runtime.test_principal_amr_runtime" name="test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths3-False-2-False]" time="40.029"><failure message="AssertionError: AssertionError: assert {1} == {0, 1}&#10;    &#10;    Extra items in the right set:&#10;    0&#10;    &#10;    Full diff:&#10;      {&#10;    -     0,&#10;          1,&#10;      }&#10;assert not 'AssertionError: assert {1} == {0, 1}\n  \n  Extra items in the right set:\n  0\n  \n  Full diff:\n    {\n  -     0,\n        1,\n    }'">tests/python/integration/runtime/test_principal_amr_runtime.py:79: in test_principal_amr_joint_faces_preserve_composite_components_and_rebind
+    _root_check(world,check_initial)
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:47: in _root_check
+    assert not failure, failure
+E   AssertionError: AssertionError: assert {1} == {0, 1}
+E       
+E       Extra items in the right set:
+E       0
+E       
+E       Full diff:
+E         {
+E       -     0,
+E             1,
+E         }
+E   assert not 'AssertionError: assert {1} == {0, 1}\n  \n  Extra items in the right set:\n  0\n  \n  Full diff:\n    {\n  -     0,\n        1,\n    }'</failure></testcase><testcase classname="tests.python.integration.runtime.test_principal_amr_runtime" name="test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths4-True-2-True]" time="40.881"><failure message="AssertionError: AssertionError: assert {1} == {0, 1}&#10;    &#10;    Extra items in the right set:&#10;    0&#10;    &#10;    Full diff:&#10;      {&#10;    -     0,&#10;          1,&#10;      }&#10;assert not 'AssertionError: assert {1} == {0, 1}\n  \n  Extra items in the right set:\n  0\n  \n  Full diff:\n    {\n  -     0,\n        1,\n    }'">tests/python/integration/runtime/test_principal_amr_runtime.py:79: in test_principal_amr_joint_faces_preserve_composite_components_and_rebind
+    _root_check(world,check_initial)
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:47: in _root_check
+    assert not failure, failure
+E   AssertionError: AssertionError: assert {1} == {0, 1}
+E       
+E       Extra items in the right set:
+E       0
+E       
+E       Full diff:
+E         {
+E       -     0,
+E             1,
+E         }
+E   assert not 'AssertionError: assert {1} == {0, 1}\n  \n  Extra items in the right set:\n  0\n  \n  Full diff:\n    {\n  -     0,\n        1,\n    }'</failure></testcase><testcase classname="tests.python.integration.runtime.test_principal_amr_runtime" name="test_principal_amr_active_singular_flux_rolls_back_all_rows_levels_and_time" time="40.199" /><testcase classname="tests.python.integration.runtime.test_principal_primitive_runtime" name="test_joint_primitive_user_sampling_allocates_the_widest_halo_for_all_rows" time="23.478" /><testcase classname="tests.python.integration.runtime.test_user_numerical_bodies_runtime" name="test_two_block_captures_and_rebind_match_independent_fv_oracle[2-uniform]" time="29.508" /><testcase classname="tests.python.integration.runtime.test_user_numerical_bodies_runtime" name="test_two_block_captures_and_rebind_match_independent_fv_oracle[5-uniform]" time="31.554" /><testcase classname="tests.python.integration.runtime.test_user_numerical_bodies_runtime" name="test_two_block_captures_and_rebind_match_independent_fv_oracle[2-amr1]" time="0.831"><failure message="TypeError: AMR comparison must contain exactly one runtime parameter threshold">tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:199: in test_two_block_captures_and_rebind_match_independent_fv_oracle
+    artifact, world = _compile(case, layout, "user-rebind-%d-%s" % (width, layout_kind))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:60: in _compile
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:29: in resolve
+    return phase(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/contextlib.py:81: in inner
+    return func(*args, **kwds)
+           ^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:288: in resolve
+    resolved_amr = adaptive_layout.resolve_amr_authorities(context)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/layouts/__init__.py:679: in resolve_amr_authorities
+    return resolve_amr_authorities(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/amr/_resolution.py:710: in resolve_amr_authorities
+    resolved_tagging = resolve_tagging(tagging, tagging_context)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/amr/_resolution.py:389: in resolve_tagging
+    _resolve_predicate(rule.predicate, action=action, context=context)
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/amr/_resolution.py:359: in _resolve_predicate
+    return protocol(context, action=action)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_ir/expr.py:239: in resolve_for_amr_predicate
+    return protocol(self, action=action)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/amr/_resolution.py:320: in resolve_comparison
+    raise TypeError(
+E   TypeError: AMR comparison must contain exactly one runtime parameter threshold</failure></testcase></testsuite></testsuites>
