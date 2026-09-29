@@ -3,7 +3,82 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Latest reception: SDK 02723ae9, source 4bb0639
+## Latest completed reception: periodic collective core and qualified inputs
+
+The package rebuilt through `7b35ffd` has the same SDK
+`02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e`,
+with new native Dim1 SHA256
+`cd45279c320533825f10a82433f6039fe4003c547f52546542bf314e176d8b01`
+and Dim2 SHA256
+`00b38fe09ba42678a5a2beda64a3767be9aa130455ecdfcf864a7182fc519cc9`.
+The installed-package runners authenticate every shipped Python source/header,
+the selected native dimension and its binary hash. Source/host tests below are
+distinct from native MultiFab execution. The files listed below are in the
+workspace's `outputs/`; immutable evidence bundles retain earlier reds.
+
+- `installed-7b35ffd-integrated-unit`: **95/95** source/host tests pass against
+  installed PoPS. They cover exact local storage, qualified parameter reports,
+  read-only captures, public exponential, affine composition, entropy and the
+  constrained W10 oracle. The source depth-1000 affine adversary no longer
+  depends on the order of moment indices.
+- `installed-7b35ffd-dim1-m15-refusal-mpi2`: the previously hanging owner-only
+  face refusal now passes on both ranks, including state/clock rollback. The
+  periodic core now uses its prepared collective evaluation phases; optional
+  callback routes are authenticated before rank-dependent dispatch. The first
+  rebuild caught a duplicate C++ declaration, fixed in `92fcebf`; its failed
+  build log is retained separately from the successful builds.
+- `m15-periodic-core-dim1-mpi2`: **six trajectories and six inadmissible-state
+  injections pass**, N32/64/128 and two component orders to time .02. Maximum
+  state error is 4.441e-16, moment-integral error 7.807e-17, permutation error
+  2.221e-16, time error zero. All six actual final states are saved. The original
+  MPI hang receipt remains historical failed evidence, not overwritten.
+- `native-periodic-core-ctest`: the five rebuilt C++ targets give **92 passes
+  and three single-rank guards skipped (95 rows)**, including four MPI2
+  aggregates; elapsed 69.58 s. These selected System/AMR/history/restart checks
+  do not qualify every AMR numerical transfer or GPU path.
+- `installed-fc0d6f4c-native-smoke`: the direct product, H05, and seven-unknown
+  source/apply product pass their first native variant, including original
+  residuals, rebind and failure rollback. The fourth test failed because its
+  fixture duplicated `InitialConditionPlan` with `initial_state`. `75c83e3`
+  supplies the typed `initial_values` instead; no production guard was weakened.
+- `installed-readonly-m11-m18-reception`: **four source tests and four native
+  tests pass**: both block orders preserve nonuniform read-only captures and
+  both W10 orders solve the augmented system while guarding the original
+  singular friction equation. The one M18 failure was its rectangular fixture
+  shape, not an accepted scientific result.
+- `installed-m18-rectangular-repaired`: after `2f7c8806` corrects the grid axes,
+  **five source tests and one native test pass**. Twenty interior entropy
+  targets retain their frozen captured values and satisfy all three original
+  moment equations; an outside-cone cell is refused twice with exact rollback.
+  Native boundary/infeasibility classification codes and near-boundary
+  convergence remain open; the oracle's geometric labels are not native codes.
+- `installed-c22-frontier-mpi2`: one shared test passes on both ranks in 18.66 s,
+  including a rank-local landing failure and rollback at the external-grid
+  frontier. This does not implement a general computed/relaxed endpoint.
+- `installed-affine-consumers-native`: four arbitrary-index affine body tests,
+  the library conditional consumer and the independent particle comparison
+  pass. Two older consumer tests fail only because the root MPI fixture compared
+  the exact class name `RuntimeError`, rejecting its valid `StepAttemptRejected`
+  subclass. The semantic `isinstance` check and all-rank assertions are being
+  restored before repeating that suite; the red receipt remains intact.
+
+The qualified BindSchema is now the parameter report authority (`d16b2e4`).
+Current-State reads, including nested branches and dt-bound regions, are required
+bind inputs without becoming commits (`629a2126`, independent review `fc0d6f4c`).
+These repair existing contracts without an ABI change. Public `exp` has its own
+expression opcode; affine push-forward and entropy quadrature compose through
+the common algebra. Their versioned extension notes remain authoritative.
+
+Next integration: selected-State wave routing (`071352f1`, source tested,
+installed refresh in progress), the corrected MPI reception fixtures, then the
+full product/affine/M11/M18 MPI matrix. Astra Protocols begins an explicit finite
+support/application extension for the true M09/W06 witness; it is distinct from
+the still-open global meshed/distributed residual capability. See
+[the independent mission gap audit](mission_gap_audit_a458113.md) for remaining
+T1–T6 obligations and scientific cases whose physical closure is not specified.
+No complete migration, remote CI, GPU or new external HPC acceptance is claimed.
+
+## Previous reception: SDK 02723ae9, source 4bb0639 (historical)
 
 Both actual Dim1 and Dim2 OpenMP/MPI extensions have been rebuilt. SDK SHA256 is
 `02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e`;

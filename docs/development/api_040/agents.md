@@ -55,10 +55,25 @@ Earlier bounded assignments after T2 integration:
 - Sol Reference: independent M15, cadence/C38 and M07 oracles/reviews delivered; now reviews the new face contract and prepares a distinct generic witness.
 - Primary: integrates, freezes installed source identity, builds one heavy target group at a time, and owns installed/native/scientific reception. Source oracles are not substituted for native execution.
 
-Current bounded assignments at source `4bb0639` (same real GPT-6/high agents):
+Earlier bounded assignments at source `4bb0639` (same real GPT-6/high agents):
 
 - Astra Semantics: public affine transformation of moments by explicit multi-indices, with independent analytic moment oracles and migration of a public consumer.
 - Astra Protocols: M11/W10 constrained flux witness through the public product residual; acceptance checks the original singular physical equation, not only its augmented solve.
 - Sol Native: generic public exponential in the common algebra, then M18/W09 positive-quadrature entropy closure and independent interior/boundary/infeasible targets.
 - Sol Reference: independent MPI dimension-runner review and authenticated native/scientific receipt bundles, preserving all earlier failures.
 - Primary: serial integration and native builds; installed Dim1/Dim2, MPI2, failure injection and numerical reception. Cross-reviews remain required before accepting shared mechanisms.
+
+Current follow-ups after the periodic-core native reception (same callable agents):
+
+- Astra Semantics independently reviewed qualified parameter authority, Exp/M18,
+  and nested read-only inputs; now converges the Uniform MPI reception fixtures.
+- Sol Native counter-reviewed local storage and affine index traversal, repaired
+  the M18 rectangular fixture and selected-State wave routing, and reviews the
+  next M09 finite-support/application increment.
+- Astra Protocols independently reviewed the periodic MPI rejection repair and
+  audited T1–T6 gaps; now implements explicit finite applications for M09/W06.
+- Sol Reference implemented the periodic collective-core repair with Astra
+  counter-review; now authenticates and archives the new native receipts and
+  saved M15 states without reclassifying earlier failures.
+- Primary owns integration, package rebuilds, C++/MPI tests, scientific campaigns,
+  fixture corrections found during reception, and the final acceptance boundary.
