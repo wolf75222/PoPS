@@ -9,6 +9,10 @@ import pytest
 from tests.python.support.native_execution_context import artifact_execution_context
 from test_user_numerical_bodies_runtime import _compile, _root_check
 
+from tests.python.support.collective_checks import (
+    collective_attempt, collective_call, collective_check, state_snapshots,
+)
+
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
 
@@ -34,27 +38,22 @@ def test_h05_original_residual_rebind_and_domain_rollback(
     parameter=validated.resolve(parameter)
     artifact,world=_compile(case,layout,"M22-H05-%s" % reverse)
     for k in (.8,0.,-.8):
-        initial=np.broadcast_to(np.array((2.,.5))[:,None,None],(2,4,4)).copy()
-        runtime=pops.bind(artifact,
+        with collective_check(world):
+            initial=np.broadcast_to(np.array((2.,.5))[:,None,None],(2,4,4)).copy()
+        runtime=collective_call(world, lambda: pops.bind(artifact,
             initial_values={subject:initial[i:i+1] for i,subject in enumerate(subjects)},
-            params={parameter:k},resources={"execution_context":artifact_execution_context(artifact)})
-        before=[np.asarray(runtime.state_global(name)).copy() for name in ("radiation","matter")]
-        failure=""
-        try:
-            pops.run(runtime,t_end=.4,max_steps=1,console=False)
-        except RuntimeError as error:
-            failure=str(error)
-        failures=(failure,)
-        if world is not None:
-            from pops._native_collectives import allgather_value
-            failures=allgather_value(world,failure)
-        after=[np.asarray(runtime.state_global(name)).copy() for name in ("radiation","matter")]
-        if k < 0:
-            assert all(failures)
-            assert runtime.time() == 0. and runtime.macro_step() == 0
-        else:
-            assert not any(failures),failures
-            assert runtime.time() == pytest.approx(.4) and runtime.macro_step() == 1
+            params={parameter:k},resources={"execution_context":artifact_execution_context(artifact)}))
+        before=state_snapshots(runtime, world, ("radiation", "matter"))
+        _, failures = collective_attempt(world, lambda: pops.run(
+            runtime, t_end=.4, max_steps=1, console=False))
+        with collective_check(world):
+            if k < 0:
+                assert all(row is not None and row[2] for row in failures), failures
+                assert runtime.time() == 0. and runtime.macro_step() == 0
+            else:
+                assert not any(failures), failures
+                assert runtime.time() == pytest.approx(.4) and runtime.macro_step() == 1
+        after = state_snapshots(runtime, world, ("radiation", "matter"))
         def check(before=before,after=after,k=k,runtime=runtime):
             saved=tmp_path/("H05_%s_%s.npz" % (reverse,k))
             np.savez_compressed(saved,initial=np.stack(before).reshape(2,4,4),

@@ -16,6 +16,10 @@ from pops.time import FailRun, FixedDt, LocalResidual
 from tests.python.integration.runtime.test_user_numerical_bodies_runtime import _compile, _root_check
 from tests.python.support.native_execution_context import artifact_execution_context
 
+from tests.python.support.collective_checks import (
+    collective_call, collective_check, state_snapshots,
+)
+
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
@@ -67,11 +71,12 @@ def test_native_affine_body_on_stage_and_unknown_matches_discrete_measure(
     expected = np.array([np.dot(weights, np.prod(moved ** index, axis=1)) for index in indices])
     initial = np.broadcast_to(raw[:, None, None], (len(indices), 4, 4)).copy()
     artifact, world = _compile(case, layout, "affine-body-%s-%s-%s" % (dimension, order, reverse))
-    runtime = pops.bind(artifact, initial_state={"matter": initial},
-                        resources={"execution_context": artifact_execution_context(artifact)})
-    report = pops.run(runtime, t_end=.01, max_steps=1)
-    gathered = np.asarray(runtime.state_global("matter"))
-    assert report.accepted_steps == 1
+    runtime = collective_call(world, lambda: pops.bind(artifact, initial_state={"matter": initial},
+                        resources={"execution_context": artifact_execution_context(artifact)}))
+    report = collective_call(world, lambda: pops.run(runtime, t_end=.01, max_steps=1))
+    with collective_check(world):
+        assert report.accepted_steps == 1
+    gathered, = state_snapshots(runtime, world, ("matter",))
     # The committed image is exactly the original residual's lhs: this bound
     # tests that residual authority as well as the analytic affine push-forward.
     _root_check(world, lambda: np.testing.assert_allclose(

@@ -12,19 +12,15 @@ from pops.time import FixedDt
 from tests.python.integration.runtime.test_user_numerical_bodies_runtime import _compile, _root_check
 from tests.python.support.native_execution_context import artifact_execution_context
 
+from tests.python.support.collective_checks import (
+    collective_attempt, collective_call, collective_check, state_snapshots,
+)
+
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
 def _attempt(runtime, world):
-    report, error = None, None
-    try:
-        report = pops.run(runtime, t_end=1e-4, max_steps=1)
-    except Exception as exc:
-        error = (type(exc).__name__, str(exc))
-    if world is None:
-        return report, (error,)
-    from pops._native_collectives import allgather_value
-    return report, allgather_value(world, error)
+    return collective_attempt(world, lambda: pops.run(runtime, t_end=1e-4, max_steps=1))
 
 
 def consumer_case(kind):
@@ -103,25 +99,27 @@ def test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch(
     case, layout, parameter = consumer_case(kind)
     artifact, world = _compile(case, layout, "conditional-consumer-" + kind)
     for active in (False, True):
-        if kind == "diffusion":
-            initial = np.full((1, 4, 4), 1. if active else -1.)
-            params = {}
-        else:
-            initial = np.zeros((6, 4, 4))
-            initial[[0, 2, 5]] = 1.  # isotropic centered second moments
-            params = {parameter: 1. if active else -1.}
-        runtime = pops.bind(artifact, initial_state={"matter": initial.copy()}, params=params,
-                            resources={"execution_context": artifact_execution_context(artifact)})
+        with collective_check(world):
+            if kind == "diffusion":
+                initial = np.full((1, 4, 4), 1. if active else -1.)
+                params = {}
+            else:
+                initial = np.zeros((6, 4, 4))
+                initial[[0, 2, 5]] = 1.  # isotropic centered second moments
+                params = {parameter: 1. if active else -1.}
+        runtime = collective_call(world, lambda: pops.bind(artifact, initial_state={"matter": initial.copy()}, params=params,
+                            resources={"execution_context": artifact_execution_context(artifact)}))
         report, errors = _attempt(runtime, world)
         if active:
-            assert all(error is not None and error[0] == "RuntimeError" for error in errors), errors
-            gathered = np.asarray(runtime.state_global("matter"))
+            assert all(error is not None and error[2] for error in errors), errors
+            gathered, = state_snapshots(runtime, world, ("matter",))
             _root_check(world, lambda gathered=gathered, initial=initial: np.testing.assert_array_equal(
                 gathered.reshape(initial.shape), initial))
         else:
             assert not any(errors), errors
-            assert report.accepted_steps == 1
-            gathered = np.asarray(runtime.state_global("matter"))
+            with collective_check(world):
+                assert report.accepted_steps == 1
+            gathered, = state_snapshots(runtime, world, ("matter",))
             _root_check(world, lambda gathered=gathered, initial=initial: np.testing.assert_allclose(
                 gathered.reshape(initial.shape), initial, rtol=0., atol=4e-15))
 
@@ -145,11 +143,12 @@ def test_native_affine_library_consumer_matches_particles_and_retained_recipe(
     for kind in ("affine", "affine_library"):
         case, layout, parameter = consumer_case(kind)
         artifact, world = _compile(case, layout, "affine-particles-" + kind)
-        runtime = pops.bind(artifact, initial_state={"matter": initial.copy()}, params={parameter: -1.},
-                            resources={"execution_context": artifact_execution_context(artifact)})
-        report = pops.run(runtime, t_end=1e-4, max_steps=1)
-        gathered = np.asarray(runtime.state_global("matter"))
-        assert report.accepted_steps == 1
+        runtime = collective_call(world, lambda: pops.bind(artifact, initial_state={"matter": initial.copy()}, params={parameter: -1.},
+                            resources={"execution_context": artifact_execution_context(artifact)}))
+        report = collective_call(world, lambda: pops.run(runtime, t_end=1e-4, max_steps=1))
+        gathered, = state_snapshots(runtime, world, ("matter",))
+        with collective_check(world):
+            assert report.accepted_steps == 1
 
         def check(gathered=gathered):
             result = gathered.reshape(initial.shape)

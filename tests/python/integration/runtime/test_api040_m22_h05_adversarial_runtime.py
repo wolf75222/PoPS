@@ -13,6 +13,10 @@ from tests.python.support.native_execution_context import artifact_execution_con
 from test_user_numerical_bodies_runtime import _compile, _root_check
 
 
+from tests.python.support.collective_checks import (
+    collective_attempt, collective_call, collective_check, state_snapshots,
+)
+
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
 
@@ -30,18 +34,6 @@ def _case_module():
         sys.path[:] = old_path
 
 
-def _agree(world, payload):
-    if world is None:
-        return (payload,)
-    from pops._native_collectives import allgather_value
-    return tuple(allgather_value(world, payload))
-
-
-def _states(runtime):
-    return tuple(np.asarray(runtime.state_global(name)).copy()
-                 for name in ("radiation", "matter"))
-
-
 @pytest.mark.parametrize("reverse", (False, True))
 def test_h05_nonuniform_cells_rebind_and_collective_negative_rate(
         isolated_native_cache, native_cxx, kokkos_root, tmp_path, reverse):
@@ -49,47 +41,35 @@ def test_h05_nonuniform_cells_rebind_and_collective_negative_rate(
     example = _case_module()
     case, layout, subjects, authored_rate = example.build_case(reverse=reverse)
     artifact, world = _compile(case, layout, "H05-adversarial-%s" % reverse)
-    i, j = np.indices((4, 4), dtype=float)
-    initial = np.stack((2. + .1*i + .03*j, .5 + .02*i + .07*j))
-    assert initial.shape == (2, 4, 4) and np.min(initial) > 0
+    with collective_check(world):
+        i, j = np.indices((4, 4), dtype=float)
+        initial = np.stack((2. + .1*i + .03*j, .5 + .02*i + .07*j))
+        assert initial.shape == (2, 4, 4) and np.min(initial) > 0
 
     # Rebind one compiled artifact. The authored, block-qualified handle must
     # authenticate through the artifact's exact BindSchema; no name lookup.
     for rate in (.8, 0., -.8):
-        runtime = None
-        bind_error = ("", "")
-        try:
-            runtime = pops.bind(
-                artifact,
-                initial_values={subject: initial[index:index+1].copy()
-                                for index, subject in enumerate(subjects)},
-                params={authored_rate: rate},
-                resources={"execution_context": artifact_execution_context(artifact)},
-            )
-        except Exception as error:
-            bind_error = (type(error).__name__, str(error))
-        bind_errors = _agree(world, bind_error)
-        assert all(kind == "" for kind, _ in bind_errors), bind_errors
-        assert runtime is not None
-        before = _states(runtime)
-
-        report = None
-        run_error = ("", "")
-        try:
-            report = pops.run(runtime, t_end=.4, max_steps=1, console=False)
-        except Exception as error:
-            run_error = (type(error).__name__, str(error))
-        run_errors = _agree(world, run_error)
-        if rate < 0:
-            assert all(kind == "RuntimeError" and "nonnegative_rate" in message
-                       for kind, message in run_errors), run_errors
-            assert runtime.time() == 0. and runtime.macro_step() == 0
-        else:
-            assert all(kind == "" for kind, _ in run_errors), run_errors
-            assert report is not None and report.accepted_steps == 1
-            assert report.rejected_steps == 0
-            assert runtime.time() == pytest.approx(.4) and runtime.macro_step() == 1
-        after = _states(runtime)
+        runtime = collective_call(world, lambda: pops.bind(
+            artifact,
+            initial_values={subject: initial[index:index+1].copy()
+                            for index, subject in enumerate(subjects)},
+            params={authored_rate: rate},
+            resources={"execution_context": artifact_execution_context(artifact)},
+        ))
+        before = state_snapshots(runtime, world, ("radiation", "matter"))
+        report, run_errors = collective_attempt(world, lambda: pops.run(
+            runtime, t_end=.4, max_steps=1, console=False))
+        with collective_check(world):
+            if rate < 0:
+                assert all(row is not None and row[2] and
+                           "nonnegative_rate" in row[1] for row in run_errors), run_errors
+                assert runtime.time() == 0. and runtime.macro_step() == 0
+            else:
+                assert not any(run_errors), run_errors
+                assert report is not None and report.accepted_steps == 1
+                assert report.rejected_steps == 0
+                assert runtime.time() == pytest.approx(.4) and runtime.macro_step() == 1
+        after = state_snapshots(runtime, world, ("radiation", "matter"))
 
         def check():
             path = tmp_path / ("h05_adversarial_%s_%s.npz" % (reverse, rate))
