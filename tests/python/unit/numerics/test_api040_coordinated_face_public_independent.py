@@ -10,36 +10,43 @@ import pytest
 from pops._ir.expr import Var
 from pops.codegen.program_models import ProgramModelGraph
 from pops.domain import CartesianDomain
-from pops.frames import Cartesian1D
+from pops.frames import Cartesian1D, Cartesian2D
 from pops.lib.time import ForwardEuler
 from pops.math import ddt, div, maximum
-from pops.mesh import CartesianGrid
+from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.layouts import Uniform
 from pops.numerics import (CoordinatedFace, CoordinatedFiniteVolume,
                            DiscretizationPlan, FaceBalance)
 from pops.time import FixedDt
 
 
-def _case(order=("c", "p", "r"), *, beta=.7, gamma=-.4):
+def _case(order=("c", "p", "r"), *, beta=.7, gamma=-.4, dimension=1):
     assert set(order) == {"c", "p", "r"} and len(order) == 3
-    frame = CartesianDomain("three_state", (0.,), (1.,)).frame(Cartesian1D())
+    assert dimension in (1, 2)
+    frame = CartesianDomain("three_state", (0.,)*dimension,
+                            (1.,)*dimension).frame(
+                                Cartesian1D() if dimension == 1 else Cartesian2D())
     axis = frame.axes[0]
     model = pops.Model("asymmetric_product", frame=frame)
     state = model.state("U", components=order)
     c, p, r = (state[name] for name in ("c", "p", "r"))
+    physical_flux = tuple({"c": c, "p": p/2, "r": -r}[name] for name in order)
     flux = model.flux("transport", state=state, frame=frame,
-                      components={axis: tuple({"c": c, "p": p/2, "r": -r}[name]
-                                              for name in order)})
+                      components={entry: (physical_flux if entry == axis else (0.,)*3)
+                                  for entry in frame.axes})
     matrix = tuple(tuple((beta*r if row == "p" and column == "c" else
                           gamma*c if row == "r" and column == "p" else 0.)
                          for column in order) for row in order)
     product = model.nonconservative_product("coupling", state=state,
-        matrices={axis: matrix}, conservative_components=("c",))
+        matrices={entry: (matrix if entry == axis else ((0.,)*3,)*3)
+                  for entry in frame.axes}, conservative_components=("c",))
     rate = model.rate("complete", equation=ddt(state) == -div(flux) - product)
     model.primitive_state(*state, conservative=tuple(state))
     index = {name: order.index(name) for name in order}
 
     def body(left, right, _axis):
+        if _axis != 0:
+            return FaceBalance((0.,)*3, (0.,)*3, (0.,)*3, 0.)
         lc, lp, lr = (left[index[name]] for name in ("c", "p", "r"))
         rc, rp, rr = (right[index[name]] for name in ("c", "p", "r"))
         integral = {"c": 0., "p": beta*(lr+rr)*(rc-lc)/2,
@@ -63,7 +70,8 @@ def _case(order=("c", "p", "r"), *, beta=.7, gamma=-.4):
     program = ForwardEuler(block[state], rate=rate)
     program.step_strategy(FixedDt(.05/8))
     case.program(program)
-    return case, Uniform(CartesianGrid(frame=frame, cells=(8,))), face
+    return case, Uniform(CartesianGrid(frame=frame, cells=(8,)*dimension,
+                                      periodic=PeriodicAxes(frame.axes))), face
 
 
 def test_public_three_state_permutation_resolves_and_emits_distinct_face_policy():
@@ -99,3 +107,13 @@ def test_public_face_refuses_nonzero_conservative_side_and_free_same_name_captur
             frame=original.frame,
             body=lambda a, b, axis: FaceBalance(
                 (same_name_other_owner, a[1], a[2]), (0., 0., 0.), (0., 0., 0.), 1.))
+
+
+def test_public_two_dimensional_extrusion_emits_zero_transverse_face():
+    case, layout, _ = _case(dimension=2)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    brick = graph.model_for_block("transport")._m.emit_cpp_brick()
+    assert "coordinated_face_contract_version = 1" in brick
+    assert "else if constexpr (Axis == 1)" in brick
+    assert "result.right_ncp.values[2]" in brick
