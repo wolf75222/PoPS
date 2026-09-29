@@ -53,3 +53,18 @@ verify nonuniform targets remain unchanged, failed closure leaves both states
 unchanged, and permutation/rebind retain the qualified capture. A scalar
 LocalResidual's same-block restriction need not be weakened: the named product
 already represents this operation.
+
+## Integrated correction and native acceptance witness
+
+Argument inspection now takes the union of exact committed State identities and
+current-State reads, including reads inside control-flow bodies and the time-step
+bound region. It preserves the original commit set. The existing argument schema
+2 is unchanged: this repairs its required-input inventory, without introducing a
+new semantic opcode, ABI or checkpoint format.
+
+`test_local_product_readonly_runtime.py` is the installed-package acceptance
+witness in both block declaration orders. It requires the target at bind, solves
+three nonlinear equations against 48 nonuniform captured values, checks the
+original residual independently, and requires bitwise preservation of the target.
+The native result is pending a rebuilt-package receipt; the earlier source red
+above is retained as the causal baseline.

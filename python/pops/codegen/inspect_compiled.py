@@ -113,8 +113,8 @@ class Arguments(Report):
     A plain, inert value describing what a caller must SUPPLY to bind the artifact -- distinct
     from ``CompiledProblem.requirements`` (the compile-time constraints). It lists, per group:
 
-      - ``instances``: the physics blocks the Program commits (name -> state space / component
-        count / required), supplied through ``initial_state=``;
+      - ``instances``: the physics blocks the Program reads or commits (name -> state space /
+        component count / required), supplied through ``initial_state=``;
       - ``params``: the immutable BindSchema's qualified parameters (identity -> type / kind /
         required), supplied
         through ``params=`` (only ``kind == "runtime"`` is settable at bind);
@@ -190,8 +190,8 @@ def build_arguments(compiled: Any) -> Arguments:
 
     Sources, all Python-side (no compile / bind / runtime read):
 
-      - instances: the blocks the Program COMMITS (``program.commits()`` -- the blocks it advances);
-        each is required and carries the model's conservative state space + component count;
+      - instances: the blocks the Program reads or commits; each is required and carries the
+        model's conservative state space + component count, including read-only captures;
       - params: the qualified parameters of the immutable BindSchema; ``kind`` is the declared kind
         (``runtime`` settable at bind, ``const`` frozen at compile);
       - provider components: the model's generic external inputs (report-only; exact identity is
@@ -407,16 +407,27 @@ def _build_arguments(
     *,
     program_name: Any = None,
 ) -> Arguments:
-    # Instances: the blocks the Program commits. A read-only block (never committed) is still a
-    # bind input, but the Program only references blocks it commits or reads; the commit set is the
-    # authoritative list of advanced blocks (criterion 23: the block is bound by name).
-    commits = {}
+    # A current-State read requires its exact initial value even when that block is never
+    # committed. Keep this input authority separate from the Program's publication authority.
+    state_refs = set()
     if program is not None and hasattr(program, "commits"):
-        commits = program.commits()
+        state_refs.update(program.commits())
+    if program is not None:
+        from .program_emit_field_routes import _walk_program_nodes
+
+        roots = list(getattr(program, "_values", ()))
+        dt_bound = getattr(program, "_dt_bound", None)
+        if dt_bound is not None:
+            roots.extend(dt_bound[0])
+        for value in _walk_program_nodes(roots):
+            if value.op == "state":
+                if value.state_ref is None:
+                    raise ValueError("compiled Program State read has no exact state identity")
+                state_refs.add(value.state_ref)
     instances = {}
     from pops.time.references import block_name as _block_name, handle_data
     by_block = {row.block_name: row for row in model_rows if row.block_name is not None}
-    for state_ref in sorted(commits, key=lambda item: item.qualified_id):
+    for state_ref in sorted(state_refs, key=lambda item: item.qualified_id):
         name = _block_name(state_ref.block_ref)
         row = by_block.get(name)
         if row is None:

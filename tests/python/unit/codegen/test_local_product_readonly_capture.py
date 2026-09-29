@@ -2,48 +2,17 @@
 from types import SimpleNamespace
 
 import pops
+import pytest
 
 from pops.codegen._compiled_artifact import CompiledPlanRecord
 from pops.codegen.inspect_compiled import _build_arguments
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
-from pops.domain import Rectangle
-from pops.frames import Cartesian2D
-from pops.initial import InitialCondition
-from pops.layouts import Uniform
-from pops.lib.initial import BindArray
-from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.projection import ConservativeCellAverage
-from pops.solvers.nonlinear import LocalNewton
-from pops.time import FailRun, FixedDt, LocalResidual
+from tests.python.support.local_product_readonly_case import make_case
 
 
-def readonly_capture_case():
-    frame = Rectangle("capture_box", (0., 0.), (1., 1.)).frame(Cartesian2D())
-    case = pops.Case("one_unknown_frozen_target")
-    subjects = []
-    for name in ("dual", "target"):
-        model = pops.Model(name, frame=frame)
-        state = model.state("U", components=("a", "b", "c"))
-        subjects.append(case.block(name, model)[state])
-    program = pops.Program("one_unknown")
-    dual, target = (program.state(subject) for subject in subjects)
-    seed = program.value("seed", dual.n, at=dual.next.point)
-
-    def residual(P, unknowns, *, frozen):
-        return {"dual": tuple(unknowns["dual"][i]**2-frozen[i] for i in range(3))}
-
-    solved = program.solve(LocalResidual(residual, {"dual": seed},
-        captures={"frozen": target.n}), solver=LocalNewton(tolerance=1e-12)
-        ).consume(action=FailRun())
-    program.commit(dual.next, solved[subjects[0].block_ref])
-    program.step_strategy(FixedDt(.01))
-    case.program(program)
-    for subject in subjects:
-        case.initials.add(InitialCondition(state=subject, value=BindArray(),
-                                          projection=ConservativeCellAverage()))
-    layout = Uniform(CartesianGrid(frame=frame, cells=(4, 4),
-                                  periodic=PeriodicAxes(frame.axes)))
+def readonly_capture_case(*, reverse=False):
+    case, layout = make_case(reverse=reverse)
     return pops.resolve(pops.validate(case), layout=layout)
 
 
@@ -76,11 +45,14 @@ def test_one_unknown_product_already_accepts_frozen_foreign_block_capture():
     assert "local product requires co-located" in source
 
 
-def test_readonly_captured_state_remains_an_exact_required_bind_input():
-    resolved = readonly_capture_case()
+@pytest.mark.parametrize("reverse", (False, True))
+def test_readonly_captured_state_remains_an_exact_required_bind_input(reverse):
+    resolved = readonly_capture_case(reverse=reverse)
     _, compiled, rows = _inspection_fixture(resolved)
     arguments = _build_arguments(compiled, resolved.time, rows)
     assert set(arguments.instances) == {"dual", "target"}
     assert arguments.instances["target"]["required"] is True
     assert arguments.instances["target"]["components"] == 3
+    assert arguments.instances["target"]["block_identity"] != arguments.instances["dual"]["block_identity"]
+    assert arguments.instances["target"]["state_identity"] != arguments.instances["dual"]["state_identity"]
     assert set(arguments.layout_runtime["ghost_depth_by_block"]) == {"dual", "target"}
