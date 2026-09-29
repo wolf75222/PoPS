@@ -9,3 +9,24 @@ The corpus does not fix amplitude, time step, end time, or a tracer accuracy tol
 All bounds appear in `api040_m08_guiding_center.py::CRITERIA` before compilation: field residual `1e-10`; independent FFT potential `1e-9`; observed-gradient agreement `2e-10`; compatible centered divergence `1e-10`; probe linear response `2e-9` with minimum `1e-3` potential separation; physical stage-field separation `1e-8`; full separate FV/SSPRK2 state agreement `3e-7`; separate charge and tracer mean defects `2e-10`; initial binding and final time `1e-12`. No field value is clipped. The receipt is based on reopened native state/history NPZ files and includes package/native identity, ABI, execution context, solver diagnostics, and archive hash. A source-only validate/resolve/emit result is not a native qualification.
 
 The source-only run first exposed a genuine publication defect: `_program_publication._states` traversed through a stage State into an older Poisson solve and misreported sequential states as conflicting current inputs. The bounded fix stops the current solve's provenance walk at State and nested solve boundaries while retaining exact current load/coefficient inputs. Dedicated tests keep both negative boundaries: conflicting current states, and explicit use of the older field for a new stage. Installed Dim=2 execution and MPI receipt are pending the root's rebuilt native artifact.
+
+
+### Discrimination du second champ de SSPRK2
+
+La réception fixe l'erreur FV maximale à **3e-11**, avant toute exécution native.
+Le seuil précédent 3e-7 acceptait la trajectoire volontairement incorrecte qui réutilise
+le champ initial dans le second RHS : les écarts finaux aux résolutions 32 et 64 sont
+respectivement 4.44054e-9 et 2.21704e-9. Le nouvel écart minimal vaut donc plus de
+73 fois la tolérance. Les deux oracles sont calculés avant compilation ; leur séparation
+doit dépasser 21 fois la tolérance. Les états sauvegardés doivent ensuite être à moins
+de 3e-11 de l'oracle frais et à au moins 20 fois cette tolérance de l'oracle périmé.
+L'inégalité triangulaire relie explicitement ces deux critères. Les références périmées,
+les erreurs et la marge sont conservées dans le NPZ et le reçu.
+
+Le seuil 3e-11 est une obligation de précision supplémentaire, et **ne découle pas**
+du seul seuil de résidu maximal 1e-10. La CG demande rel_tol=1e-12 et abs_tol=1e-13 ;
+le mode périodique non nul le plus lent de -Laplacien a une valeur propre proche de 1,
+les amplitudes sont 0.1/0.2 et le temps intégré 0.04. Cela motive une réception nettement
+plus stricte que 3e-7, avec une marge pratique par rapport aux tolérances de solveur.
+La réception native doit démontrer cette précision ; un échec reste un échec, sans
+ajustement automatique du seuil ou des paramètres physiques.

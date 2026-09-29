@@ -61,7 +61,8 @@ CRITERIA = {
     "probe_linear_response_max": 2.e-9,
     "probe_potential_separation_min": 1.e-3,
     "stage_potential_separation_min": 1.e-8,
-    "reference_fv_max_error": 3.e-7,
+    "reference_fv_max_error": 3.e-11,
+    "stale_transport_margin_min": 20.,
     "mean_defect_max": 2.e-10,
     "initial_max_error": 1.e-12,
     "time_error_max": 1.e-12,
@@ -187,6 +188,16 @@ for n in RESOLUTIONS:
     q_initial, c_initial = cell_means(n)
     inputs = {"charge": q_initial[None, :, :], "tracer": c_initial[None, :, :]}
     q_reference, c_reference = ssprk2_reference(q_initial, c_initial, dt=DT, steps=STEPS)
+    q_stale, c_stale = ssprk2_reference(q_initial, c_initial, dt=DT, steps=STEPS,
+                                      stale_second_stage=True)
+    oracle_separation = float(max(np.max(np.abs(q_reference - q_stale)),
+                                  np.max(np.abs(c_reference - c_stale))))
+    # Fixed before native execution. By the triangle inequality, this gap leaves
+    # at least the declared stale margin for every accepted fresh trajectory.
+    required_separation = ((CRITERIA["stale_transport_margin_min"] + 1.)
+                           * CRITERIA["reference_fv_max_error"])
+    if not np.isfinite(oracle_separation) or oracle_separation < required_separation:
+        raise AssertionError("M08 fresh/stale oracles do not discriminate the declared tolerance")
     compiled_at = time.perf_counter()
     artifact = pops.compile(resolved)
     compile_seconds = time.perf_counter() - compiled_at
@@ -242,6 +253,7 @@ for n in RESOLUTIONS:
                 initial_c=gathered_initial["tracer"][0],
                 final_q=final["charge"][0], final_c=final["tracer"][0],
                 reference_q=q_reference, reference_c=c_reference,
+                stale_reference_q=q_stale, stale_reference_c=c_stale,
                 time=runtime.time(), cells=n, dt=DT, **history)
             with np.load(state_path) as saved:
                 metrics = {label: field_metrics(saved[label + "_q"],
@@ -260,6 +272,9 @@ for n in RESOLUTIONS:
                     saved["stage1_phi"] - saved["stage0_phi"])))
                 fv_error = float(max(np.max(np.abs(saved["final_q"] - saved["reference_q"])),
                                      np.max(np.abs(saved["final_c"] - saved["reference_c"]))))
+                stale_error = float(max(np.max(np.abs(saved["final_q"] - saved["stale_reference_q"])),
+                                        np.max(np.abs(saved["final_c"] - saved["stale_reference_c"]))))
+                stale_margin = stale_error / CRITERIA["reference_fv_max_error"]
                 mass_defect = float(max(abs(np.mean(saved["final_q"]) - np.mean(saved["initial_q"])),
                                         abs(np.mean(saved["final_c"]) - np.mean(saved["initial_c"]))))
                 saved_time = float(saved["time"])
@@ -280,6 +295,7 @@ for n in RESOLUTIONS:
                 and probe_separation >= CRITERIA["probe_potential_separation_min"]
                 and stage_separation >= CRITERIA["stage_potential_separation_min"]
                 and fv_error <= CRITERIA["reference_fv_max_error"]
+                and stale_margin >= CRITERIA["stale_transport_margin_min"]
                 and mass_defect <= CRITERIA["mean_defect_max"])
             record = {"cells": [n, n], "time": saved_time, "accepted_steps": report.accepted_steps,
                 "field_metrics": metrics, "same_time_probe_error": probe_residual,
@@ -287,7 +303,10 @@ for n in RESOLUTIONS:
                 "probe_fft_potential_max_error": probe_fft_error,
                 "same_time_probe_separation": probe_separation,
                 "physical_stage_field_separation": stage_separation,
-                "independent_fv_max_error": fv_error, "mass_defect": mass_defect,
+                "independent_fv_max_error": fv_error,
+                "fresh_stale_oracle_separation": oracle_separation,
+                "stale_reference_max_error": stale_error,
+                "stale_transport_margin": stale_margin, "mass_defect": mass_defect,
                 "compile_seconds": compile_seconds, "run_seconds": run_seconds,
                 "run_report": report.to_data(), "execution_context": context.to_data(),
                 "runtime_backend": context.backend.to_data(), "mpi_ranks": world.size,
