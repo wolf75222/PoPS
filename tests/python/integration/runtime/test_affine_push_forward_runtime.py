@@ -13,6 +13,7 @@ from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.moments import affine_push_forward
 from pops.solvers.nonlinear import LocalNewton
 from pops.time import FailRun, FixedDt, LocalResidual
+from tests.python.integration.runtime.test_user_numerical_bodies_runtime import _compile, _root_check
 from tests.python.support.native_execution_context import artifact_execution_context
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
@@ -65,13 +66,14 @@ def test_native_affine_body_on_stage_and_unknown_matches_discrete_measure(
     moved = points @ matrix.T + offset
     expected = np.array([np.dot(weights, np.prod(moved ** index, axis=1)) for index in indices])
     initial = np.broadcast_to(raw[:, None, None], (len(indices), 4, 4)).copy()
-    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    artifact, world = _compile(case, layout, "affine-body-%s-%s-%s" % (dimension, order, reverse))
     runtime = pops.bind(artifact, initial_state={"matter": initial},
                         resources={"execution_context": artifact_execution_context(artifact)})
     report = pops.run(runtime, t_end=.01, max_steps=1)
-    actual = np.asarray(runtime.state_global("matter")).reshape(initial.shape)
+    gathered = np.asarray(runtime.state_global("matter"))
     assert report.accepted_steps == 1
     # The committed image is exactly the original residual's lhs: this bound
     # tests that residual authority as well as the analytic affine push-forward.
-    np.testing.assert_allclose(actual, np.broadcast_to(expected[:, None, None], initial.shape),
-                               atol=3e-12, rtol=0.)
+    _root_check(world, lambda: np.testing.assert_allclose(
+        gathered.reshape(initial.shape), np.broadcast_to(expected[:, None, None], initial.shape),
+        atol=3e-12, rtol=0.))

@@ -9,9 +9,22 @@ from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import Diffusion, DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
 from pops.time import FixedDt
+from tests.python.integration.runtime.test_user_numerical_bodies_runtime import _compile, _root_check
 from tests.python.support.native_execution_context import artifact_execution_context
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
+
+
+def _attempt(runtime, world):
+    report, error = None, None
+    try:
+        report = pops.run(runtime, t_end=1e-4, max_steps=1)
+    except Exception as exc:
+        error = (type(exc).__name__, str(exc))
+    if world is None:
+        return report, (error,)
+    from pops._native_collectives import allgather_value
+    return report, allgather_value(world, error)
 
 
 def consumer_case(kind):
@@ -88,7 +101,7 @@ def test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch(
         isolated_native_cache, native_cxx, kokkos_root, kind):
     del isolated_native_cache, native_cxx, kokkos_root
     case, layout, parameter = consumer_case(kind)
-    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    artifact, world = _compile(case, layout, "conditional-consumer-" + kind)
     for active in (False, True):
         if kind == "diffusion":
             initial = np.full((1, 4, 4), 1. if active else -1.)
@@ -99,14 +112,18 @@ def test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch(
             params = {parameter: 1. if active else -1.}
         runtime = pops.bind(artifact, initial_state={"matter": initial.copy()}, params=params,
                             resources={"execution_context": artifact_execution_context(artifact)})
+        report, errors = _attempt(runtime, world)
         if active:
-            with pytest.raises(RuntimeError):
-                pops.run(runtime, t_end=1e-4, max_steps=1)
-            np.testing.assert_array_equal(np.asarray(runtime.state_global("matter")).reshape(initial.shape), initial)
+            assert all(error is not None and error[0] == "RuntimeError" for error in errors), errors
+            gathered = np.asarray(runtime.state_global("matter"))
+            _root_check(world, lambda gathered=gathered, initial=initial: np.testing.assert_array_equal(
+                gathered.reshape(initial.shape), initial))
         else:
-            assert pops.run(runtime, t_end=1e-4, max_steps=1).accepted_steps == 1
-            np.testing.assert_allclose(np.asarray(runtime.state_global("matter")).reshape(initial.shape),
-                                       initial, rtol=0., atol=4e-15)
+            assert not any(errors), errors
+            assert report.accepted_steps == 1
+            gathered = np.asarray(runtime.state_global("matter"))
+            _root_check(world, lambda gathered=gathered, initial=initial: np.testing.assert_allclose(
+                gathered.reshape(initial.shape), initial, rtol=0., atol=4e-15))
 
 
 def test_native_affine_library_consumer_matches_particles_and_retained_recipe(
@@ -127,14 +144,18 @@ def test_native_affine_library_consumer_matches_particles_and_retained_recipe(
     results = []
     for kind in ("affine", "affine_library"):
         case, layout, parameter = consumer_case(kind)
-        artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+        artifact, world = _compile(case, layout, "affine-particles-" + kind)
         runtime = pops.bind(artifact, initial_state={"matter": initial.copy()}, params={parameter: -1.},
                             resources={"execution_context": artifact_execution_context(artifact)})
         report = pops.run(runtime, t_end=1e-4, max_steps=1)
-        result = np.asarray(runtime.state_global("matter")).reshape(initial.shape)
+        gathered = np.asarray(runtime.state_global("matter"))
         assert report.accepted_steps == 1
-        np.testing.assert_allclose(result, np.broadcast_to(expected[:, None, None], initial.shape),
-                                   rtol=2e-13, atol=2e-14)
-        np.testing.assert_array_equal(result[0], initial[0])
-        results.append(result)
-    np.testing.assert_allclose(*results, rtol=2e-13, atol=2e-14)
+
+        def check(gathered=gathered):
+            result = gathered.reshape(initial.shape)
+            np.testing.assert_allclose(result, np.broadcast_to(expected[:, None, None], initial.shape),
+                                       rtol=2e-13, atol=2e-14)
+            np.testing.assert_array_equal(result[0], initial[0])
+            results.append(result)
+        _root_check(world, check)
+    _root_check(world, lambda: np.testing.assert_allclose(*results, rtol=2e-13, atol=2e-14))
