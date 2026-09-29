@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -24,9 +25,16 @@ CASES = {
     "m03-stiffened": ("api040_m03_euler_eos.py", "stiffened/receipt.json",
                       {"POPS_API040_M03_CASE": "stiffened"}),
     "m04": ("api040_m04_advection_diffusion.py", "receipt.json",
-            {"POPS_API040_M04_DIFFUSION": "x_only"}),
+            {"POPS_API040_M04_DIFFUSION": "x_only", "POPS_API040_M04_METHOD": "forward_euler"}),
     "m04-isotropic": ("api040_m04_advection_diffusion.py", "receipt.json",
-                      {"POPS_API040_M04_DIFFUSION": "isotropic"}),
+                      {"POPS_API040_M04_DIFFUSION": "isotropic",
+                       "POPS_API040_M04_METHOD": "forward_euler"}),
+    "m04-ssprk2": ("api040_m04_advection_diffusion.py", "receipt.json",
+                   {"POPS_API040_M04_DIFFUSION": "x_only", "POPS_API040_M04_METHOD": "ssprk2"}),
+    "m17": ("api040_m17_fan_li.py", "reverse/result.json", {}),
+    "m06": ("api040_m06_enthalpy.py", "result.json", {}),
+    "m13": ("api040_m13_reaction_chain.py", "result.json", {}),
+    "cattaneo": ("structural_cattaneo.py", "result.json", {}),
 }
 
 
@@ -40,9 +48,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--ranks", type=int, default=1)
     parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--timeout", type=float, default=3600.,
+                        help="maximum seconds per native scientific phase")
     args = parser.parse_args()
-    if args.ranks < 1 or args.threads < 1:
-        parser.error("ranks and threads must be positive")
+    if args.ranks < 1 or args.threads < 1 or args.timeout <= 0:
+        parser.error("ranks, threads and timeout must be positive")
     if "PYTHONPATH" in os.environ:
         parser.error("run with env -u PYTHONPATH")
     if any(key.endswith("_AUTHORING_ONLY") and value != "0"
@@ -57,7 +67,8 @@ def main() -> int:
                        POPS_REQUIRE_NATIVE_TESTS="1", OMP_NUM_THREADS=str(args.threads),
                        POPS_THREADS=str(args.threads), POPS_API040_OUTPUT=str(output / "states"))
     environment.update(overrides)
-    sources = [Path(__file__).resolve(), *sorted(EXAMPLES.glob("api040_*.py"))]
+    sources = [Path(__file__).resolve(), *sorted(EXAMPLES.glob("api040_*.py")),
+               *sorted(EXAMPLES.glob("structural_cattaneo*.py"))]
     manifest = {str(path.relative_to(ROOT)): digest(path) for path in sources}
     (output / "example-sources.json").write_text(json.dumps(manifest, indent=2) + "\n")
     identity_runner = Path(__file__).with_name("run_installed_checks.py")
@@ -77,10 +88,33 @@ def main() -> int:
         command = [str(launcher), "-n", str(args.ranks), *command]
     started = time.monotonic()
     code = None
+    phases = []
     if before_code == 0:
         with (output / "run.log").open("w") as log:
-            code = subprocess.run(command, cwd=ROOT, env=environment,
-                                  stdout=log, stderr=subprocess.STDOUT).returncode
+            variants = ({"POPS_API040_M17_ORDER": "canonical"},
+                        {"POPS_API040_M17_ORDER": "reverse"}) if args.case == "m17" else ({},)
+            for variant in variants:
+                phase_started = time.monotonic()
+                process = subprocess.Popen(command, cwd=ROOT, env=dict(environment, **variant),
+                                           stdout=log, stderr=subprocess.STDOUT,
+                                           start_new_session=True)
+                timed_out = False
+                try:
+                    code = process.wait(timeout=args.timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait()
+                    code = 124
+                phases.append({"settings": variant, "returncode": code,
+                               "timeout": timed_out,
+                               "seconds": time.monotonic() - phase_started})
+                if code:
+                    break
     elapsed = time.monotonic() - started
     after_code = authenticate("after")
     unchanged = manifest == {str(path.relative_to(ROOT)): digest(path) for path in sources}
@@ -90,16 +124,20 @@ def main() -> int:
     after = json.loads((output / "after/identity.json").read_text()) if after_code == 0 else {}
     same_native = bool(before) and before.get("native_sha256") == after.get("native_sha256")
     same_sources = bool(before) and before.get("source_files_sha256") == after.get("source_files_sha256")
-    records = scientific.get("records", scientific.get("runs", []))
+    records = scientific.get("records", scientific.get("runs", scientific.get("scenarios", [])))
+    if args.case == "m17":
+        records = [scientific] if scientific else []
     correct_backend = (bool(records) and all(row.get("mpi_ranks") == args.ranks for row in records)
                        and scientific.get("threads_requested") == str(args.threads))
     passed = (code == 0 and before_code == 0 and after_code == 0 and unchanged
               and same_native and same_sources and correct_backend
               and scientific.get("status") == "passed"
-              and scientific.get("native_sha256") == before.get("native_sha256"))
+              and scientific.get("native_sha256") == before.get("native_sha256")
+              and (args.case != "m17" or scientific.get("permutation_verified") is True))
     result = {"schema_version": 1, "case": args.case,
               "status": "passed" if passed else "failed", "command": command,
               "returncode": code, "seconds": elapsed, "ranks": args.ranks,
+              "phases": phases,
               "threads": args.threads, "authentication_before": before_code,
               "authentication_after": after_code, "example_sources_unchanged": unchanged,
               "same_native": same_native, "same_shipped_sources": same_sources,

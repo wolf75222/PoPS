@@ -189,6 +189,7 @@ def main():
                                  "rates": (kab,kbc), "cell_mean_gap": gap,
                                  "metrics": metrics, "accepted": accepted,
                                  "accepted_steps": report.accepted_steps,
+                                 "mpi_ranks": world.size,
                                  "saved_state": saved.name, "saved_state_sha256": sha256(saved),
                                  "run_report": report.to_data(),
                                  "execution_context": context.to_data()})
@@ -203,7 +204,8 @@ def main():
             "scope": "homogeneous local A→B→C chemistry; no streamer/radiation closure",
             "equation": "A'=-kAB*A; B'=kAB*A-kBC*B; C'=kBC*B",
             "method": "native StateStorage/Program SSPRK2", "dt": DT,
-            "t_end": T_END, "criteria": CRITERIA, "runs": rows, **identity}
+            "t_end": T_END, "criteria": CRITERIA, "runs": rows,
+            "threads_requested": os.environ.get("POPS_THREADS", "1"), **identity}
         destination.mkdir(parents=True, exist_ok=True)
         (destination / "result.json").write_text(receipt_json(receipt)+"\n")
         print(receipt_json(receipt))

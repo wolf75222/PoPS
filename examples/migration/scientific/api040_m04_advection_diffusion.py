@@ -6,6 +6,8 @@ diffusion. POPS_API040_M04_DIFFUSION=isotropic replays the earlier D(u_xx+u_yy)
 variant whose valid combined step exposed the directional-frequency defect.
 Both use y-invariant exact cell averages; their different full constitutive
 laws and bounds are recorded explicitly. Neither qualifies native Dim=1.
+POPS_API040_M04_METHOD=ssprk2 selects a distinct temporal method. The original
+ForwardEuler case and its pre-asymptotic order failure are retained explicitly.
 Run with installed PoPS, PYTHONPATH unset, and POPS_NATIVE_DIM=2.
 """
 # ruff: noqa: E402
@@ -26,7 +28,7 @@ pops.set_threads(int(os.environ.get("POPS_THREADS", "1")))
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
-from pops.lib.time import ForwardEuler
+from pops.lib.time import ForwardEuler, SSPRK2
 from pops.math import CoeffGradient, ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import Diffusion, DiscretizationPlan, reconstruction, riemann, variables
@@ -35,7 +37,7 @@ from pops.representations import Conservative
 from pops.spaces import CellState
 from pops.time import FixedDt
 
-from api040_m04_oracle import exact_cell_means, frequencies
+from api040_m04_oracle import discrete_cell_means, exact_cell_means, frequencies
 from api040_receipts import receipt_json
 
 
@@ -50,6 +52,9 @@ AMPLITUDE = .2
 T_END = .1
 RESOLUTIONS = (32, 64, 128)
 SAFETY_FACTOR = .9
+TEMPORAL_METHOD = os.environ.get("POPS_API040_M04_METHOD", "forward_euler")
+if TEMPORAL_METHOD not in ("forward_euler", "ssprk2"):
+    raise ValueError("M04 method must be forward_euler or ssprk2")
 CRITERIA = {"density_l1_max": {32: .009, 64: .0048, 128: .0024},
             "minimum_observed_order": .7,
             "mass_defect_max": 2.e-11,
@@ -58,6 +63,7 @@ CRITERIA = {"density_l1_max": {32: .009, 64: .0048, 128: .0024},
             "y_invariance_max": 2.e-11,
             "minimum_state": .7999999999,
             "maximum_state": 1.2000000001}
+CRITERIA["discrete_fourier_max_error"] = 3.e-12
 
 
 def author_case(step: float):
@@ -88,7 +94,8 @@ def author_case(step: float):
     case = pops.Case("api040_M04_W02")
     block = case.block("tracer", model)
     case.numerics(plan, block=block)
-    program = ForwardEuler(block[state], rate=rate)
+    method = {"forward_euler": ForwardEuler, "ssprk2": SSPRK2}[TEMPORAL_METHOD]
+    program = method(block[state], rate=rate)
     program.step_strategy(FixedDt(step))
     case.program(program)
     return pops.validate(case), frame
@@ -114,6 +121,9 @@ for n in RESOLUTIONS:
                                     diffusivity=DIFFUSIVITY, amplitude=AMPLITUDE)
     exact_line = exact_cell_means(n, T_END, velocity=VELOCITY,
                                   diffusivity=DIFFUSIVITY, amplitude=AMPLITUDE)
+    discrete_line = discrete_cell_means(n, T_END, dt, method=TEMPORAL_METHOD,
+                                       velocity=VELOCITY, diffusivity=DIFFUSIVITY,
+                                       amplitude=AMPLITUDE)
     initial = np.ascontiguousarray(np.broadcast_to(initial_line, (1, n, n)))
     exact = np.ascontiguousarray(np.broadcast_to(exact_line, (1, n, n)))
     # Native arrays are (component,y,x), so the last axis carries x.
@@ -157,19 +167,22 @@ for n in RESOLUTIONS:
             destination.mkdir(parents=True, exist_ok=True)
             state_path = destination / ("state_%d.npz" % n)
             np.savez_compressed(state_path, initial=gathered_initial, final=actual,
-                                exact=exact, time=simulation.time(), cells=n,
+                                exact=exact, discrete_exact=discrete_line,
+                                time=simulation.time(), cells=n,
                                 dt=dt, velocity=VELOCITY, diffusivity=DIFFUSIVITY,
                                 transverse_diffusivity=TRANSVERSE_DIFFUSIVITY)
             # Compute acceptance exclusively from reopened actual state bytes.
             with np.load(state_path) as saved:
                 observed = saved["final"]
                 density_l1 = float(np.mean(np.abs(observed - saved["exact"])))
+                discrete_error = float(np.max(np.abs(observed - saved["discrete_exact"])))
                 mass_defect = float(abs(np.mean(observed) - np.mean(saved["initial"])))
                 y_variation = float(np.max(np.abs(observed - observed[:, :1, :])))
                 minimum, maximum = float(np.min(observed)), float(np.max(observed))
                 saved_time = float(saved["time"])
             record = {"cells": [n, n], "time": saved_time, "fixed_dt": dt,
                       "frequency_parts": parts, "density_l1": density_l1,
+                      "discrete_fourier_max_error": discrete_error,
                       "mass_defect": mass_defect, "y_invariance_max": y_variation,
                       "minimum": minimum, "maximum": maximum,
                       "initial_max_error": initial_max_error,
@@ -183,6 +196,7 @@ for n in RESOLUTIONS:
             records.append(record)
             accepted = (np.isfinite(observed).all()
                         and density_l1 <= CRITERIA["density_l1_max"][n]
+                        and discrete_error <= CRITERIA["discrete_fourier_max_error"]
                         and mass_defect <= CRITERIA["mass_defect_max"]
                         and y_variation <= CRITERIA["y_invariance_max"]
                         and minimum >= CRITERIA["minimum_state"]
@@ -207,14 +221,15 @@ if os.environ.get("POPS_API040_M04_AUTHORING_ONLY") != "1":
                         bool(np.all(orders >= CRITERIA["minimum_observed_order"])))
             from pops import _pops  # Provenance only; evolution uses public APIs.
             native = Path(_pops.__file__).resolve()
-            receipt = {"schema_version": 2, "case": "M04/W02",
+            receipt = {"schema_version": 3, "case": "M04/W02",
                        "status": "passed" if accepted else "failed",
                        "scope": "Dim=2 authored diagonal tensor, y-invariant exact trajectory; not Dim=1",
                        "diffusion_variant": DIFFUSION_VARIANT,
                        "diffusion_tensor": [[DIFFUSIVITY, 0.], [0., TRANSVERSE_DIFFUSIVITY]],
                        "equation_2d": "u_t+a*u_x=Dx*u_xx+Dy*u_yy",
                        "reduced_equation": "u_t+a*u_x=D*u_xx for y-invariant state",
-                       "method": "combined first-order Rusanov+two-point diffusion, ForwardEuler",
+                       "spatial_method": "combined first-order Rusanov+two-point diffusion",
+                       "temporal_method": TEMPORAL_METHOD,
                        "criteria": CRITERIA, "resolutions": RESOLUTIONS,
                        "observed_orders": orders.tolist(), "records": records,
                        "package_file": str(package), "package_version": pops.__version__,

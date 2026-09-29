@@ -41,3 +41,31 @@ def impulse_weights_2d(c: float, r: float) -> dict[str, float]:
     """Same x advection with isotropic x/y diffusion, for a 2D impulse."""
     return {"x_upstream": c + r, "center": 1 - c - 4 * r,
             "x_downstream": r, "y_lower": r, "y_upper": r}
+
+
+def discrete_cell_means(n: int, t: float, dt: float, *, method: str,
+                        velocity: float = 1., diffusivity: float = .01,
+                        amplitude: float = .2) -> np.ndarray:
+    """Independent Fourier solution of the selected upwind/central time method.
+
+    The final shortened step is included. This oracle describes the numerical
+    method separately from the continuous PDE oracle above.
+    """
+    if (n <= 0 or not all(np.isfinite(v) for v in (t, dt, velocity, diffusivity, amplitude))
+            or t < 0 or dt <= 0 or diffusivity < 0):
+        raise ValueError("finite inputs, n/dt > 0 and t/diffusivity >= 0 required")
+    if method not in ("forward_euler", "ssprk2"):
+        raise ValueError("method must be forward_euler or ssprk2")
+    theta = 2 * np.pi / n
+    eigenvalue = (abs(velocity) * n * (np.cos(theta) - 1)
+                  - 1j * velocity * n * np.sin(theta)
+                  - 4 * diffusivity * n * n * np.sin(theta / 2)**2)
+
+    def amplification(step):
+        z = step * eigenvalue
+        return 1 + z + (.5 * z**2 if method == "ssprk2" else 0)
+
+    full_steps = int(t // dt)
+    factor = amplification(dt)**full_steps * amplification(t - full_steps * dt)
+    phase = np.exp(1j * theta * (np.arange(n) + .5))
+    return 1 + amplitude * np.sinc(1 / n) * np.real(phase * factor)

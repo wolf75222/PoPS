@@ -168,7 +168,8 @@ def main():
     import structural_cattaneo_oracle as oracle
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--authoring-only", action="store_true")
-    parser.add_argument("--output", type=Path, default=Path("outputs/structural_cattaneo"))
+    parser.add_argument("--output", type=Path,
+                        default=Path(os.environ.get("POPS_API040_OUTPUT", "outputs/structural_cattaneo")))
     args = parser.parse_args()
     if args.authoring_only:
         print(_receipt_json(source_receipt()))
@@ -272,6 +273,7 @@ def main():
                             assert permutation < CRITERIA["permutation_max_error"], permutation
                             permutation_errors.append(permutation)
                     return {"variant": variant, "tau": tau, "kappa": kappa, "dt": dt,
+                            "mpi_ranks": world.size,
                             "steps": steps, "scheme_max_error": error, "temporal_max_error": temporal,
                             "semidiscrete_to_continuum_error": spatial,
                             "temperature_inventory_defect": inventory, "state_file": str(path),
@@ -296,6 +298,7 @@ def main():
         from pops import _pops
         native = Path(_pops.__file__).resolve()
         receipt = {"case": "structural_Maxwell_Cattaneo", "status": "passed", "dimension": 2,
+            "threads_requested": os.environ.get("POPS_THREADS", "1"),
             "criteria": CRITERIA, "cells": [CELLS, CELLS], "mode": oracle.MODE,
             "records": records, "permutation_errors": permutation_errors,
             "temporal_convergence": convergence_records,
