@@ -33,9 +33,11 @@ CASES = {
                    {"POPS_API040_M04_DIFFUSION": "x_only", "POPS_API040_M04_METHOD": "ssprk2"}),
     "m17": ("api040_m17_fan_li.py", "reverse/result.json", {}),
     "m06": ("api040_m06_enthalpy.py", "result.json", {}),
+    "m07-hydrostatic": ("api040_m07_saint_venant.py", "receipt.json", {}),
     "m08": ("api040_m08_guiding_center.py", "receipt.json", {}),
     "m13": ("api040_m13_reaction_chain.py", "result.json", {}),
     "m15-axial-b1": ("api040_m15_hyqmom_axial_b1.py", "receipt.json", {}),
+    "m22-h05": ("api040_m22_h05.py", "result.json", {}),
     "cattaneo": ("structural_cattaneo.py", "result.json", {}),
 }
 
@@ -65,7 +67,7 @@ def main() -> int:
     if any(output.iterdir()):
         parser.error("output must be empty to exclude stale receipts")
     script, receipt_name, overrides = CASES[args.case]
-    dimension = 1 if args.case == "m15-axial-b1" else 2
+    dimension = 1 if args.case in {"m07-hydrostatic", "m15-axial-b1"} else 2
     environment = dict(os.environ, PYTHONNOUSERSITE="1", POPS_NATIVE_DIM=str(dimension),
                        POPS_REQUIRE_NATIVE_TESTS="1", OMP_NUM_THREADS=str(args.threads),
                        POPS_THREADS=str(args.threads), POPS_API040_OUTPUT=str(output / "states"))

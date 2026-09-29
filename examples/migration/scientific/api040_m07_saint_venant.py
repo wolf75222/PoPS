@@ -212,9 +212,15 @@ if __name__ == "__main__":
     failure = b""
     if world.rank == 0:
         try:
-            receipt = {"case": "M07", "variant": "fully_wet_hydrostatic_lake",
+            receipt = {"schema_version": 1, "case": "M07", "status": "passed",
+                "variant": "fully_wet_hydrostatic_lake",
                 "dimension": 1, "package": str(package), "native_file": str(native_file),
                 "native_sha256": hashlib.sha256(native_file.read_bytes()).hexdigest(),
+                "abi_key": native.abi_key(),
+                "threads_requested": os.environ.get("POPS_THREADS", "1"),
+                "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "oracle_sha256": hashlib.sha256(
+                    Path(__file__).with_name("api040_m07_hydrostatic_oracle.py").read_bytes()).hexdigest(),
                 "criterion": EQUILIBRIUM_TOLERANCE, "time": T_END, "records": records}
             (destination/"receipt.json").write_text(receipt_json(receipt))
         except Exception as error:
