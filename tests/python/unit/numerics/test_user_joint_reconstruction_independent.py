@@ -76,3 +76,14 @@ def test_existing_scalar_user_contract_remains_available():
     from pops.numerics.reconstruction.user import authenticated_user_reconstruction
     assert authenticated_user_reconstruction(scalar) is scalar
     assert scalar.options["ghost_depth"] == 2
+
+
+def test_frozen_sampling_owner_cannot_be_swapped_for_a_homonymous_foreign_model():
+    _, left, right, alien = _group()
+    policy = reconstruction.User(
+        lambda sample: (sample(0)[0] + sample(1, right)[2], sample(0)[1]),
+        state=left, sampling=(right,), formal_order=1)
+    policy.options["sampling"] = (alien,)
+    from pops.numerics.reconstruction.user import authenticated_user_reconstruction
+    with pytest.raises(ValueError, match="source|identity|state|sampling|owner"):
+        authenticated_user_reconstruction(policy)
