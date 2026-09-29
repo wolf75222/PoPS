@@ -52,24 +52,36 @@ def affine_push_forward(moments, *, indices, matrix, offset):
     polynomials = {zero: {zero: 1}}
 
     def polynomial(index):
-        if index in polynomials:
-            return polynomials[index]
-        axis = max(i for i, power in enumerate(index) if power)
-        parent = list(index)
-        parent[axis] -= 1
-        terms = {}
+        # Build the same parent chain in post-order without using Python's call
+        # stack. A descending complete basis must have the same realization as
+        # an ascending one, including orders above the interpreter recursion cap.
+        pending = [index]
+        while pending:
+            current = pending[-1]
+            if current in polynomials:
+                pending.pop()
+                continue
+            axis = max(i for i, power in enumerate(current) if power)
+            parent = list(current)
+            parent[axis] -= 1
+            parent = tuple(parent)
+            if parent not in polynomials:
+                pending.append(parent)
+                continue
+            terms = {}
 
-        def add(exponent, term):
-            terms[exponent] = terms[exponent] + term if exponent in terms else term
+            def add(exponent, term, terms=terms):
+                terms[exponent] = terms[exponent] + term if exponent in terms else term
 
-        for exponent, coefficient in polynomial(tuple(parent)).items():
-            add(exponent, offset[axis] * coefficient)
-            for coordinate in range(dimension):
-                raised = list(exponent)
-                raised[coordinate] += 1
-                add(tuple(raised), matrix[axis][coordinate] * coefficient)
-        polynomials[index] = terms
-        return terms
+            for exponent, coefficient in polynomials[parent].items():
+                add(exponent, offset[axis] * coefficient)
+                for coordinate in range(dimension):
+                    raised = list(exponent)
+                    raised[coordinate] += 1
+                    add(tuple(raised), matrix[axis][coordinate] * coefficient)
+            polynomials[current] = terms
+            pending.pop()
+        return polynomials[index]
 
     for index in indices:
         missing = polynomial(index).keys() - positions.keys()
