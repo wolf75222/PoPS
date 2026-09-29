@@ -1430,7 +1430,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
   ASSERT_EQ(pops::all_reduce_max(second_publication_failure.empty() ? 1L : 0L, artifact_lane),
             0L);
   EXPECT_NE(second_publication_failure.find("injected history resource refresh"),
-            std::string::npos);
+            std::string::npos)
+      << "rank " << pops::my_rank() << ": " << second_publication_failure;
   ASSERT_NO_THROW(system.rollback_restart_transaction());
   EXPECT_EQ(system.patch_boxes(), old_boxes);
   EXPECT_EQ(system.checkpoint_topology_epoch(), old_epoch);
