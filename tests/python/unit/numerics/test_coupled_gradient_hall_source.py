@@ -112,6 +112,29 @@ def test_negative_symmetric_part_is_not_relabelled_reversible():
             reversible=((0., -.3), (.3, 0.)))
 
 
+def test_exact_rank_one_dissipation_is_admitted_without_changing_coefficients():
+    model = pops.Model("rank_one_dissipation", frame=Cartesian1D())
+    state = model.state("w", components=("a", "b", "c"))
+    ones = ((1., 1., 1.),) * 3
+    zeros = ((0., 0., 0.),) * 3
+    law = model.coupled_gradient_flux(
+        "rank_one", state=state, dissipative=ones, reversible=zeros).law
+    assert law.dissipative_components == ones
+
+
+@pytest.mark.parametrize("matrix", [
+    ((1., 0., 0.), (0., 1., 0.), (0., 0., -2**-50)),
+    ((0., 1., 0.), (1., 0., 0.), (0., 0., 0.)),
+])
+def test_exact_negative_dissipation_modes_are_rejected(matrix):
+    model = pops.Model("indefinite_dissipation", frame=Cartesian1D())
+    state = model.state("w", components=("a", "b", "c"))
+    with pytest.raises(ValueError, match="positive semidefinite"):
+        model.coupled_gradient_flux(
+            "indefinite", state=state, dissipative=matrix,
+            reversible=((0., 0., 0.),) * 3)
+
+
 def test_hall_oracle_distinguishes_continuous_phase_spatial_symbol_and_ssprk2_norm():
     import sys
     from pathlib import Path

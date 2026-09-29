@@ -22,6 +22,9 @@ reversible flux \(-R\nabla U\). The declaration supports any state component
 count and Cartesian frame and stores both matrices in the physical identity;
 this initial constitutive subtype requires finite constant entries. It is not
 relabelled as `TensorDiffusion` or checked by that method's SPD Jacobian rule.
+The PSD authoring check uses exact rational arithmetic on the represented
+integer/binary-float entries: rank-deficient positive matrices are admitted,
+and a genuinely negative mode is refused without clipping or tolerance.
 
 `CoupledGradient` selects a distinct `PreparedCoupledGradient` provider. Version
 1 realizes only one periodic Cartesian axis on Uniform storage, with first

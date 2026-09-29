@@ -212,9 +212,26 @@ def declare_coupled_gradient_flux(model: Any, name: Any, *, state: Any,
     if any(d[i][j] != d[j][i] or r[i][j] != -r[j][i]
            for i in range(n) for j in range(n)):
         raise ValueError("coupled gradient requires symmetric D and skew R")
-    import numpy as np
-    if np.linalg.eigvalsh(np.asarray(d, dtype=float))[0] < 0:
-        raise ValueError("dissipative component matrix must be positive semidefinite")
+    # The authored finite constants are exact binary rationals. An eigensolver
+    # can report a negative rounded eigenvalue for an exactly semidefinite
+    # matrix (for example, the 3x3 all-ones rank-one matrix). Exact symmetric
+    # Schur complements decide this contract without changing any coefficient
+    # or admitting a genuinely negative mode through a numerical tolerance.
+    from fractions import Fraction
+    schur = [[Fraction(entry) for entry in row] for row in d]
+    for pivot_index in range(n):
+        pivot = schur[pivot_index][pivot_index]
+        if pivot < 0 or (pivot == 0 and any(
+                schur[pivot_index][column] != 0
+                for column in range(pivot_index + 1, n))):
+            raise ValueError("dissipative component matrix must be positive semidefinite")
+        if pivot == 0:
+            continue
+        for row in range(pivot_index + 1, n):
+            for column in range(row, n):
+                entry = (schur[row][column] -
+                         schur[row][pivot_index] * schur[pivot_index][column] / pivot)
+                schur[row][column] = schur[column][row] = entry
     from pops._ir.expr import Const
     components = tuple(state)
     variables = tuple(cast(Expr, sum(
