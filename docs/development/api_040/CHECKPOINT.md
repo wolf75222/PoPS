@@ -34,25 +34,73 @@ was not imported. Output paths in this section are under the workspace `outputs/
   fixture failed its requirement for a real coarse/fine interface: its N8 grid
   became fully refined. `2156e757` changes the fixture to N16 and also requires
   partial refinement in the rollback case; equations, threshold, time step and
-  particle oracle tolerance remain unchanged. Partial support awaits reception.
+  particle oracle tolerance remain unchanged. N16 alone still produced full
+  coverage, as the later red receipt below demonstrates.
 
 Current installed Python includes the finite materialization correction. The
 header and native hashes above are unchanged by that Python-only refresh
-(`build-finite-materialization-repaired-dim2.log`). The next run is
-`installed-finite-amr-repaired-serial`: thirteen native checks, adding different
-seeds, changed operands bound to the same artifact, finite-input overflow on
-the cell owner, exact rollback and a new bind after two refusals. These are
-finite 8+4 DOF samples, not a distributed meshed mixed PDE solve. MPI2 will be
-received separately. The runners now retain pytest temporary states under each
-output directory, including actual NPZ files, for subsequent evidence archival.
+(`build-finite-materialization-repaired-dim2.log`). The repaired receptions are:
+
+- `installed-finite-amr-repaired-unit`: **21/21 passed**, including complete
+  generated C++ Program syntax against the real SDK; this is not a runtime run.
+- `installed-finite-amr-repaired-serial`, at `86646b6c`: **11/13 passed**, no
+  skips. All ten finite M09 tests and the one-level AMR case pass. Both
+  two-level AMR tests fail their partial-refinement guard: 1024/1024 cells are
+  fine, before the intended physics/rejection checks. These failures are kept.
+- `installed-finite-m09-mpi2`, at `210868a`: **10/10 passed on each rank** in
+  195.15 s. Installation authentication before/after, source hashes and rank
+  test parity match. Cases include original monolithic/condensed equations,
+  permutations, a singular elimination pivot with an invertible monolithic
+  system, changed operands bound to the same artifact, a finite-input overflow
+  on the actual cell owner with an empty peer rank, two exact rollbacks and a
+  new bind after refusal. These are finite 8+4 DOF samples, not a distributed
+  meshed mixed PDE solve.
+- The independent script `outputs/recheck_finite_m09_states.py` reopens the
+  actual sixteen serial and sixteen MPI root NPZ states and reconstructs the
+  original matrices without importing PoPS. Maximum original residual is
+  **3.553e-15**, monolithic error **7.772e-16**, and CN endpoint energy error
+  **1.066e-14**, all below the fixed 1e-11 criterion. Results are in
+  `outputs/independent-finite-m09-saved-states.json`.
+- `fb017cc4` selects the interior tagging band **1.25 < density <= 1.35** through
+  public Boolean expressions and qualified parameters. It preserves the linear
+  density, equations, dt=.01 and 3e-12 particle-moment tolerance. The independent
+  geometry probe sees **512/1024 fine cells**. Both positive and rejection tests
+  require a genuine coarse/fine interface. `installed-affine-amr-interface-serial`
+  passes **3/3** in 74.09 s; `installed-affine-amr-interface-mpi2` passes **3/3 on
+  each rank** in 82.08 s with before/after identity and source parity. The latter
+  includes two impossible-residual retries preserving state, hierarchy and time.
+
+The first red round is frozen in `evidence/finite-amr-preliminary` (`03e25b14`):
+42 payloads plus inventory/manifest/checksums, including six failed generated
+translation units. Its checker and all 43 checksum rows pass. The converged
+bundle is being assembled separately. Runners retain temporary states under
+each output directory; historical receipts are not overwritten by a repair.
 
 The W12 ProgramRuntime discriminant (`954b7dcf`, independent correction
 `86646b6c`) uses actual native duration/cache/exchange transactions with proposed
 durations .1/.2/.3, nested child and parent rollback, and an authenticated
-duplicate-occurrence refusal. Its reviewed C++ target is rebuilding; no passing
-W12 runtime result is claimed yet. M23 remains isolated pending final review
-and its own native build/reception. General integral circuit/surface state is
-still an implementation obligation; scalar diagnostics do not close it.
+duplicate-occurrence refusal. The first reviewed CTest run has two serial
+passes and one failing MPI aggregate: the test compared a root-owned global
+state with replicated history/cache on the empty nonroot result. `210868a`
+retains collective calls and compares each result on its actual owning ranks.
+After rebuilding the C++ target, `native-w12-snapshot-repaired-ctest` passes
+**3/3 CTest entries** in 5.32 s, including the ten-case two-rank ProgramRuntime
+aggregate. The previous failed log/XML remains distinct. This is native W12
+transaction evidence, not a circuit-quantity or full M14 qualification.
+
+M23 is now integrated through `4b5ad60d`: a distinct constant component-gradient
+law retains symmetric PSD D and skew R separately. The exact rational PSD
+admission admits legitimate null modes while refusing arbitrarily small
+negative modes. Positive repeated occurrences retain their own accepted
+quadrature identities and weights. Independent source/math review passes
+24 checks, and five complete generated Program translation units compile
+against real Kokkos/OpenMP/MPI headers. These are preflight results, not native
+Hall execution. The Dim1 incremental build passes; Dim2 is rebuilding before
+installed reception. New root test `3b25472` will additionally receive a
+three-component rank-one dissipative/skew law, weighted occurrence ledger,
+permutation and finite-input rejection. General integral circuit/surface state
+is under implementation and independent review; scalar diagnostics do not
+close that obligation.
 
 ## Previous reception: periodic collective core and qualified inputs (historical)
 
