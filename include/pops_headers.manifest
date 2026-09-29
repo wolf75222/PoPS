@@ -328,6 +328,7 @@ sdk-root pops/runtime/program/external_riemann_brick.hpp
 sdk-support pops/runtime/program/module_metadata.hpp
 sdk-support pops/runtime/program/profiler.hpp
 sdk-root pops/runtime/program/program_context.hpp
+sdk-root pops/runtime/program/prepared_principal_flux.hpp
 sdk-support pops/runtime/program/prepared_resource_cache.hpp
 sdk-support pops/runtime/program/prepared_resource_lifetime.hpp
 sdk-support pops/runtime/program/program_cadence_continuation.inc
