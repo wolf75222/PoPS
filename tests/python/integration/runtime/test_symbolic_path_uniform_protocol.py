@@ -141,7 +141,7 @@ def test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_st
         runtime = pops.bind(artifact, initial_state={"transport": initial},
                             resources={"execution_context": context})
         if accepted:
-            report = pops.run(runtime, t_end=dt, max_steps=1, time_grid=(0., dt))
+            report = pops.run(runtime, t_end=dt, max_steps=1, path_samples=(0., dt))
             assert report.accepted_steps == runtime.macro_step() == 1
             effective_dt = (0. if consumer == "diagnostic" else
                             dt / 100 if consumer == "fractional" else dt)
@@ -149,7 +149,7 @@ def test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_st
             assert runtime.time() == pytest.approx(dt)
         else:
             with pytest.raises((ValueError, RuntimeError), match="user_face_numerical_stability"):
-                pops.run(runtime, t_end=dt, max_steps=1, time_grid=(0., dt))
+                pops.run(runtime, t_end=dt, max_steps=1, path_samples=(0., dt))
             expected = initial
             assert runtime.time() == runtime.macro_step() == 0
         actual = np.asarray(runtime.state_global("transport")).reshape(initial.shape)

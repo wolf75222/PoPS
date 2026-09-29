@@ -230,7 +230,7 @@ def main():
                 _root_result(world, lambda: np.testing.assert_allclose(
                     before, initial, rtol=0., atol=CRITERIA["initial_max_error"]))
                 report = pops.run(simulation, t_end=FINAL_TIME, max_steps=steps,
-                                   time_grid=grid, console=False)
+                                   steps=grid, console=False)
                 actual, stored_t, stored_q = gather(simulation)
                 destination = args.output / variant / ("params%d_dt%.6g" % (parameter_index, dt))
 
