@@ -24,8 +24,8 @@ class _ProgramIntegrals:
     def integral_state(self, name: str, *, initial: float) -> IntegralState:
         """Declare a global persistent scalar, independent of cell-state and diagnostic storage."""
         self._guard_mutable("declare integral state")
-        if type(name) is not str or not name or "/" in name:
-            raise ValueError("integral_state requires a non-empty unqualified name")
+        if type(name) is not str or not name or "/" in name or "\0" in name:
+            raise ValueError("integral_state requires a non-empty unqualified name without NUL")
         if type(initial) not in (int, float) or not math.isfinite(float(initial)):
             raise ValueError("integral_state initial value must be finite")
         if name in self._integral_states:
