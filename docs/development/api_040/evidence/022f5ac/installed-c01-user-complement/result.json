@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-m",
+    "pytest",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-c01-user-complement/pytest.xml",
+    "tests/python/integration/runtime/test_program_expression_runtime.py",
+    "tests/python/integration/runtime/test_balance_multiplicity_runtime.py",
+    "tests/python/integration/amr/test_symbolic_path_amr_runtime.py",
+    "tests/python/integration/runtime/test_local_transform_runtime.py",
+    "tests/python/integration/runtime/test_native_retry_transactions.py"
+  ],
+  "returncode": 0,
+  "duration_seconds": 546.3826427499298,
+  "counts": {
+    "tests": 23,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "31ea919d5a664d8e599c3f62cd625159e7243f03a33d43b520d29a34655f1d45",
+  "log_sha256": "8cffce682227ee973b267d14ff8180bc99c80e8dec64384a45bb8dbf2618dd08"
+}

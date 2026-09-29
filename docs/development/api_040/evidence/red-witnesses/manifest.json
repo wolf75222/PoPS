@@ -1,0 +1,23 @@
+{
+  "baseline": "022f5acbb9181eb85a6d9cd05e30a92aad1c4872",
+  "files": [
+    {
+      "original": "tests/python/unit/numerics/test_principal_grouping_c11.py",
+      "preserved_as": "docs/development/api_040/evidence/red-witnesses/test_principal_grouping_c11.py.txt",
+      "sha256": "b151c56241bffb7fe1df2c53132bccbaf414d874dbad25586224f8150b9369fa",
+      "status": "original_red_witness_replaced_by_implemented_contract_tests"
+    },
+    {
+      "original": "tests/python/unit/numerics/test_principal_grouping_contract.py",
+      "preserved_as": "docs/development/api_040/evidence/red-witnesses/test_principal_grouping_contract.py.txt",
+      "sha256": "902f844580311a43deb903bce093786eb708d57621830412ea45cf025c7b76da",
+      "status": "original_red_witness_replaced_by_implemented_contract_tests"
+    },
+    {
+      "original": "tests/python/unit/numerics/test_api040_m04_degenerate_diffusion_gap.py",
+      "preserved_as": "docs/development/api_040/evidence/red-witnesses/test_api040_m04_degenerate_diffusion_gap.py.txt",
+      "sha256": "da1ab999f3ac7a7dc37dd8c79c6a65515def0ed757ade7a944313edb5b8e703f",
+      "status": "original_red_witness_replaced_by_implemented_contract_tests"
+    }
+  ]
+}

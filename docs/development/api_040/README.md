@@ -91,6 +91,28 @@ compares all tracked package/SDK files with the checkout, requires a healthy doc
 and writes imports, hashes, commands, pytest XML and exit status. It does not
 promote skipped checks to successful runtime coverage.
 
+Full scientific examples use the same identity check before and after the run:
+
+```sh
+env -u PYTHONPATH PYTHONNOUSERSITE=1 CONDA_PREFIX="$POPS_PREFIX" \
+  Kokkos_ROOT="$POPS_PREFIX" POPS_KOKKOS_ROOT="$POPS_PREFIX" \
+  POPS_INCLUDE="$POPS_PREFIX/lib/python3.12/site-packages/pops/include" \
+  "$POPS_PREFIX/bin/python" docs/development/api_040/run_scientific_checks.py \
+  --case m01 --ranks 2 --threads 1 --output /tmp/pops-api040-m01-mpi2
+```
+
+The output directory must be empty. Cases are `m01`, `m02-shock`,
+`m02-rarefaction`, `m03-ideal`, `m03-stiffened` and `m04`. Availability in the
+runner does not imply acceptance: M02 requires the authored face-body tranche;
+M04 awaits the directional stability-frequency correction. M03 stiffened passes
+receipt schema 2, which independently reconstructs the discrete incoming
+boundary integral from saved native states. Its previous far-field-budget
+failure is retained in the checkpoint. Grids, final times and criteria are
+fixed in each linear example.
+Saved native states, exact/independent references, measurements, hashes and logs
+remain in the output directory. `--threads 4 --ranks 1` selects the local OpenMP
+configuration; the runtime log reports the native execution concurrency.
+
 The C++ lane uses `cmake --preset mpi -DPOPS_TESTS_FAST_O0=ON`, followed by
 targeted builds and CTest labels. Keep its source frozen during compilation;
 a header edit during one earlier rebuild was detected by `doctor.headers_sync`

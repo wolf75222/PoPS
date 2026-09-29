@@ -10,6 +10,21 @@ The task used callable subagents; no delegation was simulated.
 | astra_protocols | gpt-6-astra/high | Native collective resource failure, deep freeze deletion, independent protocol evidence |
 | Primary | session model | Integration, baseline, generic path lowering, installed/native qualification and final review |
 
+Subsequent bounded assignments keep the same actual GPT-6 tool selections:
+
+| Agent | Isolated implementation and independent review |
+| --- | --- |
+| astra_semantics | C11 principal groups; Sol's face-body review found the missing numerical stability contract; authored independent native capture/AMR/failure witnesses; C11/T2 capture integration |
+| sol6_native | Authored vector face bodies and reconstruction parameters; directional face-frequency repair from the full M04 failure; explicit User stability function |
+| astra_protocols | Real native in-flight leases, completion/cancellation and accepted-snapshot drainage; independent M03 boundary-budget reasoning |
+| sol6_reference | Nonnegative diagonal diffusion including exact zero axes; independent C11 review reproduced eager inactive evaluation and rejected resolved bindings; independent M01 and M03 saved-state review |
+| Primary | Full M01/M03 runs and retained M04 failure; source/native authentication; root review found the nonfinite extrapolated conormal coefficient; integration and all heavy builds |
+
+Branch source checks and prepared tests are not native acceptance. The branch
+commits, installed artifact and executed results are recorded in CHECKPOINT.md
+and the scoped evidence registry; an agent's textual declaration is never used
+as proof of model routing or backend execution.
+
 Two earlier Sol 5.6 workers were interrupted after the explicit model correction.
 The initial isolated reference process had already been launched; its output
 was retained and checked by Sol 6. It is not attributed as code written by a

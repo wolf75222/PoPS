@@ -1,0 +1,15 @@
+{
+  "counts": {
+    "tests": 98,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 2
+  },
+  "xml_sha256": "51da506960880351a7e21684c5c3bbae1ce43b4c3904d2c98ca62cc197e84a66",
+  "profile_exclusions": [
+    "test_amr_system_contract.PreparedBzHasZeroLongitudinalCrossProductInDim1",
+    "ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching"
+  ],
+  "scope": "native C++ Dim=2 OpenMP with MPICH, six affected targets, three two-rank invocations",
+  "source_commit": "022f5acbb9181eb85a6d9cd05e30a92aad1c4872"
+}

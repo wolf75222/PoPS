@@ -1,0 +1,26 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 16 items
+
+tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py::test_authored_reconstruction_matches_two_component_two_axis_fv_oracle[both_orientations] PASSED [  6%]
+tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py::test_authored_reconstruction_matches_two_component_two_axis_fv_oracle[axes_and_components_permuted] PASSED [ 12%]
+tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py::test_authored_reconstruction_matches_two_component_two_axis_fv_oracle[inactive_singularity] PASSED [ 18%]
+tests/python/integration/runtime/test_conditional_consumers_runtime.py::test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[diffusion] PASSED [ 25%]
+tests/python/integration/runtime/test_conditional_consumers_runtime.py::test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch[affine] PASSED [ 31%]
+tests/python/integration/runtime/test_symbolic_path_param_runtime.py::test_bind_time_path_speed_changes_native_dissipation_on_same_artifact PASSED [ 37%]
+tests/python/integration/runtime/test_symbolic_path_four_state_runtime.py::test_four_state_noncommuting_curved_path_matches_native_2d_step[order0] PASSED [ 43%]
+tests/python/integration/runtime/test_symbolic_path_four_state_runtime.py::test_four_state_noncommuting_curved_path_matches_native_2d_step[order1] PASSED [ 50%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_adaptive_cfl_without_max_dt_matches_two_step_oracle PASSED [ 56%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_refusal_preserves_accepted_state_and_clock[fixed_dt] PASSED [ 62%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_refusal_preserves_accepted_state_and_clock[actual_stage_cfl] PASSED [ 68%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_checkpoint_restart_does_not_request_an_absent_poisson_field PASSED [ 75%]
+tests/python/integration/runtime/test_symbolic_path_runtime.py::test_authored_product_executes_on_native_faces[1.0-False] PASSED [ 81%]
+tests/python/integration/runtime/test_symbolic_path_runtime.py::test_authored_product_executes_on_native_faces[2.5-True] PASSED [ 87%]
+tests/python/integration/runtime/test_symbolic_path_adversarial_runtime.py::test_three_state_two_axis_path_matches_independent_one_step_oracle[False] PASSED [ 93%]
+tests/python/integration/runtime/test_symbolic_path_adversarial_runtime.py::test_three_state_two_axis_path_matches_independent_one_step_oracle[True] PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-c01-user-targeted/pytest.xml -
+======================== 16 passed in 273.94s (0:04:33) ========================

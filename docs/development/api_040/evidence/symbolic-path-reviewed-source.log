@@ -1,0 +1,82 @@
+....................F                                                    [100%]
+=================================== FAILURES ===================================
+_________ test_path_only_runtime_speed_parameter_reaches_native_member _________
+
+    def test_path_only_runtime_speed_parameter_reaches_native_member():
+        from pops.codegen.module_codegen import _emit_bricks
+        from pops.codegen.module_lowering import lower_and_validate
+        from pops.layouts import Uniform
+        from pops.lib.time import ForwardEuler
+        from pops.math import ddt, div
+        from pops.mesh import CartesianGrid, PeriodicAxes
+        from pops.numerics import (DiscretizationPlan, PathConservativeFiniteVolume,
+                                   reconstruction, riemann, variables)
+        from pops.params import RuntimeParam
+        from pops.time import AdaptiveCFL
+        from tests.python.support.symbolic_path_case import declarations, SIMPSON
+        model, state, flux, product, original = declarations()
+        coefficient = model.value(model.param(RuntimeParam("path_speed_only", default=100.)))
+        path = SymbolicPath(product, frame=original.frame, quadrature=SIMPSON,
+                            speed=lambda left, right, axis: coefficient)
+        rate = model.rate("balance", equation=ddt(state) == -div(flux) - product)
+        method = PathConservativeFiniteVolume(flux=flux, path=path,
+            variables=variables.Conservative(state), reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov())
+        plan = DiscretizationPlan()
+        plan.rates.add(rate, method)
+        case = pops.Case("runtime_speed_path")
+        block = case.block("transport", model)
+        case.numerics(plan, block=block)
+        program = ForwardEuler(block[state], rate=rate)
+        program.step_strategy(AdaptiveCFL(cfl=.25, max_dt=1.e-3))
+        case.program(program)
+        layout = Uniform(CartesianGrid(frame=path.frame, cells=(4, 4),
+                                       periodic=PeriodicAxes(path.frame.axes)))
+        resolved = pops.resolve(pops.validate(case), layout=layout)
+        native_block = resolved.blocks[0]
+        emitter, _ = lower_and_validate(native_block.model, state_space=native_block.state_spaces[0],
+            resolved_operations=native_block.resolved_operations, numerics=native_block.numerics)
+>       source = _emit_bricks(emitter._m)[1]
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/python/unit/numerics/test_symbolic_path_consistency.py:97: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+python/pops/codegen/module_codegen.py:261: in _emit_bricks
+    parts = [emit_cpp_brick(model, name=nm + "Hyp", hoist_reciprocals=hoist_reciprocals,
+python/pops/codegen/module_emit_brick.py:391: in emit_cpp_brick
+    S += emit_path_members(model, cse=cse, aux_locals=aux_locals)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/module_emit_path.py:23: in emit_path_members
+    lines += emit_symbolic_path_members(model)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/module_emit_symbolic_path.py:39: in emit_symbolic_path_members
+    body, values = _checked_expressions((*kernel["integrals"][axis], kernel["speeds"][axis]), "      ")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/module_emit_symbolic_path.py:8: in _checked_expressions
+    lines, values, names = _cse_emit(expressions, "pops::Real", indent,
+python/pops/codegen/cpp_writer.py:258: in _cse_emit
+    lines, rendered = emit_scope(roots, {}, "", False)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/cpp_writer.py:241: in emit_scope
+    value = _cpp_expand(expression, cse_map, key_memo, guarded)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+python/pops/codegen/cpp_writer.py:72: in _cpp_expand
+    return e.to_cpp()  # params.get(<index>): reads the brick's RuntimeParams member
+           ^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = rparam(path_speed_only)
+
+    def to_cpp(self) -> str:
+        indices = _RUNTIME_PARAM_INDICES.get()
+        index = None if indices is None else indices.get(self.name)
+        if index is None:
+>           raise RuntimeError(
+                "RuntimeParamRef('%s'): index not assigned at codegen (call the compilation via "
+                "dsl.Model which assigns the runtime indices)" % self.name)
+E           RuntimeError: RuntimeParamRef('path_speed_only'): index not assigned at codegen (call the compilation via dsl.Model which assigns the runtime indices)
+
+python/pops/_ir/values.py:268: RuntimeError
+=========================== short test summary info ============================
+FAILED tests/python/unit/numerics/test_symbolic_path_consistency.py::test_path_only_runtime_speed_parameter_reaches_native_member
+1 failed, 20 passed in 5.03s

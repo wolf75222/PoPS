@@ -1,0 +1,224 @@
+Test project /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi
+      Start 1315: test_program_runtime_np2
+ 1/98 Test #1315: test_program_runtime_np2 ......................................................................................   Passed    4.30 sec
+      Start 1118: ProgramRuntime.BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure
+      Start 1160: ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal
+ 2/98 Test #1118: ProgramRuntime.BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure ...................................   Passed    0.59 sec
+      Start 1029: test_amr_system_contract.RefusesMappedPeriodicityBeforeRankedFillPatchConstruction
+ 3/98 Test #1160: ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal .........................................   Passed    0.59 sec
+      Start 1059: test_amr_synchronized_continuation.stable_candidates_across_two_resumes
+ 4/98 Test #1029: test_amr_system_contract.RefusesMappedPeriodicityBeforeRankedFillPatchConstruction ............................   Passed    2.70 sec
+      Start 1089: test_program_reflux_ledger.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions
+ 5/98 Test #1059: test_amr_synchronized_continuation.stable_candidates_across_two_resumes .......................................   Passed    3.16 sec
+      Start  118: PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels
+ 6/98 Test #1089: test_program_reflux_ledger.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions .......   Passed    0.78 sec
+      Start 1135: ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption
+ 7/98 Test  #118: PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels .........................................   Passed    0.61 sec
+      Start 1133: ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep
+ 8/98 Test #1135: ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption ......................................   Passed    0.68 sec
+      Start 1134: ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication
+ 9/98 Test #1133: ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep ...............................................   Passed    0.63 sec
+      Start 1132: ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+10/98 Test #1134: ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication ...............................   Passed    0.59 sec
+      Start 1033: test_amr_system_contract.TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz
+11/98 Test #1132: ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource .....................................   Passed    0.59 sec
+      Start 1151: ProgramRuntime.EmbeddedBoundaryCapabilitiesUsePreparedExactRankProviders
+12/98 Test #1033: test_amr_system_contract.TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz ...............................   Passed    0.35 sec
+      Start 1163: ProgramRuntime.AnalyticInitialStatePublishesInTheFinalTypedRuntime
+13/98 Test #1151: ProgramRuntime.EmbeddedBoundaryCapabilitiesUsePreparedExactRankProviders ......................................   Passed    0.59 sec
+      Start 1161: ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally
+14/98 Test #1163: ProgramRuntime.AnalyticInitialStatePublishesInTheFinalTypedRuntime ............................................   Passed    0.58 sec
+      Start 1157: ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional
+15/98 Test #1161: ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally .........................   Passed    0.60 sec
+      Start 1148: ProgramRuntime.PreparedEmbeddedBoundaryMaskSeparatesActiveAndInactiveCells
+16/98 Test #1157: ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional .........................   Passed    0.59 sec
+      Start 1146: ProgramRuntime.CutCellPreparesFractionalMeasureAndSharesTheModelSpeedProvider
+17/98 Test #1148: ProgramRuntime.PreparedEmbeddedBoundaryMaskSeparatesActiveAndInactiveCells ....................................   Passed    0.59 sec
+      Start 1127: ProgramRuntime.CadenceUsesThePreparedFacadeEndpointWhenFloatingPointAdditionIsNonAssociative
+18/98 Test #1146: ProgramRuntime.CutCellPreparesFractionalMeasureAndSharesTheModelSpeedProvider .................................   Passed    0.59 sec
+      Start 1144: ProgramRuntime.PreparedMaximumSpeedProviderIsGeometryIndependent
+19/98 Test #1127: ProgramRuntime.CadenceUsesThePreparedFacadeEndpointWhenFloatingPointAdditionIsNonAssociative ..................   Passed    0.59 sec
+      Start 1154: ProgramRuntime.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication
+20/98 Test #1144: ProgramRuntime.PreparedMaximumSpeedProviderIsGeometryIndependent ..............................................   Passed    0.59 sec
+      Start 1137: ProgramRuntime.ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels
+21/98 Test #1154: ProgramRuntime.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication ............................   Passed    0.59 sec
+      Start 1130: ProgramRuntime.CadenceRejectsDtAbsorbedByThePhysicalClock
+22/98 Test #1137: ProgramRuntime.ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels ..............................   Passed    0.60 sec
+      Start 1128: ProgramRuntime.CadenceWindowRestartAndRejectedDueStepAreTransactional
+23/98 Test #1130: ProgramRuntime.CadenceRejectsDtAbsorbedByThePhysicalClock .....................................................   Passed    0.60 sec
+      Start 1141: ProgramRuntime.TerminalSourcePublicationAcceptsPreparedRecoveryCandidate
+24/98 Test #1128: ProgramRuntime.CadenceWindowRestartAndRejectedDueStepAreTransactional .........................................   Passed    0.61 sec
+      Start 1126: ProgramRuntime.StrideHeldStepsPublishTheExactZeroBalance
+25/98 Test #1141: ProgramRuntime.TerminalSourcePublicationAcceptsPreparedRecoveryCandidate ......................................   Passed    0.59 sec
+      Start 1129: ProgramRuntime.CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair
+26/98 Test #1126: ProgramRuntime.StrideHeldStepsPublishTheExactZeroBalance ......................................................   Passed    0.59 sec
+      Start 1164: ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+27/98 Test #1129: ProgramRuntime.CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair ..........................................   Passed    0.59 sec
+      Start 1147: ProgramRuntime.PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure
+28/98 Test #1164: ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock ....................................   Passed    0.59 sec
+      Start 1124: ProgramRuntime.FacadeTemporalOperationsRequireProgramBeforeMutation
+29/98 Test #1147: ProgramRuntime.PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure ...........................................   Passed    0.60 sec
+      Start 1140: ProgramRuntime.UnqualifiedGeneratedOperatorsRefuseActiveEmbeddedBoundaries
+30/98 Test #1124: ProgramRuntime.FacadeTemporalOperationsRequireProgramBeforeMutation ...........................................   Passed    0.60 sec
+      Start 1131: ProgramRuntime.CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresentableInterval
+31/98 Test #1140: ProgramRuntime.UnqualifiedGeneratedOperatorsRefuseActiveEmbeddedBoundaries ....................................   Passed    0.60 sec
+      Start 1158: ProgramRuntime.SystemProjectionRefusesForeignFieldContractsBeforeProviderInvocation
+32/98 Test #1131: ProgramRuntime.CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresentableInterval .........................   Passed    0.60 sec
+      Start 1153: ProgramRuntime.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate
+33/98 Test #1158: ProgramRuntime.SystemProjectionRefusesForeignFieldContractsBeforeProviderInvocation ...........................   Passed    0.59 sec
+      Start 1149: ProgramRuntime.PointwiseStatusUsesPreparedEmbeddedBoundaryMask
+34/98 Test #1153: ProgramRuntime.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate .....................................   Passed    0.60 sec
+      Start 1125: ProgramRuntime.GlobalCadencePublishesExactSubstepAndStrideWindowTimes
+35/98 Test #1149: ProgramRuntime.PointwiseStatusUsesPreparedEmbeddedBoundaryMask ................................................   Passed    0.60 sec
+      Start 1150: ProgramRuntime.Ssprk3ProgramAlgebraPreservesInactiveBits
+36/98 Test #1125: ProgramRuntime.GlobalCadencePublishesExactSubstepAndStrideWindowTimes .........................................   Passed    0.59 sec
+      Start 1152: ProgramRuntime.PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells
+37/98 Test #1150: ProgramRuntime.Ssprk3ProgramAlgebraPreservesInactiveBits ......................................................   Passed    0.61 sec
+      Start 1165: ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+38/98 Test #1152: ProgramRuntime.PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells ......................................   Passed    0.63 sec
+      Start 1145: ProgramRuntime.DiffusiveCflAddsPreparedParabolicFrequencyToTransport
+39/98 Test #1165: ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox ............................   Passed    0.63 sec
+      Start 1139: ProgramRuntime.SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCells
+40/98 Test #1145: ProgramRuntime.DiffusiveCflAddsPreparedParabolicFrequencyToTransport ..........................................   Passed    0.62 sec
+      Start 1156: ProgramRuntime.GeneratedUniformProjectionPreservesEmbeddedBoundaryInactiveCells
+41/98 Test #1139: ProgramRuntime.SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCells ...................................   Passed    0.60 sec
+      Start 1142: ProgramRuntime.TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit
+42/98 Test #1156: ProgramRuntime.GeneratedUniformProjectionPreservesEmbeddedBoundaryInactiveCells ...............................   Passed    0.60 sec
+      Start 1138: ProgramRuntime.ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMetrics
+43/98 Test #1142: ProgramRuntime.TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit ...................................   Passed    0.61 sec
+      Start 1155: ProgramRuntime.GeneratedUniformBlockSuppliesProjectionRoutesOnlyForCapableModels
+44/98 Test #1138: ProgramRuntime.ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMetrics ................................   Passed    0.63 sec
+      Start 1143: ProgramRuntime.ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells
+45/98 Test #1155: ProgramRuntime.GeneratedUniformBlockSuppliesProjectionRoutesOnlyForCapableModels ..............................   Passed    0.61 sec
+      Start 1162: ProgramRuntime.AnalyticMappedInitialFailureDoesNotPublishTheCandidate
+46/98 Test #1143: ProgramRuntime.ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells ....................................   Passed    0.60 sec
+      Start 1119: ProgramRuntime.AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySafe
+47/98 Test #1162: ProgramRuntime.AnalyticMappedInitialFailureDoesNotPublishTheCandidate .........................................   Passed    0.60 sec
+      Start 1121: ProgramRuntime.SelectiveReplayCompilesBalanceOffAndRestoresTheGuard
+48/98 Test #1119: ProgramRuntime.AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySafe ...................................   Passed    0.59 sec
+      Start 1159: ProgramRuntime.EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntryPoints
+49/98 Test #1121: ProgramRuntime.SelectiveReplayCompilesBalanceOffAndRestoresTheGuard ...........................................   Passed    0.59 sec
+      Start 1120: ProgramRuntime.SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence
+50/98 Test #1159: ProgramRuntime.EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntryPoints .............................   Passed    0.59 sec
+      Start 1122: ProgramRuntime.ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair
+51/98 Test #1120: ProgramRuntime.SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence ..................................   Passed    0.59 sec
+      Start 1123: ProgramRuntime.ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly
+52/98 Test #1122: ProgramRuntime.ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair .......................................   Passed    0.58 sec
+      Start  748: test_weno_convergence.preserves_constants
+53/98 Test  #748: test_weno_convergence.preserves_constants .....................................................................   Passed    0.32 sec
+      Start 1035: test_amr_system_contract.PreparedBzRotatesTransverseMomentumInDim2
+54/98 Test #1123: ProgramRuntime.ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly .......................................   Passed    0.58 sec
+      Start 1039: test_amr_system_contract.RestartAuxiliaryReplacementRequiresExactCompleteImage
+55/98 Test #1035: test_amr_system_contract.PreparedBzRotatesTransverseMomentumInDim2 ............................................   Passed    0.25 sec
+      Start 1040: test_amr_system_contract.InitialCoarseTilingConsumesCapsAndPreservesExplicitBoxes
+56/98 Test #1039: test_amr_system_contract.RestartAuxiliaryReplacementRequiresExactCompleteImage ................................   Passed    0.27 sec
+      Start 1037: test_amr_system_contract.BootstrapRestrictionSynchronizesOnlyCoveredCoarseCells
+57/98 Test #1040: test_amr_system_contract.InitialCoarseTilingConsumesCapsAndPreservesExplicitBoxes .............................   Passed    0.20 sec
+      Start 1043: test_amr_system_contract.AcceptedClockSerializationPreservesNonAssociativeEndpoint
+58/98 Test #1037: test_amr_system_contract.BootstrapRestrictionSynchronizesOnlyCoveredCoarseCells ...............................   Passed    0.19 sec
+      Start 1041: test_amr_system_contract.VariableDtStrideUsesOneExactPublicWindow
+59/98 Test #1043: test_amr_system_contract.AcceptedClockSerializationPreservesNonAssociativeEndpoint ............................   Passed    0.20 sec
+      Start 1032: test_amr_system_contract.PrimitiveBoundaryMatchesQualifiedConservativeOracle
+60/98 Test #1041: test_amr_system_contract.VariableDtStrideUsesOneExactPublicWindow .............................................   Passed    0.20 sec
+      Start 1030: test_amr_system_contract.DirectAndPreparedCompiledInstallationsHaveExactRankedParity
+61/98 Test #1032: test_amr_system_contract.PrimitiveBoundaryMatchesQualifiedConservativeOracle ..................................   Passed    0.19 sec
+      Start 1034: test_amr_system_contract.TemporalFacadeRequiresInstalledWholeSystemProgram
+62/98 Test #1034: test_amr_system_contract.TemporalFacadeRequiresInstalledWholeSystemProgram ....................................   Passed    0.19 sec
+      Start 1031: test_amr_system_contract.RectangularGeometryPreservesIndependentAxisPeriodicity
+63/98 Test #1030: test_amr_system_contract.DirectAndPreparedCompiledInstallationsHaveExactRankedParity ..........................   Passed    0.20 sec
+      Start 1038: test_amr_system_contract.RebuildDistributionModesPreserveReplicaAndPartitionContracts
+64/98 Test #1031: test_amr_system_contract.RectangularGeometryPreservesIndependentAxisPeriodicity ...............................   Passed    0.19 sec
+      Start 1042: test_amr_system_contract.CadenceRestoreRejectsClockDriftWithoutMutation
+65/98 Test #1038: test_amr_system_contract.RebuildDistributionModesPreserveReplicaAndPartitionContracts .........................   Passed    0.19 sec
+      Start 1060: test_amr_synchronized_continuation.collective_failure_abort_publication_rollback_and_retry
+66/98 Test #1060: test_amr_synchronized_continuation.collective_failure_abort_publication_rollback_and_retry ....................   Passed    0.06 sec
+      Start 1064: test_amr_synchronized_continuation.rank_local_callback_reentry_is_rejected_before_collectives
+67/98 Test #1064: test_amr_synchronized_continuation.rank_local_callback_reentry_is_rejected_before_collectives .................   Passed    0.05 sec
+      Start 1062: test_amr_synchronized_continuation.AttemptAuthoritySurvivesPreparedEngineReplacement
+68/98 Test #1062: test_amr_synchronized_continuation.AttemptAuthoritySurvivesPreparedEngineReplacement ..........................   Passed    0.06 sec
+      Start 1063: test_amr_synchronized_continuation.AttemptAuthorityRejectsCorruptActiveAsymmetricAndOverflow
+69/98 Test #1042: test_amr_system_contract.CadenceRestoreRejectsClockDriftWithoutMutation .......................................   Passed    0.18 sec
+      Start 1061: test_amr_synchronized_continuation.exact_clock_and_collective_operation_authority
+70/98 Test #1063: test_amr_synchronized_continuation.AttemptAuthorityRejectsCorruptActiveAsymmetricAndOverflow ..................   Passed    0.05 sec
+      Start 1093: test_program_reflux_ledger.CommittedAttemptWireAndCapacityIncludeEmptyLedgerAuthority
+71/98 Test #1061: test_amr_synchronized_continuation.exact_clock_and_collective_operation_authority .............................   Passed    0.05 sec
+      Start  120: PreparedResourceCache.FailedConstructionPreservesAcceptedBufferOnEveryRank
+72/98 Test #1093: test_program_reflux_ledger.CommittedAttemptWireAndCapacityIncludeEmptyLedgerAuthority .........................   Passed    0.04 sec
+      Start  121: PreparedResourceCache.FailedInitialConstructionRemainsCollectivelyRetryable
+73/98 Test  #120: PreparedResourceCache.FailedConstructionPreservesAcceptedBufferOnEveryRank ....................................   Passed    0.03 sec
+      Start 1092: test_program_reflux_ledger.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation
+74/98 Test #1092: test_program_reflux_ledger.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation .............................   Passed    0.03 sec
+      Start  119: PreparedResourceCache.RankLocalInvalidationAndPreflightFailureAreCollective
+75/98 Test  #121: PreparedResourceCache.FailedInitialConstructionRemainsCollectivelyRetryable ...................................   Passed    0.03 sec
+      Start 1090: test_program_reflux_ledger.SingleWindowDensityAvoidsAnExtraTemporalRounding
+76/98 Test #1090: test_program_reflux_ledger.SingleWindowDensityAvoidsAnExtraTemporalRounding ...................................   Passed    0.03 sec
+      Start 1091: test_program_reflux_ledger.HistoryPublicationIdentityUsesPhysicalWindowsAndExactWire
+77/98 Test  #119: PreparedResourceCache.RankLocalInvalidationAndPreflightFailureAreCollective ...................................   Passed    0.03 sec
+      Start  755: test_muscl_limiters.scalar_upwind_euler_tvd_and_mean_at_half_cfl
+78/98 Test  #755: test_muscl_limiters.scalar_upwind_euler_tvd_and_mean_at_half_cfl ..............................................   Passed    0.03 sec
+      Start  758: test_muscl_limiter_qualification.mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages
+79/98 Test #1091: test_program_reflux_ledger.HistoryPublicationIdentityUsesPhysicalWindowsAndExactWire ..........................   Passed    0.03 sec
+      Start  763: test_weno_convergence.fifth_order_on_smooth_function
+80/98 Test  #758: test_muscl_limiter_qualification.mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages ............   Passed    0.03 sec
+      Start  759: test_muscl_limiter_qualification.discontinuities_create_no_extremum_and_expose_interface_dissipation_budget
+81/98 Test  #763: test_weno_convergence.fifth_order_on_smooth_function ..........................................................   Passed    0.02 sec
+      Start  760: test_weno_convergence.external_sampled_policy_controls_offsets_and_orientation
+82/98 Test  #759: test_muscl_limiter_qualification.discontinuities_create_no_extremum_and_expose_interface_dissipation_budget ...   Passed    0.03 sec
+      Start  762: test_weno_convergence.sampled_policy_ghost_requirement_is_checked_exactly_in_1d_2d_3d
+83/98 Test  #760: test_weno_convergence.external_sampled_policy_controls_offsets_and_orientation ................................   Passed    0.03 sec
+      Start  754: test_muscl_limiters.mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slopes
+84/98 Test  #762: test_weno_convergence.sampled_policy_ghost_requirement_is_checked_exactly_in_1d_2d_3d .........................   Passed    0.03 sec
+      Start  753: test_muscl_limiters.minmod_and_vanleer_handle_extreme_finite_differences
+85/98 Test  #754: test_muscl_limiters.mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slopes .................................   Passed    0.02 sec
+      Start  757: test_muscl_limiters.sweby_tvd_bounds_and_finite_extremes
+86/98 Test  #757: test_muscl_limiters.sweby_tvd_bounds_and_finite_extremes ......................................................   Passed    0.02 sec
+      Start  749: test_weno_convergence.finite_extreme_stencils_and_step_faces
+87/98 Test  #753: test_muscl_limiters.minmod_and_vanleer_handle_extreme_finite_differences ......................................   Passed    0.02 sec
+      Start  750: test_weno_convergence.invalid_stencil_or_epsilon_remains_nonfinite
+88/98 Test  #749: test_weno_convergence.finite_extreme_stencils_and_step_faces ..................................................   Passed    0.03 sec
+      Start  751: test_weno_convergence.reconstruction_protocol_is_independent_of_storage_radius
+89/98 Test  #750: test_weno_convergence.invalid_stencil_or_epsilon_remains_nonfinite ............................................   Passed    0.03 sec
+      Start  764: test_weno_convergence.epsilon_default_bit_identical_and_override_live
+90/98 Test  #751: test_weno_convergence.reconstruction_protocol_is_independent_of_storage_radius ................................   Passed    0.02 sec
+      Start  756: test_muscl_limiters.zero_opposite_sign_symmetry_and_homogeneity
+91/98 Test  #764: test_weno_convergence.epsilon_default_bit_identical_and_override_live .........................................   Passed    0.02 sec
+      Start  752: test_muscl_limiters.mc_and_superbee_match_reference_formulas
+92/98 Test  #752: test_muscl_limiters.mc_and_superbee_match_reference_formulas ..................................................   Passed    0.02 sec
+      Start  761: test_weno_convergence.primitive_sampled_policy_converts_only_the_selected_branch
+93/98 Test  #756: test_muscl_limiters.zero_opposite_sign_symmetry_and_homogeneity ...............................................   Passed    0.02 sec
+      Start 1036: test_amr_system_contract.PreparedBzHasZeroLongitudinalCrossProductInDim1
+94/98 Test  #761: test_weno_convergence.primitive_sampled_policy_converts_only_the_selected_branch ..............................   Passed    0.03 sec
+      Start 1136: ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+95/98 Test #1036: test_amr_system_contract.PreparedBzHasZeroLongitudinalCrossProductInDim1 ......................................***Skipped   0.18 sec
+96/98 Test #1136: ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching ..........................................***Skipped   0.62 sec
+      Start 1311: test_amr_synchronized_continuation_np2
+97/98 Test #1311: test_amr_synchronized_continuation_np2 ........................................................................   Passed    0.11 sec
+      Start 1303: test_prepared_resource_cache_np2
+98/98 Test #1303: test_prepared_resource_cache_np2 ..............................................................................   Passed    0.05 sec
+
+100% tests passed out of 98
+
+Label Time Summary:
+amr                                              =  10.04 sec*proc (26 tests)
+backend                                          =   8.92 sec*proc (3 tests)
+checkpoint                                       =   0.91 sec*proc (5 tests)
+cpp-target:test_amr_synchronized_continuation    =   3.65 sec*proc (7 tests)
+cpp-target:test_amr_system_contract              =   5.70 sec*proc (15 tests)
+cpp-target:test_prepared_resource_cache          =   0.81 sec*proc (5 tests)
+cpp-target:test_program_reflux_ledger            =   0.91 sec*proc (5 tests)
+cpp-target:test_program_runtime                  =  37.41 sec*proc (49 tests)
+cpp-target:test_weno_convergence                 =   0.73 sec*proc (17 tests)
+fast                                             =   1.44 sec*proc (21 tests)
+integration                                      =  38.84 sec*proc (74 tests)
+medium                                           =  47.76 sec*proc (77 tests)
+mpi                                              =   8.92 sec*proc (3 tests)
+nd                                               =   0.91 sec*proc (5 tests)
+numerics                                         =   0.73 sec*proc (17 tests)
+runtime                                          =  29.51 sec*proc (52 tests)
+unit                                             =   1.44 sec*proc (21 tests)
+
+Total Test time (real) =  24.90 sec
+
+The following tests did not run:
+	1036 - test_amr_system_contract.PreparedBzHasZeroLongitudinalCrossProductInDim1 (Skipped)
+	1136 - ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching (Skipped)

@@ -1,0 +1,67 @@
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : api040_M04_W02
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : tracer
+  numerics tracer     : diffusion, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 32 x 32 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.012335526315789472)
+  interval            : 0 -> 0.1 (max 100000 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 2db22b913082c91a
+  run identity        : 7ec40318c24fc148
+================================================================
+PoPS run failed after 0 accepted step(s) at t=0 (0.001406 s)
+  StepAttemptRejected: step attempt rejected during native_evaluation: solve status=invalid_evaluation (attempt_action=reject, reason_code=502, combined_transport_diffusion_stability block=0 evaluation=1 reason_code=502)
+----------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m04_advection_diffusion.py", line 141, in <module>
+    report = pops.run(simulation, t_end=T_END, max_steps=100_000)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py", line 114, in run
+    return instance._run(**dict(controls))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py", line 1691, in _run
+    step_report = self._accepted_controller_step(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py", line 1595, in _accepted_controller_step
+    return self._accepted_step_transaction(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py", line 1399, in _accepted_step_transaction
+    return self._accepted_step_transaction_body(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py", line 1444, in _accepted_step_transaction_body
+    result, attempts = advance()
+                       ^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py", line 1581, in advance
+    report = prepared_run.run_prepared_attempt(sequence)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_step_strategy.py", line 873, in run_prepared_attempt
+    return run_prepared_step_attempt(sequence)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_step_strategy.py", line 960, in run_prepared_step_attempt
+    sequence.execute()
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_step_strategy.py", line 400, in execute
+    reported = self._attempt()
+               ^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_step_strategy.py", line 533, in attempt
+    _native_attempt(engine, native, lambda: native.step(dt), fixed_dt_grid=accepted_grid)
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_step_strategy.py", line 316, in _native_attempt
+    raise error
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_step_strategy.py", line 302, in _native_attempt
+    result = advance()
+             ^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_step_strategy.py", line 533, in <lambda>
+    _native_attempt(engine, native, lambda: native.step(dt), fixed_dt_grid=accepted_grid)
+                                            ^^^^^^^^^^^^^^^
+pops._pops.StepAttemptRejected: step attempt rejected during native_evaluation: solve status=invalid_evaluation (attempt_action=reject, reason_code=502, combined_transport_diffusion_stability block=0 evaluation=1 reason_code=502)

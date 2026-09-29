@@ -1,0 +1,43 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 23 items
+
+tests/python/integration/runtime/test_program_expression_runtime.py::test_public_pipeline_executes_expression_and_implicit_capture[False-0.0] PASSED [  4%]
+tests/python/integration/runtime/test_program_expression_runtime.py::test_public_pipeline_executes_expression_and_implicit_capture[True-0.25] PASSED [  8%]
+tests/python/integration/runtime/test_program_expression_runtime.py::test_public_pipeline_executes_expression_and_implicit_capture[True-2.0] PASSED [ 13%]
+tests/python/integration/runtime/test_program_expression_runtime.py::test_masked_invalid_intermediate_rejects_and_restores_state[division] PASSED [ 17%]
+tests/python/integration/runtime/test_program_expression_runtime.py::test_masked_invalid_intermediate_rejects_and_restores_state[overflow] PASSED [ 21%]
+tests/python/integration/runtime/test_program_expression_runtime.py::test_native_conditional_and_binary64_boundary[quotient-values0] PASSED [ 26%]
+tests/python/integration/runtime/test_program_expression_runtime.py::test_native_conditional_and_binary64_boundary[rounding-values1] PASSED [ 30%]
+tests/python/integration/runtime/test_program_expression_runtime.py::test_native_conditional_and_binary64_boundary[masked-values2] PASSED [ 34%]
+tests/python/integration/runtime/test_program_expression_runtime.py::test_native_conditional_and_binary64_boundary[implicit_guarded-values3] PASSED [ 39%]
+tests/python/integration/runtime/test_program_expression_runtime.py::test_physical_conditional_source_rejects_active_invalid_branch PASSED [ 43%]
+tests/python/integration/runtime/test_balance_multiplicity_runtime.py::test_repeated_source_retains_distinct_signed_occurrences[double-coefficients0] PASSED [ 47%]
+tests/python/integration/runtime/test_balance_multiplicity_runtime.py::test_repeated_source_retains_distinct_signed_occurrences[signed-coefficients1] PASSED [ 52%]
+tests/python/integration/runtime/test_balance_multiplicity_runtime.py::test_homonymous_source_from_foreign_model_is_refused PASSED [ 56%]
+tests/python/integration/runtime/test_balance_multiplicity_runtime.py::test_native_repeated_source_one_step_matches_occurrence_sum[double-2.0] PASSED [ 60%]
+tests/python/integration/runtime/test_balance_multiplicity_runtime.py::test_native_repeated_source_one_step_matches_occurrence_sum[signed-1.0] PASSED [ 65%]
+tests/python/integration/amr/test_symbolic_path_amr_runtime.py::test_symbolic_path_one_level_amr_matches_independent_oracle PASSED [ 69%]
+tests/python/integration/amr/test_symbolic_path_amr_runtime.py::test_symbolic_path_partial_two_level_amr_conserves_v_and_evolves_nonconservative_u PASSED [ 73%]
+tests/python/integration/amr/test_symbolic_path_amr_runtime.py::test_symbolic_path_actual_stage_cfl_failure_keeps_two_level_accepted_state PASSED [ 78%]
+tests/python/integration/runtime/test_local_transform_runtime.py::test_local_transform_executes_natively_and_rejects_before_publication PASSED [ 82%]
+tests/python/integration/runtime/test_local_transform_runtime.py::test_local_transform_preserves_and_does_not_validate_inactive_cells[staircase] PASSED [ 86%]
+tests/python/integration/runtime/test_local_transform_runtime.py::test_local_transform_preserves_and_does_not_validate_inactive_cells[cutcell] PASSED [ 91%]
+tests/python/integration/runtime/test_native_retry_transactions.py::test_native_retry_matches_successful_attempt_without_rejected_history PASSED [ 95%]
+tests/python/integration/runtime/test_native_retry_transactions.py::test_native_finite_retry_exhaustion_restores_accepted_envelope PASSED [100%]
+
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_native_retry_transactions.py::test_native_retry_matches_successful_attempt_without_rejected_history
+  tests/python/integration/runtime/test_native_retry_transactions.py:72: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    def test_native_retry_matches_successful_attempt_without_rejected_history(
+
+tests/python/integration/runtime/test_native_retry_transactions.py::test_native_finite_retry_exhaustion_restores_accepted_envelope
+  tests/python/integration/runtime/test_native_retry_transactions.py:92: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    def test_native_finite_retry_exhaustion_restores_accepted_envelope(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-c01-user-complement/pytest.xml -
+================== 23 passed, 2 warnings in 545.94s (0:09:05) ==================

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-m",
+    "pytest",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-c01-user-unit/pytest.xml",
+    "tests/python/unit/time/test_program_expressions.py",
+    "tests/python/unit/time/test_program_expressions_adversarial.py",
+    "tests/python/unit/numerics/test_symbolic_path.py",
+    "tests/python/unit/numerics/test_symbolic_path_adversarial.py",
+    "tests/python/unit/numerics/test_symbolic_path_consistency.py",
+    "tests/python/unit/numerics/test_symbolic_path_param_routing.py",
+    "tests/python/unit/problem/test_deep_freeze_storage.py",
+    "tests/python/unit/codegen/test_conditional_rounding.py",
+    "tests/python/unit/codegen/test_conditional_rounding_adversarial.py",
+    "tests/python/unit/codegen/test_program_emit_params_multimodel.py",
+    "tests/python/unit/codegen/test_bind_parameter_evidence.py",
+    "tests/python/unit/codegen/test_bind_schema.py",
+    "tests/python/unit/codegen/test_typed_phase_records.py",
+    "tests/python/unit/codegen/test_conditional_consumers.py",
+    "tests/python/unit/codegen/test_symbolic_path_name_hygiene.py",
+    "tests/python/unit/numerics/test_user_reconstruction_adversarial.py",
+    "tests/python/unit/codegen/test_user_reconstruction_gap_review.py",
+    "tests/python/unit/codegen/test_user_reconstruction_multiblock.py"
+  ],
+  "returncode": 0,
+  "duration_seconds": 31.92485300009139,
+  "counts": {
+    "tests": 167,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "31ea919d5a664d8e599c3f62cd625159e7243f03a33d43b520d29a34655f1d45",
+  "log_sha256": "f04b99705b31ac277a3d9c4649481b0fb40cdeb19f4f7c1d9561f3592bc69c56"
+}

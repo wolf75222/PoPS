@@ -1,8 +1,8 @@
 {
   "source": "PoPS_Codex_handoff_0.4.0/reference/PoPS_API_v0.4.0/results/corpus_matrix.json",
   "witness_source": "PoPS_Codex_handoff_0.4.0/context/CORPUS_ORIGINAL.md:278-289",
-  "current_head": "3a93ba7f1b3fc46ee85a06d9d3482c9b4ece7feb",
-  "mapping_kind": "provisional source-level candidates; no production tests run by this inventory",
+  "current_head": "022f5acbb9181eb85a6d9cd05e30a92aad1c4872",
+  "mapping_kind": "scoped production evidence, unresolved cases retained",
   "models": [
     {
       "id": "M01",
@@ -19,8 +19,13 @@
         "N01"
       ],
       "production_candidate_symbols": "python/pops/numerics/spatial.py:FiniteVolume;python/pops/lib/time/ssprk.py",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_status": "passed",
+      "qualification": "Full prescribed resolutions/time, native Dim=2 invariant-y. OpenMP 1/4 threads and MPICH 2 ranks; other dimensions and AMR remain unexecuted.",
+      "production_evidence": [
+        "evidence/022f5ac/m01-openmp1-reviewed",
+        "evidence/022f5ac/m01-openmp4",
+        "evidence/022f5ac/m01-mpi2-authenticated"
+      ]
     },
     {
       "id": "M02",
@@ -37,8 +42,11 @@
         "N03"
       ],
       "production_candidate_symbols": "python/pops/physics/_authoring_flux.py:flux_term;python/pops/numerics/spatial.py:FiniteVolume",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_status": "not_executed",
+      "qualification": "Shock/rarefaction Godunov examples and independent pure oracles are ready; User face contract and numerical stability implementation are in isolated review.",
+      "production_evidence": [
+        "evidence/022f5ac/astra-m02-burgers.md"
+      ]
     },
     {
       "id": "M03",
@@ -55,8 +63,13 @@
         "N05"
       ],
       "production_candidate_symbols": "python/pops/physics/_facade.py:Model;include/pops/physics/fluids/euler.hpp",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_status": "passed",
+      "qualification": "Prescribed N100/200/400 and t=.15, authored perfect and stiffened EOS, Dim=2 invariant-y CPU OpenMP1. Stiffened component and parameter names changed. Revision2 boundary budget replaces invalid unchanged-boundary assumption with measured accepted quadrature; all thresholds unchanged. Old failure retained. MPI2 and other dimensions remain unexecuted.",
+      "production_evidence": [
+        "evidence/022f5ac/m03-ideal-openmp1",
+        "evidence/022f5ac/m03-stiffened-boundary-budget",
+        "evidence/022f5ac/m03-stiffened-renamed-openmp1"
+      ]
     },
     {
       "id": "M04",
@@ -73,8 +86,12 @@
         "N04"
       ],
       "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion;python/pops/numerics/spatial.py:FiniteVolume",
-      "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established"
+      "production_status": "failed",
+      "qualification": "Full-case stable dt rejected at N32: transport global maximum is counted again on inactive y axis. Correction in progress. W02 dangerous step rejects with exact rollback, which alone does not qualify stable M04. Exact diagonal Dy=0 extension is isolated, not installed.",
+      "production_evidence": [
+        "evidence/022f5ac/m04-openmp1",
+        "evidence/022f5ac/installed-w02-combined-bound"
+      ]
     },
     {
       "id": "M05",
@@ -476,14 +493,23 @@
       "title": "Cosinus scalaire en FV",
       "related_model": "M01",
       "production_candidate_symbols": "python/pops/initial/__init__.py;python/pops/numerics/spatial.py:FiniteVolume",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "passed",
+      "qualification": "Native cell-average initial state and independent face-integral oracle, complete M01 Dim=2 sweeps.",
+      "production_evidence": [
+        "evidence/022f5ac/m01-openmp1-reviewed",
+        "evidence/022f5ac/m01-mpi2-authenticated"
+      ]
     },
     {
       "id": "W02",
       "title": "Advection-diffusion avec borne combinée",
       "related_model": "M04",
       "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion;python/pops/time/_step/transaction.py:AcceptanceGuard",
-      "production_status": "not_executed_for_this_mapping"
+      "production_status": "passed",
+      "qualification": "Actual native combined-bound violation rejects and preserves state/time; stable M04 reception separately failed.",
+      "production_evidence": [
+        "evidence/022f5ac/installed-w02-combined-bound"
+      ]
     },
     {
       "id": "W03",
@@ -555,5 +581,6 @@
       "production_candidate_symbols": "python/pops/runtime/_history_sample_identity.py",
       "production_status": "not_executed_for_this_mapping"
     }
-  ]
+  ],
+  "production_evidence_schema": 2
 }
