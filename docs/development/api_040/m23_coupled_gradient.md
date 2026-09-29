@@ -28,7 +28,7 @@ and a genuinely negative mode is refused without clipping or tolerance.
 
 `CoupledGradient` selects a distinct `PreparedCoupledGradient` provider. Its
 constant-matrix realization covers one, two, or three periodic Cartesian axes
-on Uniform storage, with first-order cell means and a two-point
+on Uniform storage, with cell means and a two-point
 component-coupled gradient on each axis. Nonperiodic traces, variable matrices,
 AMR composite transfer, implicit stages, and transport composition remain implementation obligations, not
 restrictions on the underlying physical equation. These routes refuse before
