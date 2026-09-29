@@ -3,67 +3,71 @@
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
 
-## Current reception: AMR source eac92bb, native 6b5f452e (in progress)
+## Latest executed package: eac92bb, native 6b5f452e; next build in progress
 
-Standalone User AMR admission is integrated as eac92bb, independently reviewed
-in 140ecf7. The package preflight now validates source-route syntax; the generated
-typed installers still authenticate the exact reconstruction/face identities
-before publishing. No catalogue fallback or numerical method substitution was
-introduced. The rebuilt Dim2 OpenMP/MPI package is authenticated at a085890:
-1,080 shipped sources match, source manifest
+The next coherent source includes generic coordinated faces (`df8817b/cee8d66`),
+named LocalResidual products (`6f2a49a/44b6894`) and retained pending AMR-history
+qualification (`5669914`, native wire AND9). Independent Astra/Sol reviews and
+adversarial tests are integrated through `d077aa8`. Eighty-six targeted integrated
+source/host tests pass; the separate seven-unknown dense product witness passes
+five cases. These are not MultiFab/MPI runtime receipts. A true Dim1 OpenMP/MPI
+build started at d077aa8; Dim2 must be rebuilt afterward against the same SDK.
+Production sources remain frozen during the central build. No GPU backend is
+available locally, and no remote CI or HPC qualification is claimed.
+
+The latest completed native package is still production eac92bb: 1,080 shipped
+sources authenticate, source manifest
 `325b26277781f7da41780585662562ca0b5d531615856b9233e048b97e2971e3`, native
 `6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb`, SDK
 `dfcd85eba73c963aaceeaf85738296e5a46272e3f76aff1890a2f7850c4b94d8`.
-Logs: parent `outputs/build-user-amr-route-openmp-mpi.log` and
-`outputs/installed-a085890-amr-routes/`. All seven installed tests pass (284.85 s):
-standalone User AMR and six principal AMR cases, including partial refinement,
-2+3 components, permutations, parameter rebind, composite conservation, an
-independent flux oracle, real clock advancement and rejection rollback. This is
-single-rank evidence on the authenticated OpenMP/MPI-capable Dim2 package.
+Selected AMR receipts are versioned in `evidence/eac92bb/`; the scientific
+receipts, including failed attempts, are in `evidence/scientific-eac92bb/`.
+Both bundles have manifests and SHA256SUMS. Raw NPZ states remain local.
 
-The MPI2 rank-one-owned failure injection now passes on both ranks (46.42 s),
-with unchanged installed sources/native image and exact test parity. The first
-two receipts are retained failures: their oracle incorrectly expected the
-principal RHS-group diagnostic, whereas this standalone User route rejects at
-`generated AMR flux/residual materialization failed collectively`. 797b94b
-exposed the actual exceptions; reviewed correction 90da6e8 changes only the
-expected route. The rerun reaches all checks: unchanged time/step, bitwise states
-of both blocks, and unchanged flux ledger. It is one test on two ranks, not two
-independent tests. Receipts are now copied with hashes into
-`evidence/eac92bb/`, alongside the seven installed passes and C++ reception.
+- Seven installed User/principal AMR tests pass (284.85 s): standalone User,
+  partial refinement, two-plus-three components, permutations, rebind, independent
+  flux oracle, composite conservation, actual clock advancement and rollback.
+- The rank-one-owned invalid-User injection passes on both MPI2 ranks (46.42 s):
+  both states, clocks and flux ledger remain unchanged. Initial failed fixtures
+  expected the wrong rejection route; the reviewed correction changes only that
+  diagnostic. This is one distributed test, not two independent tests.
+- M06 passes all eight scenarios after fixing post-rotation derived-history
+  observation (slot 1). The initial import failure and stale-slot failures are
+  retained. The physical model, calendar and tolerances are unchanged.
+- M13 passes eight runs: maximum state error 5.757e-7 and inventory defect
+  2.887e-15 on two grids, three nonzero-rate combinations and the zero-rate case.
+- M17 passes both component orders at eight SSPRK2 steps: error 4.461e-10 against
+  DOP853/Gauss24, exact permutation equality, nonconservative contribution
+  7.564e-3. This is a Dim2 x-dependent extrusion, not Dim1/AMR proof.
+- Cattaneo passes twelve runs after binding the authored external-grid name:
+  temporal orders 1.0037--1.0170, zero permutation error. No spatial-convergence
+  claim. Its initial control-name rejection is retained.
+- M08 final-state/current-field checks pass at 32² and 64², but a later audit
+  found a saved stage diagnostic reads the prior history slot. That diagnostic
+  is not accepted by this receipt; its corrected observation and discriminating
+  stage oracle require a new run.
 
-The three rebuilt C++ targets completed 73 rows in 59.97 s: 69 passed, two failed,
-two single-rank guards skipped. The owners-array correction now reaches the real
-three-level restart regrid. Its remaining failure is native: the second parent
-replacement invalidates an earlier pending history remap's topology generation.
-The same scenario fails in the MPI2 aggregate. Astra is implementing a versioned
-qualification record that preserves the original transfer generations; the
-checkpoint validators must stay strict. No fix or native rerun is claimed yet.
+The previous C++ reception at eac92bb ran 73 rows: 69 passed, two failed and two
+single-rank guards skipped. Both failures are the same three-level restart
+scenario (serial and MPI aggregate): the second parent publication invalidates
+an earlier pending lag. The integrated AND9 change preserves immutable creation
+and source authority while qualifying unchanged rings against each subsequent
+live publication. Its test injects a failure on the second resource refresh,
+requires exact collective rollback, then retries. The new headers and fixture
+must still pass the rebuilt native hierarchy; source reviews alone do not close
+C38. AND8 is explicitly refused rather than given fabricated qualification.
 
-The T2/C38 C++ rebuild completed and ran 193 CTest rows in 68.24 s: **187 passed,
-two failed, four single-rank guards skipped**. WENO/vector and both repaired
-history guard tests passed, including the history MPI wrapper; suspended cadence
-tests passed too. The sole remaining scenario failure appears once in serial
-and once inside the MPI loader aggregate: the three-level history fixture paired
-refined `patch_boxes()` with owner ranks from levels 0–2. ab0007a now pairs only
-owners 1–2 and asserts exact array lengths, retaining all state/history checks;
-a085890 records Sol's independent review. Its final native execution is pending.
-Raw evidence: `outputs/native-t2-c38-repaired{.xml,-ctest.log,-receipt.json}`.
+Performance v1 and v1.1 both stopped before measurements. v1 called a mapping
+property; v1.1 reached a separate ABI metadata-format mismatch. Their scripts
+and failed receipts remain unchanged. A versioned v1.2 collector is being
+prepared against the real artifact and native ABI representations; frozen
+scientific case, ABBA order, thresholds and snapshots remain unchanged. Neither
+runtime speed nor missing resource counters is currently reported as zero.
 
-Currently running the complete M17 canonical/permuted trajectory and M06 phase
-crossing on the installed Dim2 artifact. Production and scientific sources stay
-frozen during these receipts. Build true Dim1 with the existing
-`scripts/build_python.sh --dim 1 --mpi` only when no installed tests are active;
-the script preserves compatible Dim2 variants. M15/M17 and the other scientific
-campaigns remain pending. M07 coordinated-face implementation and its asymmetric
-non-integrable counterexample remain isolated agent work, not integrated code.
-The paired performance v1 stopped before measurements because its metadata
-reader called the `layout_program_paths` mapping property as a function. Its
-script and failed output `outputs/performance-t2-run/` are preserved. v1.1 is
-integrated in 6d7013a and independently reviewed in d556353: only the metadata
-access, explicit version and companion hash pin change; the case, calendar,
-thresholds and ABBA order are identical. Both timings and resource counts remain
-unmeasured. Missing counters must not be reported as zero.
+Next: finish real Dim1/Dim2 builds; receive coordinated-face/M07, products/H05,
+M15, legacy paths and the C38 second-refresh failure on actual installed/native
+backends; then run the repaired paired performance and resource protocols while
+workers are idle. Broader corpus and T3/T5 obligations remain open.
 
 ## Previous reception: T2 source 3bd6ea9, native 4b458dab (historical)
 

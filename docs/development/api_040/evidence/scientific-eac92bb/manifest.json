@@ -1,0 +1,317 @@
+{
+  "schema": "pops.api040.scientific-reception-evidence/v1",
+  "production_source": "eac92bb",
+  "scope": "Actual Dim2 OpenMP one rank/thread; retained failures and later fixture corrections. M08 final-state checks passed but a stale stage diagnostic was subsequently found; this receipt does not qualify that diagnostic.",
+  "receipts": [
+    {
+      "id": "m06-eac92bb-openmp1",
+      "runner_status": "failed",
+      "ranks": 1,
+      "threads": 1,
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "scientific_receipt": "states/result.json"
+    },
+    {
+      "id": "m06-eac92bb-openmp1-reviewed",
+      "runner_status": "failed",
+      "ranks": 1,
+      "threads": 1,
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "scientific_receipt": "states/result.json"
+    },
+    {
+      "id": "m06-eac92bb-openmp1-accepted-history",
+      "runner_status": "passed",
+      "ranks": 1,
+      "threads": 1,
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "scientific_receipt": "states/result.json"
+    },
+    {
+      "id": "m13-eac92bb-openmp1",
+      "runner_status": "passed",
+      "ranks": 1,
+      "threads": 1,
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "scientific_receipt": "states/result.json"
+    },
+    {
+      "id": "m08-eac92bb-openmp1",
+      "runner_status": "passed",
+      "ranks": 1,
+      "threads": 1,
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "scientific_receipt": "states/receipt.json"
+    },
+    {
+      "id": "m17-eac92bb-openmp1",
+      "runner_status": "failed",
+      "ranks": 1,
+      "threads": 1,
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "scientific_receipt": "states/reverse/result.json"
+    },
+    {
+      "id": "m17-eac92bb-openmp1-reviewed",
+      "runner_status": "passed",
+      "ranks": 1,
+      "threads": 1,
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "scientific_receipt": "states/reverse/result.json"
+    },
+    {
+      "id": "cattaneo-eac92bb-openmp1",
+      "runner_status": "failed",
+      "ranks": 1,
+      "threads": 1,
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "scientific_receipt": "states/result.json"
+    },
+    {
+      "id": "cattaneo-eac92bb-openmp1-named-grid",
+      "runner_status": "passed",
+      "ranks": 1,
+      "threads": 1,
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "scientific_receipt": "states/result.json"
+    }
+  ],
+  "raw_root": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs",
+  "files": [
+    {
+      "path": "cattaneo-eac92bb-openmp1/after/identity.json",
+      "bytes": 2724,
+      "sha256": "bf3d5d071bb59352a8b488ee4c01a5de5c92c1226c8bcfaffd6e48df9c854590"
+    },
+    {
+      "path": "cattaneo-eac92bb-openmp1/before/identity.json",
+      "bytes": 2724,
+      "sha256": "bf3d5d071bb59352a8b488ee4c01a5de5c92c1226c8bcfaffd6e48df9c854590"
+    },
+    {
+      "path": "cattaneo-eac92bb-openmp1/example-sources.json",
+      "bytes": 3490,
+      "sha256": "7e017ba1c7ec57acbe93cc053d68249d08963efcb0b0980e665f862fb019103f"
+    },
+    {
+      "path": "cattaneo-eac92bb-openmp1/result.json",
+      "bytes": 1094,
+      "sha256": "5192c4563914aae6a2ced7faf819b6086523768b44ac6b5a7b88e9c578da990d"
+    },
+    {
+      "path": "cattaneo-eac92bb-openmp1/run.log",
+      "bytes": 1739,
+      "sha256": "6456f5250ea6c682f40e61b3f2106050874fe7accf0e006896d3683a636e7fb0"
+    },
+    {
+      "path": "cattaneo-eac92bb-openmp1-named-grid/after/identity.json",
+      "bytes": 2724,
+      "sha256": "aa386b031a0d67b9af8abc07df99ab8e8f6dee0dcbb1e60d24b4b01573a2f726"
+    },
+    {
+      "path": "cattaneo-eac92bb-openmp1-named-grid/before/identity.json",
+      "bytes": 2724,
+      "sha256": "aa386b031a0d67b9af8abc07df99ab8e8f6dee0dcbb1e60d24b4b01573a2f726"
+    },
+    {
+      "path": "cattaneo-eac92bb-openmp1-named-grid/example-sources.json",
+      "bytes": 3490,
+      "sha256": "40849196cb73a71c89258a01aa2d402cecadf865fcd00da74409ba00bb027b12"
+    },
+    {
+      "path": "cattaneo-eac92bb-openmp1-named-grid/result.json",
+      "bytes": 1166,
+      "sha256": "fa48265db71bba5bb7f031a896ba1b98285a698cb98938fd867a17ed402badf5"
+    },
+    {
+      "path": "cattaneo-eac92bb-openmp1-named-grid/states/result.json",
+      "bytes": 27279,
+      "sha256": "29fcbc65b2c7acb0c92855d434fe680a4f0d5fc5e9dc7ef098996b2e7b41b6bd"
+    },
+    {
+      "path": "m06-eac92bb-openmp1/after/identity.json",
+      "bytes": 2724,
+      "sha256": "a39544ab5f45fefb393b25544de3c88b5f07986e1c8998d047b2492cfcc88be9"
+    },
+    {
+      "path": "m06-eac92bb-openmp1/before/identity.json",
+      "bytes": 2724,
+      "sha256": "a39544ab5f45fefb393b25544de3c88b5f07986e1c8998d047b2492cfcc88be9"
+    },
+    {
+      "path": "m06-eac92bb-openmp1/example-sources.json",
+      "bytes": 3490,
+      "sha256": "659d78d806c19edef6029e2a655d7eb6995a720ef62620da996852a4c402d0f7"
+    },
+    {
+      "path": "m06-eac92bb-openmp1/result.json",
+      "bytes": 1086,
+      "sha256": "d104c65847e5e0053ee208c9dc565e2463e8861bfa2dfa628e7ee05eabbdad10"
+    },
+    {
+      "path": "m06-eac92bb-openmp1/run.log",
+      "bytes": 801,
+      "sha256": "8d944a2ef95109419cb65446ed18ce7a73ab73c8b9970a09f6b40fccb034adfc"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-accepted-history/after/identity.json",
+      "bytes": 2724,
+      "sha256": "aa386b031a0d67b9af8abc07df99ab8e8f6dee0dcbb1e60d24b4b01573a2f726"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-accepted-history/before/identity.json",
+      "bytes": 2724,
+      "sha256": "aa386b031a0d67b9af8abc07df99ab8e8f6dee0dcbb1e60d24b4b01573a2f726"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-accepted-history/example-sources.json",
+      "bytes": 3490,
+      "sha256": "40849196cb73a71c89258a01aa2d402cecadf865fcd00da74409ba00bb027b12"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-accepted-history/result.json",
+      "bytes": 1164,
+      "sha256": "5c225c0cdab4ca72aefb1165b172be0c6456f50a94b860dab1090b99e51fb2f4"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-accepted-history/states/result.json",
+      "bytes": 23300,
+      "sha256": "98e8285dcce3a8524bf4411e89d0305e89819895d4eecf1e6a3e763ecd9b107a"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-reviewed/after/identity.json",
+      "bytes": 2724,
+      "sha256": "bf3d5d071bb59352a8b488ee4c01a5de5c92c1226c8bcfaffd6e48df9c854590"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-reviewed/before/identity.json",
+      "bytes": 2724,
+      "sha256": "bf3d5d071bb59352a8b488ee4c01a5de5c92c1226c8bcfaffd6e48df9c854590"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-reviewed/example-sources.json",
+      "bytes": 3490,
+      "sha256": "7e017ba1c7ec57acbe93cc053d68249d08963efcb0b0980e665f862fb019103f"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-reviewed/result.json",
+      "bytes": 1156,
+      "sha256": "d106f725e0c5819379223fbea5f9e66314d0c6af3fc85b19e13f8a74bc9ccca4"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-reviewed/run.log",
+      "bytes": 33300,
+      "sha256": "accdbabe33c3e7e007e9628ff4100c722b14003b6e425e2458a8a495cde0d203"
+    },
+    {
+      "path": "m06-eac92bb-openmp1-reviewed/states/result.json",
+      "bytes": 23512,
+      "sha256": "62bab82e4da16f43cfce5448dcb42721a3f22db9bc0aaec151b31e36b54ccf40"
+    },
+    {
+      "path": "m08-eac92bb-openmp1/after/identity.json",
+      "bytes": 2724,
+      "sha256": "bf3d5d071bb59352a8b488ee4c01a5de5c92c1226c8bcfaffd6e48df9c854590"
+    },
+    {
+      "path": "m08-eac92bb-openmp1/before/identity.json",
+      "bytes": 2724,
+      "sha256": "bf3d5d071bb59352a8b488ee4c01a5de5c92c1226c8bcfaffd6e48df9c854590"
+    },
+    {
+      "path": "m08-eac92bb-openmp1/example-sources.json",
+      "bytes": 3490,
+      "sha256": "7e017ba1c7ec57acbe93cc053d68249d08963efcb0b0980e665f862fb019103f"
+    },
+    {
+      "path": "m08-eac92bb-openmp1/result.json",
+      "bytes": 1151,
+      "sha256": "c5a64ad580e2683fc68e8c5c1abb10923af7dd1af5393f268af17ae5380da2d7"
+    },
+    {
+      "path": "m08-eac92bb-openmp1/states/receipt.json",
+      "bytes": 19839,
+      "sha256": "d88a358923cf0a5cb1dfa48dc092aa3341a191a033124f9ddbefd77c20dfb953"
+    },
+    {
+      "path": "m13-eac92bb-openmp1/after/identity.json",
+      "bytes": 2724,
+      "sha256": "bf3d5d071bb59352a8b488ee4c01a5de5c92c1226c8bcfaffd6e48df9c854590"
+    },
+    {
+      "path": "m13-eac92bb-openmp1/before/identity.json",
+      "bytes": 2724,
+      "sha256": "bf3d5d071bb59352a8b488ee4c01a5de5c92c1226c8bcfaffd6e48df9c854590"
+    },
+    {
+      "path": "m13-eac92bb-openmp1/example-sources.json",
+      "bytes": 3490,
+      "sha256": "7e017ba1c7ec57acbe93cc053d68249d08963efcb0b0980e665f862fb019103f"
+    },
+    {
+      "path": "m13-eac92bb-openmp1/result.json",
+      "bytes": 1151,
+      "sha256": "f171d3de67794ee177ef87bc3e3613edb94b19bc4e2b3a1f4ddc2abd5ff7276e"
+    },
+    {
+      "path": "m13-eac92bb-openmp1/states/result.json",
+      "bytes": 23637,
+      "sha256": "31ec9ab6a2096012687cdad3dabcc07ab91e677385157fce4c85147a565cc487"
+    },
+    {
+      "path": "m17-eac92bb-openmp1/after/identity.json",
+      "bytes": 2724,
+      "sha256": "38fb69067c26db1e73434baf2a8c4af62b5912c0d45856b9282a23008b70208c"
+    },
+    {
+      "path": "m17-eac92bb-openmp1/before/identity.json",
+      "bytes": 2724,
+      "sha256": "2c5885b62817a439e56af8f212be4c7276d4d2713fee6635cd42636f4051f0ba"
+    },
+    {
+      "path": "m17-eac92bb-openmp1/example-sources.json",
+      "bytes": 3490,
+      "sha256": "659d78d806c19edef6029e2a655d7eb6995a720ef62620da996852a4c402d0f7"
+    },
+    {
+      "path": "m17-eac92bb-openmp1/result.json",
+      "bytes": 1142,
+      "sha256": "6fc342ec07486bc5cda0db34e30519e0c6ca8e32ca406e2ad46225af7416b8cc"
+    },
+    {
+      "path": "m17-eac92bb-openmp1/run.log",
+      "bytes": 1776,
+      "sha256": "15456aa7ee37ab5a5d0ea72778a65636b2aac3da1f09c801e94c255d75120987"
+    },
+    {
+      "path": "m17-eac92bb-openmp1-reviewed/after/identity.json",
+      "bytes": 2724,
+      "sha256": "bf3d5d071bb59352a8b488ee4c01a5de5c92c1226c8bcfaffd6e48df9c854590"
+    },
+    {
+      "path": "m17-eac92bb-openmp1-reviewed/before/identity.json",
+      "bytes": 2724,
+      "sha256": "bf3d5d071bb59352a8b488ee4c01a5de5c92c1226c8bcfaffd6e48df9c854590"
+    },
+    {
+      "path": "m17-eac92bb-openmp1-reviewed/example-sources.json",
+      "bytes": 3490,
+      "sha256": "7e017ba1c7ec57acbe93cc053d68249d08963efcb0b0980e665f862fb019103f"
+    },
+    {
+      "path": "m17-eac92bb-openmp1-reviewed/result.json",
+      "bytes": 1379,
+      "sha256": "648f73397f231fd0748be1f7006e1c97a3b73f6086a3001a1ed25dd61dc0f597"
+    },
+    {
+      "path": "m17-eac92bb-openmp1-reviewed/states/canonical/result.json",
+      "bytes": 9042,
+      "sha256": "ce872c7b58d65cc2845ca0c817662d22e94e72fa276a1aa4e950339ebeaefef7"
+    },
+    {
+      "path": "m17-eac92bb-openmp1-reviewed/states/reverse/result.json",
+      "bytes": 9039,
+      "sha256": "c69270705bbadce34919c786d27d8f6f4c34d9de5e858e3385a5a8436f323ae2"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m06_enthalpy.py", line 208, in <module>
+    main()
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m06_enthalpy.py", line 110, in main
+    identity = _installed_identity()
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m06_enthalpy.py", line 102, in _installed_identity
+    from pops import _pops
+ImportError: cannot import name '_pops' from 'pops' (/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py)

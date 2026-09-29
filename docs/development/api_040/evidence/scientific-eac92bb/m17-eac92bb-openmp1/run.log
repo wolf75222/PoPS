@@ -1,0 +1,35 @@
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : api040_M17_fan_li15
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : gas
+  numerics gas        : path_conservative_finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 16 x 16 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.0001)
+  interval            : 0 -> 0.0008 (max 8 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 55bbe769864a33d3
+  run identity        : 78d1f373a84f7b71
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 8 / 0
+  final time / step   : 0.0008 / 8
+  elapsed             : 0.028702 s
+  run identity        : 78d1f373a84f7b71
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m17_fan_li.py", line 312, in <module>
+    main()
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m17_fan_li.py", line 308, in main
+    raise RuntimeError(failure.decode())
+RuntimeError: IndexError: too many indices for array: array is 2-dimensional, but 10 were indexed

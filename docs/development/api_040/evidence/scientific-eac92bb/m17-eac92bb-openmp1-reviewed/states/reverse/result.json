@@ -1,0 +1,274 @@
+{
+  "schema_version": 1,
+  "case": "M17/W08",
+  "status": "passed",
+  "scope": "Uniform Dim=2 x-dependent extrusion; no Dim=1 or AMR claim",
+  "grid": [
+    16,
+    16
+  ],
+  "steps": 8,
+  "dt": 0.0001,
+  "final_time": 0.0008,
+  "order": [
+    [
+      0,
+      4
+    ],
+    [
+      1,
+      3
+    ],
+    [
+      0,
+      3
+    ],
+    [
+      2,
+      2
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      3,
+      1
+    ],
+    [
+      2,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      4,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      1,
+      0
+    ],
+    [
+      0,
+      0
+    ]
+  ],
+  "criteria": {
+    "oracle_max_error": 3e-08,
+    "conserved_inventory": 3e-13,
+    "permutation_max_error": 1e-12,
+    "path_quadrature_gap": 3e-08,
+    "Gauss4_vs_Gauss48_saved_faces": 3e-08,
+    "nonconservative_max_min": 1e-08,
+    "y_invariance": 1e-12,
+    "initial_max_error": 1e-13,
+    "time_error": 1e-14
+  },
+  "error_to_DOP853_Gauss24": 4.460334324107862e-10,
+  "ten_line_inventory_defect": 2.220446049250313e-16,
+  "nonconservative_path_max": 0.00756390007852085,
+  "Gauss24_48_path_gap": 7.806255641895632e-18,
+  "y_invariance": 0.0,
+  "Gauss4_48_saved_face_path_gap": 1.474514954580286e-17,
+  "permutation_error_if_counterpart_saved": 0.0,
+  "permutation_verified": true,
+  "run_report": {
+    "accepted_steps": 8,
+    "rejected_steps": 0,
+    "final_time": 0.0008,
+    "final_macro_step": 8,
+    "stop_reason": "target_time_reached",
+    "run_identity": {
+      "domain": "run",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "9401c5e16005a7e4e4b28f2a28aebd95b1c63c961d2fb291a17d42f62a94c946"
+      }
+    },
+    "bind_identity": {
+      "domain": "bind",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "40e12fccf967e44b44ba34d8c7a3b8dd9ec663cbb25355325fcc75a77cc60a78"
+      }
+    },
+    "execution_identity": {
+      "domain": "execution-context",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+      }
+    },
+    "artifact_identity": {
+      "domain": "artifact",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "1f65ef670a7df2e22b13c02ba0d9c12cd88606af42dcfe335ebb36b471017f89"
+      }
+    },
+    "field_providers": []
+  },
+  "execution_context": {
+    "schema_version": 1,
+    "backend_identity": {
+      "domain": "runtime-backend-manifest",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+      }
+    },
+    "communicator": {
+      "kind": "communicator",
+      "identity": "MPI_COMM_WORLD"
+    },
+    "datatype": {
+      "kind": "datatype",
+      "identity": "float64"
+    },
+    "device": {
+      "kind": "device",
+      "identity": "cpu"
+    }
+  },
+  "runtime_backend": {
+    "schema_version": 1,
+    "backend": {
+      "value": "production",
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "target": {
+      "value": "system",
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "abi": {
+      "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=dfcd85eba73c963aaceeaf85738296e5a46272e3f76aff1890a2f7850c4b94d8;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "precision": {
+      "storage": {
+        "value": "float64",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "compute": {
+        "value": "float64",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "accumulation": {
+        "value": "float64",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "reduction": {
+        "value": "float64",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      }
+    },
+    "device": {
+      "value": "cpu",
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "memory_spaces": {
+      "value": [
+        "host"
+      ],
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "communicator": {
+      "value": "MPI_COMM_WORLD",
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "capabilities": {
+      "centerings": {
+        "value": [
+          "cell"
+        ],
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "execution_backend": {
+        "value": "OpenMP",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "generic_field_view": {
+        "value": true,
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "layouts": {
+        "value": [
+          "right",
+          "left",
+          "strided"
+        ],
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "ownership": {
+        "value": [
+          "borrowed",
+          "owned",
+          "shared"
+        ],
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "scalars": {
+        "value": [
+          "float64"
+        ],
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "shared_space": {
+        "value": "Host",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "stream_identity": {
+        "value": "Kokkos::OpenMP::synchronous",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "supported_dimensions": {
+        "value": [
+          2
+        ],
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      }
+    }
+  },
+  "mpi_ranks": 1,
+  "threads_requested": "1",
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "package_version": "1.1.0",
+  "script_sha256": "fd069025c0e8d2229acc274039e12ef542a306f278136a9be5e7d95ee9b3633d",
+  "oracle_sha256": "4372bd23f6bc69ed0906b9d007ffb045242882792f12789c4f400786e8c1ddbd",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=dfcd85eba73c963aaceeaf85738296e5a46272e3f76aff1890a2f7850c4b94d8;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+  "state_file": "state.npz",
+  "state_sha256": "cac085bc4f0648bc1a730f646c3f0b866490556cc839c407fda9d989f4f3274d",
+  "compile_seconds": 380.3130202079192,
+  "run_seconds": 1.502246417105198
+}

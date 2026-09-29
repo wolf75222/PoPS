@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/structural_cattaneo.py", line 319, in <module>
+    main()
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/structural_cattaneo.py", line 232, in main
+    report = pops.run(simulation, t_end=FINAL_TIME, max_steps=steps,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py", line 114, in run
+    return instance._run(**dict(controls))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py", line 1645, in _run
+    prepared_run = prepare_program_run(native, controller_controls)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_step_strategy.py", line 892, in prepare_program_run
+    control_payload = run_control_payload(strategy, controls)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_step_strategy.py", line 982, in run_control_payload
+    strategy.validate_runtime_controls(controls)
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/time/_step/strategy.py", line 299, in validate_runtime_controls
+    raise ValueError(
+ValueError: ExternalTimeGrid('steps') requires exactly that named runtime grid
