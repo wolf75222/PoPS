@@ -6,6 +6,8 @@ generated C++ route; it does not claim native execution.
 """
 
 import pops
+import pytest
+from pops._ir.expr import Var
 from pops.codegen.program_models import ProgramModelGraph
 from pops.domain import CartesianDomain
 from pops.frames import Cartesian1D
@@ -82,3 +84,18 @@ def test_public_three_state_permutation_resolves_and_emits_distinct_face_policy(
         identities.append(face.to_data())
     assert emitted[0] != emitted[1]
     assert identities[0] != identities[1]
+
+
+def test_public_face_refuses_nonzero_conservative_side_and_free_same_name_capture():
+    _, _, original = _case()
+    left = original.left_symbols
+    with pytest.raises(ValueError, match="conservative component c"):
+        CoordinatedFace(flux=original.flux, product=original.product,
+            frame=original.frame,
+            body=lambda a, b, axis: FaceBalance(a, (1., 0., 0.), (0., 0., 0.), 1.))
+    same_name_other_owner = Var(left[0].name, left[0].kind)
+    with pytest.raises(ValueError, match="free variable"):
+        CoordinatedFace(flux=original.flux, product=original.product,
+            frame=original.frame,
+            body=lambda a, b, axis: FaceBalance(
+                (same_name_other_owner, a[1], a[2]), (0., 0., 0.), (0., 0., 0.), 1.))
