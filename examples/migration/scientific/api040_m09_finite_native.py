@@ -18,7 +18,7 @@ DT = .06
 THRESHOLD = 1.e-11
 
 
-def build_case(data, *, condensed=False, permuted=False):
+def build_case(data, *, condensed=False, permuted=False, seed_scale=0):
     # data carries coefficients and initial captures only, never a computed solve.
     v_order = tuple(reversed(range(8))) if permuted else tuple(range(8))
     p_order = (2, 0, 3, 1) if permuted else tuple(range(4))
@@ -40,8 +40,8 @@ def build_case(data, *, condensed=False, permuted=False):
         vb, pb = case.block("velocity", vm), case.block("potential", pm)
     P = pops.Program("finite_condensed" if condensed else "finite_monolithic")
     v, p = P.state(vb[vu]), P.state(pb[pu])
-    sv = P.value("v_seed", 0*v.n, at=v.next.point)
-    sp = P.value("p_seed", 0*p.n, at=p.next.point)
+    sv = P.value("v_seed", seed_scale*v.n, at=v.next.point)
+    sp = P.value("p_seed", seed_scale*p.n, at=p.next.point)
 
     def original(velocity, potential, old_v, old_p):
         return A.apply(velocity)+B.apply(potential)-old_v, C.apply(velocity)+K.apply(potential)-K.apply(old_p)
