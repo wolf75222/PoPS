@@ -119,10 +119,10 @@ def test_rank_one_owned_invalid_body_collectively_rolls_back(
         failure = (type(exc).__name__, str(exc))
     failures = allgather_value(world, failure)
     _agree(world, all(kind == "RuntimeError" and
-                      "AMR Program RHS group evaluation failed collectively" in message
+                      "generated AMR flux/residual materialization failed collectively" in message
                       for kind, message in failures),
-           "the active rank-one User face body must cause the collective RHS-group "
-           "numerical rejection; observed per-rank failures: %r" % (failures,))
+           "the active rank-one User face body must cause the collective "
+           "collective native flux/residual numerical rejection; observed per-rank failures: %r" % (failures,))
     _agree(world, runtime.time() == 0. and runtime.macro_step() == 0,
            "rejected step advanced accepted time or macro-step")
     after = tuple(_snapshot(runtime, name, 1, "amr1", world)
