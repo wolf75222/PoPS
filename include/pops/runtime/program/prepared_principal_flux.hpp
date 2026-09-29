@@ -51,6 +51,15 @@ class PreparedPrincipalFlux {
     throw std::runtime_error(message);
   }
 
+  template <class Reconstruction>
+  void require_input_(const Field& input) const {
+    long invalid = !same_layout_(input);
+    for (int axis = 0; axis < Dim; ++axis)
+      invalid |= input.ghosts()[axis] < Reconstruction::n_ghost;
+    if (all_reduce_max(invalid, *lane_) != 0)
+      throw std::invalid_argument("principal input layout or halo differs from its prepared contract");
+  }
+
   template <int Axis, class Model, class Reconstruction, class Numerical>
   void faces_(const Field& input, Model model, Reconstruction reconstruction, Numerical numerical) {
     const auto metric = metric_;
@@ -169,6 +178,61 @@ class PreparedPrincipalFlux {
     collective_error_(error, "principal output publication failed collectively");
   }
 
+  /// Pack caller-authenticated coarse/fine ghosts. Each component keeps its own
+  /// resolved stencil extent; unused wider slots remain invalid, never invented.
+  template <std::size_t Count>
+  void pack_prepared(const std::array<Field*, Count>& inputs, Field& packed,
+                     const std::array<int, Count>& component_counts) const {
+    pack(inputs, packed, component_counts);
+    std::exception_ptr error;
+    try {
+      packed.set_val(std::numeric_limits<Real>::quiet_NaN());
+      int offset = 0;
+      for (const auto* input : inputs) {
+        const int count = input->ncomp(), first = offset;
+        for (std::size_t local = 0; local < packed.local_size(); ++local) {
+          auto cells = packed.box(local);
+          for (int axis = 0; axis < Dim; ++axis)
+            cells = cells.grow(axis, std::min(input->ghosts()[axis], packed.ghosts()[axis]));
+          const auto source = std::as_const(*input).fab(local).view();
+          const auto target = packed.fab(local).view();
+          for_each_cell(cells, [=] POPS_HD(const Index<Dim>& cell) {
+            for (int component = 0; component < count; ++component)
+              target(cell, first + component) = source(cell, component);
+          });
+        }
+        offset += count;
+      }
+      device_fence();
+    } catch (...) { error = std::current_exception(); }
+    collective_error_(error, "principal prepared halo packing failed collectively");
+  }
+
+  /// Retain exactly the integrated faces used by the group residual, projected
+  /// onto one physical row for the existing AMR flux-expression/reflux ledger.
+  std::vector<nd::FaceField<Dim>> component_faces(int first, int count) const {
+    std::vector<nd::FaceField<Dim>> result;
+    std::exception_ptr error;
+    try {
+      if (!evaluated_ || first < 0 || count < 1 || first > Components - count)
+        throw std::invalid_argument("principal face projection has no completed exact component range");
+      result.reserve(flux_.size());
+      for (std::size_t local = 0; local < flux_.size(); ++local) {
+        result.emplace_back(candidate_.box(local), count);
+        const auto source = std::as_const(flux_[local]).view();
+        const auto target = result.back().view();
+        for (int axis = 0; axis < Dim; ++axis)
+          for_each_cell(nd::face_box(candidate_.box(local), axis), [=] POPS_HD(const Index<Dim>& face) {
+            for (int component = 0; component < count; ++component)
+              target.axes[axis](face, component) = source.axes[axis](face, first + component);
+          });
+      }
+      device_fence();
+    } catch (...) { error = std::current_exception(); }
+    collective_error_(error, "principal component face projection failed collectively");
+    return result;
+  }
+
   template <class Context>
   PreparedPrincipalFlux(Context& ctx, Field& prototype)
       : geometry_(ctx.geometry()), metric_(make_metric_(geometry_)),
@@ -215,13 +279,19 @@ class PreparedPrincipalFlux {
   template <class Model, class Reconstruction, class Numerical>
   const Field& evaluate(Field& input, Model model, Reconstruction reconstruction, Numerical numerical) {
     evaluated_ = false;
-    static_assert(Model::dimension == Dim && Model::n_vars == Components);
-    long invalid = !same_layout_(input);
-    for (int axis = 0; axis < Dim; ++axis)
-      invalid |= input.ghosts()[axis] < Reconstruction::n_ghost;
-    if (all_reduce_max(invalid, *lane_) != 0)
-      throw std::invalid_argument("principal input layout or halo differs from its prepared contract");
+    require_input_<Reconstruction>(input);
     boundary_->fill_halo(input);
+    return evaluate_prepared(input, model, reconstruction, numerical);
+  }
+
+  /// The AMR context supplies authenticated same-level and coarse/fine ghosts;
+  /// repeating the Uniform halo route here would discard that stage authority.
+  template <class Model, class Reconstruction, class Numerical>
+  const Field& evaluate_prepared(Field& input, Model model, Reconstruction reconstruction,
+                                 Numerical numerical) {
+    evaluated_ = false;
+    static_assert(Model::dimension == Dim && Model::n_vars == Components);
+    require_input_<Reconstruction>(input);
     std::exception_ptr error;
     try {
       faces_<0>(std::as_const(input), model, reconstruction, numerical);

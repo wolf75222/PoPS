@@ -84,16 +84,24 @@ def emit_principal_helper(entry):
     size = len(group.states)
     lines = ["template<class Context>", "auto& %s_evaluate(Context& ctx,std::int64_t node," % name,
         "    const std::array<pops::MultiFab<pops::kNativeDimension>*,%d>& inputs," % size,
-        "    const std::array<int,%d>& blocks) {" % size,
+        "    const std::array<int,%d>& blocks," % size,
+        "    const std::array<std::int64_t,%d>& sources) {" % size,
         "  for (int block : blocks) ctx.require_cartesian_generated_operator(block,\"principal_finite_volume\");",
         "  auto& packed=ctx.scalar_scratch(node,0,*inputs[0],%d,%d);" % (
             group.component_count,max(method.ghost_depth for method in group.methods)),
         "  const auto geometry=ctx.geometry(); const auto& lane=ctx.prepared_execution_lane();",
         "  auto& resource=ctx.template prepared_resource<pops::runtime::program::PreparedPrincipalFlux<pops::kNativeDimension,%d>>(" % group.component_count,
         "    node,blocks[0],[&](const auto& previous){return previous.matches_preparation(geometry,lane,packed);},ctx,packed);",
-        "  resource.pack(inputs,packed,%s::component_counts);" % name, "  %s model;" % name,
+        "  %s model;" % name,
         "  for (int i=0;i<%d;++i) model.parameter_sets[i]=ctx.program_params(blocks[i]);" % size,
-        "  resource.evaluate(packed,model,%s,%s);" % (reconstruction,numerical),
+        "  if constexpr (requires { ctx.prepare_principal_inputs(inputs,blocks,node,sources); }) {",
+        "    ctx.prepare_principal_inputs(inputs,blocks,node,sources);",
+        "    resource.pack_prepared(inputs,packed,%s::component_counts);" % name,
+        "    resource.evaluate_prepared(packed,model,%s,%s);" % (reconstruction,numerical),
+        "  } else {",
+        "    resource.pack(inputs,packed,%s::component_counts);" % name,
+        "    resource.evaluate(packed,model,%s,%s);" % (reconstruction,numerical),
+        "  }",
         "  return resource;", "}"]
     return reconstruction_definition + numerical_definition + "\n".join(lines) + "\n"
 
@@ -102,7 +110,7 @@ def principal_dt_bounds(program, authority):
     """Bound only unconditional evaluations of the actual beginning-of-step state.
 
     A prescribed step needs no speculative evaluation. Conditional bodies and
-    calculated stages retain their face-frequency check at the active RHS site;
+    calculated stages retain their face-frequency check at the explicit consumer;
     they must never be replayed with unrelated current-state inputs here.
     """
     from .program_lowerability import all_ops_with_ancestry
@@ -134,22 +142,24 @@ def principal_dt_bounds(program, authority):
         prefix = "principal_bound_%d" % value.id
         lines.extend(["std::array<pops::MultiFab<pops::kNativeDimension>*,%d> %s_inputs{%s};" %
                       (len(indices),prefix,",".join("&ctx.state(%d)" % index for index in indices)),
-                      "auto& %s_resource=%s_evaluate(ctx,%d,%s_inputs,std::array<int,%d>{%s});" %
-                      (prefix,entry["cpp_name"],value.id,prefix,len(indices),",".join(map(str,indices))),
+                      "auto& %s_resource=%s_evaluate(ctx,%d,%s_inputs,std::array<int,%d>{%s},std::array<std::int64_t,%d>{%s});" %
+                      (prefix,entry["cpp_name"],value.id,prefix,len(indices),",".join(map(str,indices)),
+                       len(indices),",".join(str(next(item.id for item in value.inputs
+                           if item.block._resolved() == state.block_ref)) for state in group.states)),
                       "const pops::Real %s_frequency=%s_resource.explicit_frequency();" % (prefix,prefix),
                       "pops_program_dt_bound_value=std::min(pops_program_dt_bound_value,%s_frequency>0 ? cfl/%s_frequency : std::numeric_limits<pops::Real>::infinity());" % (prefix,prefix)])
     if required - seen and program._dt_bound is None:
         raise NotImplementedError(
             "adaptive principal groups evaluated only under a guard or on a calculated stage "
-            "require an authored Program.dt_bound; their active face stability is checked at RHS")
+            "require an authored Program.dt_bound; their face stability is checked at explicit consumers")
     return lines
 
 
 def emit_principal_rate(value, var, lines, model, block_indices, target):
     from .principal_lowering import principal_for_value
     from pops.time._evaluation_point import evaluation_stage_fraction
-    if target != "system":
-        raise NotImplementedError("principal AMR transport requires its joint stage trace and reflux realization")
+    if target not in {"system", "amr_system"}:
+        raise NotImplementedError("principal transport requires a System or AMR Program context")
     entry = principal_for_value(model, value)
     group = entry["group"]
     inputs = []
@@ -164,21 +174,24 @@ def emit_principal_rate(value, var, lines, model, block_indices, target):
                      if state.block_ref == value.block._resolved()]
     key = ("principal_evaluation", group.identity.token, tuple(item.id for item in inputs),
            value.attrs.get("principal_region"))
+    stage = evaluation_stage_fraction(value, ark_partition="explicit")
+    lines.append("ctx.set_stage_time(%d,%d);" % (stage.numerator, stage.denominator))
     cached = var.get(key)
     if cached is not None and output_index not in cached[1]:
         cached[1].add(output_index)
         var[value.id] = cached[0][output_index]
         var[("partition_frequency", value.id)] = cached[2]
         var[("principal_frequency", value.id)] = cached[2]
+        _attach_principal_faces(value, lines, group, output_index, cached[3],
+                                var[value.id], block_indices, target)
         return
-    stage = evaluation_stage_fraction(value, ark_partition="explicit")
     prefix = "principal_%d" % value.id
     indices = [block_indices[item.block] for item in inputs]
-    lines.append("ctx.set_stage_time(%d,%d);" % (stage.numerator, stage.denominator))
     lines += ["std::array<pops::MultiFab<pops::kNativeDimension>*,%d> %s_inputs{%s};" %
               (len(inputs), prefix, ",".join("&" + var[item.id] for item in inputs)),
-              "auto& %s_resource=%s_evaluate(ctx,%d,%s_inputs,std::array<int,%d>{%s});" %
-              (prefix,entry["cpp_name"],value.id,prefix,len(indices),",".join(map(str,indices)))]
+              "auto& %s_resource=%s_evaluate(ctx,%d,%s_inputs,std::array<int,%d>{%s},std::array<std::int64_t,%d>{%s});" %
+              (prefix,entry["cpp_name"],value.id,prefix,len(indices),",".join(map(str,indices)),
+               len(inputs),",".join(str(item.id) for item in inputs))]
     frequency = "principal_frequency_%d" % value.id
     lines.append("const pops::Real %s=%s_resource.explicit_frequency();" % (frequency, prefix))
     var[("partition_frequency", value.id)] = frequency
@@ -189,5 +202,19 @@ def emit_principal_rate(value, var, lines, model, block_indices, target):
     lines += ["std::array<pops::MultiFab<pops::kNativeDimension>*,%d> %s_outputs{%s};" %
               (len(outputs), prefix, ",".join("&" + output for output in outputs)),
               "%s_resource.publish(%s_outputs,%s::component_counts);" % (prefix, prefix, entry["cpp_name"])]
-    var[key] = (outputs, {output_index}, frequency)
+    resource = "%s_resource" % prefix
+    var[key] = (outputs, {output_index}, frequency, resource)
     var[value.id] = outputs[output_index]
+    _attach_principal_faces(value, lines, group, output_index, resource,
+                            var[value.id], block_indices, target)
+
+
+def _attach_principal_faces(value, lines, group, row, resource, output, block_indices, target):
+    if target != "amr_system":
+        return
+    import json
+    from .program_emit_ops import _rhs_flux_temporal_family
+    first = sum(group.component_counts[:row])
+    lines.append("ctx.attach_principal_flux(%d,%s,%d,%s.component_faces(%d,%d),%s);" % (
+        block_indices[value.block], output, value.id, resource, first,
+        group.component_counts[row], json.dumps(_rhs_flux_temporal_family(value))))

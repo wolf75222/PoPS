@@ -360,6 +360,7 @@ public:
 #include <pops/runtime/program/amr_program_context_rhs_input_trace.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_public.inc>
 #include <pops/runtime/program/amr_program_context_diffusion.inc>
+#include <pops/runtime/program/amr_program_context_principal.inc>
 #include <pops/runtime/program/amr_program_context_spatial_implicit.inc>
 #include <pops/runtime/program/amr_program_context_spatial_imex.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_public.inc>

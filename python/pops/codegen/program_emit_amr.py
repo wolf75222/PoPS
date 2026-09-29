@@ -76,7 +76,7 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
     ordered_blocks = sorted(blocks, key=blocks.get)
 
     def flux_basis_count(value: Any) -> int:
-        if value.op == "rhs":
+        if value.op in {"rhs", "principal_rate"}:
             return 1 if value.attrs.get("flux", True) else 0
         if value.op == "diffusive_rhs":
             from pops.codegen.program_emit_diffusion import diffusive_flux_basis_count
@@ -86,7 +86,7 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
 
     def contains_rhs(values: Any, block: Any, *, flux_only: bool = False) -> bool:
         for value in values:
-            if value.op in {"rhs", "diffusive_rhs"} and value.block == block and (
+            if value.op in {"rhs", "diffusive_rhs", "principal_rate"} and value.block == block and (
                 not flux_only or flux_basis_count(value) != 0
             ):
                 return True
@@ -566,6 +566,8 @@ def _emit_flux_temporal_family_install(program: Any) -> str:
             provider = 3 if named is not None else (0 if requested is None or "default" in requested else 1)
             rows.append((blocks[value.block], value.id, provider,
                          _rhs_flux_temporal_family(value, named)))
+        elif value.op == "principal_rate":
+            rows.append((blocks[value.block], value.id, 1, _rhs_flux_temporal_family(value)))
         elif value.op == "diffusive_rhs":
             constitutive, transport = _diffusive_flux_families(value)
             rows.append((blocks[value.block], value.id, 4, constitutive))
