@@ -138,7 +138,7 @@ def run_and_archive(destination: Path):
         world = execution.communicator.handle
         initial = initial_means(cells, order)
         simulation = _collective_call(world, "bind", lambda artifact=artifact,
-                initial=initial, execution=execution: pops.bind(
+                initial=initial, execution=execution, subject=subject: pops.bind(
             artifact, initial_values={subject: initial},
             resources={"execution_context": execution}))
         before_global = _collective_call(

@@ -1,5 +1,6 @@
 """Independent native matrix/ledger witness and finite-input failure injections."""
 import json
+import re
 
 import numpy as np
 import pops
@@ -69,41 +70,62 @@ def _rate(values):
     return sum(WEIGHTS)*(D+R)@laplacian
 
 
+def _stage_states(contexts, initial, predictor):
+    """Use the retained IR stage identity, independently of ledger ordering."""
+    result = {}
+    seen = set()
+    assert len(contexts) == 2
+    for context in contexts:
+        stages = re.findall(r"StagePoint\(name='ssprk2_stage_([01])',", context)
+        assert len(stages) == 1, context
+        stage = int(stages[0])
+        assert stage not in seen, contexts
+        seen.add(stage)
+        result[context] = (initial, predictor)[stage]
+    assert seen == {0, 1}
+    return result
+
+
 @pytest.mark.parametrize("order", ((0,1,2), (2,0,1)))
 def test_matrix_flux_occurrences_and_rollback(isolated_native_cache, native_cxx,
         kokkos_root, tmp_path, record_property, order):
     del isolated_native_cache, native_cxx, kokkos_root
     native = select_native_dimension(1)
     world = native.mpi_world()
-    resolved, subject = _case(order)
+    resolved, subject = collective_call(world, lambda: _case(order))
     artifact = compile_resolved_plan_once(world, resolved,
         route="independent coupled matrix", compile_artifact=pops.compile)
     context = collective_call(world, lambda: artifact_execution_context(artifact))
 
     def bind(values):
+        # Finish local allocations/conversions before a peer may enter bind.
+        prepared = collective_call(world, lambda: np.ascontiguousarray(values[list(order)]))
         return collective_call(world, lambda: pops.bind(artifact,
-            initial_values={subject: np.ascontiguousarray(values[list(order)])},
+            initial_values={subject: prepared},
             resources={"execution_context": context}))
 
-    initial = _initial()
+    initial = collective_call(world, _initial)
     runtime = bind(initial)
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     actual = state_snapshots(runtime, world, ("mixture",))[0]
     local = collective_call(world, runtime._executor._program_exchange_records)
-    records = [row for batch in allgather_value(world,local) for row in batch]
+    batches = allgather_value(world,local)
     with collective_check(world):
+        records = [row for batch in batches for row in batch]
         assert runtime.time() == DT and runtime.macro_step() == 1
         assert len(records) == 3*CELLS*2*2*2
+        if world.size == 2:
+            assert sorted(map(len, batches)) == [0, len(records)]
         if world.rank == 0:
             predictor = initial+DT*_rate(initial)
             expected = .5*(initial+predictor+DT*_rate(predictor))
             actual = actual.reshape(3,CELLS)[np.argsort(order)]
             np.testing.assert_allclose(actual,expected,rtol=0,atol=3.e-12)
             contexts = tuple(dict.fromkeys(row['evaluation_context'] for row in records))
-            assert len(contexts) == 2
-            stages = dict(zip(contexts,(initial,predictor),strict=True))
+            stages = _stage_states(contexts, initial, predictor)
             increments = np.zeros_like(initial)
             identities = set()
+            assert len({row['operation_identity'] for row in records}) == 1
             for row in records:
                 tokens = row['quadrature_identity'].split('/')
                 cell, axis, side, component = (int(token.split(':')[1]) for token in tokens)
@@ -112,6 +134,8 @@ def test_matrix_flux_occurrences_and_rollback(isolated_native_cache, native_cxx,
                 assert key not in identities
                 identities.add(key)
                 assert axis == 0 and occurrence in (0,1)
+                assert 0 <= cell < CELLS and side in (0,1) and 0 <= component < 3
+                assert row['occurrence_identity'] == row['operation_identity'] + '/occurrence:' + str(occurrence)
                 assert row['multiplicity'] == 1 and row['face_measure'] == 1
                 assert row['orientation'] == (-1 if side == 0 else 1)
                 assert row['temporal_weight'] == DT/2*WEIGHTS[occurrence]
@@ -129,8 +153,9 @@ def test_matrix_flux_occurrences_and_rollback(isolated_native_cache, native_cxx,
 
     # Only finite inputs are bound. A single large cell makes the component law
     # overflow during evaluation; no nonfinite initial value bypasses that route.
-    bad = initial.copy()
-    bad[:,CELLS//3] = 1.e308
+    with collective_check(world):
+        bad = initial.copy()
+        bad[:,CELLS//3] = 1.e308
     failed = bind(bad)
     before = state_snapshots(failed,world,("mixture",))[0]
     ledger_before = collective_call(world,failed._executor._program_exchange_records)
