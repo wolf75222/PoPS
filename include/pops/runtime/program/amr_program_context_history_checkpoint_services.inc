@@ -1,4 +1,13 @@
+void require_unfrozen_history_authoring_() const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  const long frozen = facade_->restart_regrid_history_sequence_active() ? 1L : 0L;
+  if (all_reduce_max(frozen, lane) != 0)
+    throw std::logic_error(
+        "AMR Program history authoring cannot change a frozen restart regrid image");
+}
+
 void store_history_(const std::string& name, const field_type& value) const {
+  require_unfrozen_history_authoring_();
   struct StoreCandidate {
     std::string key;
     std::vector<field_type> rollback_ring;
@@ -94,6 +103,7 @@ void store_history_(const std::string& name, const field_type& value) const {
 }
 
 void rotate_histories_(std::optional<std::string> clock_identity) const {
+  require_unfrozen_history_authoring_();
   auto& manager = runtime_state().hist_;
   struct RotateCandidate {
     std::vector<std::string> selected;

@@ -1236,7 +1236,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction")
+            "test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction:test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore")
       elseif(_test STREQUAL "test_program_runtime")
         pops_add_mpi_rank_test(
           ${_test} ${_np}

@@ -8460,8 +8460,11 @@ struct AmrSystem<Dim>::Impl {
   }
 
   void require_history_mutation_before_restart_commit() const {
-    if (restart_transaction_committed)
+    const ExecutionLane& lane = require_prepared_engine_lane("AMR history mutation");
+    if (all_reduce_max(restart_transaction_committed ? 1L : 0L, lane) != 0)
       throw std::logic_error("AMR history mutation cannot change a committed restart");
+    if (all_reduce_max(history_regrid_sequence_sources ? 1L : 0L, lane) != 0)
+      throw std::logic_error("AMR history mutation cannot change a frozen restart regrid image");
   }
 
   void require_restart_auxiliary_restoration(const ExecutionLane& lane) const {
@@ -17267,6 +17270,11 @@ void AmrSystem<Dim>::end_restart_regrid_history_sequence() noexcept {
 }
 
 template <int Dim>
+bool AmrSystem<Dim>::restart_regrid_history_sequence_active() const noexcept {
+  return p_->history_regrid_sequence_sources != nullptr;
+}
+
+template <int Dim>
 void AmrSystem<Dim>::begin_bootstrap_plan() {
   if (!p_->cfg.explicit_bootstrap)
     throw std::logic_error("AmrSystem explicit bootstrap is disabled by the resolved layout");
@@ -22243,6 +22251,7 @@ AmrSystem<kNativeDimension>::execute_prepared_tagging(int);
 template bool AmrSystem<kNativeDimension>::regrid_from_prepared_tagging(int);
 template void AmrSystem<kNativeDimension>::begin_restart_regrid_history_sequence();
 template void AmrSystem<kNativeDimension>::end_restart_regrid_history_sequence() noexcept;
+template bool AmrSystem<kNativeDimension>::restart_regrid_history_sequence_active() const noexcept;
 template void AmrSystem<kNativeDimension>::synchronize_bootstrap_state(const std::string&, int);
 template void AmrSystem<kNativeDimension>::begin_bootstrap_plan();
 template bool AmrSystem<kNativeDimension>::bootstrap_next_level();

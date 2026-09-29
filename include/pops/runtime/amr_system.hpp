@@ -648,6 +648,9 @@ class AmrSystem {
   /// from the successively remapped parent.
   POPS_EXPORT void begin_restart_regrid_history_sequence();
   POPS_EXPORT void end_restart_regrid_history_sequence() noexcept;
+  /// Query the native frozen-image authority. Generated Program history stores and rotations use
+  /// this at their collective preflight; internal topology remaps are not authoring mutations.
+  POPS_EXPORT bool restart_regrid_history_sequence_active() const noexcept;
   /// Install one exact parent/child temporal relation per AMR transition.  These ratios are an
   /// independent execution authority and are never inferred from spatial refinement.
   void set_temporal_relations(const std::vector<std::int64_t>& numerators,

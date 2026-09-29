@@ -227,6 +227,37 @@ TEST(test_amr_history_ring, RestartRegridImageRejectsPendingStoreAndEndsWithItsT
   EXPECT_EQ(pops::reduce_min_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(7));
 }
 
+TEST(test_amr_history_ring, FrozenRestartImageRefusesLaterStoreRotationAndRestore) {
+  constexpr int Dim = pops::kNativeDimension;
+  Fixture<Dim> fixture;
+  fixture.register_history();
+  auto sample = fixture.context->scratch_state_like(fixture.context->state(0));
+  fixture.context->begin_step(0.125);
+  sample.set_val(pops::Real(7));
+  fixture.context->store_history("tracer.rate", sample, 0);
+  fixture.context->rotate_histories("clock.macro");
+  const auto accepted = fixture.system.history_global("tracer.rate", 0, 0);
+  const auto fill = fixture.system.history_fill_count("tracer.rate", 0);
+
+  fixture.system.begin_restart_transaction();
+  ASSERT_NO_THROW(fixture.system.begin_restart_regrid_history_sequence());
+  fixture.context->begin_step(0.125);
+  sample.set_val(pops::Real(19));
+  EXPECT_THROW(fixture.context->store_history("tracer.rate", sample, 0), std::logic_error);
+  EXPECT_THROW(fixture.context->rotate_histories("clock.macro"), std::logic_error);
+  EXPECT_THROW(fixture.system.restore_history_fill_count("tracer.rate", 0, fill),
+               std::logic_error);
+  EXPECT_EQ(fixture.system.history_global("tracer.rate", 0, 0), accepted);
+  EXPECT_EQ(fixture.system.history_fill_count("tracer.rate", 0), fill);
+  ASSERT_NO_THROW(fixture.system.rollback_restart_transaction());
+
+  // Normal authoring resumes once rollback releases the frozen-image authority.
+  fixture.context->begin_step(0.125);
+  EXPECT_NO_THROW(fixture.context->store_history("tracer.rate", sample, 0));
+  EXPECT_NO_THROW(fixture.context->rotate_histories("clock.macro"));
+  EXPECT_EQ(pops::reduce_min_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(19));
+}
+
 TEST(test_amr_history_ring, RegisteredHistoryRejectsTopologyPublicationBeforeMutation) {
   constexpr int Dim = pops::kNativeDimension;
   Fixture<Dim> fixture;
