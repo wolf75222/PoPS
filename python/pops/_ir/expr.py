@@ -328,6 +328,17 @@ class Sqrt(Expr):
     def _str(self) -> str: return "sqrt(%s)" % self.a
 
 
+class Exp(Expr):
+    """Pointwise exponential, distinct from powers and analytic initial-data expressions."""
+    def __init__(self, a: Any) -> None: self.a = a
+    def eval(self, env: Any) -> Any:
+        import numpy as np
+        return np.exp(self.a.eval(env))
+    def deps(self) -> Any: return self.a.deps()
+    def to_cpp(self) -> str: return "std::exp(%s)" % self.a.to_cpp()
+    def _str(self) -> str: return "exp(%s)" % self.a
+
+
 class Abs(Expr):
     """Absolute value ``|a|`` (e.g. ``|lambda_k|`` of a Roe dissipation). Emitted as std::fabs at codegen
     (equal to the ternary a<0?-a:a outside -0.0). Not differentiable by dsl.diff (no sign node)."""

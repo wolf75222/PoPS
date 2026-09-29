@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .expr import Sqrt, Abs, Sign, Minimum, Maximum, _wrap
+from .expr import Sqrt, Exp, Abs, Sign, Minimum, Maximum, _wrap
 from .expr import Gradient, Partial, Laplacian, Divergence, TimeDerivative, Unknown, Integral
 from .elliptic import CoeffGradient, DivCoeffGrad
 from .values import EigWitness, StateRef
@@ -34,6 +34,11 @@ from .values import EigWitness, StateRef
 def sqrt(x: Any) -> Any:
     """Symbolic square root."""
     return Sqrt(_wrap(x))
+
+
+def exp(x: Any) -> Any:
+    """Symbolic pointwise exponential for native numerical expressions."""
+    return Exp(_wrap(x))
 
 
 def abs_(x: Any) -> Any:

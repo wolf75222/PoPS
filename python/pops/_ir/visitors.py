@@ -12,7 +12,7 @@ import json
 from collections.abc import Iterable
 from typing import Any, cast
 
-from .expr import Const, Expr, Var, _Bin, Neg, Sqrt, Abs, Sign
+from .expr import Const, Expr, Var, _Bin, Neg, Sqrt, Exp, Abs, Sign
 from .values import EigWitness, StateRef, RuntimeParamRef
 
 
@@ -33,7 +33,7 @@ def _children(e: Any) -> Any:
             return children
     if isinstance(e, _Bin):
         return (e.a, e.b)
-    if isinstance(e, (Neg, Sqrt, Abs, Sign)):
+    if isinstance(e, (Neg, Sqrt, Exp, Abs, Sign)):
         return (e.a,)
     if isinstance(e, EigWitness):
         return tuple(e.entries())  # entrees de la matrice : enfants pour CSE / decouverte deps
@@ -118,6 +118,8 @@ def _key(e: Any, _memo: dict[int, Any] | None = None) -> Any:
         key = ("neg", recurse(e.a))
     elif isinstance(e, Sqrt):
         key = ("sqrt", recurse(e.a))
+    elif isinstance(e, Exp):
+        key = ("exp", recurse(e.a))
     elif isinstance(e, Abs):
         key = ("abs", recurse(e.a))
     elif isinstance(e, Sign):
@@ -179,6 +181,8 @@ def _dag_key_ids(exprs: Any) -> tuple[dict[int, int], tuple[Any, ...], tuple[int
                 descriptor = ("neg", visit(e.a))
             elif isinstance(e, Sqrt):
                 descriptor = ("sqrt", visit(e.a))
+            elif isinstance(e, Exp):
+                descriptor = ("exp", visit(e.a))
             elif isinstance(e, Abs):
                 descriptor = ("abs", visit(e.a))
             elif isinstance(e, Sign):

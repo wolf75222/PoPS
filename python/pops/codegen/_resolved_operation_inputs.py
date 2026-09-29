@@ -410,7 +410,7 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
     """
     from pops._ir.application import OperatorApplication
     from pops._ir.native_call import NativeCall
-    from pops._ir.expr import Const, Div, Expr, Pow, Sqrt, Var
+    from pops._ir.expr import Const, Div, Exp, Expr, Pow, Sqrt, Var
     from pops._ir.visitors import _children
     from pops.model.handles import Handle
 
@@ -440,7 +440,7 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
             # A precise read footprint does not establish purity or successful evaluation.
             retain("opaque", "fallible")
         elif isinstance(value, Expr):
-            if isinstance(value, (Div, Sqrt, Pow)):
+            if isinstance(value, (Div, Exp, Sqrt, Pow)):
                 retain("fallible")
             if isinstance(value, OperatorApplication):
                 retain(*value.effects)

@@ -144,7 +144,7 @@ class CoefficientExpression(ir.Expr):
 _BINARY = {ir.Add: "add", ir.Sub: "sub", ir.Mul: "mul", ir.Div: "div",
            ir.Pow: "pow", ir.Minimum: "minimum", ir.Maximum: "maximum",
            ir.BooleanAnd: "and", ir.BooleanOr: "or"}
-_UNARY = {ir.Neg: "neg", ir.Sqrt: "sqrt", ir.Abs: "abs", ir.Sign: "sign",
+_UNARY = {ir.Neg: "neg", ir.Sqrt: "sqrt", ir.Exp: "exp", ir.Abs: "abs", ir.Sign: "sign",
           ir.BooleanNot: "not", Rounded: "rounded"}
 
 

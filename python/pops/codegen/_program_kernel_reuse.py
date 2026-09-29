@@ -11,11 +11,11 @@ from typing import Any
 
 
 def _transparent_roots(impl: Any, roots: Any) -> bool:
-    from pops._ir.expr import (Abs, Add, Compare, Const, Div, Maximum, Minimum,
+    from pops._ir.expr import (Abs, Add, Compare, Const, Div, Exp, Maximum, Minimum,
                               Mul, Neg, Pow, Sqrt, Sub, Var)
     from pops._ir.visitors import _children
 
-    allowed = {Abs, Add, Compare, Const, Div, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub, Var}
+    allowed = {Abs, Add, Compare, Const, Div, Exp, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub, Var}
     seen: set[int] = set()
 
     def visit(value: Any) -> bool:

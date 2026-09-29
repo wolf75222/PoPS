@@ -49,7 +49,7 @@ def checked_expression_dag(expressions, nodes, inputs):
     binary = {"add": ir.Add, "sub": ir.Sub, "mul": ir.Mul, "div": ir.Div,
               "pow": ir.Pow, "minimum": ir.Minimum, "maximum": ir.Maximum,
               "and": ir.BooleanAnd, "or": ir.BooleanOr}
-    unary = {"neg": ir.Neg, "abs": ir.Abs, "sqrt": ir.Sqrt, "sign": ir.Sign,
+    unary = {"neg": ir.Neg, "abs": ir.Abs, "sqrt": ir.Sqrt, "exp": ir.Exp, "sign": ir.Sign,
              "not": ir.BooleanNot, "rounded": Rounded}
     restored, bindings = [], {}
     for index, node in enumerate(nodes):

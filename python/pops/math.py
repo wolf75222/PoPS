@@ -7,7 +7,7 @@ explicitly with :class:`ValueExpr` when an expression is required.
 from __future__ import annotations
 
 __all__ = [
-    "sqrt", "minimum", "maximum", "grad", "norm", "div", "laplacian", "dx", "dy", "dz", "ddt", "rate", "unknown",
+    "sqrt", "exp", "minimum", "maximum", "grad", "norm", "div", "laplacian", "dx", "dy", "dz", "ddt", "rate", "unknown",
     "integral", "where", "rounded",
     # Public symbolic values and node types.
     "Expr", "Const", "Var", "ValueExpr", "SymbolicTruthValueError",
@@ -64,7 +64,7 @@ from pops._ir.ops import (  # noqa: F401
     minimum,
     maximum,
 )
-from pops._ir.ops import board_sqrt as sqrt  # noqa: F401
+from pops._ir.ops import board_sqrt as sqrt, exp  # noqa: F401
 
 
 # --- scalar dtypes (Spec 5 sec.5.12: a typed param declares its dtype) -------------------

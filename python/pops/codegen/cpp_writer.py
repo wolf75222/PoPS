@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow, Div, Mul, Minimum, Maximum, BooleanAnd, BooleanOr, BooleanNot
+from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Exp, Abs, Sign, Pow, Div, Mul, Minimum, Maximum, BooleanAnd, BooleanOr, BooleanNot
 from pops._ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, _EIG_PREDICATES
 from pops._ir.visitors import _dag_key_ids, _key, _children
 from pops._ir.expr import _wrap
@@ -77,6 +77,8 @@ def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None, guarded: Any = None)
         return "(-%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
     if isinstance(e, Sqrt):
         return "std::sqrt(%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
+    if isinstance(e, Exp):
+        return "std::exp(%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
     if isinstance(e, Abs):
         return "std::fabs(%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
     if isinstance(e, Sign):
@@ -379,6 +381,8 @@ def _recip_rewrite(e: Any, inv_set: Any) -> Any:
         return Neg(_recip_rewrite(e.a, inv_set))
     if isinstance(e, Sqrt):
         return Sqrt(_recip_rewrite(e.a, inv_set))
+    if isinstance(e, Exp):
+        return Exp(_recip_rewrite(e.a, inv_set))
     if isinstance(e, Abs):
         return Abs(_recip_rewrite(e.a, inv_set))
     if isinstance(e, StateRef):
@@ -444,6 +448,8 @@ def _cpp_roe(e: Any, prefix: Any) -> str:
         return "(-%s)" % _cpp_roe(e.a, prefix)
     if isinstance(e, Sqrt):
         return "std::sqrt(%s)" % _cpp_roe(e.a, prefix)
+    if isinstance(e, Exp):
+        return "std::exp(%s)" % _cpp_roe(e.a, prefix)
     if isinstance(e, Abs):
         return "std::fabs(%s)" % _cpp_roe(e.a, prefix)
     if isinstance(e, Sign):

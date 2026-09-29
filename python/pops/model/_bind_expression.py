@@ -17,7 +17,7 @@ def qualified_expression_key(value: Any, *, where: str) -> Any:
     name with different values.  This narrower protocol therefore accepts only the operations the
     Bind evaluator executes and requires every parameter leaf to carry a resolved ``ParamHandle``.
     """
-    from pops._ir.expr import Abs, Const, Neg, Sign, Sqrt, Var, _Bin
+    from pops._ir.expr import Abs, Const, Exp, Neg, Sign, Sqrt, Var, _Bin
     from pops._ir.handle_expr import ValueExpr
     from pops._ir.values import RuntimeParamRef
     from pops.model.handles import ParamHandle
@@ -50,8 +50,8 @@ def qualified_expression_key(value: Any, *, where: str) -> Any:
                 "%s contains free-name Var(%r, %r); Bind-time consumers require an exact "
                 "model.value(parameter) Handle leaf" % (where, node.name, node.kind)
             )
-        if isinstance(node, (Neg, Sqrt, Abs, Sign)):
-            return ({Neg: "neg", Sqrt: "sqrt", Abs: "abs", Sign: "sign"}[type(node)],
+        if isinstance(node, (Neg, Sqrt, Exp, Abs, Sign)):
+            return ({Neg: "neg", Sqrt: "sqrt", Exp: "exp", Abs: "abs", Sign: "sign"}[type(node)],
                     walk(node.a))
         if isinstance(node, _Bin):
             if node.op not in {"+", "-", "*", "/", "**", "==", "!=", "<", "<=", ">", ">="}:
@@ -116,12 +116,14 @@ def eval_expression_key(value: Any, env: Mapping[str, Any], *, where: str) -> An
         # RuntimeParamRef is emitted by Module.value(handle); ValueExpr retains a handle qid.
         # In both cases depends_on authenticated the exact slot before this evaluator runs.
         return _dependency(env, value[1], where=where)
-    if op in ("neg", "sqrt", "abs", "sign") and len(value) == 2:
+    if op in ("neg", "sqrt", "exp", "abs", "sign") and len(value) == 2:
         item = eval_expression_key(value[1], env, where=where)
         if op == "neg":
             return -item
         if op == "sqrt":
             return math.sqrt(item)
+        if op == "exp":
+            return math.exp(item)
         if op == "abs":
             return abs(item)
         return (item > 0) - (item < 0)
@@ -169,7 +171,7 @@ def expression_reference_keys(value: Any, *, where: str) -> frozenset[tuple[str,
             return
         if op == "const" and len(node) == 2:
             return
-        if op in ("neg", "sqrt", "abs", "sign") and len(node) == 2:
+        if op in ("neg", "sqrt", "exp", "abs", "sign") and len(node) == 2:
             walk(node[1])
             return
         if op in ("+", "-", "*", "/", "**", "==", "!=", "<", "<=", ">", ">="):

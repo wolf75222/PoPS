@@ -234,7 +234,7 @@ def _native_scalar(
                 % (name, [reference.qualified_id for reference in unsupported]),
             )
 
-        from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow
+        from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Exp, Abs, Sign, Pow
         from pops._ir.handle_expr import ValueExpr
         from pops._ir.values import RuntimeParamRef
         from pops.fields.boundary_values import BoundaryValue, LogicalTimeValue
@@ -264,7 +264,7 @@ def _native_scalar(
                     "%s contains unqualified Var(%r); boundary dependencies require typed, "
                     "owner-qualified handles" % (name, node.name),
                 )
-            if isinstance(node, (Neg, Sqrt, Abs, Sign)):
+            if isinstance(node, (Neg, Sqrt, Exp, Abs, Sign)):
                 validate_expression(node.a)
                 return
             if isinstance(node, (Pow, _Bin)):
