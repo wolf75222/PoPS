@@ -533,7 +533,8 @@ class PreparedDiffusion {
                 if (boundary.kind == DiffusiveBoundaryKind::conormal) {
                   const Real trace = boundary.trace(geometry, face, axis);
                   flux = orientation * trace;
-                  if (!(coefficient >= 0) || (coefficient == 0 && trace != 0))
+                  if (!Kokkos::isfinite(coefficient) || coefficient < 0 ||
+                      (coefficient == 0 && trace != 0))
                     flux = std::numeric_limits<Real>::quiet_NaN();
                 } else {
                   if (coefficient == 0) {

@@ -37,7 +37,8 @@ from tests.python.support.native_execution_context import artifact_execution_con
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
-def _authored(n=16, dt=.12, *, coefficient="x_only", y_boundary="periodic", amr=False):
+def _authored(n=16, dt=.12, *, coefficient="x_only", y_boundary="periodic",
+              x_conormal=False, amr=False):
     frame = Rectangle("semidefinite_square", lower=(0., 0.), upper=(1., 1.)).frame(Cartesian2D())
     model = pops.Model("semidefinite_diffusion", frame=frame)
     state = model.state("U", components=("u",))
@@ -50,10 +51,21 @@ def _authored(n=16, dt=.12, *, coefficient="x_only", y_boundary="periodic", amr=
         dx = u
     elif coefficient == "nonfinite":
         dx = 1 / (u - 1)
+    elif coefficient == "overflow":
+        dx = u
     else:
         raise ValueError(coefficient)
     physical = None
-    if y_boundary != "periodic":
+    if x_conormal:
+        if y_boundary != "periodic":
+            raise ValueError("overflow witness uses x conormal and periodic y")
+        physical = (
+            DiffusiveBoundary(0, "lower", "conormal", 0.),
+            DiffusiveBoundary(0, "upper", "conormal", 0.),
+            DiffusiveBoundary(1, "lower", "periodic"),
+            DiffusiveBoundary(1, "upper", "periodic"),
+        )
+    elif y_boundary != "periodic":
         y_kind = "conormal" if y_boundary in ("conormal", "incompatible") else "value"
         upper_value = 1. if y_boundary == "incompatible" else 0.
         physical = (
@@ -63,7 +75,8 @@ def _authored(n=16, dt=.12, *, coefficient="x_only", y_boundary="periodic", amr=
             DiffusiveBoundary(1, "upper", y_kind, upper_value),
         )
     flux = model.diffusive_flux("diffusion", state=state,
-                                value=CoeffGradient(u, ((dx, 0.), (0., 0.))),
+                                value=CoeffGradient(0. * u if coefficient == "overflow" else u,
+                                                    ((dx, 0.), (0., 0.))),
                                 boundaries=physical)
     rate = model.rate("balance", equation=ddt(state) == div(flux))
     case = pops.Case("semidefinite_%s_%s" % (coefficient, y_boundary))
@@ -74,7 +87,9 @@ def _authored(n=16, dt=.12, *, coefficient="x_only", y_boundary="periodic", amr=
     program = ForwardEuler(block[state], rate=rate)
     program.step_strategy(FixedDt(dt))
     case.program(program)
-    periodic = PeriodicAxes(frame.axes) if y_boundary == "periodic" else PeriodicAxes((frame.x,))
+    periodic = (PeriodicAxes((frame.y,)) if x_conormal else
+                PeriodicAxes(frame.axes) if y_boundary == "periodic" else
+                PeriodicAxes((frame.x,)))
     grid = CartesianGrid(frame=frame, cells=(n, n), periodic=periodic)
     if not amr:
         return pops.resolve(pops.validate(case), layout=Uniform(grid))
@@ -178,6 +193,22 @@ def test_nonzero_conormal_on_zero_normal_axis_rejects_before_acceptance():
     n, dt = 8, .01
     initial = _initial(n)
     runtime = _bind_uniform(_authored(n, dt, y_boundary="incompatible"), initial)
+    before = np.asarray(runtime.state_global("heat")).reshape(initial.shape).copy()
+    with pytest.raises(RuntimeError, match="diffusive|pointwise|rejected"):
+        pops.run(runtime, t_end=dt, max_steps=1, console=False)
+    after = np.asarray(runtime.state_global("heat")).reshape(initial.shape)
+    np.testing.assert_array_equal(before, initial)
+    np.testing.assert_array_equal(after, initial)
+    assert runtime.time() == 0 and runtime.macro_step() == 0
+
+
+def test_finite_cell_coefficients_overflowing_at_conormal_face_are_rejected():
+    n, dt = 8, .01
+    initial = np.zeros((1, n, n), dtype=np.float64)
+    initial[0, :, 0] = 1.6e308
+    assert np.isfinite(initial).all()
+    assert not math.isfinite(1.5 * float(initial[0, 0, 0]))
+    runtime = _bind_uniform(_authored(n, dt, coefficient="overflow", x_conormal=True), initial)
     before = np.asarray(runtime.state_global("heat")).reshape(initial.shape).copy()
     with pytest.raises(RuntimeError, match="diffusive|pointwise|rejected"):
         pops.run(runtime, t_end=dt, max_steps=1, console=False)

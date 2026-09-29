@@ -23,10 +23,13 @@ contributes its own frequency to the combined bound.
 At a nonperiodic face, the existing linear coefficient extrapolation
 `D_face=1.5 D_center-0.5 D_inside` is retained. A **value** boundary with
 `D_face=0` contributes zero flux and conductance, even if its prescribed
-value differs from the cell state. A **conormal** boundary with `D_face=0`
+value differs from the cell state. The inactive value trace need not be
+evaluated; a nonfinite trace on a contributing face is rejected by the flux
+and frequency checks. A **conormal** boundary with `D_face=0`
 accepts only an exactly zero prescribed normal flux; nonzero conormal data
 fail during face preparation, before an accepted face ledger can be
-published. A negative or nonfinite extrapolated face coefficient fails;
+published. A negative or nonfinite extrapolated face coefficient fails,
+including overflow to infinity from finite cell coefficients;
 the implementation never clips it to zero. The public `DiffusiveBoundary`
 API currently exposes `periodic`, `value`, and `conormal`, not Robin.
 
