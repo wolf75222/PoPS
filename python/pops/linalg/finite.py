@@ -99,3 +99,79 @@ class FiniteLinearMap:
         if len(self.source.dofs) != len(self.target.dofs):
             raise ValueError("finite solve requires a square map; invertibility is checked natively")
         return self._evaluate(rhs, "solve")
+
+
+@dataclass(frozen=True)
+class FiniteMeasure:
+    """Positive finite quadrature measure on one ordered finite support."""
+
+    support: FiniteSupport
+    weights: tuple[float, ...]
+
+    def __post_init__(self):
+        if not isinstance(self.support, FiniteSupport):
+            raise TypeError("finite measure requires an exact FiniteSupport")
+        weights = tuple(self.weights)
+        if len(weights) != len(self.support.dofs) or any(
+                type(weight) not in (int, float) or not math.isfinite(weight)
+                or not weight > 0 for weight in weights):
+            raise ValueError("finite measure requires one strictly positive finite weight per DOF")
+        object.__setattr__(self, "weights", weights)
+
+    def pair(self, left: FiniteVector, right: FiniteVector):
+        """Return the exact authored weighted pairing, with no spatial-grid reduction."""
+        if not isinstance(left, FiniteVector) or not isinstance(right, FiniteVector) \
+                or left.support != self.support or right.support != self.support:
+            raise ValueError("finite pairing requires the measure's exact ordered support")
+        total = _wrap(0)
+        for weight, x, y in zip(self.weights, left, right, strict=True):
+            total = total + _wrap(weight) * x * y
+        return total
+
+
+@dataclass(frozen=True)
+class FiniteSymmetricInteraction:
+    """Measured self-adjoint finite kernel and its quadratic energy.
+
+    The native action is the generic FiniteLinearMap with entries W_ij*m_j.
+    Exact symmetry is checked on represented coefficients; no tolerance or
+    silent symmetrization changes the authored interaction.
+    """
+
+    measure: FiniteMeasure
+    kernel: tuple[tuple[float, ...], ...]
+
+    def __post_init__(self):
+        if not isinstance(self.measure, FiniteMeasure):
+            raise TypeError("finite symmetric interaction requires a FiniteMeasure")
+        rows = tuple(tuple(row) for row in self.kernel)
+        width = len(self.measure.support.dofs)
+        if len(rows) != width or any(len(row) != width for row in rows):
+            raise ValueError("finite interaction kernel differs from its measured support")
+        if any(type(value) not in (int, float) or not math.isfinite(value)
+               for row in rows for value in row):
+            raise ValueError("finite interaction kernel requires finite numeric constants")
+        if any(rows[i][j] != rows[j][i] for i in range(width) for j in range(i)):
+            raise ValueError("finite interaction kernel must be exactly symmetric")
+        object.__setattr__(self, "kernel", rows)
+
+    @property
+    def map(self) -> FiniteLinearMap:
+        support = self.measure.support
+        return FiniteLinearMap(support, support, tuple(
+            tuple(value * weight for value, weight in zip(row, self.measure.weights,
+                                                           strict=True))
+            for row in self.kernel))
+
+    def apply(self, density: FiniteVector) -> FiniteVector:
+        return self.map.apply(density)
+
+    def adjoint(self, value: FiniteVector) -> FiniteVector:
+        """Weighted adjoint, equal to the action by the certified symmetry."""
+        return self.map.apply(value)
+
+    def energy(self, density: FiniteVector):
+        return _wrap(0.5) * self.measure.pair(density, self.apply(density))
+
+    def directional_derivative(self, density: FiniteVector, direction: FiniteVector):
+        return self.measure.pair(direction, self.apply(density))

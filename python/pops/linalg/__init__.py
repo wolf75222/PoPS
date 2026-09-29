@@ -13,7 +13,8 @@ The solvers AND the preconditioners live in :mod:`pops.solvers` (ADC-502 ratifie
 NO ``preconditioners`` submodule -- a preconditioner configures a solver, so it belongs with the
 solver descriptors, and the no-retro-compat regime forbids a second public path / shim.
 """
-from .finite import FiniteSupport, FiniteVector, FiniteLinearMap
+from .finite import (FiniteSupport, FiniteVector, FiniteLinearMap, FiniteMeasure,
+                     FiniteSymmetricInteraction)
 from .operator import LinearOperator, MatrixFreeOperator
 from .problem import LinearOperatorProperties, LinearProblem
 from .norms import L1, L2, LInf
@@ -21,7 +22,8 @@ from .reductions import Dot, Norm2, dot, norm2
 from . import operator, problem, norms, reductions
 
 __all__ = [
-    "FiniteSupport", "FiniteVector", "FiniteLinearMap",
+    "FiniteSupport", "FiniteVector", "FiniteLinearMap", "FiniteMeasure",
+    "FiniteSymmetricInteraction",
     "LinearOperator", "MatrixFreeOperator",
     "LinearOperatorProperties", "LinearProblem",
     "L1", "L2", "LInf",
