@@ -133,7 +133,6 @@ TEST(ProgramRuntimeStateCadence, SuspendedRegionsKeepOneCadenceAndQualifiedScrat
   EXPECT_EQ(finished, 0);
   EXPECT_EQ(step, 0);
   EXPECT_EQ(state.program_map_fields("mapped-half-stage", false).front(), &stage);
-  EXPECT_THROW(state.advance_cadence_region(time, step, 0.5, "Regions"), std::logic_error);
   EXPECT_THROW(state.program_map_fields("wrong-stage", false), std::logic_error);
   EXPECT_THROW(state.program_map_fields("mapped-half-stage", true), std::logic_error);
   state.release_program_map("mapped-half-stage", false);
@@ -147,6 +146,60 @@ TEST(ProgramRuntimeStateCadence, SuspendedRegionsKeepOneCadenceAndQualifiedScrat
   EXPECT_EQ(finished, 2);
   EXPECT_EQ(step, 1);
   EXPECT_DOUBLE_EQ(time, 0.5);
+  EXPECT_FALSE(state.cadence_continuation_);
+  EXPECT_FALSE(state.balance_due_window_active_);
+}
+
+TEST(ProgramRuntimeStateCadence, PrematureResumeRevokesSuspendedPortAndRetryStartsFresh) {
+  pops::runtime::program::ProgramRuntimeState<2> state;
+  pops::MultiFab<2> rejected_stage, retry_stage;
+  double time = 2.0;
+  int step = 7;
+  int started = 0, finished = 0;
+  bool retry = false;
+  state.set_cadence(2, 1, "Regions");
+  state.install_unverified_step([&](double dt) {
+    ++started;
+    EXPECT_DOUBLE_EQ(dt, 0.25);
+    state.suspend_program_map("mapped-half-stage", false,
+                              {retry ? &retry_stage : &rejected_stage},
+                              [&] { ++finished; }, started);
+  });
+  ASSERT_EQ(state.advance_cadence_region(time, step, 0.5, "Regions"), "mapped-half-stage");
+  state.release_program_map("mapped-half-stage", false);
+  ASSERT_EQ(state.advance_cadence_region(time, step, 0.5, "Regions"), "mapped-half-stage");
+  EXPECT_DOUBLE_EQ(time, 2.25);
+  EXPECT_EQ(finished, 1);
+  EXPECT_EQ(state.program_map_stage_generation("mapped-half-stage", false), 2u);
+
+  // A failed advance rejects the whole cadence attempt, including its borrowed port.
+  EXPECT_THROW(state.advance_cadence_region(time, step, 0.5, "Regions"), std::logic_error);
+  EXPECT_DOUBLE_EQ(time, 2.0);
+  EXPECT_EQ(step, 7);
+  EXPECT_EQ(started, 2);
+  EXPECT_EQ(finished, 1);
+  EXPECT_FALSE(state.cadence_continuation_);
+  EXPECT_FALSE(state.cadence_dispatch_active_);
+  EXPECT_FALSE(state.balance_due_window_active_);
+  EXPECT_THROW(state.program_map_fields("mapped-half-stage", false), std::logic_error);
+  EXPECT_THROW(state.program_map_stage_generation("mapped-half-stage", false), std::logic_error);
+  EXPECT_THROW(state.release_program_map("mapped-half-stage", false), std::logic_error);
+
+  retry = true;
+  ASSERT_EQ(state.advance_cadence_region(time, step, 0.5, "Regions"), "mapped-half-stage");
+  EXPECT_EQ(state.program_map_fields("mapped-half-stage", false).front(), &retry_stage);
+  EXPECT_EQ(state.program_map_stage_generation("mapped-half-stage", false), 3u);
+  state.release_program_map("mapped-half-stage", false);
+  ASSERT_EQ(state.advance_cadence_region(time, step, 0.5, "Regions"), "mapped-half-stage");
+  EXPECT_DOUBLE_EQ(time, 2.25);
+  EXPECT_EQ(step, 7);
+  EXPECT_EQ(state.program_map_stage_generation("mapped-half-stage", false), 4u);
+  state.release_program_map("mapped-half-stage", false);
+  EXPECT_TRUE(state.advance_cadence_region(time, step, 0.5, "Regions").empty());
+  EXPECT_EQ(started, 4);
+  EXPECT_EQ(finished, 3);
+  EXPECT_DOUBLE_EQ(time, 2.5);
+  EXPECT_EQ(step, 8);
   EXPECT_FALSE(state.cadence_continuation_);
   EXPECT_FALSE(state.balance_due_window_active_);
 }
