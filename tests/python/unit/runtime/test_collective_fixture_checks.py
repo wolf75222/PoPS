@@ -101,4 +101,4 @@ def test_success_returns_local_values_and_serial_checks_are_preserved(monkeypatc
     assert checks.collective_call(None, lambda: 17) == 17
     with pytest.raises(AssertionError, match="AssertionError.*unchanged threshold"):
         with checks.collective_check(None):
-            assert False, "unchanged threshold"
+            raise AssertionError("unchanged threshold")

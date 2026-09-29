@@ -49,7 +49,7 @@ def state_snapshots(runtime, world, names):
     import numpy as np
     rows = []
     for name in names:
-        value = collective_call(world, lambda: runtime.state_global(name))
+        value = collective_call(world, lambda name=name: runtime.state_global(name))
         with collective_check(world):
             rows.append(np.asarray(value).copy())
     return tuple(rows)

@@ -107,7 +107,7 @@ def test_native_consumer_accepts_inactive_and_rejects_active_invalid_branch(
                 initial = np.zeros((6, 4, 4))
                 initial[[0, 2, 5]] = 1.  # isotropic centered second moments
                 params = {parameter: 1. if active else -1.}
-        runtime = collective_call(world, lambda: pops.bind(artifact, initial_state={"matter": initial.copy()}, params=params,
+        runtime = collective_call(world, lambda initial=initial, params=params: pops.bind(artifact, initial_state={"matter": initial.copy()}, params=params,
                             resources={"execution_context": artifact_execution_context(artifact)}))
         report, errors = _attempt(runtime, world)
         if active:
@@ -143,9 +143,9 @@ def test_native_affine_library_consumer_matches_particles_and_retained_recipe(
     for kind in ("affine", "affine_library"):
         case, layout, parameter = consumer_case(kind)
         artifact, world = _compile(case, layout, "affine-particles-" + kind)
-        runtime = collective_call(world, lambda: pops.bind(artifact, initial_state={"matter": initial.copy()}, params={parameter: -1.},
+        runtime = collective_call(world, lambda artifact=artifact, parameter=parameter: pops.bind(artifact, initial_state={"matter": initial.copy()}, params={parameter: -1.},
                             resources={"execution_context": artifact_execution_context(artifact)}))
-        report = collective_call(world, lambda: pops.run(runtime, t_end=1e-4, max_steps=1))
+        report = collective_call(world, lambda runtime=runtime: pops.run(runtime, t_end=1e-4, max_steps=1))
         gathered, = state_snapshots(runtime, world, ("matter",))
         with collective_check(world):
             assert report.accepted_steps == 1

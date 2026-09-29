@@ -40,11 +40,11 @@ def test_h05_original_residual_rebind_and_domain_rollback(
     for k in (.8,0.,-.8):
         with collective_check(world):
             initial=np.broadcast_to(np.array((2.,.5))[:,None,None],(2,4,4)).copy()
-        runtime=collective_call(world, lambda: pops.bind(artifact,
+        runtime=collective_call(world, lambda initial=initial, k=k: pops.bind(artifact,
             initial_values={subject:initial[i:i+1] for i,subject in enumerate(subjects)},
             params={parameter:k},resources={"execution_context":artifact_execution_context(artifact)}))
         before=state_snapshots(runtime, world, ("radiation", "matter"))
-        _, failures = collective_attempt(world, lambda: pops.run(
+        _, failures = collective_attempt(world, lambda runtime=runtime: pops.run(
             runtime, t_end=.4, max_steps=1, console=False))
         with collective_check(world):
             if k < 0:

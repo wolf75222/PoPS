@@ -49,7 +49,7 @@ def test_h05_nonuniform_cells_rebind_and_collective_negative_rate(
     # Rebind one compiled artifact. The authored, block-qualified handle must
     # authenticate through the artifact's exact BindSchema; no name lookup.
     for rate in (.8, 0., -.8):
-        runtime = collective_call(world, lambda: pops.bind(
+        runtime = collective_call(world, lambda rate=rate: pops.bind(
             artifact,
             initial_values={subject: initial[index:index+1].copy()
                             for index, subject in enumerate(subjects)},
@@ -57,7 +57,7 @@ def test_h05_nonuniform_cells_rebind_and_collective_negative_rate(
             resources={"execution_context": artifact_execution_context(artifact)},
         ))
         before = state_snapshots(runtime, world, ("radiation", "matter"))
-        report, run_errors = collective_attempt(world, lambda: pops.run(
+        report, run_errors = collective_attempt(world, lambda runtime=runtime: pops.run(
             runtime, t_end=.4, max_steps=1, console=False))
         with collective_check(world):
             if rate < 0:
@@ -71,7 +71,7 @@ def test_h05_nonuniform_cells_rebind_and_collective_negative_rate(
                 assert runtime.time() == pytest.approx(.4) and runtime.macro_step() == 1
         after = state_snapshots(runtime, world, ("radiation", "matter"))
 
-        def check():
+        def check(rate=rate, before=before, after=after):
             path = tmp_path / ("h05_adversarial_%s_%s.npz" % (reverse, rate))
             np.savez_compressed(path, initial=np.stack(before).reshape(initial.shape),
                                 final=np.stack(after).reshape(initial.shape))

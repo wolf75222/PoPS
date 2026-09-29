@@ -27,10 +27,10 @@ def test_joint_product_rebind_or_atomic_failure(
         with collective_check(world):
             a = np.broadcast_to(np.array(capture[:2])[:,None,None], (2,4,4)).copy()
             b = np.broadcast_to(np.array(capture[2:])[:,None,None], (3,4,4)).copy()
-        runtime = collective_call(world, lambda: pops.bind(artifact, initial_values=dict(zip(subjects,(a,b),strict=True)),
+        runtime = collective_call(world, lambda a=a, b=b: pops.bind(artifact, initial_values=dict(zip(subjects,(a,b),strict=True)),
                             resources={"execution_context": artifact_execution_context(artifact)}))
         before = snapshots(runtime, world)
-        _, failures = collective_attempt(world, lambda: pops.run(
+        _, failures = collective_attempt(world, lambda runtime=runtime: pops.run(
             runtime, t_end=.01, max_steps=1, console=False))
         with collective_check(world):
             if invalid:

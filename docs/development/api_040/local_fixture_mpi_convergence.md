@@ -38,6 +38,11 @@ stops both participants before the next operation. It also checks runtime-error
 subclass diagnostics, rejection of another exception family, local result
 ownership, and serial behavior.
 
+Follow-up lint review: explicit default arguments bind every loop-dependent
+lambda/closure. The intentional assertion failure uses `raise AssertionError`.
+Ruff passes on all nine Python files in this ten-file change (the tenth is this
+Markdown receipt), with no rule suppression; the six helper tests pass again.
+
 All **20 cases collected** from these seven files:
 
 - `test_local_residual_product_runtime.py`
