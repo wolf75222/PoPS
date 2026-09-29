@@ -264,5 +264,5 @@ def test_named_primitive_is_scoped_in_program_source_and_local_residual(local):
     source = emit(model, program)
     assert "const pops::Real danger =" not in source
     assert "? ([&]()" in source
-    assert "std::isfinite(guard" in source
+    assert ("Kokkos::isfinite(guard" if local else "std::isfinite(guard") in source
     assert "quiet_NaN" in source

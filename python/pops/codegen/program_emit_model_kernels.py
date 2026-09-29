@@ -12,8 +12,9 @@ from typing import Any
 
 from pops.identity.scalar import scalar_cpp
 from pops.model.state_symbols import state_component_symbol
-from pops.codegen.cpp_writer import _cse_emit
-from pops._ir.primitive_expansion import expand_evaluation_boundaries
+from pops.codegen.cpp_writer import _cpp_identifier, _cse_emit
+from pops._ir.primitive_expansion import expand_evaluation_boundaries, expand_primitive_recipes
+from pops._ir.visitors import _dependencies
 from pops.codegen.module_emit_helpers import _checked_inline_expr
 
 from pops.codegen.program_emit_kernels import (
@@ -645,14 +646,14 @@ def _residual_term_exprs(impl: Any, w: Any) -> list:
             raise NotImplementedError(
                 "emit_cpp_program: residual source '%s' is not declared on the model (m.source_term); "
                 "declared: %s" % (name, sorted(impl._source_terms)))
-        return list(expand_evaluation_boundaries(impl._source_terms[name], impl.prim_defs))
+        return list(expand_primitive_recipes(impl._source_terms[name], impl.prim_defs))
     if w.op == "apply":
         rows = _linear_source_rows(impl, w.attrs["linear_source"])
         n = len(rows)
         # (L U)_r = sum_c L[r][c] * cons_c -- a per-component Expr in the cons names + aux.
         expressions = [sum((rows[r][c] * Var(impl.cons_names[c], "cons") for c in range(n)),
                            Const(0.0)) for r in range(n)]
-        return list(expand_evaluation_boundaries(expressions, impl.prim_defs))
+        return list(expand_primitive_recipes(expressions, impl.prim_defs))
     raise NotImplementedError(
         "emit_cpp_program: residual op '%s' is not a per-cell Expr term (source / apply only)" % w.op)
 
@@ -693,14 +694,25 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
             target = "residual_value_%d" % w.id
             lines.append("pops::Real %s[%d];" % (target, n))
             lines.append("{")
-            for c, name in enumerate(impl.cons_names):
-                lines.append("  const pops::Real %s = %s;" % (name, source[c]))
-            live = impl._live_prims(exprs)
-            for name, expression in impl.prim_defs.items():
-                if name in live:
-                    lines.append("  const pops::Real %s = %s;" % (name, _checked_inline_expr(expand_evaluation_boundaries(expression, impl.prim_defs))))
-            for c, expression in enumerate(exprs):
-                lines.append("  %s[%d] = %s;" % (target, c, _checked_inline_expr(expression)))
+            # Use the same checked evaluation policy as Program expressions. A
+            # final finite residual alone cannot detect sqrt(-u) hidden by fmin.
+            # Bind leaves, too: otherwise a non-finite captured argument could
+            # disappear behind a finite min/max. The common emitter keeps where
+            # branches lazy and rounded barriers intact.
+            bindings = {name: _cpp_identifier(name) for name in _dependencies(exprs)}
+            bindings.update(zip(impl.cons_names, source, strict=True))
+            temporaries, rendered, observed = _cse_emit(
+                exprs, "pops::Real", "  ", materialize_all=True, return_names=True,
+                scalar_bindings=bindings)
+            lines.extend(temporaries)
+            invalid = " || ".join("!Kokkos::isfinite(%s)" % name
+                                   for name in dict.fromkeys([*observed, *rendered])) or "false"
+            lines.append("  if (%s) {" % invalid)
+            for c in range(n):
+                lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
+            lines.extend(["    return;", "  }"])
+            for c, expression in enumerate(rendered):
+                lines.append("  %s[%d] = %s;" % (target, c, expression))
             lines.append("}")
             comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
         elif w.op == "pointwise_expression":
@@ -822,12 +834,6 @@ def _emit_solve_local_nonlinear_kernel(
         "    auto residual_eval = "
         "[&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {" % (n, n)
     )
-    for component, name in enumerate(impl.cons_names):
-        body.append("      const pops::Real %s = Ueval[%d];" % (name, component))
-    live = impl._live_prims(term_exprs) if term_exprs else set()
-    for name, expr in impl.prim_defs.items():
-        if name in live:
-            body.append("      const pops::Real %s = %s;" % (name, _checked_inline_expr(expand_evaluation_boundaries(expr, impl.prim_defs))))
     body += ["      " + line for line in _emit_residual_eval(impl, v, n)]
     body.append("    };")
     attrs = dict(v.attrs)
