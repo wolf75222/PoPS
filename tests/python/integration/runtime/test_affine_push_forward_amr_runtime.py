@@ -22,10 +22,11 @@ def _states(runtime, levels, world):
     for level in range(levels):
         value = collective_call(world, lambda level=level: runtime.block_level_state_global(
             "moments", level))
-        if world is None or world.rank == 0:
-            width = CELLS * 2**level
-            rows.append(np.asarray(value, dtype=np.float64).reshape(
-                len(INDICES), width, width).copy())
+        with collective_check(world):
+            if world is None or world.rank == 0:
+                width = CELLS * 2**level
+                rows.append(np.asarray(value, dtype=np.float64).reshape(
+                    len(INDICES), width, width).copy())
     return rows
 
 
@@ -35,8 +36,9 @@ def test_public_affine_body_and_local_solve_match_particles_on_amr(
     del isolated_native_cache, native_cxx, kokkos_root
     case, layout, _ = affine_amr_case(levels=levels)
     artifact, world = _compile(case, layout, "affine-local-amr%d" % levels)
+    context = collective_call(world, lambda: artifact_execution_context(artifact))
     runtime = collective_call(world, lambda: pops.bind(
-        artifact, resources={"execution_context": artifact_execution_context(artifact)}))
+        artifact, resources={"execution_context": context}))
     with collective_check(world):
         assert runtime.n_levels() == levels
     before = _states(runtime, levels, world)
@@ -74,10 +76,12 @@ def test_impossible_local_residual_rejects_without_amr_publication(
         levels=2, case_name="affine_amr_impossible_residual",
         impossible_residual=True)
     artifact, world = _compile(case, layout, "affine-local-amr-reject")
+    context = collective_call(world, lambda: artifact_execution_context(artifact))
     runtime = collective_call(world, lambda: pops.bind(
-        artifact, resources={"execution_context": artifact_execution_context(artifact)}))
+        artifact, resources={"execution_context": context}))
     before = _states(runtime, 2, world)
-    boxes = tuple(runtime.patch_boxes())
+    with collective_check(world):
+        boxes = tuple(runtime.patch_boxes())
     for _ in range(2):
         _, failures = collective_attempt(
             world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
