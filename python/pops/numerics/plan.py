@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from pops.descriptors import Descriptor
+from pops.blockage import Blockage, BlockageClass, BlockageValueError
 from pops.identity import Identity, make_identity, semantic_identity
 from pops.model import Handle, OperatorHandle, OwnerKind
 
@@ -16,7 +17,7 @@ _RATE_METHOD_PROTOCOL = (
 )
 
 
-class UnsupportedBalanceRealizationError(ValueError):
+class UnsupportedBalanceRealizationError(BlockageValueError):
     """A retained equation has no selected native numerical realization."""
 
     code = "unsupported_balance_realization"
@@ -24,7 +25,13 @@ class UnsupportedBalanceRealizationError(ValueError):
 
     def __init__(self, rate: OperatorHandle, reason: str) -> None:
         self.context = {"rate": rate.local_id, "reason": reason}
-        super().__init__("[%s] rate %r: %s" % (self.code, rate.local_id, reason))
+        super().__init__(
+            "[%s] rate %r: %s" % (self.code, rate.local_id, reason),
+            blockage=Blockage(
+                BlockageClass.IMPL, self.phase, rate.qualified_id,
+                "numerical_realization_unavailable", "selected_rate_realization",
+            ),
+        )
 
 
 def _validate_selected_balance_coverage(model: Any, selected: Mapping, *, states: Any) -> None:

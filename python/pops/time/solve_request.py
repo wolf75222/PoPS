@@ -12,17 +12,19 @@ from types import MappingProxyType
 from typing import Any
 
 from pops.identity import make_identity
+from pops.blockage import Blockage, BlockageClass, BlockageValueError
 from pops.time.canonical_data import CanonicalData
 from pops.time.points import TimePoint
 from pops.time.residual_common import residual_name
 
 
-class SolveRequestError(ValueError):
+class SolveRequestError(BlockageValueError):
     """A structured refusal before a solve can publish a value."""
 
-    def __init__(self, code: str, detail: str, *, where: str = "SolveRequest") -> None:
+    def __init__(self, code: str, detail: str, *, where: str = "SolveRequest",
+                 blockage: Blockage | None = None) -> None:
         self.code, self.detail, self.where = code, detail, where
-        super().__init__("%s [%s]: %s" % (where, code, detail))
+        super().__init__("%s [%s]: %s" % (where, code, detail), blockage=blockage)
 
     def to_data(self) -> dict[str, str]:
         return {"code": self.code, "detail": self.detail, "where": self.where}
@@ -114,11 +116,17 @@ class SolveUnknown:
         from pops.time.values import ProgramValue
 
         residual_name(self.name, "SolveUnknown name")
-        if not isinstance(self.template, ProgramValue) or self.template.vtype not in (
-            "state", "scalar_field"
-        ):
+        if not isinstance(self.template, ProgramValue):
             raise SolveRequestError(
                 "invalid_unknown", "unknown template must be a typed state or field ProgramValue")
+        if self.template.vtype not in ("state", "scalar_field"):
+            raise SolveRequestError(
+                "invalid_unknown", "unknown template must be a typed state or field ProgramValue",
+                blockage=Blockage(
+                    BlockageClass.EXPR, "author", "SolveUnknown:%s" % self.name,
+                    "unknown_value_space_unrepresentable", self.template.vtype,
+                ),
+            )
 
         if self.interval is not None:
             if type(self.interval) is not TemporalInterval:

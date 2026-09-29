@@ -1,5 +1,6 @@
 """Selected cell-gradient / constitutive-face / divergence diffusion construction."""
 from __future__ import annotations
+from pops.blockage import Blockage, BlockageClass, BlockageValueError
 from pops.descriptors import Descriptor
 from pops.model.balance_analysis import diffusion_balance_supported
 
@@ -60,9 +61,17 @@ class Diffusion(Descriptor):
                 for column, value in enumerate(row):
                     if axis != column and not (isinstance(value, Const) and value.value == 0):
                         raise ValueError("two-point monotone diffusion requires diagonal spatial tensors; off-diagonal fluxes require a transverse-gradient realization")
-                    if axis == column and isinstance(value, Const) and (
-                            not math.isfinite(value.value) or value.value < 0):
+                    if axis == column and isinstance(value, Const) and not math.isfinite(value.value):
                         raise ValueError("diffusion coefficients must be finite and nonnegative")
+                    if axis == column and isinstance(value, Const) and value.value < 0:
+                        raise BlockageValueError(
+                            "diffusion coefficients must be finite and nonnegative",
+                            blockage=Blockage(
+                                BlockageClass.MATH, "validate", self.flux.qualified_id,
+                                "incompatible_method_hypothesis",
+                                "nonnegative_diagonal_diffusion",
+                            ),
+                        )
         return True
 
     def _transport_frequency_contract(self):

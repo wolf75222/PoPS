@@ -131,7 +131,8 @@ def flux_available(flux: Any, context: Any = None) -> Any:
             riemann_capability_contract(flux), model
         )
         alternatives = ["pops.numerics.riemann.Rusanov()"]
-        return Availability.no(str(err), missing=missing, alternatives=alternatives)
+        return Availability.no(str(err), missing=missing, alternatives=alternatives,
+                               blockage=getattr(err, "blockage", None))
     return Availability.yes()
 
 
