@@ -209,6 +209,10 @@ class _ProgramSerialization(_ProgramBase):
                  "component": component, "scale": scale}
                 for name, rate_id, axis, side, component, scale in self._integral_transfers
             ]
+            if self._integral_units:
+                result["integral_units_v2"] = {
+                    name: units.to_data() for name, units in sorted(self._integral_units.items())
+                }
         post_sync_commits = getattr(self, "_post_sync_commits", {})
         if post_sync_commits:
             result["post_synchronization_commits"] = [

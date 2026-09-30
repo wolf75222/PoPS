@@ -30,6 +30,14 @@ def expression_cpp(node, inputs):
 def pointwise_output_template(value):
     """One authenticated output authority for allocation, mask and cell evaluation."""
     from pops.time.expressions import component_names
+    if "global_template_index" in value.attrs:
+        index = value.attrs["global_template_index"]
+        if (type(index) is not int or not 0 <= index < len(value.inputs)
+                or value.inputs[index].vtype != "state"
+                or value.inputs[index].block != value.block
+                or value.inputs[index].state_ref != value.state_ref):
+            raise ValueError("global expression output authority changed")
+        return value.inputs[index]
     if "finite_support_v1" in value.attrs:
         from pops.linalg.finite import FiniteSupport
         support = FiniteSupport(*value.attrs["finite_support_v1"])
@@ -139,7 +147,8 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
         " : pops::FieldView<const pops::Real, pops::kNativeDimension>{};" % mask,
     ])
     body[index:index] = views
-    rows = [[name] if item.vtype == "scalar" else
+    rows = [["global_value_%d" % item.id] if item.op == "integral_candidate" else
+            [name] if item.vtype == "scalar" else
             ["%sA(index, %d)" % (name, c) for c in range(len(component_names(item)))]
             for item, name in zip(value.inputs, names, strict=True)]
     temporaries, rendered, invalid = checked_pointwise_rows(value, rows)
@@ -158,5 +167,13 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
                         % (name, output, name, output, name, output))
         vote += ["if (pops::all_reduce_max(finite_layout_error_, ctx.prepared_execution_lane()))",
                  '  throw std::runtime_error("finite materialization requires co-located layouts, distributions and ranks");']
-        return vote + ["}"] + body + _kernel_close()
-    return body + _kernel_close()
+        body = vote + ["}"] + body
+    captures = []
+    for item, name in zip(value.inputs, names, strict=True):
+        if item.op == "integral_candidate":
+            import json
+            from pops.codegen.program_integral_transfers import integral_identity
+            captures.append("const pops::Real global_value_%d = ctx.integral_candidate_value(%s,%s,%s);" %
+                (item.id, name, json.dumps(integral_identity(item.prog,item.attrs["integral"])),
+                 json.dumps(item.attrs["units"])))
+    return captures + body + _kernel_close()

@@ -44,6 +44,9 @@ class PreparedResourceAttempt {
   PreparedResourceAttempt() = default;
   std::uint64_t ordinal() const noexcept { return state_ ? state_->ordinal : 0; }
   bool visible() const noexcept { return state_ && state_->visible(); }
+  bool same_attempt(const PreparedResourceAttempt& other) const noexcept {
+    return state_ && state_ == other.state_;
+  }
   void reject() const noexcept {
     if (state_)
       state_->rejected.store(true, std::memory_order_release);

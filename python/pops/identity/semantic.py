@@ -128,6 +128,7 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         "post_synchronization_commits",
         "integral_states",
         "external_trace_transfers",
+        "integral_units_v2",
     }
     if not expected.issubset(serialized) or not set(serialized).issubset(expected | optional):
         raise TypeError("Program semantic projection received an unsupported IR schema")
@@ -149,6 +150,7 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         "post_synchronization_commits",
         "integral_states",
         "external_trace_transfers",
+        "integral_units_v2",
     ):
         if key in serialized:
             result[key] = serialized[key]

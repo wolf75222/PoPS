@@ -6,6 +6,23 @@ import math
 from typing import Any
 
 from pops.time.values import ProgramValue
+from pops.time._authoring import atomic_authoring
+
+
+def integral_units_bytes(units) -> str:
+    import json
+    return json.dumps(units.to_data(), sort_keys=True, separators=(",", ":"))
+
+
+def integral_identity(program, name: str) -> str:
+    from pops.identity.semantic import semantic_identity_of
+    from hashlib import sha256
+    units = program._integral_units.get(name)
+    base = semantic_identity_of(program=program).token
+    if units is None:
+        return "pops.integral.v1/" + base + "/" + name
+    digest = sha256(integral_units_bytes(units).encode("utf-8")).hexdigest()
+    return "pops.integral.v2/" + base + "/" + digest + "/" + name
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -15,13 +32,11 @@ class IntegralState:
 
     @property
     def identity(self) -> str:
-        from pops.identity.semantic import semantic_identity_of
-
-        return "pops.integral.v1/" + semantic_identity_of(program=self.program).token + "/" + self.name
+        return integral_identity(self.program, self.name)
 
 
 class _ProgramIntegrals:
-    def integral_state(self, name: str, *, initial: float) -> IntegralState:
+    def integral_state(self, name: str, *, initial: float, units=None) -> IntegralState:
         """Declare a global persistent scalar, independent of cell-state and diagnostic storage."""
         self._guard_mutable("declare integral state")
         if type(name) is not str or not name or "/" in name or "\0" in name:
@@ -30,8 +45,41 @@ class _ProgramIntegrals:
             raise ValueError("integral_state initial value must be finite")
         if name in self._integral_states:
             raise ValueError("integral state is already declared in this Program")
+        from pops._ir.quantity import PhysicalDimension
+        if units is not None and type(units) is not PhysicalDimension:
+            raise TypeError("integral units require an exact PhysicalDimension")
         self._integral_states[name] = float(initial)
+        if units is not None:
+            self._integral_units[name] = units
         return IntegralState(self, name)
+
+    @atomic_authoring
+    def integral_value(self, state: IntegralState, *, at, scope: str):
+        """Capture a global candidate in an explicit Program pointwise expression.
+
+        Direct Equation/FieldProblem argument capture is not realized by this API.
+        Candidate scope participates in the enclosing transaction and can be revoked.
+        """
+        self._guard_mutable("capture integral candidate")
+        if type(state) is not IntegralState or state.program is not self \
+                or state.name not in self._integral_states:
+            raise ValueError("integral capture requires this Program's exact IntegralState")
+        if scope != "candidate":
+            raise ValueError("integral capture currently realizes explicit candidate scope")
+        units = self._integral_units.get(state.name)
+        if units is None:
+            raise ValueError("integral capture requires explicitly declared physical units")
+        from pops.time._program.value_validation import point_clock
+        if point_clock(at, "integral capture") != self.clock:
+            raise ValueError("integral capture requires this Program's exact clock")
+        from pops.time.expressions import ProgramGlobal
+        value = self._new("scalar", "integral_candidate", (), {
+            "integral": state.name, "units": integral_units_bytes(units),
+            "scope": scope, "capture_version": 1,
+        }, None, None, point=at)
+        from pops.time._evaluation_point import evaluation_stage_fraction
+        evaluation_stage_fraction(value)
+        return ProgramGlobal(value)
 
     def accept_external_trace(
         self, state: IntegralState, *, rate: ProgramValue, axis: int, side: int,

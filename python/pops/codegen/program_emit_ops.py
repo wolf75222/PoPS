@@ -414,7 +414,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # branches. Evaluation context and kernels remain in the guarded body.
     output_setup_end = None
     evaluation_prelude = []
-    if v.op in {"source", "implicit_source", "local_transform", "affine_moment_update", "apply",
+    if v.op in {"source", "implicit_source", "local_transform", "affine_moment_update", "apply", "integral_candidate",
                 "solve_local_linear", "solve_local_nonlinear", "solve_implicit_source"}:
         from pops.time._evaluation_point import evaluation_stage_fraction
         # Unqualified sources use explicit ARK coordinates; an authored partition takes precedence.
@@ -423,7 +423,18 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                          None if v.op in {"apply", "local_transform", "affine_moment_update"} else "implicit")
         stage = evaluation_stage_fraction(v, ark_partition=ark_partition)
         evaluation_prelude.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
-    if v.op == "post_synchronization":
+    if v.op == "integral_candidate":
+        from pops.time._program.integrals import integral_identity, integral_units_bytes
+        units = program._integral_units.get(v.attrs.get("integral"))
+        if (v.vtype != "scalar" or v.inputs or v.attrs.get("capture_version") != 1
+                or v.attrs.get("scope") != "candidate" or units is None
+                or v.attrs.get("units") != integral_units_bytes(units)):
+            raise ValueError("integral candidate capture metadata changed")
+        var[v.id] = "integral_capture_%d" % v.id
+        lines.append("const auto %s = ctx.capture_integral_candidate(%s,%s);" %
+                     (var[v.id], json.dumps(integral_identity(program,v.attrs["integral"])),
+                      json.dumps(v.attrs["units"])))
+    elif v.op == "post_synchronization":
         var[v.id] = "/* post_synchronization */"
     elif v.op in ("layout_map_export", "layout_map_import"):
         from pops.codegen.program_emit_mapping_regions import emit_map_port
@@ -1510,6 +1521,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             target=target)
     elif v.op == "pointwise_expression":
         from pops.codegen.program_emit_expressions import emit_pointwise_kernel, pointwise_output_template
+        if "global_template_index" in v.attrs:
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            template = pointwise_output_template(v)
+            stage = evaluation_stage_fraction(template)
+            evaluation_prelude.append("ctx.set_stage_time(%d, %d);" %
+                                      (stage.numerator,stage.denominator))
         template_var = var[pointwise_output_template(v).id]
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"

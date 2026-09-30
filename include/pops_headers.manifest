@@ -339,6 +339,7 @@ sdk-support pops/runtime/program/moving_interval_checkpoint.hpp
 sdk-root pops/runtime/program/prepared_principal_flux.hpp
 sdk-support pops/runtime/program/prepared_resource_cache.hpp
 sdk-support pops/runtime/program/prepared_resource_lifetime.hpp
+sdk-support pops/runtime/program/prepared_integral_capture.hpp
 sdk-support pops/runtime/program/program_cadence_continuation.inc
 sdk-support pops/runtime/program/prepared_condensed_sampling.hpp
 sdk-support pops/runtime/program/prepared_scalar_boundary_session.hpp

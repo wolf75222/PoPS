@@ -29,13 +29,27 @@ class _ProgramExpressions:
         if not inputs:
             raise ValueError("a pointwise expression needs a temporal value to define its support")
         if template is None:
-            template = next((item for item in inputs if item.vtype == "state"), inputs[0])
+            template = next((item for item in inputs if item.vtype == "state"), None)
+            if template is None:
+                template = next((item for item in inputs
+                                 if item.op != "integral_candidate"), None)
+        if template is None:
+            raise ValueError("a global capture cannot define cell support")
         require_owned(self, template, "pointwise expression template")
         if template.vtype != "state":
             raise TypeError("pointwise materialization currently requires a typed State template")
         if len(expressions) != len(component_names(template)):
             raise ValueError("pointwise output component count must match its StateSpace")
         attrs = {"expressions": encoded, "expression_nodes": nodes}
+        globals_ = tuple(value for value in inputs if value.op == "integral_candidate")
+        if globals_:
+            if all(value is not template for value in inputs):
+                inputs = (*inputs, template)
+            attrs["global_template_index"] = next(i for i, value in enumerate(inputs) if value is template)
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            if any(evaluation_stage_fraction(value) != evaluation_stage_fraction(template)
+                   for value in globals_):
+                raise ValueError("global capture and cell evaluation require the same exact point")
         if finite_support is not None:
             if type(finite_support) is not tuple or len(finite_support) != 2 or \
                     type(finite_support[0]) is not str or not finite_support[0] or \
@@ -46,6 +60,8 @@ class _ProgramExpressions:
             attrs["finite_support_v1"] = finite_support
             attrs["finite_template_index"] = next(i for i, value in enumerate(inputs) if value is template)
             for value in inputs:
+                if value.op == "integral_candidate":
+                    continue
                 for attribute in ("layout", "centering", "support", "sampling", "frame", "clock"):
                     if getattr(value.space, attribute) != getattr(template.space, attribute):
                         raise ValueError("finite materialization co-location obligation: different " + attribute)

@@ -5,9 +5,8 @@ import json
 
 
 def integral_identity(program, name: str) -> str:
-    from pops.identity.semantic import semantic_identity_of
-
-    return "pops.integral.v1/" + semantic_identity_of(program=program).token + "/" + name
+    from pops.time._program.integrals import integral_identity as identity
+    return identity(program, name)
 
 
 def emit_integral_declarations(program) -> list[str]:

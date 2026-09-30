@@ -153,6 +153,7 @@ class Program(
         self._post_sync_commits = {}
         self._post_sync_recording = False
         self._integral_states = {}
+        self._integral_units = {}
         self._integral_transfers = []
         self._transaction_stores = ALL_PROVISIONAL_STORES
         self._acceptance_guards = ()

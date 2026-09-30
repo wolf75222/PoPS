@@ -63,6 +63,7 @@ _ALLOWED_OPS = frozenset(
         "solve_implicit_source",
         "linear_combine",
         "pointwise_expression",
+        "integral_candidate",
         "linear_source",
         "reduce",
         "scalar_op",

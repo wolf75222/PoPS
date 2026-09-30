@@ -1309,8 +1309,13 @@ class TransportBoundarySet:
 
     @staticmethod
     def _requirements(context: Any) -> dict[Handle, BoundaryStencilRequirement]:
+        from pops.numerics.state_storage import StateStorage
         accumulated: dict[Handle, dict[str, Any]] = {}
         for row in context.rates:
+            # A declared local-source partition shares the evolved state storage;
+            # its validated contract contains no hyperbolic flux or boundary stencil.
+            if isinstance(row.method, StateStorage):
+                continue
             state = row.method.variables.options.get("state")
             _state(state, where="FiniteVolume.variables state")
             if not state.is_resolved:

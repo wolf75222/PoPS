@@ -14,6 +14,8 @@ from pops._ir.symbolic import ImmutableSymbolic
 
 
 def component_names(value: Any) -> tuple[str, ...]:
+    if value.op == "integral_candidate" and value.vtype == "scalar":
+        return ("value",)
     if value.vtype == "scalar":
         return ("scalar",)
     space = value.space
@@ -78,6 +80,21 @@ class ProgramScalar(ir.Expr):
 
     def _str(self):
         return self.value.name
+
+
+class ProgramGlobal(ir.Expr):
+    """Exact typed global capture; no grid support and no Python numerical value."""
+    def __init__(self, value):
+        self.value = value
+    def __pops_ir_children__(self):
+        return ()
+    def __pops_ir_key__(self, recurse):
+        return ("program_global", str(self.value.prog.owner_path), self.value.id)
+    def to_cpp(self):
+        raise TypeError("global integral capture requires authenticated Program lowering; "
+                        "direct Equation/FieldProblem capture is unsupported")
+    def _str(self):
+        return "global_candidate(%s)" % self.value.name
 
 
 class ProgramExpression(ImmutableSymbolic):
@@ -197,12 +214,13 @@ def encode_expressions(expressions, program):
                 by_id[value.id] = len(inputs)
                 inputs.append(value)
             encoded = ("input", by_id[value.id], 0)
-        elif type(node) is ProgramComponent:
+        elif type(node) in (ProgramComponent, ProgramGlobal):
             value = require_owned(program, node.value, "pointwise expression")
             if value.id not in by_id:
                 by_id[value.id] = len(inputs)
                 inputs.append(value)
-            encoded = ("input", by_id[value.id], node.component)
+            encoded = ("input", by_id[value.id],
+                       node.component if type(node) is ProgramComponent else 0)
         elif type(node) is ir.Const:
             encoded = ("literal", node.literal)
         elif type(node) is CoefficientExpression:

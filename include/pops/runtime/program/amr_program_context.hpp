@@ -28,6 +28,7 @@
 #include <pops/runtime/program/prepared_condensed_sampling.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/prepared_resource_cache.hpp>
+#include <pops/runtime/program/prepared_integral_capture.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/program_owner_field_identity.hpp>
@@ -106,6 +107,24 @@ class AmrProgramContext {
   }
   Real integral_state(const std::string& identity) const {
     return static_cast<Real>(facade_->program_integral(identity));
+  }
+  PreparedIntegralCapture capture_integral_candidate(const std::string& identity,
+                                                     const std::string& units) const {
+    return PreparedIntegralCapture::prepare_(this, [&] { return resource_attempt(); },
+        [&] { return boundary_evaluation_point(0); },
+        identity, units, [&] {
+          const auto& ledger = facade_->program_runtime_state_().accepted_exchanges_;
+          return PreparedIntegralCapture::ReadImage{ledger.integral(identity),ledger.checkpoint(true)};
+        }, prepared_execution_lane());
+  }
+  Real integral_candidate_value(const PreparedIntegralCapture& capture,
+      const std::string& identity, const std::string& units) const {
+    return static_cast<Real>(capture.consume_(this, [&] { return resource_attempt(); },
+        [&] { return boundary_evaluation_point(0); },
+        identity, units, [&] {
+          const auto& ledger = facade_->program_runtime_state_().accepted_exchanges_;
+          return PreparedIntegralCapture::ReadImage{ledger.integral(identity),ledger.checkpoint(true)};
+        }, prepared_execution_lane()));
   }
   Real consume_external_trace(const std::string& integral_identity,
                               const AcceptedExchangeLedger::TraceSelection& selection,
