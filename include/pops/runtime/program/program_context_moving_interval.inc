@@ -177,6 +177,10 @@
       const auto& input = state(program_block);
       const auto& accepted = moving_interval_geometry(identity);
       const int components = input.ncomp();
+      const auto* active_mask = pointwise_active_mask(program_block, input);
+      if (all_reduce_max(active_mask ? 1L : 0L, lane) != 0)
+        throw std::invalid_argument("moving interval provider requires full physical cells; "
+                                    "embedded-boundary moving measures are not prepared");
       std::vector<std::size_t> ordered;
       std::vector<std::vector<Real>> endpoints;
       try {
@@ -276,6 +280,12 @@
       if (all_reduce_max(static_cast<double>(invalid), lane) != 0)
         throw StepAttemptRejected(SolveStatus::kInvalidEvaluation, "moving-GCL",
                                    "nonfinite/inverted cell or endpoint/sweep/GCL mismatch");
+      // Preserve the physical block's prepared recovery/admissibility contract.
+      // A finite density alone does not establish a valid physical state.
+      const auto* publication_mask = system_->validate_program_state_publication_candidate_(
+          sys_block(program_block), *updated, lane);
+      if (all_reduce_max(publication_mask ? 1L : 0L, lane) != 0)
+        throw std::invalid_argument("moving interval publication cannot use a static EB mask");
 
       stage_exchange_batch([&](auto&& stage) {
         for (std::size_t patch = 0; patch < input.local_size(); ++patch) {

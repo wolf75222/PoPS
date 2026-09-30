@@ -2986,6 +2986,7 @@ TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforeP
   ctx->initialize_moving_interval_geometry("mesh", 0);
   const auto before = sim.get_state("gas");
   bool stale = true;
+  bool inadmissible = false;
   ctx->install([&](double dt) {
     ctx->begin_step(dt);
     const auto& accepted = ctx->moving_interval_geometry("mesh");
@@ -3010,6 +3011,14 @@ TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforeP
         pos(face) = old(face) + shift;
         sw(face) = use_stale ? shift/Real(2) : shift;
       });
+      if (inadmissible) {
+        const auto initial_state = ctx->state(0).fab(patch).view();
+        const auto volume = accepted.measures.fab(patch).view();
+        const auto amount = source.fab(patch).view();
+        for_each_cell(box, [=] POPS_HD(const Index<kNativeDimension>& cell) {
+          amount(cell, 0) = -(initial_state(cell, 0) + Real(10)) * volume(cell);
+        });
+      }
     }
     ctx->advance_moving_intervals("mesh", 0, proposed, sweep, physical, density, source, Real(1e-13));
   });
@@ -3020,6 +3029,12 @@ TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforeP
   EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 0u);
   EXPECT_TRUE(sim.program_exchange_records().empty());
   stale = false;
+  inadmissible = true;
+  EXPECT_THROW(sim.step(.25), runtime::program::StepAttemptRejected);
+  EXPECT_EQ(sim.get_state("gas"), before);
+  EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 0u);
+  EXPECT_TRUE(sim.program_exchange_records().empty());
+  inadmissible = false;
   EXPECT_NO_THROW(sim.step(.3));
   EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 1u);
   sim.rollback_step_transaction();

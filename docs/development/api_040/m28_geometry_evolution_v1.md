@@ -112,3 +112,10 @@ therefore cannot skip that reduction while its peers enter it.
 
 This fixes the source defects found in independent review of `88c755d`.
 Source syntax validation is separate from native MPI execution evidence.
+
+Publication also invokes the physical block's existing prepared recovery guard.
+A finite but negative gas density is rejected before ledger staging and swaps.
+The native retry probe now injects that state through a genuine integrated
+source and checks unchanged state, geometry and ledger before its next retry.
+The interval provider rejects active embedded-boundary masks: static masks do
+not supply the missing moving physical-cell measures.
