@@ -903,7 +903,7 @@ std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepare_regridded_state_tra
     const MultiFab<Dim>& field, const amr::hierarchy::LevelLayout<Dim>& parent_layout,
     const amr::hierarchy::LevelLayout<Dim>& child_layout,
     const SparseFieldImage<Dim>* previous_child, amr::transfer::TransferKind transfer_kind,
-    int collective_rank) {
+    int collective_rank, const std::type_identity_t<std::array<bool, Dim>>& periodic_axes) {
   const int source_radius = transfer_kind == amr::transfer::TransferKind::ConstantInjection ? 0 : 1;
   if (source_radius < 0 || source_radius > 1)
     throw std::invalid_argument("AMR prepared transfer requested an unsupported source radius");
@@ -962,13 +962,20 @@ std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepare_regridded_state_tra
   const amr::transfer::ComponentRange components{0, 0, field.ncomp()};
   const amr::transfer::TransferProvider<Dim, amr::transfer::Centering::Cell> provider(
       transfer_kind);
+  amr::transfer::PhysicalParentBoundary<Dim> physical_boundary;
+  if (transfer_kind == amr::transfer::TransferKind::LinearProlongation) {
+    physical_boundary.domain = parent_layout.domain();
+    for (int axis = 0; axis < Dim; ++axis)
+      physical_boundary.lower[axis] = physical_boundary.upper[axis] = !periodic_axes[axis];
+  }
   // A deeper parent may cover only part of its domain. Authenticate the source stencil of
   // every global child patch, not unused cells in the dense communication carrier. Include
   // retained child cells too: the prepared kernels evaluate them before their values are reused.
   prepared->required_sources.reserve(child_layout.patches().size());
   for (const Box<Dim>& child_patch : child_layout.patches().boxes()) {
     const Box<Dim> required = amr::transfer::detail::interpolation_source_box(
-        child_patch, ratio, mapping, provider.capabilities().source_stencil_radius);
+        child_patch, ratio, mapping, provider.capabilities().source_stencil_radius,
+        physical_boundary);
     if (!dense_box.contains(required))
       throw std::invalid_argument("AMR prepared transfer source carrier omits a required stencil");
     prepared->required_sources.push_back(required);
@@ -978,9 +985,12 @@ std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepare_regridded_state_tra
                                                                     : 0);
   for (std::size_t local = 0; local < prepared->child.local_size(); ++local) {
     Fab<Dim>& fab = prepared->child.fab(local);
-    prepared->kernels.push_back(provider.prepare(std::as_const(prepared->dense_parent).view(),
-                                                 fab.view(), fab.box(), ratio, mapping,
-                                                 components));
+    const auto source = std::as_const(prepared->dense_parent).view();
+    prepared->kernels.push_back(
+        transfer_kind == amr::transfer::TransferKind::LinearProlongation
+            ? provider.prepare_physical_boundary_prolongation(
+                  source, fab.view(), fab.box(), ratio, mapping, components, physical_boundary)
+            : provider.prepare(source, fab.view(), fab.box(), ratio, mapping, components));
     if (prepared->previous_child != nullptr)
       prepared->child_hosts.push_back(fab.create_host_mirror());
   }
@@ -1035,17 +1045,17 @@ void execute_regridded_state_transfer(PreparedRegriddedStateTransfer<Dim>& prepa
 }
 
 template <int Dim>
-MultiFab<Dim> transfer_regridded_state(const MultiFab<Dim>& parent,
-                                       const amr::hierarchy::LevelLayout<Dim>& parent_layout,
-                                       const amr::hierarchy::LevelLayout<Dim>& child_layout,
-                                       const SparseFieldImage<Dim>* previous_child,
-                                       const CommunicatorView& communicator,
-                                       amr::transfer::TransferKind transfer_kind) {
+MultiFab<Dim> transfer_regridded_state(
+    const MultiFab<Dim>& parent, const amr::hierarchy::LevelLayout<Dim>& parent_layout,
+    const amr::hierarchy::LevelLayout<Dim>& child_layout,
+    const SparseFieldImage<Dim>* previous_child, const CommunicatorView& communicator,
+    amr::transfer::TransferKind transfer_kind,
+    const std::type_identity_t<std::array<bool, Dim>>& periodic_axes) {
   std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepared;
   std::exception_ptr local_error;
   try {
     prepared = prepare_regridded_state_transfer(parent, parent_layout, child_layout, previous_child,
-                                                transfer_kind, communicator.rank());
+                                                transfer_kind, communicator.rank(), periodic_axes);
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -9186,9 +9196,9 @@ struct AmrSystem<Dim>::Impl {
         try {
           const SparseFieldImage<Dim>* retained =
               transfer.previous != nullptr ? &transfer.previous->slots[slot].image : nullptr;
-          transfer.remapped->push_back(
-              transfer_regridded_state((*transfer.parent)[slot], parent_layout, *fine_layout,
-                                       retained, communicator, transfer.transfer_kind));
+          transfer.remapped->push_back(transfer_regridded_state(
+              (*transfer.parent)[slot], parent_layout, *fine_layout, retained, communicator,
+              transfer.transfer_kind, cfg.periodicity));
         } catch (...) {
           transfer_error = std::current_exception();
         }
@@ -10008,9 +10018,9 @@ struct AmrSystem<Dim>::Impl {
         }
         std::exception_ptr transfer_error;
         try {
-          child_states[block].emplace(transfer_regridded_state(parent_state, parent_layout,
-                                                               *prepared->fine_layout(), retained,
-                                                               graph_communicator, *transfer_kind));
+          child_states[block].emplace(transfer_regridded_state(
+              parent_state, parent_layout, *prepared->fine_layout(), retained, graph_communicator,
+              *transfer_kind, cfg.periodicity));
         } catch (...) {
           transfer_error = std::current_exception();
         }
@@ -11667,7 +11677,7 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
                   *parent, p_->engine->hierarchy().layout(level - 1),
                   p_->engine->hierarchy().layout(level),
                   static_cast<const SparseFieldImage<Dim>*>(nullptr), lane.communicator(),
-                  amr::transfer::TransferKind::ConstantInjection);
+                  amr::transfer::TransferKind::ConstantInjection, p_->cfg.periodicity);
               copy_full_field_in_place(transferred, *group);
             }
           }
@@ -16928,7 +16938,8 @@ std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subj
           p_->multiblock_hierarchy->state(block_index, parent_level),
           p_->engine->hierarchy().layout(parent_level),
           p_->engine->hierarchy().layout(static_cast<std::size_t>(level)),
-          static_cast<const SparseFieldImage<Dim>*>(nullptr), kind, communicator.rank());
+          static_cast<const SparseFieldImage<Dim>*>(nullptr), kind, communicator.rank(),
+          p_->cfg.periodicity);
       candidate = &transfer_materialization->child;
       materialized =
           checked_size_product(static_cast<std::size_t>(block->ncomp),

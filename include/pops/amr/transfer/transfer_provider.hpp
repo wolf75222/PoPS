@@ -62,7 +62,7 @@ struct IndexMapping {
   constexpr bool operator==(const IndexMapping&) const = default;
 };
 
-/// Physical parent faces where limited-linear ghost interpolation uses one-sided slopes.
+/// Physical parent faces where limited-linear interpolation uses one-sided slopes.
 /// Storage edges alone never authorize a reduced stencil.
 template <int Dim>
 struct PhysicalParentBoundary {
@@ -203,7 +203,8 @@ Box<Dim> refined_source_box(const Box<Dim>& coarse_region, const RefinementRatio
 
 template <int Dim>
 Box<Dim> interpolation_source_box(const Box<Dim>& fine_region, const RefinementRatio<Dim>& ratio,
-                                  const IndexMapping<Dim>& mapping, int stencil_radius) {
+                                  const IndexMapping<Dim>& mapping, int stencil_radius,
+                                  PhysicalParentBoundary<Dim> physical_boundary = {}) {
   Box<Dim> result{};
   for (int axis = 0; axis < Dim; ++axis) {
     const std::int64_t lower_relative =
@@ -226,6 +227,24 @@ Box<Dim> interpolation_source_box(const Box<Dim>& fine_region, const RefinementR
         lower, "prepared ND interpolation lower stencil exceeds signed coordinates");
     result.hi[axis] = checked_transfer_index(
         upper, "prepared ND interpolation upper stencil exceeds signed coordinates");
+  }
+  if (!physical_boundary.domain.empty()) {
+    const auto parents = interpolation_source_box(fine_region, ratio, mapping, 0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto lower = physical_boundary.domain.lo[axis];
+      const auto upper = physical_boundary.domain.hi[axis];
+      if ((physical_boundary.lower[axis] && parents.lo[axis] < lower) ||
+          (physical_boundary.upper[axis] && parents.hi[axis] > upper))
+        throw std::invalid_argument("interpolation parents cross a physical domain face");
+      const bool one_sided_lower = physical_boundary.lower[axis] && result.lo[axis] < lower;
+      const bool one_sided_upper = physical_boundary.upper[axis] && result.hi[axis] > upper;
+      if ((one_sided_lower || one_sided_upper) && lower == upper)
+        throw std::invalid_argument("one-sided interpolation requires two physical parent cells");
+      if (one_sided_lower)
+        result.lo[axis] = lower;
+      if (one_sided_upper)
+        result.hi[axis] = upper;
+    }
   }
   return result;
 }
@@ -695,6 +714,19 @@ class TransferProvider {
                         physical_boundary);
   }
 
+  /// Conservative linear reconstruction at physical faces uses the adjacent interior slope.
+  /// Periodic and interior stencils retain their complete parent-neighbor requirement.
+  PreparedTransfer<Dim> prepare_physical_boundary_prolongation(
+      FieldView<const Real, Dim> source, FieldView<Real, Dim> destination,
+      const Box<Dim>& destination_region, RefinementRatio<Dim> ratio, IndexMapping<Dim> mapping,
+      ComponentRange components, PhysicalParentBoundary<Dim> physical_boundary) const {
+    if (kind_ != TransferKind::LinearProlongation || physical_boundary.domain.empty())
+      throw std::invalid_argument(
+          "physical parent prolongation requires the conservative linear route");
+    return prepare_impl(source, destination, destination_region, ratio, mapping, components,
+                        physical_boundary);
+  }
+
  private:
   PreparedTransfer<Dim> prepare_impl(FieldView<const Real, Dim> source,
                                      FieldView<Real, Dim> destination,
@@ -724,27 +756,7 @@ class TransferProvider {
         : kind_ == TransferKind::NodeMultilinearProlongation
             ? detail::node_interpolation_source_box(destination_region, ratio, mapping)
             : detail::interpolation_source_box(destination_region, ratio, mapping,
-                                               interpolation_radius);
-    if (!physical_boundary.domain.empty()) {
-      const auto parents = detail::interpolation_source_box(destination_region, ratio, mapping, 0);
-      for (int axis = 0; axis < Dim; ++axis) {
-        const auto lower = physical_boundary.domain.lo[axis];
-        const auto upper = physical_boundary.domain.hi[axis];
-        if ((physical_boundary.lower[axis] && parents.lo[axis] < lower) ||
-            (physical_boundary.upper[axis] && parents.hi[axis] > upper))
-          throw std::invalid_argument("coarse/fine ghost parents cross a physical domain face");
-        const bool one_sided_lower =
-            physical_boundary.lower[axis] && required_source.lo[axis] < lower;
-        const bool one_sided_upper =
-            physical_boundary.upper[axis] && required_source.hi[axis] > upper;
-        if ((one_sided_lower || one_sided_upper) && lower == upper)
-          throw std::invalid_argument("one-sided interpolation requires two physical parent cells");
-        if (one_sided_lower)
-          required_source.lo[axis] = lower;
-        if (one_sided_upper)
-          required_source.hi[axis] = upper;
-      }
-    }
+                                               interpolation_radius, physical_boundary);
     if (!source_view.box.contains(required_source))
       throw std::invalid_argument(
           "prepared ND transfer source FieldView does not contain the complete stencil");

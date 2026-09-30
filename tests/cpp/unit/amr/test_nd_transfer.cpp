@@ -865,6 +865,69 @@ TEST(test_nd_transfer, linear_prolongation_and_restriction_reproduce_affine_fiel
   expect_affine_prolongation_and_conservative_round_trip<3>();
 }
 
+template <int Dim>
+void expect_physical_affine_prolongation() {
+  const auto mapping = sample_mapping<Dim>();
+  const auto ratio = sample_ratio<Dim>();
+  const auto domain = sample_coarse_region(mapping);
+  const auto fine_region = refine_for_test(domain, ratio, mapping);
+  HostField<Dim> coarse(domain, 2), fine(fine_region, 2), restricted(domain, 2);
+  fill_affine(coarse, mapping);
+  pops::amr::transfer::PhysicalParentBoundary<Dim> physical;
+  physical.domain = domain;
+  physical.lower.fill(true);
+  physical.upper.fill(true);
+  const auto provider = TransferProvider<Dim, Centering::Cell>::linear_prolongation();
+  EXPECT_THROW((void)provider.prepare(coarse.const_view(), fine.view(), fine_region, ratio, mapping,
+                                      ComponentRange{0, 0, 2}),
+               std::invalid_argument);
+  const auto prepared = provider.prepare_physical_boundary_prolongation(
+      coarse.const_view(), fine.view(), fine_region, ratio, mapping, {0, 0, 2}, physical);
+  visit(fine_region, [&](const Index<Dim>& index) {
+    prepared(index);
+    for (int component = 0; component < 2; ++component)
+      EXPECT_NEAR(fine(index, component), affine_fine(index, ratio, mapping, component), 1e-13);
+  });
+  const auto average = TransferProvider<Dim, Centering::Cell>::conservative_restriction().prepare(
+      fine.const_view(), restricted.view(), domain, ratio, mapping, {0, 0, 2});
+  visit(domain, [&](const Index<Dim>& index) {
+    average(index);
+    for (int component = 0; component < 2; ++component)
+      EXPECT_NEAR(restricted(index, component), coarse(index, component), 1e-13);
+  });
+  // Marking an axis periodic retains the missing-neighbor rejection.
+  physical.lower[0] = physical.upper[0] = false;
+  EXPECT_THROW(
+      (void)provider.prepare_physical_boundary_prolongation(
+          coarse.const_view(), fine.view(), fine_region, ratio, mapping, {0, 0, 2}, physical),
+      std::invalid_argument);
+}
+
+TEST(test_nd_transfer, physical_prolongation_reproduces_affine_averages_in_1d_2d_3d) {
+  expect_physical_affine_prolongation<1>();
+  expect_physical_affine_prolongation<2>();
+  expect_physical_affine_prolongation<3>();
+}
+
+TEST(test_nd_transfer, physical_prolongation_does_not_authorize_missing_interior_or_singletons) {
+  const Box<1> domain{Index<1>{0}, Index<1>{3}};
+  HostField<1> incomplete(Box<1>{Index<1>{0}, Index<1>{1}}, 1);
+  HostField<1> fine(Box<1>{Index<1>{0}, Index<1>{7}}, 1);
+  const auto provider = TransferProvider<1, Centering::Cell>::linear_prolongation();
+  const pops::amr::transfer::PhysicalParentBoundary<1> physical{domain, {true}, {true}};
+  EXPECT_THROW((void)provider.prepare_physical_boundary_prolongation(
+                   incomplete.const_view(), fine.view(), fine.box(), RefinementRatio<1>{2}, {}, {},
+                   physical),
+               std::invalid_argument);
+  const Box<1> singleton{Index<1>{0}, Index<1>{0}};
+  HostField<1> one(singleton, 1);
+  const pops::amr::transfer::PhysicalParentBoundary<1> one_physical{singleton, {true}, {true}};
+  EXPECT_THROW((void)provider.prepare_physical_boundary_prolongation(
+                   one.const_view(), fine.view(), Box<1>{Index<1>{0}, Index<1>{1}},
+                   RefinementRatio<1>{2}, {}, {}, one_physical),
+               std::invalid_argument);
+}
+
 TEST(test_nd_transfer, limited_linear_prolongation_preserves_every_parent_average_in_1d_2d_3d) {
   expect_limited_prolongation_is_conservative<1>();
   expect_limited_prolongation_is_conservative<2>();

@@ -93,6 +93,16 @@ def test_public_diffusive_integral_constant_gradient_balance_and_restart(
             assert mask[:, 0].all(), "left face must remain coarse-owned for the balance oracle"
     _, before = save_public_snapshot(world, runtime, artifact, right, directory, "initial",
                                      amr=kind == "amr2")
+    if kind == "amr2":
+        from tests.python.support.amr_snapshots import level_valid_mask
+        valid = collective_call(world, lambda: level_valid_mask(runtime, 1, refinement_ratio=2))
+        fine = collective_call(world, lambda: runtime.block_level_state_global("fluid", 1))
+        with collective_check(world):
+            if world is None or int(world.rank) == 0:
+                np.testing.assert_allclose(before[0], initial.reshape(-1), rtol=0, atol=2e-14)
+                expected = np.broadcast_to(1. + (np.arange(64) + .5) / 64, (64, 64))
+                np.testing.assert_allclose(np.asarray(fine).reshape(64, 64)[valid],
+                                           expected[valid], rtol=0, atol=2e-14)
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     checkpoint, accepted = save_public_snapshot(world, runtime, artifact, right, directory,
                                                 "accepted", amr=kind == "amr2")
