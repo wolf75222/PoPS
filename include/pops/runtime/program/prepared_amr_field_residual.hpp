@@ -79,7 +79,8 @@ class PreparedAmrFieldResidual final {
                          const ExecutionLane& lane) const {
     std::string contract;
     local_phase_(lane, [&] {
-      if (!current.owner || current.owner != authority_.owner || !authority_.attempt.visible() ||
+      if (&lane != &op_->original_field_execution_lane() ||
+          !current.owner || current.owner != authority_.owner || !authority_.attempt.visible() ||
           !current.attempt.visible() || !authority_.attempt.same_attempt(current.attempt) ||
           current.topology_epoch != authority_.topology_epoch ||
           current.materialization_generation != authority_.materialization_generation ||
