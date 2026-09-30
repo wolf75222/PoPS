@@ -40,7 +40,7 @@ print("source_import="+pops.__file__)
 def test_m26_full_program_syntax(tmp_path, monkeypatch, permuted, nonuniform):
     monkeypatch.setattr(compiler, "EMIT_WORKER", WORKER)
     monkeypatch.setenv("POPS_M23_SOURCE_ROOT", str(Path(__file__).resolve().parents[4]))
-    compiler.test_m23_complete_ssprk2_program_syntax(tmp_path, 12, permuted, nonuniform)
+    compiler.test_m23_complete_ssprk2_program_syntax(tmp_path, 1, 12, permuted, nonuniform)
     source = (tmp_path / "complete_m23_program.cpp").read_text()
     # Inspect the actual emitted arrays, rather than rebuilding the interaction
     # through the API under review. Each Fourier basis column independently

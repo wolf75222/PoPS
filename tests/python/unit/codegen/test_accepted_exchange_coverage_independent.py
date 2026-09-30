@@ -13,6 +13,15 @@ import pytest
 from pops.codegen.program_emit_transport_exchanges import emit_transport_exchanges
 
 
+def _sdk_root():
+    package = Path(pops.__file__).resolve().parent
+    if (package / "include/pops/runtime/program/accepted_exchange.hpp").is_file():
+        return package
+    source = Path(__file__).resolve().parents[4]
+    assert Path(pops.__file__).resolve() == source / "python/pops/__init__.py"
+    return source
+
+
 HOST = r'''#include <pops/runtime/program/accepted_exchange.hpp>
 #include <array>
 #include <iostream>
@@ -156,7 +165,7 @@ def test_actual_transport_emitter_intersects_coverage_and_embedded_boundary(tmp_
     compiler = shutil.which("clang++") or shutil.which("c++")
     if compiler is None:
         pytest.skip("host C++20 compiler required")
-    root = Path(pops.__file__).resolve().parents[2]
+    root = _sdk_root()
     generated = "\n".join(emit_transport_exchanges(
         "faces", "operation", "occurrence", "stage0/evaluation0", "dt"))
     source = tmp_path / "coverage.cpp"
@@ -181,7 +190,7 @@ def test_actual_diffusion_producer_intersects_coverage_and_embedded_boundary(tmp
     compiler = shutil.which("clang++") or shutil.which("c++")
     if compiler is None:
         pytest.skip("host C++20 compiler required")
-    root = Path(pops.__file__).resolve().parents[2]
+    root = _sdk_root()
     header = (root / "include/pops/numerics/diffusion/prepared_diffusion.hpp").read_text()
     start = header.index("  template <class Context>\n  void stage_accepted_exchanges(")
     end = header.index("\n  const auto& faces()", start)
@@ -280,7 +289,7 @@ def test_production_coverage_lookup_does_not_reenter_collective_preparation(tmp_
     compiler = shutil.which("clang++") or shutil.which("c++")
     if compiler is None:
         pytest.skip("host C++20 compiler required")
-    root = Path(pops.__file__).resolve().parents[2]
+    root = _sdk_root()
     header = (root / "include/pops/runtime/program/"
               "amr_program_context_history_checkpoint_public.inc").read_text()
     start = header.index("const field_type* pointwise_exchange_coverage_mask(")

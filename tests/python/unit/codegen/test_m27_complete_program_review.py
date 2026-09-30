@@ -33,4 +33,4 @@ print("source_import="+pops.__file__)
 def test_m27_full_program_syntax(tmp_path, monkeypatch, permuted, insufficient):
     monkeypatch.setattr(compiler, "EMIT_WORKER", WORKER)
     monkeypatch.setenv("POPS_M23_SOURCE_ROOT", str(Path(__file__).resolve().parents[4]))
-    compiler.test_m23_complete_ssprk2_program_syntax(tmp_path, 2, permuted, insufficient)
+    compiler.test_m23_complete_ssprk2_program_syntax(tmp_path, 1, 2, permuted, insufficient)
