@@ -195,7 +195,7 @@ TEST(ProgramRuntime, IndependentMovingCaptureRejectsNonterminalOrNestedStaging) 
   ASSERT_EQ(sim.step_transaction_depth(), 1u);
   EXPECT_ANY_THROW(sim.checkpoint_program_exchanges());
   EXPECT_ANY_THROW(sim.checkpoint_program_exchanges(true));  // no terminal receipt exists yet
-  sim.begin_step_transaction();
+  sim.begin_nested_step_transaction();
   ASSERT_EQ(sim.step_transaction_depth(), 2u);
   EXPECT_ANY_THROW(sim.checkpoint_program_exchanges(true));
   sim.rollback_step_transaction();
