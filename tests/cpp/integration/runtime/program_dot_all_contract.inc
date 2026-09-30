@@ -1,3 +1,5 @@
+#include "program_dot_all_precision_independent.inc"
+
 // Include in test_program_runtime.cpp; exercises the real owner-aware provider.
 TEST(ProgramRuntime, ExplicitVectorPairingIncludesEveryComponentAndKeepsLegacyDotZero) {
 #if defined(POPS_HAS_KOKKOS)
