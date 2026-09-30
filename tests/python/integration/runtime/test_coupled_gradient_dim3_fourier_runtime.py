@@ -249,9 +249,12 @@ def test_dim3_fourier_faces_and_component_permutation(
     record_batches = allgather_value(world, local_records)
     local_wire = collective_call(world, runtime._executor._checkpoint_program_exchanges)
     wire_batches = allgather_bytes(world, local_wire)
+    native_time, native_step = collective_call(
+        world, lambda: (runtime.time(), runtime.macro_step()))
     with collective_check(world):
-        assert runtime.time() == DT and runtime.macro_step() == 1
-        assert all(wire.startswith(b"POPSEX02") for wire in wire_batches)
+        assert native_time == DT and native_step == 1
+        # This graph has no IntegralState or moving geometry declaration.
+        assert all(wire.startswith(b"POPSEX01") for wire in wire_batches)
         if world.rank == 0:
             actual = after.reshape(2, *reversed(CELLS))[np.argsort(order)]
             predictor = initial + DT * _rate(initial)
@@ -300,6 +303,8 @@ def test_dim3_fourier_faces_and_component_permutation(
                 "native_path": str(Path(native.__file__).resolve()),
                 "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
                 "native_abi": str(native.abi_key()),
+                "native_time": native_time,
+                "native_macro_step": native_step,
                 "artifact_identity": artifact.artifact_identity.token,
                 "platform_manifest": artifact.platform_manifest.to_data(),
                 "fixture_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
