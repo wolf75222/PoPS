@@ -157,3 +157,26 @@ validation/restore explicitly refuse a nonempty moving-geometry carrier. This
 also covers externally authored C++ Programs. The mandatory Uniform checkpoint
 continuation capture reaches this refusal before publishing a checkpoint file;
 an image that silently drops the accepted moving geometry is forbidden.
+
+## Generic native face and cell projection
+
+`project_moving_interval<Components>` samples the actual owned physical state,
+fills its real halo through the existing prepared boundary session, then runs
+coordinate, face and cell construction functors inside the issued interval.
+The device context carries physical interval endpoints/duration, reference and
+evolved face positions, old/new cell centers and independently stored measures.
+Every source and face quantity is therefore evaluated by its producer during
+that interval; an older face array is not requalified at publication.
+
+The coordinate law is evaluated at both physical endpoints and must continue
+the accepted coordinates. The face/cell policies explicitly return integrated
+physical flux, density trace and integrated source. No physical equation or
+benchmark coefficient lives in this generic runtime operation. Higher stencil
+orders require their own geometry-aware sampling provider, and source/time
+quadrature and numerical stability remain authored obligations.
+
+The real Program runtime fixture uses 8/32 cells, velocities of opposite sign,
+permuted physical components, successive `.2/.3` intervals and parent rollback.
+It verifies constant-preserving componentwise linear transport, actual volume
+sum and receipt duration/coordinates. These C++ probes do not establish public
+Python or AMR qualification.

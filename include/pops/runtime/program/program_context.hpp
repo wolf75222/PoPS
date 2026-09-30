@@ -371,6 +371,7 @@ class ProgramContext {
   }
 
 #include <pops/runtime/program/program_context_moving_interval.inc>
+#include <pops/runtime/program/program_context_moving_projection.inc>
   /// One collective prerequisite publication before a generated consumer traverses local Fabs.
   /// The supplied SSA state is authenticated without substituting the accepted block state.
   /// Native DerivedAux launchers consume their declared auxiliary dependencies; state-dependent

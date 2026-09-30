@@ -2,6 +2,7 @@
 /// @brief Deep-owned moving geometry storage for the existing Program transaction.
 #pragma once
 
+#include <pops/core/state/state.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/spatial/nd/face_field.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
@@ -16,6 +17,22 @@
 namespace pops::runtime::program {
 
 template <int Dim> class ProgramContext;
+
+/// Device-copyable quadrature coordinates; the exact logical/attempt authority
+/// stays on the host RuntimeIntervalEvaluation rather than in a kernel capture.
+struct MovingIntervalTime {
+  Real begin = 0, end = 0, duration = 0;
+};
+struct MovingFaceGeometry {
+  Real reference = 0, previous_position = 0, position = 0, swept_volume = 0;
+};
+struct MovingCellGeometry {
+  Real reference = 0, previous_center = 0, center = 0, previous_measure = 0, measure = 0;
+};
+template <int Components>
+struct MovingFaceEvaluation {
+  StateVec<Components> physical_amount{}, density{};
+};
 
 /// Values produced by one generic native interval evaluator. They are already
 /// integrated quantities; the runtime never inserts a physical constitutive law.

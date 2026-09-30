@@ -2830,6 +2830,8 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
   }
 }
 
+#include "moving_interval_projection_tests.inc"
+
 TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentRollback) {
   if constexpr (kNativeDimension != 1) {
     GTEST_SKIP() << "The first moving-interval provider requires a native Dim1 build";
@@ -3029,6 +3031,7 @@ TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforeP
     ctx->begin_step(dt);
     auto evaluation = ctx->evaluate_moving_interval("mesh", 0, "unit-interval", "endpoint-swept@1",
         [&](const runtime::multiblock::BoundaryEvaluationPoint& point) {
+    const double interval_dt = point.dt;
     const auto& accepted = ctx->moving_interval_geometry("mesh");
     auto proposed = accepted.coordinates;
     auto sweep = accepted.swept_volumes;
@@ -3047,7 +3050,7 @@ TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforeP
         const Real x = geom.face_coordinate(0, face[0]);
         const Real shift = face[0] == geom.domain().lo[0] ||
                            face[0] == geom.domain().hi[0] + 1 ? Real(0) :
-                           Real(.1) * Real(point.dt) * Kokkos::sin(Real(6.2831853071795864769)*x);
+                           Real(.1) * Real(interval_dt) * Kokkos::sin(Real(6.2831853071795864769)*x);
         pos(face) = old(face) + shift;
         sw(face) = use_stale ? shift/Real(2) : shift;
       });
