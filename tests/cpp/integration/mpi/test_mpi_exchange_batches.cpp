@@ -35,6 +35,12 @@ struct Context {
   bool is_external_trace_face(int axis, int side, const Index<1>& cell) const {
     return cell[axis] == (side == 0 ? geometry_.domain().lo[axis] : geometry_.domain().hi[axis]);
   }
+  auto prepare_external_trace_face_predicate() const {
+    const auto domain = geometry().domain();
+    return [domain](int axis, int side, const Index<1>& cell) {
+      return cell[axis] == (side == 0 ? domain.lo[axis] : domain.hi[axis]);
+    };
+  }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
     auto records = prepare_exchange_batch(

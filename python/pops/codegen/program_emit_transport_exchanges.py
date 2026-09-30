@@ -19,7 +19,11 @@ def emit_transport_exchanges(
         "std::exception_ptr accepted_mask_error;",
         "long accepted_mask_layout_error = 0;",
         "bool accepted_owner_contributes = false;",
+        "std::optional<pops::Geometry<pops::kNativeDimension>> accepted_geometry;",
+        "std::optional<decltype(ctx.prepare_external_trace_face_predicate())> accepted_external_face;",
         "try {",
+        "  accepted_geometry.emplace(ctx.geometry());",
+        "  accepted_external_face.emplace(ctx.prepare_external_trace_face_predicate());",
         "  pops::sync_host();",
         "  %s = ctx.pointwise_active_mask(%d, %s);" % (active_name, program_block, active),
         "  %s = ctx.pointwise_exchange_coverage_mask(%d, %s);" % (
@@ -70,7 +74,7 @@ def emit_transport_exchanges(
         "    for (int axis = 0; axis < pops::kNativeDimension; ++axis) {",
         "      pops::Real measure = 1;",
         "      for (int tangent = 0; tangent < pops::kNativeDimension; ++tangent)",
-        "        if (tangent != axis) measure *= ctx.geometry().spacing(tangent);",
+        "        if (tangent != axis) measure *= accepted_geometry->spacing(tangent);",
         "      for (int side = 0; side < 2; ++side) {",
         "        auto face = cell; face[axis] += side;",
         '        std::string quadrature = "cell";',
@@ -83,7 +87,7 @@ def emit_transport_exchanges(
         "        stage_exchange(pops::runtime::program::ExchangeRecord{%s, %s, %s, component_quadrature,"
         % (json.dumps(operation), json.dumps(occurrence), json.dumps(evaluation)),
         "            side == 0 ? 1 : -1, measure, face_values.axes[axis](face, component)/measure, %s, 1,"
-        " axis, side, component, ctx.is_external_trace_face(axis, side, cell)});"
+        " axis, side, component, (*accepted_external_face)(axis, side, cell)});"
         % weight,
         "        }",
         "      }",

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -689,7 +690,9 @@ class PreparedDiffusion {
     std::exception_ptr active_error;
     long active_layout_error = 0;
     bool owner_contributes = false;
+    std::optional<decltype(ctx.prepare_external_trace_face_predicate())> external_face;
     try {
+      external_face.emplace(ctx.prepare_external_trace_face_predicate());
       sync_host();
       active = ctx.pointwise_active_mask(program_block, variable_);
       coverage = ctx.pointwise_exchange_coverage_mask(program_block, variable_);
@@ -765,7 +768,7 @@ class PreparedDiffusion {
                 stage_exchange({operation, occurrence, evaluation, component_identity,
                                 side == 0 ? -1 : 1, measure, faces.axes[axis](face, component),
                                 temporal_weight, 1, axis, side, component,
-                                ctx.is_external_trace_face(axis, side, cell)});
+                                (*external_face)(axis, side, cell)});
               }
             }
           }

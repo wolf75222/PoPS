@@ -357,6 +357,20 @@ class ProgramContext {
                                    : geometry().domain().hi[axis]);
   }
 
+  /// Prepare collectively before a rank-local exchange producer. The returned
+  /// predicate owns its domain/topology and never calls back into the facade.
+  auto prepare_external_trace_face_predicate() const {
+    const auto domain = geometry().domain();
+    const auto topology = scalar_boundary_topology_();
+    return [domain, topology](int axis, int side, const Index<Dim>& cell) {
+      if (axis < 0 || axis >= Dim || (side != 0 && side != 1))
+        throw std::invalid_argument("external trace face has invalid axis or side");
+      const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+      return !topology.is_periodic(Face<Dim>{axis, boundary}) &&
+             cell[axis] == (side == 0 ? domain.lo[axis] : domain.hi[axis]);
+    };
+  }
+
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) const {
     auto records = prepare_exchange_batch(

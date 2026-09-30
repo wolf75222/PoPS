@@ -122,6 +122,20 @@ class AmrProgramContext {
                                    : geometry().domain().hi[axis]);
   }
 
+  /// Geometry acquisition can enter the prepared hierarchy collective phase.
+  /// Snapshot it before the producer, whose local face count may differ by rank.
+  auto prepare_external_trace_face_predicate() const {
+    const auto domain = geometry().domain();
+    const auto topology = facade_->prepared_amr_boundary_topology();
+    return [domain, topology](int axis, int side, const Index<Dim>& cell) {
+      if (axis < 0 || axis >= Dim || (side != 0 && side != 1))
+        throw std::invalid_argument("external trace face has invalid axis or side");
+      const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+      return !topology.is_periodic(Face<Dim>{axis, boundary}) &&
+             cell[axis] == (side == 0 ? domain.lo[axis] : domain.hi[axis]);
+    };
+  }
+
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) const {
     auto records = prepare_exchange_batch(
