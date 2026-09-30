@@ -43,3 +43,15 @@ one preexisting gtest char8_t conversion warning. No link, native run, install,
 or rebuild performed here. Central serial/MPI2 re-execution is still required
 on the rebuilt fixture; earlier successful capture/precision cases are separate
 evidence and do not make this repaired feedback case green.
+
+## Central follow-up: explicit advection velocity
+
+The rebuilt wave4c fixture reached rollback, retry and native restart, but its
+wall-current assertion still failed: q remained .7 instead of .719958. The
+production `ScalarAdvection` default constructor prepares zero velocity on
+every axis. The fixture now calls the public `prepare` factory with x velocity
+1 and zero transverse velocities, matching its original wall-current oracle.
+This changes only the physical test configuration. The true numerical face,
+ownership rule, exactly-once guard, rollback checks and `2e-13` tolerances remain.
+The MPI CTest selection also receives both new canonical-unit tests. Native
+reception of this follow-up is pending the next central build.

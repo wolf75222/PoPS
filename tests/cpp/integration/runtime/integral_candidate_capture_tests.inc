@@ -202,7 +202,9 @@ TEST(ProgramRuntime, IntegralFeedbackRealExteriorConsumptionThenParentRollbackAn
       face_types,std::vector<double>(static_cast<std::size_t>(2*kNativeDimension),0.),
       face_identities,{"scalar"},state_identity);
   sim.seal_auxiliary_providers();
-  add_compiled_model(sim,"tracer",nd::ScalarAdvection<kNativeDimension>{},"none","rusanov",
+  RealVector<kNativeDimension> velocity{};
+  velocity[0] = Real(1);
+  add_compiled_model(sim,"tracer",nd::ScalarAdvection<kNativeDimension>::prepare(velocity),"none","rusanov",
       "conservative","explicit");
   std::vector<double> initial(exact_cell_count<kNativeDimension>(n),2.);
   sim.set_state("tracer",initial);
