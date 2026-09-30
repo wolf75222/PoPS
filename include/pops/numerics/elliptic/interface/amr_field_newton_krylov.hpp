@@ -95,6 +95,21 @@ class AmrFieldNewtonKrylovWorkspace final {
   SolveReport solve(std::span<field_type* const> destination, ResidualProvider&& evaluate_residual,
                     JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge, const ExecutionLane& lane,
                     bool collective_local_phases = false) {
+    auto identity = [&](const hierarchy_type& input, hierarchy_type& output) { copy_(input, output); };
+    return solve_preconditioned(destination, std::forward<ResidualProvider>(evaluate_residual),
+                                std::forward<JvpProvider>(apply_jvp),
+                                std::forward<GaugeProvider>(apply_gauge), identity, lane,
+                                collective_local_phases);
+  }
+
+  /// Stationary linear right-preconditioner realization. The callback owns any
+  /// collective preparation/authority protocol; it must produce one full tower.
+  template <class ResidualProvider, class JvpProvider, class GaugeProvider,
+            class RightPreconditioner>
+  SolveReport solve_preconditioned(std::span<field_type* const> destination,
+                                  ResidualProvider&& evaluate_residual, JvpProvider&& apply_jvp,
+                                  GaugeProvider&& apply_gauge, RightPreconditioner&& apply_right,
+                                  const ExecutionLane& lane, bool collective_local_phases = false) {
     const auto* previous_lane = local_lane_;
     local_lane_ = collective_local_phases ? &lane : nullptr;
     struct ResetLane {
@@ -137,7 +152,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       set_zero_(correction_);
       const Real linear_stop = options_.linear_tolerance * report.residual_norm;
       const LinearResult linear =
-          solve_linear_(iterate_, residual_, linear_stop, jvp_provider, iteration, lane);
+          solve_linear_(iterate_, residual_, linear_stop, jvp_provider, iteration, lane, apply_right);
       report.evaluations += linear.evaluations;
       if (!linear.converged) {
         report.iters = iteration;
@@ -235,10 +250,10 @@ class AmrFieldNewtonKrylovWorkspace final {
     LinearFailure failure = LinearFailure::kIterationLimit;
   };
 
-  template <class JvpProvider>
+  template <class JvpProvider, class RightPreconditioner>
   LinearResult solve_linear_(const hierarchy_type& iterate, const hierarchy_type& rhs, Real stop,
                              JvpProvider& apply_jvp, int nonlinear_iteration,
-                             const ExecutionLane& lane) {
+                             const ExecutionLane& lane, RightPreconditioner& apply_right) {
     copy_(rhs, linear_residual_);
     Real beta = norm_(linear_residual_, lane);
     LinearResult result;
@@ -265,7 +280,9 @@ class AmrFieldNewtonKrylovWorkspace final {
 
       int used = 0;
       for (int column = 0; column < cycle; ++column) {
-        apply_jvp(iterate, basis_[static_cast<std::size_t>(column)], work_, nonlinear_iteration);
+        apply_right(basis_[static_cast<std::size_t>(column)], image_);
+        project_unknowns_(image_);
+        apply_jvp(iterate, image_, work_, nonlinear_iteration);
         project_unknowns_(work_);
         local_phase_([] { Kokkos::fence(); });
         ++result.evaluations;
@@ -324,7 +341,7 @@ class AmrFieldNewtonKrylovWorkspace final {
                                              : LinearFailure::kNonfiniteArnoldiColumn;
         return result;
       }
-      if (!update_correction_(used, result))
+      if (!update_correction_(used, result, apply_right))
         return result;
       // A small rotated RHS only ends Arnoldi. The requested linear tolerance
       // is authenticated by the actual JVP on the complete correction, also
@@ -348,7 +365,8 @@ class AmrFieldNewtonKrylovWorkspace final {
     return result;
   }
 
-  bool update_correction_(int used, LinearResult& result) {
+  template <class RightPreconditioner>
+  bool update_correction_(int used, LinearResult& result, RightPreconditioner& apply_right) {
     for (int reverse = used; reverse != 0; --reverse) {
       const int row = reverse - 1;
       Real value = rotated_rhs_[static_cast<std::size_t>(row)];
@@ -368,9 +386,11 @@ class AmrFieldNewtonKrylovWorkspace final {
         return false;
       }
     }
-    for (int index = 0; index < used; ++index)
-      saxpy_(correction_, coefficients_[static_cast<std::size_t>(index)],
-             basis_[static_cast<std::size_t>(index)]);
+    for (int index = 0; index < used; ++index) {
+      apply_right(basis_[static_cast<std::size_t>(index)], image_);
+      project_unknowns_(image_);
+      saxpy_(correction_, coefficients_[static_cast<std::size_t>(index)], image_);
+    }
     return true;
   }
 

@@ -108,10 +108,18 @@ auto original_local_body(std::array<int, 3> permutation) {
   };
 }
 
-TEST(CompositeGeneralField, OriginalAmrNonlinearResidualTwoResolutionsAndPermutation) {
+void original_nonlinear_native_profile(AmrFieldRightPreconditioner realization,
+                                       bool receive_identity_rejection = false) {
   auto lane = ExecutionLane::duplicate_world_collectively("original-amr-field-witness");
+  ::testing::Test::RecordProperty("realization",
+      realization == AmrFieldRightPreconditioner::kIdentity ? "identity"
+          : "pops.amr.original-spatial-jacobi.basis-response@1");
+  ::testing::Test::RecordProperty("linear_budget", original_controls().linear_max_iterations);
+  ::testing::Test::RecordProperty("restart", original_controls().restart);
   for (int cells : {16, 32})
     for (auto permutation : {std::array<int, 3>{0, 1, 2}, std::array<int, 3>{2, 0, 1}}) {
+      if (receive_identity_rejection && (cells != 32 || permutation != std::array<int, 3>{0, 1, 2}))
+        continue;
       SCOPED_TRACE(::testing::Message() << "cells=" << cells << ":permutation="
                                        << permutation[0] << permutation[1] << permutation[2]);
       auto provider = original_field_provider(lane, cells, permutation);
@@ -144,7 +152,20 @@ TEST(CompositeGeneralField, OriginalAmrNonlinearResidualTwoResolutionsAndPermuta
       auto authority = original_authority(provider.get(), cache.begin_attempt(lane));
       const std::array<const Solver::hierarchy_type*, 1> inputs{&forcing};
       auto prepared = OriginalResidual::prepare(provider, authority, inputs, original_controls(),
-                                                Real(1e-5), lane);
+                                                Real(1e-5), lane, realization);
+      if (realization == AmrFieldRightPreconditioner::kSpatialBasisJacobi) {
+        EXPECT_EQ(prepared->invocation_identity(), OriginalResidual::preconditioned_identity);
+        std::size_t applications = 1;
+        for (int level = 0; level < provider->level_count(); ++level) {
+          const auto& layout = provider->original_field_layout(level).layout();
+          for (std::size_t global = 0; global < layout.size(); ++global)
+            applications += static_cast<std::size_t>(layout[global].numPts()) * 3;
+        }
+        EXPECT_EQ(prepared->spatial_jacobi_applications(), applications);
+      } else {
+        EXPECT_EQ(prepared->invocation_identity(), OriginalResidual::identity);
+        EXPECT_EQ(prepared->spatial_jacobi_applications(), std::size_t(0));
+      }
       for (auto& level : forcing)
         level.set_val(Real(99));  // Captures must own their original numeric storage.
       for (int level = 0; level < 2; ++level)
@@ -152,7 +173,21 @@ TEST(CompositeGeneralField, OriginalAmrNonlinearResidualTwoResolutionsAndPermuta
       auto report = prepared->solve(authority, nullptr, body, lane);
       auto outcome = SolveOutcome::collective_lane(std::move(report), lane);
       const auto accepted = outcome.consume(outcome.report().solved() ? SolveConsumption::kAccept
-                                                                      : SolveConsumption::kFailRun);
+          : (receive_identity_rejection ? SolveConsumption::kRejectAttempt : SolveConsumption::kFailRun));
+      if (receive_identity_rejection) {
+        EXPECT_FALSE(accepted.solved());
+        EXPECT_EQ(accepted.status, SolveStatus::kBreakdown);
+        EXPECT_EQ(accepted.action, SolveAction::kRejectAttempt);
+        EXPECT_EQ(accepted.iters, 0);
+        EXPECT_EQ(accepted.reason.find(
+            "amr_field_newton_gmres_breakdown:iteration_limit:newton=0:columns=240:"), std::size_t(0));
+        EXPECT_EQ(original_controls().linear_max_iterations, 240);
+        EXPECT_EQ(original_controls().restart, 80);
+        EXPECT_THROW(prepared->candidate(authority, lane), std::exception);
+        for (int level = 0; level < 2; ++level)
+          EXPECT_EQ(norm_inf(provider->solution(level), 0), Real(4));
+        continue;
+      }
       ASSERT_TRUE(accepted.solved()) << accepted.reason;
       const auto& solved = prepared->candidate(authority, lane);
       EXPECT_GT(prepared->residual_evaluations(), 1);
@@ -192,6 +227,46 @@ TEST(CompositeGeneralField, OriginalAmrNonlinearResidualTwoResolutionsAndPermuta
       provider->prepare_original_field_operator();
       EXPECT_THROW(prepared->require_authority(authority, lane), std::exception);
     }
+}
+
+TEST(CompositeGeneralField, OriginalAmrNonlinearResidualTwoResolutionsAndPermutation) {
+  original_nonlinear_native_profile(AmrFieldRightPreconditioner::kSpatialBasisJacobi);
+}
+
+TEST(CompositeGeneralField, OriginalAmrNonlinearIdentityBudgetRejectsWithoutPublication) {
+  original_nonlinear_native_profile(AmrFieldRightPreconditioner::kIdentity, true);
+}
+
+TEST(CompositeGeneralField, OriginalSpatialJacobiRejectsMissingDiagonalAndStaleAuthority) {
+  auto lane = ExecutionLane::duplicate_world_collectively("original-spatial-jacobi-authority");
+  auto provider = original_field_provider(lane, 16, {0, 1, 2});
+  auto forcing = original_tower(*provider);
+  for (auto& field : forcing) field.set_val(Real(0));
+  PreparedResourceCache cache;
+  auto authority = original_authority(provider.get(), cache.begin_attempt(lane));
+  const std::array<const Solver::hierarchy_type*, 1> inputs{&forcing};
+  EXPECT_THROW(OriginalResidual::prepare(provider, authority, inputs, original_controls(),
+                Real(1e-5), lane, static_cast<AmrFieldRightPreconditioner>(99)), std::exception);
+  if (lane.size() > 1)
+    EXPECT_THROW(OriginalResidual::prepare(provider, authority, inputs, original_controls(),
+                  Real(1e-5), lane, lane.rank() == 0 ? AmrFieldRightPreconditioner::kIdentity
+                      : AmrFieldRightPreconditioner::kSpatialBasisJacobi), std::exception);
+  auto prepared = OriginalResidual::prepare(provider, authority, inputs, original_controls(),
+                     Real(1e-5), lane, AmrFieldRightPreconditioner::kSpatialBasisJacobi);
+  auto forged = authority;
+  if (lane.rank() == 0) forged.points[1].dt += .01;
+  int callbacks = 0;
+  EXPECT_THROW(prepared->solve(forged, nullptr,
+      [&](const auto&, const auto&, auto&, int) { ++callbacks; }, lane), std::exception);
+  EXPECT_EQ(all_reduce_max(static_cast<long>(callbacks), lane), 0);
+  EXPECT_THROW(prepared->candidate(authority, lane), std::exception);
+  for (int level = 0; level < 2; ++level)
+    provider->assembly_target("pops.general-field.coefficients", level).set_val(Real(0));
+  EXPECT_THROW(OriginalResidual::prepare(provider, authority, inputs, original_controls(),
+                 Real(1e-5), lane, AmrFieldRightPreconditioner::kSpatialBasisJacobi), std::exception);
+  // This is an unavailable spatial-Jacobi realization, not an impossible original equation.
+  EXPECT_NO_THROW(OriginalResidual::prepare(provider, authority, inputs, original_controls(),
+                    Real(1e-5), lane, AmrFieldRightPreconditioner::kIdentity));
 }
 
 TEST(CompositeGeneralField, OriginalIdentityResidualNewtonDirectionArbitraryComponents) {

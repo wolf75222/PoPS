@@ -53,12 +53,13 @@ struct Engine {
 void check(bool v) { if(!v) throw std::runtime_error("actual GMRES check"); }
 int main() {
   ExecutionLane lane;
+  auto right=[](const auto& input,auto& output) { output=input; };
   for(int width: {1,3,5}) {
     Engine e(width,3,12); std::vector<Real> rhs(width), iterate(width);
     for(int i=0;i<width;++i) rhs[i]=.3+.1*i;
     int calls=0;
     auto identity=[&](const auto&,const auto& v,auto& out,int) { ++calls; out=v; };
-    const auto result=e.solve_linear_(iterate,rhs,1e-12,identity,0,lane);
+    const auto result=e.solve_linear_(iterate,rhs,1e-12,identity,0,lane,right);
     check(result.converged && result.columns<=12 && result.evaluations==calls);
     check(calls>result.columns); // Every projected stop gets a complete-correction JVP.
     Real residual=0; for(int i=0;i<width;++i) residual=std::hypot(residual,rhs[i]-e.correction_[i]);
@@ -70,7 +71,7 @@ int main() {
     auto approximate=[&](const auto&,const auto& v,auto& out,int) {
       const Real norm=std::hypot(v[0],v[1]); const Real factor=norm>2 ? 2 : 1;
       if(norm>2) ++full; for(int i=0;i<2;++i) out[i]=factor*v[i]; };
-    const auto result=e.solve_linear_(iterate,rhs,1e-8,approximate,0,lane);
+    const auto result=e.solve_linear_(iterate,rhs,1e-8,approximate,0,lane,right);
     check(!result.converged && result.columns==6 && full>0);
     check(result.residual_norm>1e-8);
   }
@@ -80,12 +81,23 @@ int main() {
     auto matrix=[&](const auto&,const auto& v,auto& out,int) {
       out[0]=a*v[0]+b*v[1]; out[1]=b*v[0]+c*v[1]; };
     const Real stop=1e-5*std::hypot(rhs[0],rhs[1]);
-    const auto result=e.solve_linear_(iterate,rhs,stop,matrix,0,lane);
+    const auto result=e.solve_linear_(iterate,rhs,stop,matrix,0,lane,right);
     std::vector<Real> image(2); matrix(iterate,e.correction_,image,0);
     const Real actual=std::hypot(rhs[0]-image[0],rhs[1]-image[1]);
     check(!result.converged || actual<=stop);
     check(result.columns<=6);
     std::cout<<std::hexfloat<<"stop="<<stop<<" residual="<<actual<<" converged="<<result.converged<<'\n';
+  }
+  {
+    Engine e(2,2,6); std::vector<Real> rhs{1.7,-.2}, iterate(2);
+    auto matrix=[](const auto&,const auto& v,auto& out,int) {
+      out[0]=2*v[0]-.3*v[1]; out[1]=.4*v[0]+7*v[1]; };
+    int applications=0;
+    auto diagonal=[&](const auto& v,auto& out) { ++applications; out[0]=v[0]/2; out[1]=v[1]/7; };
+    const auto result=e.solve_linear_(iterate,rhs,1e-12,matrix,0,lane,diagonal);
+    std::vector<Real> image(2); matrix(iterate,e.correction_,image,0);
+    check(result.converged && applications>result.columns && result.columns<=6);
+    check(std::hypot(rhs[0]-image[0],rhs[1]-image[1])<=1e-12);
   }
 }
 '''
