@@ -25,10 +25,12 @@ TEST(ProgramRuntime, MovingIntervalsRefuseFiniteUnrecoverablePhysicalStateBefore
   constexpr int cache_node = 682301;
   ctx->cache_store_scratch(cache_node, ctx->state(0));
   const auto cache_before = sim.program_cache_global(cache_node);
+  bool producer_entered = false;
   ctx->install([&](double dt) {
     ctx->begin_step(dt);
     auto evaluation = ctx->evaluate_moving_interval(
         "mesh", 0, "unit-interval", "endpoint-swept@1", [&](const auto& point) {
+    producer_entered = true;
     EXPECT_DOUBLE_EQ(point.dt, dt);
     const auto& accepted = ctx->moving_interval_geometry("mesh");
     auto proposed = accepted.coordinates;
@@ -60,8 +62,18 @@ TEST(ProgramRuntime, MovingIntervalsRefuseFiniteUnrecoverablePhysicalStateBefore
     });
     ctx->advance_moving_intervals(evaluation, Real(0));
   });
+  sim.set_program_block_map({0});
   sim.begin_step_transaction();
-  EXPECT_ANY_THROW(sim.step(.1));
+  std::string refusal;
+  try {
+    sim.step(.1);
+    ADD_FAILURE() << "Finite but physically unrecoverable density was published";
+  } catch (const std::exception& error) {
+    refusal = error.what();
+  }
+  EXPECT_TRUE(producer_entered);
+  EXPECT_NE(refusal.find("System Program terminal state publication: variable recovery rejected"),
+            std::string::npos) << refusal;
   EXPECT_EQ(sim.time(), 0.);
   EXPECT_EQ(sim.macro_step(), 0);
   EXPECT_EQ(sim.get_state("gas"), state_before);

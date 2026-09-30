@@ -800,7 +800,10 @@ pops_test_source(_src test_coupled_source_stack_limit)
 pops_add_gtest_suite(NAME test_coupled_source_stack_limit SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
 pops_test_source(_src test_program_runtime)
-pops_add_gtest_suite(NAME test_program_runtime SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+set(_program_runtime_review "cpp/integration/runtime/ale_carrier_independent_review.inc")
+set_source_files_properties("${_program_runtime_review}" PROPERTIES HEADER_FILE_ONLY TRUE)
+pops_add_gtest_suite(NAME test_program_runtime SOURCES "${_src}" "${_program_runtime_review}"
+  EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
 # ADC-538: the native ProgramContext contract + the history-ring checkpoint round-trip both drive a
 # real System (the ring memory is co-distributed with block 0), so they link the heavy runtime object
@@ -1241,7 +1244,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching:ProgramRuntime.MovingIntervalsPublishRealGeometryStateAndLedgerThenParentRollback:ProgramRuntime.MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforePublication:ProgramRuntime.MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceExactlyOnce")
+            "ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching:ProgramRuntime.MovingIntervalsPublishRealGeometryStateAndLedgerThenParentRollback:ProgramRuntime.MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforePublication:ProgramRuntime.MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceExactlyOnce:ProgramRuntime.MovingIntervalsRefuseFiniteUnrecoverablePhysicalStateBeforePublication")
       elseif(_test STREQUAL "test_program_context_contract")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
