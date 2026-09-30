@@ -30,6 +30,12 @@ def test_native_fixture_is_authentic_resolved_and_routes_query_owner(capture, or
     case, layout, program, _, _ = authored_capture(capture, order)
     before = copy.deepcopy(program._serialize())
     resolved = pops.resolve(pops.validate(case), layout=layout)
+    bindings = resolved.initial_condition_plan.bindings
+    expected = {"fluid"} if capture == "main_current" else {"fluid", "query_only"}
+    assert {b.subject.block_ref.local_id for b in bindings} == expected
+    assert all(b.subject.is_resolved and b.subject.kind == "state" for b in bindings)
+    assert all(b.source.options.to_data()["native_route"] == "bound_level_zero"
+               for b in bindings)
     graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
     cpp = emit_cpp_program(resolved.time, model_graph=graph)
     _, bound, _ = _emit_dt_bound(resolved.time, graph)
