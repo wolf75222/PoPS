@@ -17,7 +17,7 @@ from pops.codegen.program_models import ProgramModelGraph
 
 def declared_case(*, components=("density",), velocity=.7, with_source=False,
                   selected_reconstruction=None, cells=16, output_mode=None,
-                  face_weights=(Fraction(1,2),Fraction(1,2)),source_measure_weights=(1,0)):
+                  face_weights=(Fraction(1,2),Fraction(1,2)),source_measure_weights=(1,0),proposed_dt=.001):
     frame=CartesianDomain("domain",(0.,),(1.,)).frame(Cartesian1D())
     model=pops.Model("arbitrary_transport",frame=frame)
     state=model.state("q",components=components)
@@ -42,7 +42,7 @@ def declared_case(*, components=("density",), velocity=.7, with_source=False,
         source_rate=None if source_rate is None else source_rate(temporal.n),
         projection=MovingFieldProjection(face_weights,source_measure_weights),
         geometry_tolerance=1e-13,at=temporal.next.point)
-    program.commit(temporal.next,candidate); program.step_strategy(FixedDt(.001)); case.program(program)
+    program.commit(temporal.next,candidate); program.step_strategy(FixedDt(proposed_dt)); case.program(program)
     layout=MovingControlVolumes(Uniform(CartesianGrid(frame=frame,cells=(cells,),
         periodic=PeriodicAxes(frame.axes))),evolution=evolution)
     if output_mode is not None:
