@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pops.time._program.value_validation import require_owned, require_region
-from pops.time._authoring import atomic_authoring
+from pops.time._authoring import atomic_authoring, readonly_authoring_query
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -74,12 +74,13 @@ class _ProgramDtBound(_ProgramBase):
         if self._recording:
             raise NotImplementedError("set_dt_bound cannot be opened inside another sub-block")
         sub = []
-        self._recording.append(sub)
-        try:
-            cfl = self._new("scalar", "cfl", (), {}, "cfl", None)
-            result = builder(self, cfl)
-        finally:
-            self._recording.pop()
+        with readonly_authoring_query(self):
+            self._recording.append(sub)
+            try:
+                cfl = self._new("scalar", "cfl", (), {}, "cfl", None)
+                result = builder(self, cfl)
+            finally:
+                self._recording.pop()
         if getattr(result, "vtype", None) != "scalar":
             raise ValueError("set_dt_bound: builder must return a Scalar ProgramValue")
         require_region(self, result, self._region_for_block(sub), "set_dt_bound", vtype="scalar")

@@ -117,6 +117,71 @@ def test_long_shared_capture_dag_has_no_python_recursion_limit():
     assert len(ids) == len(set(ids)) == 1505
 
 
+@pytest.mark.parametrize("mutation", ["strategy", "cadence", "cell_time", "integral",
+                                      "freeze", "stage", "history", "retime"])
+def test_callback_cannot_hide_temporal_or_publication_metadata_changes(mutation):
+    _, program, _, u = _case("unbounded")
+    before = (program._serialize(), program._next_id, program._next_region)
+
+    def builder(P, cfl):
+        if mutation == "strategy":
+            P.step_strategy(FixedDt(.2))
+        elif mutation == "cadence":
+            P.cadence(substeps=2)
+        elif mutation == "cell_time":
+            P.cell_local_time(tick_denominator=2)
+        elif mutation == "integral":
+            P.integral_state("hidden", initial=1.)
+        elif mutation == "freeze":
+            result = cfl * P.hmin()
+            P.freeze()
+            return result
+        elif mutation == "stage":
+            P.stage("hidden", c=.5)
+        elif mutation == "history":
+            P.keep_history(u, depth=2)
+        elif mutation == "retime":
+            P.value("hidden_retime", u.n, at=u.next.point)
+        return cfl * P.hmin()
+
+    error = RuntimeError if mutation == "freeze" else ValueError
+    diagnostic = "cannot run while" if mutation == "freeze" else (
+        "read-only callback changed authoring metadata")
+    with pytest.raises(error, match=diagnostic):
+        program.set_dt_bound(builder)
+    assert (program._serialize(), program._next_id, program._next_region) == before
+    assert not program.has_dt_bound() and not program._frozen
+    # Exact retry observes the restored graph and preserves its block route.
+    program.set_dt_bound(lambda P, cfl: cfl / (1 + P.norm2(u.n)))
+    assert list(program._block_indices().values()) == [0]
+
+
+def test_callback_cannot_add_a_hidden_commit_of_a_preexisting_candidate():
+    frame = Rectangle("mutation_domain", (0., 0.), (1., 1.)).frame(Cartesian2D())
+    model = pops.Model("mutation_model", frame=frame)
+    state = model.state("U", components=("a", "b"))
+    case = pops.Case("mutation_case")
+    program = pops.Program("mutation_program")
+    q = program.state(case.block("fluid", model)[state])
+    passive = program.state(case.block("side", model)[state])
+    program.commit(q.next, program.value("identity", (q.n[0], q.n[1]), at=q.next.point))
+    candidate = program.value("side_update", (2 * passive.n[0], 3 * passive.n[1]),
+                              at=passive.next.point)
+    program.step_strategy(FixedDt(.1))
+    before = program._serialize(), program._next_id
+
+    def builder(P, cfl):
+        P.commit(passive.next, candidate)
+        return cfl * P.hmin()
+
+    with pytest.raises(ValueError, match="read-only callback.*_commits"):
+        program.set_dt_bound(builder)
+    assert (program._serialize(), program._next_id) == before
+    assert len(program.commits()) == 1 and not program.has_dt_bound()
+    program.set_dt_bound(lambda P, cfl: cfl / (1 + P.norm2(passive.n)))
+    assert len(program.commits()) == 1
+
+
 # Filled from public source-only emission on the exact pre-fix 5d97b7a5 tree.
 BASELINE = {
     "legacy": (

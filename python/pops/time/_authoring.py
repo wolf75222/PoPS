@@ -75,6 +75,77 @@ class _AuthoringSnapshot:
         program.__dict__.clear()
         program.__dict__.update(self._attributes)
 
+    def require_readonly_query(self, program: Any) -> None:
+        """Allow query allocation only; preserve publication and temporal metadata.
+
+        Check saved contents rather than comparing mutable aliases or ProgramValue
+        equality. Unknown/future attributes are protected by default.
+        """
+        append_maps = frozenset({
+            "_issued_values", "_recording_regions", "_state_spaces", "_operator_registries",
+            "_time_states", "_time_current_values", "_time_endpoint_handles",
+        })
+        counters = frozenset({"_next_id", "_next_region"})
+        saved = {id(container): (kind, contents)
+                 for container, kind, contents in self._containers}
+        seen: set[int] = set()
+
+        def fail(name: str) -> None:
+            raise ValueError("dt_bound read-only callback changed authoring metadata %s" % name)
+
+        def check(value: Any, name: str) -> None:
+            marker = id(value)
+            if marker in seen:
+                return
+            seen.add(marker)
+            entry = saved.get(marker)
+            if entry is None:
+                if isinstance(value, (tuple, frozenset)):
+                    for item in value:
+                        check(item, name)
+                return
+            kind, contents = entry
+            if kind == "dict":
+                if len(value) != len(contents) or any(
+                        key not in value or value[key] is not item for key, item in contents):
+                    fail(name)
+                children = (item for pair in contents for item in pair)
+            elif kind == "list":
+                if len(value) != len(contents) or any(
+                        actual is not prior for actual, prior in zip(value, contents, strict=True)):
+                    fail(name)
+                children = iter(contents)
+            else:
+                if {id(item) for item in value} != {id(item) for item in contents}:
+                    fail(name)
+                children = iter(contents)
+            for child in children:
+                check(child, name)
+
+        if program.__dict__.keys() != self._attributes.keys():
+            fail("attribute set")
+        for name, original in self._attributes.items():
+            current = program.__dict__[name]
+            if name in counters:
+                if type(current) is not int or current < original:
+                    fail(name)
+                continue
+            # First read of a case-owned state may establish its live Case authority.
+            if name == "_case_owner_path" and original is None:
+                continue
+            if current is not original:
+                fail(name)
+            if name in append_maps:
+                _, contents = saved[id(original)]
+                if any(key not in current or current[key] is not item for key, item in contents):
+                    fail(name)
+                # New entries are query allocations; old nested regions remain protected.
+                for key, item in contents:
+                    check(key, name)
+                    check(item, name)
+            else:
+                check(original, name)
+
 
 @contextmanager
 def authoring_transaction(program: Any) -> Iterator[None]:
@@ -82,6 +153,18 @@ def authoring_transaction(program: Any) -> Iterator[None]:
     snapshot = _AuthoringSnapshot(program)
     try:
         yield
+    except BaseException:
+        snapshot.restore(program)
+        raise
+
+
+@contextmanager
+def readonly_authoring_query(program: Any) -> Iterator[None]:
+    """Authenticate a query callback's net effect using the authoring snapshot."""
+    snapshot = _AuthoringSnapshot(program)
+    try:
+        yield
+        snapshot.require_readonly_query(program)
     except BaseException:
         snapshot.restore(program)
         raise
@@ -97,4 +180,4 @@ def atomic_authoring(function: Callable[..., Any]) -> Callable[..., Any]:
     return guarded
 
 
-__all__ = ["atomic_authoring", "authoring_transaction"]
+__all__ = ["atomic_authoring", "authoring_transaction", "readonly_authoring_query"]
