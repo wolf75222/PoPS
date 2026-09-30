@@ -11,7 +11,18 @@ from pops.time._authoring import atomic_authoring
 
 def integral_units_bytes(units) -> str:
     import json
-    return json.dumps(units.to_data(), sort_keys=True, separators=(",", ":"))
+    from pops._ir.quantity import PhysicalDimension
+    if type(units) is not PhysicalDimension:
+        raise TypeError("integral units require an exact PhysicalDimension")
+    encoded = json.dumps(units.to_data(), sort_keys=True, separators=(",", ":"))
+    message = "integral units require a lossless canonical PhysicalDimension JSON roundtrip"
+    try:
+        decoded = PhysicalDimension.from_data(json.loads(encoded))
+    except (TypeError, ValueError, ZeroDivisionError) as error:
+        raise ValueError(message) from error
+    if decoded != units:
+        raise ValueError(message)
+    return encoded
 
 
 def integral_identity(program, name: str) -> str:
@@ -48,6 +59,8 @@ class _ProgramIntegrals:
         from pops._ir.quantity import PhysicalDimension
         if units is not None and type(units) is not PhysicalDimension:
             raise TypeError("integral units require an exact PhysicalDimension")
+        if units is not None:
+            integral_units_bytes(units)
         self._integral_states[name] = float(initial)
         if units is not None:
             self._integral_units[name] = units
