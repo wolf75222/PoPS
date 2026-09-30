@@ -1,4 +1,86 @@
-# Integration checkpoint — 2026-09-29
+# Integration checkpoint — 2026-09-30
+
+The requested migration is **in progress**. Source implementation, native
+reception, scientific witnesses and backend qualification are recorded separately.
+
+## Current reception and integration freeze (2026-09-30)
+
+The last installed reception used native ABI5, SDK
+`307f61570e511eae829151680b4dd2e24425907803f4ec78b2dbb32a19b82540`.
+Dim2 native SHA256 was
+`d80e633cb18d352643091fa9677ec35b4851bcade6653f9fa0ad64d5566fa744`.
+These receipts authenticate the actual installed PoPS package and extension,
+rather than the handoff demonstrator. Local backend: Apple LLVM21, Kokkos5.2
+OpenMP CPU, MPICH4.1.2 with `FI_PROVIDER=tcp`, parallel HDF5. The release's
+official dependency/backend matrix, GPU, remote CI and the complete mission
+remain unqualified by these local results.
+
+- The public `bound_initial` reseal lacked its real RuntimeInstance temporal
+  authority. Central `c34e2d1` supplies the executor's accepted authority and
+  manifest through explicit facade seams. Installed regression: 84 pass.
+  Ten public IntegralState/transport/diffusion checks: 9 pass, one AMR2
+  diffusion failure retained with unchanged guard.
+- Twelve selected native CTests pass in serial and MPI2, including real
+  moving state/geometry/ledger rollback and a finite but physically
+  unrecoverable state rejected before publication. These receive the earlier
+  carrier; they do not receive the later projector, codec or public ALE body.
+- The actual MPI2 IntegralState campaign times out at 1200 seconds after
+  Uniform passes, AMR1 fails on both ranks and AMR2 remains incomplete.
+  Isolated AMR1 then finishes: q=.72 instead of .71. Both saved rank ledgers
+  contain the same eight physical x+ faces and amount -.01. Central
+  `1f777538` selects contributions from the carrier distribution and lane,
+  preserving collective preparation/staging on empty contributors.
+  New native/MPI reception is required; no other pending cases are green.
+- The AMR2 diffusion's saved initial fine field has a flattened physical-edge
+  affine slope. The generic transfer correction `69d4ce3` (central
+  `72d3d077`) threads physical boundary/periodicity into bootstrap,
+  regrid and history stencils. Independent `b7ba217` (central
+  `7432e39e`): 5,770 real-header host assertions and ASan/UBSan pass,
+  covering 1D/2D/3D, anisotropic ratios, shifted origins, components,
+  conservation and incomplete-stencil refusal. Actual runtime/MPI reception
+  remains open.
+- Computed-frontier native diagnostics retain rejected effective durations
+  4 and 8, caused by the historical component-zero `dot`. The explicit
+  vector `dot_all@1` extension preserves those old semantics and hashes,
+  but independent `f212b9c` finds covered-coarse double counting and
+  active nonfinite/overflow acceptance in the initial implementation
+  `21a56b9`. A corrected provider must be received before qualification.
+- FiniteLinear layering fixes `908508a/1c84af0/8bf5ae0` are integrated.
+  Independent comparisons restore the exact parent DAGs, encodings and
+  hashes, including mixed expressions and per-component vector literals;
+  the weak conversion cache retains neither declaration nor IR lifetime.
+- ALE projector/SSA and corrected codec `c19b452/745993c/8a77f9c/
+  0116827/2df5090/2a741ef` are integrated. POPSEX03 applies only to
+  explicit moving geometry; empty-map legacy POPSEX01/02 remains unchanged.
+  Installed clock/tolerance, exact endpoints, finite derived Reynolds
+  terms, occurrence support, enclosing t/macrostep, bounded decoding and
+  staged-versus-durable lifecycle are authenticated. Independent
+  `0b1e8fa` (central `31802c5b`) supplies six actual C++ injections.
+  Source/host evidence is positive; native compilation/reception and
+  public body/observer delivery remain pending.
+- The real anisotropic Dim3 Fourier/ledger fixture is integrated
+  (`74a47abb`); production Dim3 extension and saved-state native
+  reception remain pending.
+
+The immutable historical `native-fc0-20260930` archive is integrated in
+`fde88bf`: 161 payloads, 18 authentic scientific saved states, strict
+manifest schema2, source/native/JUnit/state hash links, and independent
+offline recomputation. The corrected checker receives all 18 states and
+refuses all 14 independent corruptions, including fully resealed M26/M27
+scientific countermodels. See
+[native saved reception](native_saved_reception_fc0_20260930.md).
+Those older ABI4 records retain failures and exact scopes; they are not
+qualification of the current ABI5 or a later SDK.
+
+Immediate work: finish the coherent provider corrections; rebuild actual
+Dim1/Dim2 and the first Dim3 extension with repository scripts; receive
+native projector/codec, physical AMR transfer, replicated/distributed
+exchanges and vector pairing in serial/MPI; independently recompute new
+saved states; continue public ALE and the remaining specification mechanisms.
+Do not overwrite historical failures or the old qualification registry with
+new source-only evidence.
+
+## Earlier reception history (retained)
 
 The requested migration is **in progress**. This checkpoint records actual code,
 failures and next actions; it is not acceptance of the complete specification.
