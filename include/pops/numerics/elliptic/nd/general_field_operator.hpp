@@ -36,11 +36,13 @@ inline void require_field_boundary(
 
 /// Allocation-free conservative variable-coefficient apply over one physical tuple.
 /// The coefficient and boundary session are immutable, prepared solve inputs. Every
-/// diagonal-only coefficient uses harmonic face averaging. A complete component matrix
-/// uses arithmetic face averaging, preserving a complete linear law and SPD
-/// when the authored matrix has that property.
+/// diagonal-only coefficient uses harmonic face averaging by default; a complete
+/// matrix defaults to arithmetic face averaging. ArithmeticFaces explicitly selects
+/// the discretization, including scalar arithmetic means. Signed finite matrices
+/// remain admissible; this general application makes no SPD certificate.
 /// Reaction is the complete component matrix supplied by the authored equation.
-template <int Dim, int Components, int CoefficientComponents = Components>
+template <int Dim, int Components, int CoefficientComponents = Components,
+          bool ArithmeticFaces = (CoefficientComponents != Components)>
 inline void apply_general_field(
     MultiFab<Dim>& output, MultiFab<Dim>& input, const MultiFab<Dim>& coefficients,
     const runtime::program::PreparedScalarBoundarySession<Dim>& boundary,
@@ -94,7 +96,7 @@ inline void apply_general_field(
             ++upper[axis];
             const Real center = coefficient(cell, slot);
             Real low, high;
-            if constexpr (CoefficientComponents == Components) {
+            if constexpr (!ArithmeticFaces) {
               low = harmonic_tensor_face_average(coefficient(lower, slot), center);
               high = harmonic_tensor_face_average(center, coefficient(upper, slot));
             } else {

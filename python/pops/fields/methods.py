@@ -98,15 +98,20 @@ class CellCenteredGeneralCoupled(CellCenteredSecondOrder):
 class CellCenteredNonlinearCoupled(CellCenteredGeneralCoupled):
     """Original mixed residual with explicitly selected central finite differences.
 
-    The first realization admits constant diffusion and local nonlinear reactions,
-    on Cartesian Uniform or synchronized AMR layouts. The AMR realization applies
-    one covered composite operator and solves the full coupled hierarchy.
+    The legacy realization admits constant diffusion and local nonlinear reactions.
+    ``face_policy="Arithmetic@1"`` explicitly selects arithmetic face means and
+    admits diffusion expressions of exact frozen State captures. Diffusion may not
+    depend on the unknown. Both routes admit Cartesian Uniform or synchronized AMR
+    layouts; AMR applies one covered operator to the full coupled hierarchy.
     """
 
-    def __init__(self, *, finite_difference_step: Any) -> None:
+    def __init__(self, *, finite_difference_step: Any, face_policy: str | None = None) -> None:
         import math
         from pops.identity.scalar import exact_numeric_scalar
 
+        if face_policy is not None and (type(face_policy) is not str or face_policy != "Arithmetic@1"):
+            raise ValueError("field residual face_policy must be None or Arithmetic@1")
+        self.face_policy = face_policy
         step = exact_numeric_scalar(finite_difference_step, where="field residual FD step")
         if not math.isfinite(float(step)) or step <= 0:
             raise ValueError("field residual FD step must be positive and finite")
@@ -115,9 +120,15 @@ class CellCenteredNonlinearCoupled(CellCenteredGeneralCoupled):
     def options(self) -> dict[str, Any]:
         from pops.identity.scalar import scalar_data
 
-        return {**super().options(), "contract": "pops.spatial-field-residual@1",
+        data = {**super().options(), "contract": "pops.spatial-field-residual@1",
                 "derivative": {"route": "finite_difference", "scheme": "central_full_residual",
                                "step": scalar_data(self.finite_difference_step)}}
+        if self.face_policy is not None:
+            if type(self.face_policy) is not str or self.face_policy != "Arithmetic@1":
+                raise ValueError("unknown original field face policy")
+            data["contract"] = "pops.spatial-field-residual@2"
+            data["coefficient_face_policy"] = "pops.field.face-mean.arithmetic@1"
+        return data
 
 
 __all__ = ["CellCenteredSecondOrder", "CellCenteredGeneralCoupled",

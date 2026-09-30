@@ -165,6 +165,10 @@ class ResolvedProgramFieldPlan:
                     raise ValueError("original mixed residual requires its explicit native nonlinear method")
                 captures = solve.inputs[2:2 + solve.attrs["capture_count"]]
                 diffusion, local = compile_equations(self.operator, captures)
+                method_data = self.discretization.method.options()
+                if solve.attrs["contract"] != method_data["contract"] or \
+                        solve.attrs.get("coefficient_face_policy") != method_data.get("coefficient_face_policy"):
+                    raise ValueError("original field coefficient realization differs from registered method")
                 if _canonical(local) != _canonical(solve.attrs["local_expressions"]) or \
                         _canonical(diffusion) != _canonical(solve.inputs[1].attrs["expressions"]) or \
                         _canonical(solve.attrs["finite_difference_step"]) != _canonical(scalar_data(self.discretization.method.finite_difference_step)) or \

@@ -74,11 +74,12 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
         lines.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (name, variables[capture.id]))
     lines.append("pops::elliptic::nd::prepare_general_field_coefficients<pops::kNativeDimension, %d, %d, false>(*%s, *%s);"
                  % (width, width * width, coefficient_pointer, coefficient_boundary))
+    arithmetic_argument = ", true" if value.attrs.get("coefficient_face_policy") is not None else ""
     callback = stem + "_evaluate"
     lines += ["auto %s = [&](const pops::MultiFab<pops::kNativeDimension>& q, pops::MultiFab<pops::kNativeDimension>& result, int evaluation) {" % callback,
               "  (void)evaluation;", "  pops::PureFieldAlgebra::copy(*%s, q);" % trial,
-              "  pops::elliptic::nd::apply_general_field<pops::kNativeDimension, %d, %d>(result, *%s, %s, *%s, std::array<pops::Real, %d>{},"
-              % (width, width * width, trial, coefficients, boundary, width * width),
+              "  pops::elliptic::nd::apply_general_field<pops::kNativeDimension, %d, %d%s>(result, *%s, %s, *%s, std::array<pops::Real, %d>{},"
+              % (width, width * width, arithmetic_argument, trial, coefficients, boundary, width * width),
               "      [] { std::array<pops::elliptic::nd::PhysicalFieldBoundary, 2 * pops::kNativeDimension> laws{}; "
               "laws.fill(pops::elliptic::nd::PhysicalFieldBoundary::%s); return laws; }());" % value.attrs["physical_boundary"],
               "  for (std::size_t patch = 0; patch < result.local_size(); ++patch) {",
