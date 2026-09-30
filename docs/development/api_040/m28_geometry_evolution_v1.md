@@ -180,3 +180,10 @@ permuted physical components, successive `.2/.3` intervals and parent rollback.
 It verifies constant-preserving componentwise linear transport, actual volume
 sum and receipt duration/coordinates. These C++ probes do not establish public
 Python or AMR qualification.
+
+Coupled commit also checks that the accepted frame, previous interval identity,
+coordinates and independently stored measures still match its owned input.
+Generation equality alone is insufficient. Rank-local mutation of any of those
+inputs after preparation is rejected before ledger/publication. The ordinary
+native `commit_many` refuses a state that owns moving geometry, so a bare density
+publication cannot bypass the coupling contract.

@@ -809,6 +809,10 @@ class ProgramContext {
         if (std::find(targets.begin(), targets.end(), target) != targets.end())
           throw std::invalid_argument("ProgramContext commit contains a duplicate target");
         require_same_field_contract_(*target, *source, "ProgramContext commit");
+        for (const auto& [identity, moving] : runtime_state().moving_interval_geometry_)
+          if (target == &system_->block_state(moving.runtime_block))
+            throw std::invalid_argument("Program state " + identity +
+                " owns moving geometry and requires a coupled state/geometry commit");
         targets.push_back(target);
         sources.push_back(source);
       }

@@ -109,7 +109,7 @@ class PreparedMovingIntervalUpdate {
   PreparedMovingIntervalUpdate() = default;
   const ProgramContext<Dim>* owner_ = nullptr;
   PreparedResourceAttempt attempt_;
-  std::string identity_, physical_frame_, quadrature_;
+  std::string identity_, physical_frame_, quadrature_, previous_interval_;
   int program_block_ = -1;
   runtime::multiblock::BoundaryEvaluationPoint point_;
   MovingIntervalGeometry<Dim> geometry_;

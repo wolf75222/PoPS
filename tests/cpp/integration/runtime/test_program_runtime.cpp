@@ -2857,11 +2857,13 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
     ctx->configure_primary_clock("ale-clock");
     ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval");
     EXPECT_THROW(sim.checkpoint_program_exchanges(), std::logic_error);
+    EXPECT_ANY_THROW(ctx->commit_many({{&ctx->state(0), &ctx->state(0)}}));
     const auto original = sim.get_state("gas");
     const auto original_geometry = ctx->moving_interval_geometry("mesh");
     bool reject_after_publication = true;
     bool reuse_rejected_evaluation = false;
     bool partial_interval = false, change_input_after_prepare = false;
+    int change_geometry_after_prepare = 0;
     std::optional<runtime::program::RuntimeIntervalEvaluation<kNativeDimension>> cached_evaluation;
     ctx->install([&](double dt) {
       ctx->begin_step(dt);
@@ -2913,6 +2915,14 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
       EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 0u);
       EXPECT_TRUE(sim.program_exchange_records().empty());
       if (change_input_after_prepare) ctx->state(0).set_val(Real(100));
+      if (change_geometry_after_prepare && ctx->prepared_execution_lane().rank() == 0) {
+        auto& mutable_geometry = ctx->runtime_state().moving_interval_geometry_.at("mesh");
+        if (change_geometry_after_prepare == 1) mutable_geometry.physical_frame = "forged-frame";
+        if (change_geometry_after_prepare == 2) mutable_geometry.measures.set_val(Real(9));
+        if (change_geometry_after_prepare == 3 && !mutable_geometry.coordinates.empty())
+          mutable_geometry.coordinates.front().set_val(Real(9));
+        if (change_geometry_after_prepare == 4) mutable_geometry.last_interval = "forged-interval";
+      }
       ctx->commit_moving_interval(proposal);
       if (reject_after_publication)
         throw runtime::program::StepAttemptRejected(SolveStatus::kIterationLimit, "ale-post-publication");
@@ -2924,6 +2934,7 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
       EXPECT_EQ(sim.time(), 0.);
       const auto& actual = ctx->moving_interval_geometry("mesh");
       EXPECT_EQ(actual.generation, 0u);
+      EXPECT_EQ(actual.physical_frame, "unit-interval");
       EXPECT_TRUE(actual.last_interval.empty());
       EXPECT_FALSE(actual.last_receipt.has_value());
       EXPECT_TRUE(sim.program_exchange_records().empty());
@@ -2954,6 +2965,12 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
     EXPECT_ANY_THROW(sim.step(.19));
     expect_original();
     change_input_after_prepare = false;
+    for (int mutation : {1, 2, 3, 4}) {
+      change_geometry_after_prepare = mutation;
+      EXPECT_ANY_THROW(sim.step(.19));
+      expect_original();
+    }
+    change_geometry_after_prepare = 0;
     sim.step(.2);
     EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 1u);
     const auto child_interval = ctx->moving_interval_geometry("mesh").last_interval;

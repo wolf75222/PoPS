@@ -402,6 +402,7 @@
         proposal.program_block_ = program_block;
         proposal.physical_frame_ = evaluation.physical_frame_;
         proposal.quadrature_ = evaluation.quadrature_;
+        proposal.previous_interval_ = accepted.last_interval;
         proposal.point_ = evaluation.point_;
         proposal.geometry_ = std::move(*candidate);
         proposal.state_ = std::move(*updated);
@@ -433,9 +434,20 @@
           proposal.published_ || system_->step_transaction_depth() == 0 ||
           proposal.point_ != boundary_evaluation_point(0) ||
           geometry_target->generation + 1 != proposal.geometry_.generation ||
+          geometry_target->physical_frame != proposal.physical_frame_ ||
+          geometry_target->last_interval != proposal.previous_interval_ ||
           geometry_target->runtime_block != sys_block(proposal.program_block_))
         throw std::invalid_argument("moving SSA publication has stale point/state/geometry or was reused");
       mf_arith_detail::require_same_layout(*state_target, proposal.initial_state_, "moving SSA input");
+      const auto& receipt = proposal.geometry_.last_receipt.value();
+      mf_arith_detail::require_same_layout(geometry_target->measures, receipt.previous_measures,
+                                          "moving SSA geometry input", false);
+      if (geometry_target->coordinates.size() != receipt.previous_coordinates.size())
+        throw std::invalid_argument("moving SSA geometry input changed its coordinate ownership");
+      for (std::size_t patch = 0; patch < geometry_target->coordinates.size(); ++patch)
+        if (geometry_target->coordinates[patch].cell_box() != receipt.previous_coordinates[patch].cell_box() ||
+            geometry_target->coordinates[patch].ncomp() != 1)
+          throw std::invalid_argument("moving SSA geometry input changed its coordinate shape");
       contract.text("pops.moving-interval-commit.v1").text(proposal.identity_)
           .text(proposal.geometry_.last_interval).scalar(std::int32_t(proposal.program_block_))
           .scalar(proposal.geometry_.generation).text(proposal.physical_frame_).text(proposal.quadrature_);
@@ -448,9 +460,17 @@
       for (std::size_t patch = 0; patch < state_target->local_size(); ++patch) {
         const auto actual = state_target->fab(patch).view();
         const auto expected = proposal.initial_state_.fab(patch).view();
+        const auto actual_measure = geometry_target->measures.fab(patch).view();
+        const auto expected_measure = proposal.geometry_.last_receipt->previous_measures.fab(patch).view();
+        const auto actual_position = geometry_target->coordinates.at(patch).template field<0>().view();
+        const auto expected_position = proposal.geometry_.last_receipt->previous_coordinates.at(patch).template field<0>().view();
         const int components = state_target->ncomp();
         changed = std::max(changed, for_each_cell_reduce_max(state_target->box(patch),
             [=] POPS_HD(const Index<Dim>& cell) {
+          Index<Dim> right = cell; ++right[0];
+          if (actual_measure(cell) != expected_measure(cell) ||
+              actual_position(cell) != expected_position(cell) ||
+              actual_position(right) != expected_position(right)) return Real(1);
           for (int component = 0; component < components; ++component)
             if (actual(cell, component) != expected(cell, component)) return Real(1);
           return Real(0);
@@ -460,7 +480,7 @@
     } catch (...) { error = std::current_exception(); }
     collectively_rethrow_exception(error, lane, "moving SSA input validation failed collectively");
     if (all_reduce_max(static_cast<double>(changed), lane) != 0)
-      throw std::invalid_argument("moving SSA input state changed after interval evaluation");
+      throw std::invalid_argument("moving SSA input state/coordinates/measures changed after interval evaluation");
     const auto* mask = system_->validate_program_state_publication_candidate_(
         sys_block(proposal.program_block_), proposal.state_, lane);
     if (all_reduce_max(mask ? 1L : 0L, lane) != 0)
