@@ -50,6 +50,19 @@ def test_module_manifest_extension_and_units_are_authenticated():
     assert ModuleManifest.from_dict(legacy).to_dict()==legacy
 
 
+@pytest.mark.parametrize("version",(1.0,True,"1"))
+def test_global_quantity_manifest_version_requires_exact_integer(version):
+    module = Module("physical_port_version")
+    module.global_quantity("q",units=PhysicalDimension())
+    data = module.manifest().to_dict()
+    assert data["global_quantities"]["q"]["version"] == 1
+    assert ModuleManifest.from_dict(data).to_dict() == data
+    forged = json.loads(json.dumps(data))
+    forged["global_quantities"]["q"]["version"] = version
+    with pytest.raises(ValueError):
+        ModuleManifest.from_dict(forged)
+
+
 def test_two_physical_source_ports_keep_their_own_bodies_and_occurrences():
     from pops.math import ddt
     from pops.domain import Rectangle
@@ -99,7 +112,7 @@ def test_operator_first_module_preserves_the_physical_global_source_body():
     assert module.manifest().to_dict()["schema_version"]==11
 
 
-@pytest.mark.parametrize("mutation",("units","point","scope","index","port_units"))
+@pytest.mark.parametrize("mutation",("units","point","scope","index","port_units","port_clone"))
 def test_mutated_physical_source_binding_refuses_before_kernel(mutation):
     baseline_case,baseline_layout,_,_,_ = build_feedback(physical_global=True)
     baseline = pops.resolve(pops.validate(baseline_case),layout=baseline_layout)
@@ -112,10 +125,15 @@ def test_mutated_physical_source_binding_refuses_before_kernel(mutation):
     if mutation=="units": rows[0]["units"]+=" "
     elif mutation=="index": rows[0]["input"]=0
     elif mutation=="port_units": object.__setattr__(rows[0]["port"],"units",PhysicalDimension((("charge",1),)))
+    elif mutation=="port_clone":
+        issued = rows[0]["port"]
+        rows[0]["port"] = issued._with_owner(issued.owner_path)
+        assert rows[0]["port"] is not issued
+        assert rows[0]["port"]._resolved() == issued._resolved()
     elif mutation=="point": program._replace_value(capture,point=temporal.next.point)
     else: program._replace_value(capture,attrs={**capture.attrs,"scope":"accepted"})
     program._replace_value(source,attrs={**source.attrs,"physical_global_inputs_v1":rows})
-    with pytest.raises((ValueError,TypeError)):
+    with pytest.raises((ValueError,TypeError),match="registry-issued" if mutation=="port_clone" else None):
         resolved = pops.resolve(pops.validate(case),layout=layout)
         emit_cpp_program(resolved.time,model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
 

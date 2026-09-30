@@ -73,3 +73,9 @@ dimensionless units, one/two components) were compared byte-for-byte with the
 version-10 class and hash function extracted from base `8eabb8e2`; all agreed.
 The public runtime fixture is provided for central native reception; no native
 execution, SDK build, installation, or JIT was performed by this author.
+
+The follow-up authentication patch repeats registry issuance at emission, after
+SSA resealing: a same-owner metadata-equal clone is rejected before conversion
+to the kernel POD. Global declaration version 1 requires an exact integer;
+float, boolean and string substitutes are rejected. Its 21 physical-source
+source tests include a separate valid emission before each mutated binding.

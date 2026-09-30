@@ -270,7 +270,7 @@ class ModuleManifest:
             row = require_exact_keys(declaration, {"version", "scope", "units", "handle"},
                                      where="global quantity")
             handle = Handle.from_canonical_identity(row["handle"])
-            if (row["version"] != 1 or isinstance(row["version"], bool)
+            if (type(row["version"]) is not int or row["version"] != 1
                     or row["scope"] != "global" or handle.owner_path != owner
                     or handle.is_instance or handle.kind != "global_quantity" or handle.local_id != key):
                 raise ValueError("ModuleManifest global quantity declaration authority changed")
