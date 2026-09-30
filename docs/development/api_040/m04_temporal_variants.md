@@ -28,3 +28,19 @@ separately and adds the error against an independent Fourier solution of the
 exact selected discrete method, including the final shortened step. The latter
 is checked at 3e-12, separately from the continuous PDE error and conservation.
 The original `m04` and `m04-isotropic` commands explicitly retain Forward Euler.
+
+## Separate ForwardEuler fixed-Courant regime control (source base 99d651c1)
+
+`m04-fe-fixed-courant` retains the original x-only physics, initial cell means,
+N32/64/128, final time, L1 caps, order guard `.7`, and ForwardEuler itself. Its
+declared step is `min(.9/(N+.02*N*N), (1/8)/N)`. The combined bound remains
+mandatory; the advective Courant is fixed at `1/8` on these three meshes. The
+original commands explicitly select their unchanged `combined_bound` policy.
+
+This is a separate regime/cancellation control, not a replacement or successful
+reception of old `m04`. Independent mathematical stencil/mode calculations
+predict L1 `.00641685/.00325627/.00164122` and orders `.97865/.98845` for this
+control. The native control is pending. The independent audit re-authenticates
+the old actual saved NPZ files and their unchanged externally pinned failed
+receipt, and distinguishes the wrong SSPRK2 equation at the same dt. See
+`m04_forward_euler_regime_review_sol61.md` for exact commands and limits.

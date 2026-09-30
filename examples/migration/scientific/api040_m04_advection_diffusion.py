@@ -8,6 +8,8 @@ Both use y-invariant exact cell averages; their different full constitutive
 laws and bounds are recorded explicitly. Neither qualifies native Dim=1.
 POPS_API040_M04_METHOD=ssprk2 selects a distinct temporal method. The original
 ForwardEuler case and its pre-asymptotic order failure are retained explicitly.
+POPS_API040_M04_STEP_POLICY=fixed_courant adds a separate ForwardEuler regime
+control capped at advective Courant 1/8; it does not receive the failed case.
 Run with installed PoPS, PYTHONPATH unset, and POPS_NATIVE_DIM=2.
 """
 # ruff: noqa: E402
@@ -55,6 +57,12 @@ SAFETY_FACTOR = .9
 TEMPORAL_METHOD = os.environ.get("POPS_API040_M04_METHOD", "forward_euler")
 if TEMPORAL_METHOD not in ("forward_euler", "ssprk2"):
     raise ValueError("M04 method must be forward_euler or ssprk2")
+STEP_POLICY = os.environ.get("POPS_API040_M04_STEP_POLICY", "combined_bound")
+if STEP_POLICY not in ("combined_bound", "fixed_courant"):
+    raise ValueError("M04 step policy must be combined_bound or fixed_courant")
+if STEP_POLICY == "fixed_courant" and (TEMPORAL_METHOD != "forward_euler" or DIFFUSION_VARIANT != "x_only"):
+    raise ValueError("M04 fixed-courant control requires x-only ForwardEuler")
+FIXED_ADVECTIVE_COURANT = 1. / 8.
 CRITERIA = {"density_l1_max": {32: .009, 64: .0048, 128: .0024},
             "minimum_observed_order": .7,
             "mass_defect_max": 2.e-11,
@@ -107,6 +115,8 @@ for n in RESOLUTIONS:
     parts = frequencies(n, velocity=VELOCITY, diffusivity=DIFFUSIVITY,
                         transverse_diffusivity=TRANSVERSE_DIFFUSIVITY)
     dt = SAFETY_FACTOR / parts["installed_2d"]
+    if STEP_POLICY == "fixed_courant":
+        dt = min(dt, FIXED_ADVECTIVE_COURANT / (abs(VELOCITY) * n))
     if not (dt * parts["installed_2d"] <= SAFETY_FACTOR + 1.e-14
             and dt <= SAFETY_FACTOR / parts["physical_1d"]):
         raise RuntimeError("M04 authored step violates its combined frequency")
@@ -115,7 +125,7 @@ for n in RESOLUTIONS:
                                    periodic=PeriodicAxes(frame.axes)))
     if os.environ.get("POPS_API040_M04_AUTHORING_ONLY") == "1":
         pops.resolve(validated, layout=layout)
-        print("M04 public authoring validated and resolved:", n, dt, parts)
+        print("M04 public authoring validated and resolved:", n, dt, STEP_POLICY, parts)
         continue
     initial_line = exact_cell_means(n, 0., velocity=VELOCITY,
                                     diffusivity=DIFFUSIVITY, amplitude=AMPLITUDE)
@@ -170,7 +180,9 @@ for n in RESOLUTIONS:
                                 exact=exact, discrete_exact=discrete_line,
                                 time=simulation.time(), cells=n,
                                 dt=dt, velocity=VELOCITY, diffusivity=DIFFUSIVITY,
-                                transverse_diffusivity=TRANSVERSE_DIFFUSIVITY)
+                                transverse_diffusivity=TRANSVERSE_DIFFUSIVITY,
+                                step_policy=STEP_POLICY,
+                                advective_courant=abs(VELOCITY) * n * dt)
             # Compute acceptance exclusively from reopened actual state bytes.
             with np.load(state_path) as saved:
                 observed = saved["final"]
@@ -181,6 +193,7 @@ for n in RESOLUTIONS:
                 minimum, maximum = float(np.min(observed)), float(np.max(observed))
                 saved_time = float(saved["time"])
             record = {"cells": [n, n], "time": saved_time, "fixed_dt": dt,
+                      "step_policy": STEP_POLICY, "advective_courant": abs(VELOCITY) * n * dt,
                       "frequency_parts": parts, "density_l1": density_l1,
                       "discrete_fourier_max_error": discrete_error,
                       "mass_defect": mass_defect, "y_invariance_max": y_variation,
@@ -230,6 +243,9 @@ if os.environ.get("POPS_API040_M04_AUTHORING_ONLY") != "1":
                        "reduced_equation": "u_t+a*u_x=D*u_xx for y-invariant state",
                        "spatial_method": "combined first-order Rusanov+two-point diffusion",
                        "temporal_method": TEMPORAL_METHOD,
+                       "step_policy": STEP_POLICY,
+                       "fixed_advective_courant_cap": FIXED_ADVECTIVE_COURANT if STEP_POLICY == "fixed_courant" else None,
+                       "regime_control": STEP_POLICY == "fixed_courant",
                        "criteria": CRITERIA, "resolutions": RESOLUTIONS,
                        "observed_orders": orders.tolist(), "records": records,
                        "package_file": str(package), "package_version": pops.__version__,
