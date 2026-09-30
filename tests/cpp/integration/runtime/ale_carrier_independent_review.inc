@@ -19,7 +19,7 @@ TEST(ProgramRuntime, MovingIntervalsRefuseFiniteUnrecoverablePhysicalStateBefore
   sim.set_program_block_map({0});
   auto ctx = runtime::program::make_program_execution_provider(&sim);
   ctx->configure_primary_clock("ale-review-clock");
-  ctx->initialize_moving_interval_geometry("mesh", 0);
+  ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval");
   const auto state_before = sim.get_state("gas");
   const auto geometry_before = ctx->moving_interval_geometry("mesh");
   constexpr int cache_node = 682301;
@@ -27,6 +27,9 @@ TEST(ProgramRuntime, MovingIntervalsRefuseFiniteUnrecoverablePhysicalStateBefore
   const auto cache_before = sim.program_cache_global(cache_node);
   ctx->install([&](double dt) {
     ctx->begin_step(dt);
+    auto evaluation = ctx->evaluate_moving_interval(
+        "mesh", 0, "unit-interval", "endpoint-swept@1", [&](const auto& point) {
+    EXPECT_DOUBLE_EQ(point.dt, dt);
     const auto& accepted = ctx->moving_interval_geometry("mesh");
     auto proposed = accepted.coordinates;
     auto sweep = accepted.swept_volumes;
@@ -51,7 +54,11 @@ TEST(ProgramRuntime, MovingIntervalsRefuseFiniteUnrecoverablePhysicalStateBefore
           source_view(cell, 0) = -(input(cell, 0) + Real(1)) * volume(cell);
       });
     }
-    ctx->advance_moving_intervals("mesh", 0, proposed, sweep, physical, density, source, Real(0));
+    return runtime::program::MovingIntervalInputs<kNativeDimension>{
+        std::move(proposed), std::move(sweep), std::move(physical),
+        std::move(density), std::move(source)};
+    });
+    ctx->advance_moving_intervals(evaluation, Real(0));
   });
   sim.begin_step_transaction();
   EXPECT_ANY_THROW(sim.step(.1));

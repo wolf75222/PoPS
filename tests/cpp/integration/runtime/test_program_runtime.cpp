@@ -3220,3 +3220,5 @@ TEST(ProgramRuntime, MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceEx
   EXPECT_NEAR(all_reduce_sum(source_total-relative_net, lane), growth*duration, 3e-13);
   sim.commit_step_transaction(); sim.finalize_step_transaction();
 }
+
+#include "ale_carrier_independent_review.inc"
