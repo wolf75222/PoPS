@@ -297,13 +297,13 @@ class Module(ModuleFreezable):
     @staticmethod
     def _normalize_expression_output(result: Any, output: Any, *, directional: bool = True) -> Any:
         from collections.abc import Mapping
-        from pops._ir.expr import Expr, _wrap
+        from pops._ir.expr import is_scalar_expression, _wrap
         from pops._ir.symbolic import freeze_symbolic_metadata
         from .bundles import ProductSpace, RateBundle
         from numbers import Number
 
         def vector(value: Any, width: int) -> tuple[Any, ...]:
-            values = (value,) if isinstance(value, (Expr, Number)) else tuple(value)
+            values = (value,) if is_scalar_expression(value) or isinstance(value, Number) else tuple(value)
             if len(values) != width:
                 raise ValueError("captured operator output does not match its declared component shape")
             return tuple(_wrap(value) for value in values)
@@ -380,7 +380,8 @@ class Module(ModuleFreezable):
         inputs = []
         bindings = {}
         for space, argument in zip(declaration.signature.inputs, arguments, strict=True):
-            values = (argument,) if isinstance(argument, Expr) else tuple(argument)
+            values = (argument,) if (isinstance(argument, Expr) or
+                                    callable(getattr(argument, "__pops_scalar_plan__", None))) else tuple(argument)
             if len(values) != len(space.components):
                 raise ValueError("application input component shape differs from its signature")
             values = tuple(_wrap(value) for value in values)

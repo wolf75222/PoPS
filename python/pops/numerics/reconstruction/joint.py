@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 
-from pops._ir.expr import Const, Expr, Var
-from pops._ir.vector_expr import VectorExpr
-from pops._ir.visitors import _children
+from pops.model.scalar_contract import (
+    Const, Expr, Var, VectorExpr, NativeCall, RuntimeParamRef,
+    scalar_children as _children, scalar_expression, state_component_count,
+)
 from pops.descriptors import BrickDescriptor
 from pops.model.hash_data import canonical_hash_data
 
@@ -16,12 +17,10 @@ _NATIVE_ID = "pops.generated.reconstruction.joint-stencil/v2"
 
 
 def _width(state):
-    from pops.model import StateHandle
-    from pops.physics.board_handles import StateHandle as BoardStateHandle
-
-    if not isinstance(state, (StateHandle, BoardStateHandle)):
-        raise TypeError("joint reconstruction requires exact StateHandle inputs")
-    return len(state.components if isinstance(state, BoardStateHandle) else state.space.components)
+    try:
+        return state_component_count(state)
+    except TypeError as error:
+        raise TypeError("joint reconstruction requires exact StateHandle inputs") from error
 
 
 class _Sample:
@@ -51,8 +50,6 @@ class _Sample:
 
 
 def _reads(roots, counts, *, allowed=None):
-    from pops._ir.native_call import NativeCall
-    from pops._ir.values import RuntimeParamRef
 
     reads, captures, seen = set(), {}, set()
     pending = list(roots)
@@ -139,7 +136,7 @@ def author_joint(body, *, state, sampling, formal_order, name):
     output = body(sample)
     if not isinstance(output, tuple) or len(output) != counts[0]:
         raise TypeError("joint reconstruction body must return one Expr per output state component")
-    roots = tuple(item if isinstance(item, Expr) else Const(item) for item in output)
+    roots = tuple(scalar_expression(item) for item in output)
     options = _contract(
         roots, states, formal_order, allowed={id(node) for node in sample.nodes.values()}
     )

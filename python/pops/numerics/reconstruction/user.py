@@ -10,8 +10,9 @@ import json
 import re
 from typing import Any
 
-from pops._ir.expr import Const, Expr, Var
-from pops._ir.visitors import _children
+from pops.model.scalar_contract import (
+    Const, Expr, Var, NativeCall, RuntimeParamRef, scalar_children as _children, scalar_expression,
+)
 from pops.descriptors import BrickDescriptor
 from pops.model.hash_data import canonical_hash_data
 
@@ -41,7 +42,6 @@ class _Sample:
 
 def _capture_identities(expression: Expr) -> tuple[tuple[str, str], ...]:
     """Infer live typed runtime reads without baking their declaration values."""
-    from pops._ir.values import RuntimeParamRef
     from pops.model import ParamHandle
 
     found: dict[str, str] = {}
@@ -64,8 +64,6 @@ def _capture_identities(expression: Expr) -> tuple[tuple[str, str], ...]:
 
 
 def _body_data(expression: Expr, nodes: dict[int, Var]) -> tuple[Any, tuple[int, ...]]:
-    from pops._ir.native_call import NativeCall
-    from pops._ir.values import RuntimeParamRef
 
     allowed = {id(node): offset for offset, node in nodes.items()}
     used: set[int] = set()
@@ -110,8 +108,6 @@ def _source_identity(data: dict[str, Any]) -> str:
 
 def _retained_offsets(expression: Expr) -> tuple[int, ...]:
     """Re-check every live variable against the exact source-sampler protocol."""
-    from pops._ir.native_call import NativeCall
-    from pops._ir.values import RuntimeParamRef
 
     offsets: set[int] = set()
     pending = [expression]
@@ -173,7 +169,7 @@ def User(body: Any, *, formal_order: int, name: str = "user", state: Any = None,
     if not isinstance(expression, Expr):
         if isinstance(expression, (tuple, list)):
             raise TypeError("reconstruction.User is scalar per component; vector bodies are unsupported")
-        expression = Const(expression)
+        expression = scalar_expression(expression)
     body_data, offsets = _body_data(expression, sample.nodes)
     captures = _capture_identities(expression)
     minimum = min(offsets, default=0)

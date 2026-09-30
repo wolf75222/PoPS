@@ -24,6 +24,7 @@ methods) so it stays codegen-free and ``_pops``-free and keeps the ``pops.time``
 """
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -290,7 +291,18 @@ class Handle:
             type(self).__name__, self.local_id, self.kind, str(self.owner_path))
 
 
-class StateHandle(Handle):
+class StateShapeHandle(Handle, ABC):
+    """Nominal state-shape contract shared by registry and board declarations."""
+
+    __slots__ = ()
+
+    @property
+    @abstractmethod
+    def state_components(self):
+        raise NotImplementedError
+
+
+class StateHandle(StateShapeHandle):
     """Registry-issued state identity carrying its authoritative :class:`StateSpace`.
 
     The space is declaration metadata, not a second identity axis. Carrying it on the handle lets
@@ -300,6 +312,10 @@ class StateHandle(Handle):
     __slots__ = ("space",)
 
     space: StateSpace
+
+    @property
+    def state_components(self):
+        return self.space.components
 
     def __init__(self, name: Any, *, owner: Any, space: Any, schema_version: int = 1) -> None:
         from .spaces import StateSpace

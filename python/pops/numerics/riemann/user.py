@@ -5,12 +5,12 @@ import hashlib
 import json
 from typing import Any
 
-from pops._ir.expr import Const, Expr, Var
-from pops._ir.visitors import _children
-from pops._ir.vector_expr import VectorExpr
+from pops.model.scalar_contract import (
+    Const, Expr, Var, VectorExpr, NativeCall, RuntimeParamRef,
+    scalar_children as _children, scalar_expression, state_component_count,
+)
 from pops.descriptors import BrickDescriptor
 from pops.model import StateHandle
-from pops.physics.board_handles import StateHandle as BoardStateHandle
 from pops.model.hash_data import canonical_hash_data
 
 
@@ -20,9 +20,10 @@ _CAPABILITIES = ("physical_flux", "provider_pack", "stability_bound")
 
 
 def _state_width(state: Any) -> int:
-    if not isinstance(state, (StateHandle, BoardStateHandle)):
-        raise TypeError("riemann.User(state=) requires an exact model StateHandle")
-    return len(state.components if isinstance(state, BoardStateHandle) else state.space.components)
+    try:
+        return state_component_count(state)
+    except TypeError as error:
+        raise TypeError("riemann.User(state=) requires an exact model StateHandle") from error
 
 
 def _variables(width: int) -> dict[str, VectorExpr]:
@@ -32,7 +33,6 @@ def _variables(width: int) -> dict[str, VectorExpr]:
 
 
 def _capture_identities(roots: tuple[Expr, ...]) -> tuple[tuple[str, str], ...]:
-    from pops._ir.values import RuntimeParamRef
     from pops.model import ParamHandle
 
     found: dict[str, str] = {}
@@ -56,8 +56,6 @@ def _capture_identities(roots: tuple[Expr, ...]) -> tuple[tuple[str, str], ...]:
 
 def _check_body(roots: tuple[Expr, ...], variables: dict[str, VectorExpr],
                 speed: Var, *, exact_objects: bool) -> tuple[tuple[str, str], ...]:
-    from pops._ir.native_call import NativeCall
-    from pops._ir.values import RuntimeParamRef
 
     allowed = {id(node) for row in variables.values() for node in row} | {id(speed)}
     expected_names = {node.name for row in variables.values() for node in row} | {speed.name}
@@ -115,13 +113,12 @@ def User(body: Any, *, state: StateHandle, stability: Any = None,
                   variables["flux_right"], speed)
     if not isinstance(result, tuple) or len(result) != width:
         raise TypeError("riemann.User body must return a tuple of one Expr per state component")
-    roots = tuple(item if isinstance(item, Expr) else Const(item) for item in result)
+    roots = tuple(scalar_expression(item) for item in result)
     stability_result = stability(variables["left"], variables["right"],
                                  variables["flux_left"], variables["flux_right"], speed)
     if isinstance(stability_result, (tuple, list, VectorExpr)):
         raise TypeError("riemann.User stability must return one scalar Expr")
-    stability_root = (stability_result if isinstance(stability_result, Expr)
-                      else Const(stability_result))
+    stability_root = scalar_expression(stability_result)
     captures = _check_body(roots + (stability_root,), variables, speed, exact_objects=True)
     body_data = canonical_hash_data(roots, where="user face body")
     stability_data = canonical_hash_data(stability_root, where="user face stability")

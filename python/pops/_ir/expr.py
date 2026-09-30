@@ -81,6 +81,10 @@ class Expr(ImmutableSymbolic):
     def _str(self) -> str: return "?"
 
 
+def is_scalar_expression(value: Any) -> bool:
+    return isinstance(value, Expr) or callable(getattr(value, "__pops_scalar_plan__", None))
+
+
 def _wrap(o: Any) -> Any:
     if isinstance(o, Expr):
         return o
@@ -88,6 +92,9 @@ def _wrap(o: Any) -> Any:
     node = getattr(o, "_node", None)
     if isinstance(node, Expr):
         return node
+    if callable(getattr(o, "__pops_scalar_plan__", None)):
+        from .finite_linear import lower_finite_scalars
+        return lower_finite_scalars((o,))[0]
     return Const(o)
 
 class Const(Expr):

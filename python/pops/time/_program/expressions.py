@@ -1,15 +1,22 @@
 """Materialize mathematical expressions through the native Program IR."""
-from pops._ir.expr import Expr
+from pops._ir.expr import is_scalar_expression
 from pops.time._authoring import atomic_authoring
 from pops.time.expressions import ProgramExpression, component_names, encode_expressions
 from pops.time._program.value_validation import require_compatible_spaces, require_owned
 
 
 def is_pointwise_expression(value):
-    return isinstance(value, (Expr, ProgramExpression, tuple, list))
+    return is_scalar_expression(value) or isinstance(value, (ProgramExpression, tuple, list))
 
 
 class _ProgramExpressions:
+    def _materialize_finite_vector(self, name, components, *, support, template, at=None):
+        from pops._ir.finite_linear import lower_finite_scalars
+        if component_names(template) != support[1]:
+            raise ValueError("finite output template differs from its ordered support")
+        expression = ProgramExpression(lower_finite_scalars(components), template)
+        return self._pointwise_expression(name, expression, at=at, finite_support=support)
+
     @atomic_authoring
     def _pointwise_expression(self, name, expression, *, at=None, finite_support=None):
         if isinstance(expression, ProgramExpression):
@@ -30,12 +37,13 @@ class _ProgramExpressions:
             raise ValueError("pointwise output component count must match its StateSpace")
         attrs = {"expressions": encoded, "expression_nodes": nodes}
         if finite_support is not None:
-            from pops.linalg.finite import FiniteSupport
-            if not isinstance(finite_support, FiniteSupport) or finite_support.dofs != component_names(template):
+            if type(finite_support) is not tuple or len(finite_support) != 2 or \
+                    type(finite_support[0]) is not str or not finite_support[0] or \
+                    finite_support[1] != component_names(template):
                 raise ValueError("finite materialization requires its exact output support")
             if all(value is not template for value in inputs):
                 inputs = (*inputs, template)
-            attrs["finite_support_v1"] = finite_support.contract
+            attrs["finite_support_v1"] = finite_support
             attrs["finite_template_index"] = next(i for i, value in enumerate(inputs) if value is template)
             for value in inputs:
                 for attribute in ("layout", "centering", "support", "sampling", "frame", "clock"):

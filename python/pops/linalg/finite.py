@@ -1,7 +1,93 @@
 """Version 1: immutable explicit finite DOF maps, evaluated in native kernels."""
 from dataclasses import dataclass
+from decimal import Decimal
+from fractions import Fraction
+import json
 import math
-from pops._ir.expr import _wrap
+
+
+def _retain_scalar(value):
+    """Retain a literal or a symbolic scalar without importing its owning layer."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return _ScalarPlan("number", (int(value),))
+    if isinstance(value, Fraction):
+        return _ScalarPlan("number", (Fraction(value.numerator, value.denominator),))
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("finite scalar literal must be finite")
+        return _ScalarPlan("number", (float(value),))
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("finite scalar literal must be finite")
+        return _ScalarPlan("number", (Decimal(str(value)),))
+    if callable(getattr(value, "__pops_ir_children__", None)) or \
+            callable(getattr(value, "__pops_scalar_plan__", None)):
+        return value
+    node = getattr(value, "_node", None)
+    if callable(getattr(node, "__pops_ir_children__", None)):
+        return node
+    literal = getattr(value, "__pops_scalar_literal__", None)
+    if callable(literal):
+        encoded = json.dumps(literal(), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        return _ScalarPlan("literal", (encoded,))
+    raise TypeError("finite vector requires real literals or declared symbolic scalar expressions")
+
+
+@dataclass(frozen=True, eq=False)
+class _ScalarPlan:
+    """Immutable mathematical declaration; conversion is owned by the IR consumer."""
+    operation: str
+    arguments: tuple
+
+    def __pops_scalar_plan__(self):
+        return ("pops.finite-scalar-plan@1", self.operation, self.arguments)
+
+    def __pops_scalar_literal__(self):
+        if self.operation != "literal":
+            raise TypeError("finite operation is not a captured scalar literal")
+        return json.loads(self.arguments[0])
+
+    def _binary(self, other, op, reverse=False):
+        other = _retain_scalar(other)
+        return _ScalarPlan(op, (other, self) if reverse else (self, other))
+
+    def __add__(self, other): return self._binary(other, "add")
+    def __radd__(self, other): return self._binary(other, "add", True)
+    def __sub__(self, other): return self._binary(other, "sub")
+    def __rsub__(self, other): return self._binary(other, "sub", True)
+    def __mul__(self, other): return self._binary(other, "mul")
+    def __rmul__(self, other): return self._binary(other, "mul", True)
+    def __truediv__(self, other): return self._binary(other, "div")
+    def __rtruediv__(self, other): return self._binary(other, "div", True)
+    def __pow__(self, other): return self._binary(other, "pow")
+    def __eq__(self, other): return self._binary(other, "eq")
+    def __ne__(self, other): return self._binary(other, "ne")
+    def __lt__(self, other): return self._binary(other, "lt")
+    def __le__(self, other): return self._binary(other, "le")
+    def __gt__(self, other): return self._binary(other, "gt")
+    def __ge__(self, other): return self._binary(other, "ge")
+    def __and__(self, other): return self._binary(other, "and")
+    def __rand__(self, other): return self._binary(other, "and", True)
+    def __or__(self, other): return self._binary(other, "or")
+    def __ror__(self, other): return self._binary(other, "or", True)
+    def __invert__(self): return _ScalarPlan("not", (self,))
+    def __neg__(self): return _ScalarPlan("neg", (self,))
+    def __pos__(self): return self
+    def __abs__(self): return _ScalarPlan("abs", (self,))
+    def __bool__(self): raise TypeError("a finite symbolic scalar has no Python truth value")
+
+
+@dataclass(frozen=True, eq=False)
+class _ApplicationPlan:
+    operation: str
+    source: tuple
+    target: tuple
+    coefficients: tuple
+    inputs: tuple
+
+    def __pops_finite_application__(self):
+        return ("pops.finite-application-plan@1", self.operation, self.source,
+                self.target, self.coefficients, self.inputs)
 
 
 @dataclass(frozen=True)
@@ -23,12 +109,9 @@ class FiniteSupport:
         return (self.name, self.dofs)
 
     def bind(self, values):
-        from pops.time.values import ProgramValue
-        from pops.time.expressions import as_expression, component_names
-        if isinstance(values, ProgramValue):
-            if component_names(values) != self.dofs:
-                raise ValueError("Program components differ from the ordered finite support labels")
-            values = as_expression(values).components
+        binder = getattr(values, "__pops_finite_components__", None)
+        if callable(binder):
+            values = binder(self.dofs)
         return FiniteVector(self, tuple(values))
 
 
@@ -40,16 +123,13 @@ class FiniteVector:
     def __post_init__(self):
         if not isinstance(self.support, FiniteSupport):
             raise TypeError("finite vector requires a FiniteSupport")
-        object.__setattr__(self, "components", tuple(_wrap(x) for x in self.components))
+        object.__setattr__(self, "components", tuple(_retain_scalar(x) for x in self.components))
         if len(self.components) != len(self.support.dofs):
             raise ValueError("finite vector width differs from its support")
 
     def materialize(self, program, name, *, template, at=None):
-        from pops.time.expressions import ProgramExpression, component_names
-        if component_names(template) != self.support.dofs:
-            raise ValueError("finite output template differs from its ordered support")
-        expression = ProgramExpression(self.components, template)
-        return program._pointwise_expression(name, expression, at=at, finite_support=self.support)
+        return program._materialize_finite_vector(
+            name, self.components, support=self.support.contract, template=template, at=at)
 
     def __len__(self): return len(self.components)
     def __iter__(self): return iter(self.components)
@@ -63,7 +143,9 @@ class FiniteVector:
     def __add__(self, other): return self._binary(other, lambda a, b: a+b)
     def __sub__(self, other): return self._binary(other, lambda a, b: a-b)
     def __neg__(self): return self.support.bind(-x for x in self)
-    def __mul__(self, scalar): return self.support.bind(x*_wrap(scalar) for x in self)
+    def __mul__(self, scalar):
+        scalar = _retain_scalar(scalar)
+        return self.support.bind(x*scalar for x in self)
     def __rmul__(self, scalar): return self*scalar
 
 
@@ -84,14 +166,13 @@ class FiniteLinearMap:
         object.__setattr__(self, "coefficients", rows)
 
     def _evaluate(self, value, operation):
-        from pops._ir.finite_linear import FiniteApplication, FiniteProjection
         expected = self.source if operation == "apply" else self.target
         output = self.target if operation == "apply" else self.source
         if not isinstance(value, FiniteVector) or value.support != expected:
             raise ValueError("finite map argument differs from its exact ordered support")
-        call = FiniteApplication(operation, self.source.contract, self.target.contract,
-                                 self.coefficients, value.components)
-        return output.bind(FiniteProjection(call, i) for i in range(len(output.dofs)))
+        call = _ApplicationPlan(operation, self.source.contract, self.target.contract,
+                                self.coefficients, value.components)
+        return output.bind(_ScalarPlan("projection", (call, i)) for i in range(len(output.dofs)))
 
     def apply(self, value): return self._evaluate(value, "apply")
 

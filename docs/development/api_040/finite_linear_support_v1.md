@@ -26,6 +26,11 @@ source/target contracts and coefficients into versioned `finite_linear_v1` DAG
 nodes, projected through `finite_projection_v1`. CSE keys include all those fields.
 The common region-aware CSE preserves lazy `where` branches. There is no Python
 runtime callback, Python inverse, precomputed native answer, or per-cell allocation.
+The dependency-free algebra layer retains immutable scalar/application plans;
+the consuming model/Program converts them into these same native IR nodes.
+Literal operations remain unfurled expressions. Packing, output-template and
+owned temporal-capture validation stay with the Program. See
+[`symbolic_policy_layering_review.md`](symbolic_policy_layering_review.md).
 
 Native application uses fixed arrays and explicit row sums. A nonfinite product or
 sum invalidates the complete joint result, even if another projection is finite.

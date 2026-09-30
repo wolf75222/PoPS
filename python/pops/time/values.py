@@ -284,6 +284,12 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
     _FIELD = ("state", "rhs", "scalar_field")
     _SCALAR = ("scalar", "bool")  # runtime scalars / predicates: never a Python bool / index
 
+    def __pops_finite_components__(self, dofs):
+        from pops.time.expressions import as_expression, component_names
+        if component_names(self) != dofs:
+            raise ValueError("Program components differ from the ordered finite support labels")
+        return as_expression(self).components
+
     def __init__(self, prog: Any, vid: Any, vtype: Any, op: Any, inputs: Any, attrs: Any,
                  name: Any, block: Any, *, space: Any = None, source_location: Any = None,
                  field_context: Any = None, region: int = 0, state_ref: Any = None,
