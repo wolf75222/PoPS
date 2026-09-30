@@ -351,7 +351,7 @@ public:
 Real dot_all(int program_block, const field_type& left, const field_type& right) const {
   const ExecutionLane& lane = prepared_execution_lane();
   std::exception_ptr local_error;
-  Real local = Real(0);
+  FiniteCompensatedSum accumulated;
   try {
     for_each_owner_finest_active_level_(
         program_block, left, right,
@@ -362,21 +362,18 @@ Real dot_all(int program_block, const field_type& left, const field_type& right)
           require_same_field_contract_(left_field, *right_field, "AMR Program dot_all");
           if (left_field.ghosts() != right_field->ghosts())
             throw std::invalid_argument("AMR Program dot_all ghost count differs");
-          const Real checked =
-              pops::dot_owned_active_all_finite_local(left_field, *right_field, active, coverage);
+          const auto checked =
+              pops::dot_owned_active_all_finite_sum_local(left_field, *right_field, active, coverage);
           if (!left_field.distribution().replicated() || lane.rank() == 0)
-            local += checked;
-          if (!std::isfinite(local))
+            accumulated.join(checked);
+          if (!accumulated.finite())
             throw std::overflow_error("AMR Program dot_all level accumulation is nonfinite");
         });
   } catch (...) {
     local_error = std::current_exception();
   }
   converge_owner_reduction_(local_error, lane, "AMR Program dot-all reduction");
-  const Real result = static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
-  if (!std::isfinite(result))
-    throw std::overflow_error("AMR Program dot_all collective sum is nonfinite");
-  return result;
+  return pops::collective_finite_compensated_sum(accumulated, lane.communicator());
 }
 
 Geometry<Dim> geometry() const {

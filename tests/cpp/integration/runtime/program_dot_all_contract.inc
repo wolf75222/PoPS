@@ -76,6 +76,50 @@ TEST(ProgramRuntime, ExplicitVectorPairingIncludesEveryComponentAndKeepsLegacyDo
   EXPECT_ANY_THROW(context.dot_all(0, increment, unit));  // finite products, local sum overflow
 }
 
+TEST(ProgramRuntime, CompensatedVectorPairingKeepsLowWordsAcrossRealLaneAndPatches) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  comm_init();
+  auto lane = ExecutionLane::duplicate_world_collectively("pops.test.compensated-dot-all.v1");
+  const int ranks = lane.size();
+  const auto layout = mesh::BoxArray<1>::from_domain(
+      Box<1>{Index<1>{-3}, Index<1>{3 * ranks - 4}}, Extent<1>{1});
+  const mesh::RankSpace<1> rank_space{Index<1>{7}, Extent<1>{ranks}};
+  std::vector<Index<1>> owners;
+  for (int patch = 0; patch < 3 * ranks; ++patch)
+    owners.push_back(Index<1>{7 + patch / 3});
+  const auto distribution = mesh::Distribution<1>::partitioned(layout, rank_space, owners);
+  MultiFab<1> left(layout, distribution, Index<1>{7 + lane.rank()}, 1, Extent<1>{});
+  MultiFab<1> right(layout, distribution, left.local_rank(), 1, Extent<1>{});
+  right.set_val(Real(1));
+  for (std::size_t patch = 0; patch < left.local_size(); ++patch) {
+    const auto values = left.fab(patch).view();
+    for_each_cell(left.box(patch), [=] POPS_HD(const Index<1>& cell) {
+      const int ordinal = cell[0] + 3;
+      values(cell, 0) = ordinal == 0 ? Real(1e16)
+          : (ordinal == 1 ? Real(1)
+             : (ordinal == (ranks == 1 ? 2 : 3) ? Real(-1e16) : Real(0)));
+    });
+  }
+  const auto summary = dot_owned_active_all_finite_sum_local(
+      left, right, static_cast<const MultiFab<1>*>(nullptr));
+  EXPECT_DOUBLE_EQ(collective_finite_compensated_sum(summary, lane.communicator()), 1.);
+  // Empty/noncontributing summaries do not remove a low word.
+  FiniteCompensatedSum empty;
+  EXPECT_DOUBLE_EQ(collective_finite_compensated_sum(empty, lane.communicator()), 0.);
+  FiniteCompensatedSum poisoned;
+  poisoned.invalid = lane.rank() == ranks - 1;
+  EXPECT_THROW(collective_finite_compensated_sum(poisoned, lane.communicator()),
+               std::overflow_error);
+  if (ranks > 1) {
+    FiniteCompensatedSum overflow;
+    overflow.add(std::numeric_limits<Real>::max() * Real(.75));
+    EXPECT_THROW(collective_finite_compensated_sum(overflow, lane.communicator()),
+                 std::overflow_error);
+  }
+}
+
 TEST(ProgramRuntime, ExplicitVectorPairingRefusesDistributedGlobalOverflow) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();

@@ -21,7 +21,7 @@ def _extract(path, signature):
     while depth:
         depth += (source[end] == "{") - (source[end] == "}")
         end += 1
-    return source[start:end] + (";" if signature.startswith("template <int Dim>\nstruct") else "")
+    return source[start:end] + (";" if signature.startswith(("template <int Dim>\nstruct", "struct ")) else "")
 
 
 def test_authentic_dot_all_finite_coverage_and_collective_control_flow(tmp_path):
@@ -33,10 +33,12 @@ def test_authentic_dot_all_finite_coverage_and_collective_control_flow(tmp_path)
     amr = "include/pops/runtime/program/amr_program_context_spatial_operations.inc"
     contracts = "include/pops/runtime/program/amr_program_context_history_checkpoint_services.inc"
     pieces = {
+        "accumulator": _extract("include/pops/mesh/execution/for_each.hpp", "struct FiniteCompensatedSum"),
         "kernel": _extract(mesh, "template <int Dim>\nstruct FiniteOwnedDotKernel"),
         "layout": _extract(mesh, "template <int Dim, class LeftSpace, class RightSpace>\nvoid require_same_layout"),
         "measure": _extract(mesh, "template <int Dim, class MemorySpace>\nvoid validate_measure"),
         "local": _extract(mesh, "template <int Dim, class MemorySpace>\nReal dot_owned_active_all_finite_local"),
+        "local_sum": _extract(mesh, "template <int Dim, class MemorySpace>\nFiniteCompensatedSum dot_owned_active_all_finite_sum_local"),
         "uniform": _extract(uniform, "Real dot_all(int program_block,"),
         "uniform_contract": _extract(uniform, "static void require_same_field_contract_"),
         "amr": _extract(amr, "Real dot_all(int program_block,"),
@@ -99,6 +101,10 @@ template<class Kernel>Real for_each_cell_reduce_sum(size_t n,Kernel kernel){
 }
 using Field=MultiFab<1,int>;
 namespace pops {
+@ACCUMULATOR@
+template<class Kernel>FiniteCompensatedSum for_each_cell_reduce_finite_sum(size_t n,Kernel kernel){
+ FiniteCompensatedSum x;for(size_t i=0;i<n;++i)x.add(kernel(Index<1>{static_cast<int>(i)}));return x;
+}
 template<int Dim,class Memory>struct RelativeCellMeasure {
  const MultiFab<Dim,Memory>* active_cells;const MultiFab<Dim,Memory>* inverse_volume_fraction;
 };
@@ -107,13 +113,24 @@ namespace mf_arith_detail {
 @LAYOUT@
 @MEASURE@
 }
+@LOCAL_SUM@
 @LOCAL@
 }
-struct ExecutionLane {int r=0,n=1;int rank()const{return r;}int size()const{return n;}};
+using pops::FiniteCompensatedSum;
+struct ExecutionLane {int r=0,n=1;int rank()const{return r;}int size()const{return n;}
+ const ExecutionLane& communicator()const{return *this;}};
 struct Identity {enum class Family{State,History,Scratch,Direct};Family family=Family::State;int direct_level=0;};
 using Family=Identity::Family;
 std::string events;bool global_overflow=false;
 double all_reduce_sum(double x,const ExecutionLane&){events+='S';return global_overflow?x*2:x;}
+// This fixture substitutes transport; real collective summaries are tested in C++.
+namespace pops {
+Real collective_finite_compensated_sum(const FiniteCompensatedSum& local,const ExecutionLane& lane){
+ const Real result=all_reduce_sum(local.value(),lane);
+ if(!local.finite()||!std::isfinite(result))throw std::overflow_error("collective overflow");
+ return result;
+}
+}
 struct Base {
  using field_type=Field;ExecutionLane lane;
  const ExecutionLane& prepared_execution_lane()const{return lane;}

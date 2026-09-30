@@ -1104,20 +1104,17 @@ class ProgramContext {
     const ExecutionLane& lane = prepared_execution_lane();
     const field_type* const active = pointwise_active_mask(program_block, left);
     std::exception_ptr local_error;
-    Real local = Real(0);
+    FiniteCompensatedSum local;
     try {
       require_same_field_contract_(left, right, "ProgramContext dot_all");
-      const Real checked = pops::dot_owned_active_all_finite_local(left, right, active);
-      // Every physical replica is validated; exactly one enters the lane SUM.
-      local = left.distribution().replicated() && lane.rank() != 0 ? Real(0) : checked;
+      const auto checked = pops::dot_owned_active_all_finite_sum_local(left, right, active);
+      // Every physical replica is validated; exactly one contributes to the lane pairing.
+      local = left.distribution().replicated() && lane.rank() != 0 ? FiniteCompensatedSum{} : checked;
     } catch (...) {
       local_error = std::current_exception();
     }
     converge_owner_reduction_(local_error, lane, "Program dot-all reduction");
-    const Real result = static_cast<Real>(all_reduce_sum(local, lane));
-    if (!std::isfinite(result))
-      throw std::overflow_error("Program dot_all collective sum is nonfinite");
-    return result;
+    return pops::collective_finite_compensated_sum(local, lane.communicator());
   }
 
   Geometry<Dim> geometry() const { return system_->prepared_block_geometry(); }

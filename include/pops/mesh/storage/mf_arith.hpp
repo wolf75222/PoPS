@@ -10,12 +10,14 @@
 #include <pops/parallel/comm.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace pops {
 
@@ -674,29 +676,72 @@ Real dot_active_local(const MultiFab<Dim, MemorySpace>& left,
 /// Allocation-free, finite local algebra for pops.program.dot-all@1 only.
 /// Masked field values do not participate; malformed masks fail closed.
 template <int Dim, class MemorySpace>
-Real dot_owned_active_all_finite_local(const MultiFab<Dim, MemorySpace>& left,
-                                      const MultiFab<Dim, MemorySpace>& right,
-                                      const MultiFab<Dim, MemorySpace>* active_cells,
-                                      const MultiFab<Dim, MemorySpace>* coverage_cells = nullptr) {
+FiniteCompensatedSum dot_owned_active_all_finite_sum_local(
+    const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+    const MultiFab<Dim, MemorySpace>* active_cells,
+    const MultiFab<Dim, MemorySpace>* coverage_cells = nullptr) {
   constexpr const char* operation = "pops::dot_owned_active_all_finite_local";
   mf_arith_detail::require_same_layout(left, right, operation);
   mf_arith_detail::validate_measure(left, {active_cells, nullptr}, operation);
   mf_arith_detail::validate_measure(left, {coverage_cells, nullptr}, operation);
-  Real result = Real{0};
+  FiniteCompensatedSum result;
   for (int component = 0; component < left.ncomp(); ++component) {
     for (std::size_t local = 0; local < left.local_size(); ++local) {
-      const Real patch = for_each_cell_reduce_sum(
+      const auto patch = for_each_cell_reduce_finite_sum(
           left.box(local), mf_arith_detail::FiniteOwnedDotKernel<Dim>{
               left.fab(local).view(), right.fab(local).view(),
               active_cells ? active_cells->fab(local).view() : FieldView<const Real, Dim>{},
               coverage_cells ? coverage_cells->fab(local).view() : FieldView<const Real, Dim>{},
               component, active_cells != nullptr, coverage_cells != nullptr});
-      result += patch;
-      if (!std::isfinite(patch) || !std::isfinite(result))
+      result.join(patch);
+      if (!patch.finite() || !result.finite())
         throw std::overflow_error("Program dot_all has nonfinite active values or local overflow");
     }
   }
   return result;
+}
+
+template <int Dim, class MemorySpace>
+Real dot_owned_active_all_finite_local(const MultiFab<Dim, MemorySpace>& left,
+                                      const MultiFab<Dim, MemorySpace>& right,
+                                      const MultiFab<Dim, MemorySpace>* active_cells,
+                                      const MultiFab<Dim, MemorySpace>* coverage_cells = nullptr) {
+  return dot_owned_active_all_finite_sum_local(left, right, active_cells, coverage_cells).value();
+}
+
+/// dot-all@1 transports the two-word summaries, never fields or finalized rank scalars.
+/// All ranks merge in communicator order; device reduction trees can still differ.
+inline Real collective_finite_compensated_sum(const FiniteCompensatedSum& local,
+                                             const CommunicatorView& communicator) {
+  if (all_reduce_max(local.finite() ? 0L : 1L, communicator) != 0)
+    throw std::overflow_error("Program dot_all local summary is nonfinite");
+#ifdef POPS_HAS_MPI
+  if (communicator.active() && communicator.size() > 1) {
+    std::vector<Real> summaries;
+    long allocation_failed = 0;
+    try {
+      summaries.resize(2 * static_cast<std::size_t>(communicator.size()));
+    } catch (...) {
+      allocation_failed = 1;
+    }
+    if (all_reduce_max(allocation_failed, communicator) != 0)
+      throw std::runtime_error("Program dot_all could not allocate collective summaries");
+    const std::array<Real, 2> words{local.high, local.low};
+    detail::require_mpi_success(
+        MPI_Allgather(words.data(), 2, mpi_real_datatype(), summaries.data(), 2,
+                      mpi_real_datatype(), communicator.native_handle()),
+        "MPI_Allgather(Program dot_all compensated summaries)");
+    FiniteCompensatedSum global;
+    for (std::size_t source = 0; source < summaries.size(); source += 2) {
+      global.add(summaries[source]);
+      global.add(summaries[source + 1]);
+    }
+    if (all_reduce_max(global.finite() ? 0L : 1L, communicator) != 0)
+      throw std::overflow_error("Program dot_all collective sum is nonfinite");
+    return global.value();
+  }
+#endif
+  return local.value();
 }
 
 template <int Dim, class MemorySpace>
