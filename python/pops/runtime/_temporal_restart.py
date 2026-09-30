@@ -7,6 +7,7 @@ boundary is serializable; an older schema is an offline-migration input, never a
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import math
 import operator
@@ -506,8 +507,18 @@ class TemporalRestartState:
     status: str = "accepted"
     synchronized: bool = True
     _restored_pending: bool = field(default=False, repr=False)
+    _initial_strategy_declaration: dict[str, Any] | None = field(default=None, repr=False)
 
-    def configure_program(self, schedule: Any, *, time: Any, macro_step: Any) -> None:
+    def configure_program(self, schedule: Any, *, time: Any, macro_step: Any,
+                          strategy: Any = _UNSPECIFIED) -> None:
+        """Install schedule and initial controller authority before runtime publication."""
+        candidate = deepcopy(self)
+        candidate._configure_program_schedule(schedule, time=time, macro_step=macro_step)
+        if strategy is not _UNSPECIFIED:
+            candidate._configure_initial_strategy(strategy, time=time, macro_step=macro_step)
+        self.__dict__ = candidate.__dict__
+
+    def _configure_program_schedule(self, schedule: Any, *, time: Any, macro_step: Any) -> None:
         """Bind one immutable nested-clock contract before execution or restart."""
         now, step = _clock(time, macro_step)
         self._require_live_clock(now, step)
@@ -527,10 +538,42 @@ class TemporalRestartState:
             (self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
              self.history_cursors, self.cache_cursors) = cursors
 
+    def _configure_initial_strategy(self, strategy: Any, *, time: Any, macro_step: Any) -> None:
+        from pops.time._step.transaction import ensure_step_strategy
+
+        if strategy is None:
+            if self.strategy is not None or self._initial_strategy_declaration is not None:
+                raise RuntimeError("installed Program omits the accepted step strategy declaration")
+            return
+        policy = ensure_step_strategy(strategy)
+        if policy.initial_controls_contract != "pops.step-strategy.initial-runtime-controls@1":
+            raise TypeError("unsupported initial step-strategy controls contract")
+        declaration = _json_copy(policy.to_data(), where="installed initial step strategy")
+        if self.strategy is not None:
+            if self.strategy["strategy"] != declaration:
+                raise RuntimeError("installed step strategy differs from restored temporal strategy")
+            # Preserve exact runtime controls, queued decisions and the pending
+            # next-attempt obligation. Binding never consumes a restored cursor.
+            self._initial_strategy_declaration = declaration
+            return
+        self._initial_strategy_declaration = declaration
+        controls = policy.initial_runtime_controls()
+        if controls is None:
+            return
+        policy.validate_runtime_controls(controls)
+        manifest = validate_step_strategy_manifest({
+            "strategy": declaration, "controls": policy.runtime_controls_data(controls),
+        })
+        self.begin_run({"strategy": manifest, "program_schedule": self.program_schedule},
+                       time=time, macro_step=macro_step)
+
     def begin_run(self, strategy: dict[str, Any], *, time: Any, macro_step: Any) -> None:
         """Bind the controller for this run, enforcing the first post-restart attempt."""
         now, step = _clock(time, macro_step)
         candidate, prepared_schedule = _run_binding(strategy)
+        if self._initial_strategy_declaration is not None \
+                and candidate["strategy"] != self._initial_strategy_declaration:
+            raise RuntimeError("prepared run step strategy differs from the installed declaration")
         if prepared_schedule != self.program_schedule and prepared_schedule is not None:
             raise RuntimeError("prepared run schedule differs from the installed program schedule")
         self._require_live_clock(now, step)
@@ -683,6 +726,9 @@ class TemporalRestartState:
                 "checkpoint requires an accepted synchronized step boundary; "
                 "the last attempt was %s" % self.status)
         if self.strategy is None:
+            if self._initial_strategy_declaration is not None:
+                raise RuntimeError("checkpoint requires runtime controls for the installed step strategy "
+                                   + self._initial_strategy_declaration["kind"])
             raise RuntimeError("checkpoint requires a declared step strategy")
         validate_step_strategy_manifest(self.strategy)
         if self.program_schedule is not None:

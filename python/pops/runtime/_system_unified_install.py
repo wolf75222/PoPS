@@ -436,7 +436,8 @@ class _SystemUnifiedInstall(_System):
             )
             if authored is not None:
                 self._temporal_restart_state.configure_program(
-                    authored.temporal_manifest(), time=self.time(), macro_step=self.macro_step()
+                    authored.temporal_manifest(), time=self.time(), macro_step=self.macro_step(),
+                    strategy=self._step_strategy,
                 )
 
         # Shared NumericalFlux routes need both endpoint MultiFabs and the installed Program, but

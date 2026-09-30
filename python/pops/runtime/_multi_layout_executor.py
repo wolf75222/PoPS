@@ -662,7 +662,7 @@ class _CompositeTemporalRestartState:
         return values[0]
 
     def _require_shared(self) -> None:
-        for name in ("_restored_pending", "strategy", "time_hex", "macro_step",
+        for name in ("_restored_pending", "_initial_strategy_declaration", "strategy", "time_hex", "macro_step",
                      "controller_state", "event_queue", "transaction_stats", "status",
                      "synchronized"):
             self._same_attribute(name)

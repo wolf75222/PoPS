@@ -63,6 +63,7 @@ class StepStrategy:
 
     kind: ClassVar[str] = "strategy"
     __pops_ir_immutable__ = True
+    initial_controls_contract: ClassVar[str] = "pops.step-strategy.initial-runtime-controls@1"
 
     def __new__(cls, *args: Any, **kwargs: Any) -> StepStrategy:
         if cls is StepStrategy:
@@ -107,6 +108,14 @@ class StepStrategy:
             raise ValueError(
                 "%s does not accept runtime control(s): %s"
                 % (self.kind, ", ".join(sorted(values))))
+
+    def initial_runtime_controls(self) -> Mapping[str, Any] | None:
+        """Bind-time controls for an accepted initial checkpoint (protocol version 1).
+
+        Providers needing caller-supplied controls return None explicitly. No
+        controller is constructed and validation errors are never suppressed.
+        """
+        return {}
 
 
 _StepStrategyT = TypeVar("_StepStrategyT", bound=StepStrategy)
@@ -292,6 +301,10 @@ class ExternalTimeGrid(StepStrategy):
                 or payload.get("kind") != cls.kind:
             raise ValueError("ExternalTimeGrid strategy manifest has invalid keys")
         return cls(payload["grid_id"])
+
+    def initial_runtime_controls(self) -> Mapping[str, Any] | None:
+        """The declared grid identity does not supply its runtime coordinates."""
+        return None
 
     def validate_runtime_controls(self, controls: Mapping[str, Any] | None = None) -> None:
         values = _controls(controls)
