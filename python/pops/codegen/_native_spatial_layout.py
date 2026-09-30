@@ -64,19 +64,23 @@ def native_spatial_layouts(
     selected_dimensions: set[int] = set()
     for normalized in layout_plan.layouts:
         evolution = normalized.requirements.get("geometry_evolution")
-        if evolution is not None:
+        if evolution is not None and (normalized.adaptive or
+                normalized.native_spatial_layout is None or
+                normalized.native_spatial_layout.dimension != 1 or
+                normalized.native_spatial_layout.periodicity != (True,) or
+                normalized.options.get("embedded_boundary") is not None):
             from pops.blockage import Blockage, BlockageClass
 
             blockage = Blockage(
                 BlockageClass.IMPL, "resolve", "native-spatial-geometry",
-                "The native carrier has immutable Cartesian measures; no trial/accepted "
-                "coordinates, swept-volume exchange or atomic geometry/state rollback exists.",
+                "The selected moving geometry realization needs a geometry/boundary provider "
+                "beyond the available periodic Uniform1D endpoint carrier.",
                 capability="moving_control_volumes",
             )
             raise NativeSpatialLayoutError(
                 "native_geometry_evolution_unavailable",
-                "Moving control volumes require a native geometry carrier and discrete GCL; "
-                "a fixed Cartesian layout or instantaneous AMR remap cannot satisfy the request",
+                "The discrete GCL realization is available for periodic Uniform1D endpoints; "
+                "the requested geometry needs another prepared boundary/transfer provider",
                 layout_id=normalized.handle.qualified_id,
                 evidence={"blockage": blockage.to_data(), "geometry_evolution": evolution},
             )

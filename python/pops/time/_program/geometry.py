@@ -51,6 +51,8 @@ class _ProgramGeometry:
         """Bind an accepted physical state to its explicit evolved geometry."""
         from pops.mesh import GeometryEvolution
         self._guard_mutable("bind state geometry")
+        if self._current_region() != 0:
+            raise ValueError("geometry_state must be declared in the top-level Program")
         state = require_owned(self, _resolve_handle(state), "geometry_state", vtype="state")
         require_top_level(self, state, "geometry_state")
         if type(evolution) is not GeometryEvolution:
@@ -101,7 +103,12 @@ class _ProgramGeometry:
             if rate.block != state.block or rate.state_ref != state.state_ref or rate.point != state.point:
                 raise ValueError("Reynolds rates must sample the same exact state/clock/point")
             require_compatible_spaces(state.space, rate.space, "Reynolds rate", typed_pair=True)
-            if not any(value is state for value in rate.inputs) or any(value is not state for value in rate.inputs):
+            def samples(value):
+                if value.op == "linear_combine" and value.attrs.get("physical_balance") is not None:
+                    return tuple(leaf for item in value.inputs for leaf in samples(item))
+                return value.inputs
+            sampled = samples(rate)
+            if not sampled or any(value is not state for value in sampled):
                 raise ValueError("Reynolds evaluation requires complete single-state sampling")
         if type(projection) is not MovingFieldProjection:
             raise TypeError("Reynolds update needs an explicit MovingFieldProjection")

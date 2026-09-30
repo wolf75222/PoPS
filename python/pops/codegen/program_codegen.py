@@ -407,7 +407,8 @@ def _emit_program_model_helpers(program: Any, authority: Any) -> str:
         expressions.append(declaration["valid_if"])
     lines = _eig_witness_helpers(_collect_eig_witnesses(expressions), indent="")
     from .program_emit_principal import emit_principal_models
-    return (("\n".join(lines) + "\n") if lines else "") + emit_principal_models(program, authority)
+    from .program_emit_moving import emit_moving_helpers
+    return (("\n".join(lines) + "\n") if lines else "") + emit_principal_models(program, authority) + emit_moving_helpers(program, authority)
 
 
 def _emit_system_install(target: str, prelude: str, body: str, provider_plan_install: str) -> str:
@@ -568,6 +569,8 @@ def _check_lowerable(
     (e.g. a passive field whose charge couples the others); a commit of a block that was never
     declared by ``T.state`` is rejected (an unknown-block commit cannot route to an index)."""
     _check_model_owner_dispatch(program, model)
+    from .program_emit_moving import check_moving_program
+    check_moving_program(program, model, target)
     blocks = program._block_indices()
     for state_ref in list(program._commits) + list(getattr(program, "_post_sync_commits", {})):
         block = state_ref.block_ref

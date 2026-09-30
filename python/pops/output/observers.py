@@ -239,6 +239,7 @@ def detach_observer_frame(frame: ObserverFrame) -> ObserverFrame:
             coordinate_system=geometry.coordinate_system,
             cell_measure=geometry.cell_measure,
             axis_names=geometry.axis_names,
+            node_coordinates=geometry.node_coordinates,
         )
         for geometry in frame.snapshot.geometries
     )

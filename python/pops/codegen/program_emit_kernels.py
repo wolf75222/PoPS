@@ -50,6 +50,8 @@ _MODEL_OPS = (
 _ALLOWED_OPS = frozenset(
     {
         "state",
+        "geometry_state",
+        "reynolds_update",
         "layout_map_export",
         "layout_map_import",
         "solve_fields",

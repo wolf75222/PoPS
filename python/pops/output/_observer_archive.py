@@ -218,6 +218,9 @@ def _frame_projection(
         add_array(arrays["valid_cells"], geometry.valid_cells)
         add_array(arrays["coverage"], geometry.coverage)
         add_array(arrays["cell_volumes"], geometry.cell_volumes)
+        if geometry.node_coordinates is not None:
+            arrays["node_coordinates"] = prefix + "_node_coordinates"
+            add_array(arrays["node_coordinates"], geometry.node_coordinates)
         geometries.append({
             "layout_identity": geometry.layout_identity.token,
             "layout_kind": geometry.layout_kind,
@@ -406,7 +409,8 @@ def _decode_geometry(data: Any, arrays: Mapping[str, Any]) -> LevelGeometry:
         "boxes", "coordinate_system", "cell_measure", "axis_names", "arrays",
     }, "observer archive geometry")
     names = _mapping(
-        row["arrays"], {"valid_cells", "coverage", "cell_volumes"},
+        row["arrays"], {"valid_cells", "coverage", "cell_volumes"} |
+        ({"node_coordinates"} if "node_coordinates" in row["arrays"] else set()),
         "observer archive geometry arrays")
     try:
         origin = tuple(float.fromhex(value) for value in row["origin"])
@@ -424,6 +428,7 @@ def _decode_geometry(data: Any, arrays: Mapping[str, Any]) -> LevelGeometry:
             coordinate_system=row["coordinate_system"],
             cell_measure=row["cell_measure"],
             axis_names=tuple(row["axis_names"]),
+            node_coordinates=(arrays[names["node_coordinates"]] if "node_coordinates" in names else None),
             _native_valid_cells=arrays[names["valid_cells"]],
             _native_arrays=_NATIVE_GEOMETRY_ARRAYS,
         )

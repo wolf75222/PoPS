@@ -152,6 +152,8 @@ def resolve(
     )
 
     validate_program_spatial_dimension(resolved_time, resolved_dimension(native_layouts))
+    from .program_moving_layout_contract import validate_moving_layout_program
+    validate_moving_layout_program(resolved_time, layout_plan)
     validate_layout_mapping_components(layout_plan, components)
     from pops.codegen._physical_mapping_resolution import validate_physical_mapping_geometry
     validate_physical_mapping_geometry(layout_plan)
@@ -361,6 +363,10 @@ def resolve(
                                       resolve=problem.resolve)
     from pops.codegen.program_emit_field_routes import validate_program_field_routes
     validate_program_field_routes(resolved_time, field_plans)
+    if any(value.op == "reynolds_update" for value in resolved_time._values):
+        from .program_models import ProgramModelGraph
+        from .program_emit_moving import check_moving_program
+        check_moving_program(resolved_time, ProgramModelGraph.from_resolved_blocks(blocks), target)
     snapshot = prepare_problem_snapshot(
         problem, resolved_time, layout=layout_plan, libraries=())
     from pops.codegen._resolution import resolve_capability_evidence
@@ -408,6 +414,8 @@ def resolve(
         else problem._consumers.resolve(
             problem.resolve, layout_plan, owner=problem.owner_path.canonical())
     )
+    from .program_moving_layout_contract import validate_moving_metric_consumers
+    validate_moving_metric_consumers(consumer_graph, layout_plan)
     from pops.output._restart_provider import RestartAuthority
     restart_authority = RestartAuthority.from_consumer_graph(consumer_graph)
     lowering_coverage = layout_lowering_coverage(layout_plan)

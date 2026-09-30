@@ -41,6 +41,7 @@ class ProgramModelGraph:
         "_authorities_by_owner",
         "_models_by_block",
         "_rhs_coherence_neighbours",
+        "_numerics_by_block",
     )
 
     def __init__(
@@ -52,6 +53,7 @@ class ProgramModelGraph:
         authorities_by_owner: Mapping[Any, Any],
         models_by_block: Mapping[str, Any] | None = None,
         rhs_coherence_neighbours: Mapping[str, frozenset[str]] | None = None,
+        numerics_by_block: Mapping[str, Any] | None = None,
     ) -> None:
         if not models_by_owner:
             raise ValueError("ProgramModelGraph requires at least one model owner")
@@ -86,6 +88,9 @@ class ProgramModelGraph:
         if set(routed_models) != set(owners_by_block):
             raise ValueError("ProgramModelGraph block model routes must match owner block routes")
         self._models_by_block = MappingProxyType(routed_models)
+        self._numerics_by_block = MappingProxyType(dict(numerics_by_block or {}))
+        if self._numerics_by_block and set(self._numerics_by_block) != set(owners_by_block):
+            raise ValueError("ProgramModelGraph numerical routes must cover exactly its block owners")
         if rhs_coherence_neighbours is not None:
             if set(rhs_coherence_neighbours) != set(owners_by_block):
                 raise ValueError("ProgramModelGraph RHS connectivity must cover exactly its blocks")
@@ -171,7 +176,15 @@ class ProgramModelGraph:
             authorities_by_owner=authorities,
             models_by_block=block_models,
             rhs_coherence_neighbours=resolved_rhs_neighbours(blocks),
+            numerics_by_block={block.name: block.numerics for block in blocks},
         )
+
+    def numerics_for_block(self, block: Any) -> Any:
+        self.owner_for_block(block)
+        try:
+            return self._numerics_by_block[block.local_id]
+        except KeyError:
+            raise ValueError("Program numerical realization requires resolved block method authority") from None
 
     @property
     def rhs_coherence_neighbours(self) -> Mapping[str, frozenset[str]] | None:

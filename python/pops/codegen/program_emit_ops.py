@@ -388,6 +388,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     routing is always an error; even a one-block Program reaches index 0 through an explicit map."""
     bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
             if v.block is not None else None)
+    if v.id in var.get(("moving_deferred_rates",), ()):
+        # The interval producer evaluates these exact authored bodies with its
+        # actual geometry/time. No immutable-metric RHS is issued here.
+        var[v.id] = "/* interval-owned physical body */"
+        return
+    if v.op in {"geometry_state", "reynolds_update"}:
+        from .program_emit_moving import emit_moving_op
+        emit_moving_op(program, v, var, lines, prelude, model, block_idx)
+        return
     from pops.codegen.program_models import model_for_node
     node_model = model_for_node(model, v) if model is not None and (
         v.block is not None or v.attrs.get("operator_handle") is not None) else model

@@ -4,6 +4,7 @@
 #include "boundary_component_install.hpp"
 #include "checkpoint_spatial_binding.hpp"
 #include "output_geometry_binding.hpp"
+#include "output_moving_geometry_binding.hpp"
 
 #include <pops/core/identity/sha256.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
@@ -1475,6 +1476,8 @@ void bind_system_data(py::class_<System>& cls) {
           },
           py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"), py::arg("cell_measure"),
           "Private Writer geometry view: native, immutable, and cacheable by the runtime.")
+      .def("_output_moving_geometry_snapshot", &pops::python::detail::moving_output_geometry_snapshot<pops::kNativeDimension>,
+           py::arg("identity"),py::arg("frame"))
       // LOCAL per-fab accessors (NOT collective): native ownership inspection. ScientificOutput
       // consumes the typed output_*_local_pieces API above; local_boxes returns the list of boxes
       // as (lower[Dim], upper_exclusive[Dim]) in GLOBAL native-axis indices. local_state returns fab

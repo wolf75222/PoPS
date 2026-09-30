@@ -4572,6 +4572,32 @@ class RuntimeOutputSnapshot:
         """Drop geometry snapshots when restart replaces topology under a reused epoch."""
         self._geometry_cache.clear()
 
+    def _moving_declaration(self, layout: Any) -> tuple[str, str] | None:
+        install = getattr(self._owner,"_install_plan",None)
+        if install is None:
+            if layout.requirements.get("geometry_evolution") is not None:
+                raise RuntimeError("moving output lacks its compiled Program authority")
+            return None
+        artifact = install.artifact
+        rows = [row for row in artifact.layout_programs if row.layout_id == layout.handle.qualified_id]
+        handle = rows[0].program if len(rows) == 1 else artifact.program
+        program = getattr(handle, "program", None)
+        if program is None:
+            return None
+        names = {row.subject.local_id for row in self._owner._layout_plan.assignments
+                 if row.subject_kind == "block" and row.layout == layout.handle}
+        bindings = [value for value in program._values if value.op == "geometry_state" and
+                    value.block.local_id in names]
+        if not bindings:
+            return None
+        if len(bindings) != 1 or layout.adaptive:
+            raise NotImplementedError("moving output requires one Uniform1D geometry authority per layout")
+        from pops.time.references import canonical_handle
+        value = bindings[0]
+        if value.space.frame != layout.geometry.frame_id:
+            raise ValueError("moving output physical frame differs from its assigned layout")
+        return "pops.moving:" + canonical_handle(value.state_ref).qualified_id, value.space.frame
+
     @staticmethod
     def _native_composite_integral(
         entry: Mapping[str, Any],
@@ -4614,7 +4640,8 @@ class RuntimeOutputSnapshot:
             "method_name": method_name,
         }
 
-    def _geometry(self, layout: Any, level: int) -> LevelGeometry:
+    def _geometry(self, layout: Any, level: int, *, moving_snapshot: Any = None,
+                  reference_only: bool = False) -> LevelGeometry:
         engine = self._owner._executor_for_layout(layout.handle.qualified_id)
         native_engine = getattr(engine, "_s", None)
         native_geometry = getattr(native_engine, "_output_geometry_snapshot", None)
@@ -4646,8 +4673,18 @@ class RuntimeOutputSnapshot:
         )
         layout_identity = _layout_identity(layout)
         cache_key = (layout_identity.token, level, topology_epoch)
+        moving = self._moving_declaration(layout)
+        if moving is not None and not reference_only:
+            if dimension != 1 or level != 0:
+                raise NotImplementedError("moving output needs the installed 1D endpoint provider")
+            if moving_snapshot is None:
+                raise RuntimeError("moving output requires a collectively prepared native snapshot")
+            generation = moving_snapshot["generation"]
+            if type(generation) is not int or generation < 0:
+                raise TypeError("moving output generation must be an exact nonnegative integer")
+            cache_key = (layout_identity.token, level, generation)
         cached = self._geometry_cache.get(cache_key)
-        if cached is not None:
+        if cached is not None and moving is None:
             return cached
         spacing = tuple(
             length / extent
@@ -4711,10 +4748,13 @@ class RuntimeOutputSnapshot:
             cell_shape,
             native_boxes,
             native["coverage"],
-            native["cell_volumes"],
-            coordinate_system=geometry.coordinate_system,
-            cell_measure=geometry.cell_measure,
+            native["cell_volumes"] if moving_snapshot is None else moving_snapshot["cell_volumes"],
+            coordinate_system=(geometry.coordinate_system if moving_snapshot is None else
+                               "pops://coordinates/moving-cartesian-1d@1"),
+            cell_measure=(geometry.cell_measure if moving_snapshot is None else
+                          "pops://cell-measures/endpoint-length@1"),
             axis_names=geometry.axis_names,
+            node_coordinates=None if moving_snapshot is None else moving_snapshot["node_coordinates"],
             _native_valid_cells=native["valid_cells"],
             _native_arrays=_NATIVE_GEOMETRY_ARRAYS,
         )
@@ -4723,7 +4763,8 @@ class RuntimeOutputSnapshot:
         for stale in tuple(self._geometry_cache):
             if stale[:2] == cache_key[:2] and stale != cache_key:
                 del self._geometry_cache[stale]
-        self._geometry_cache[cache_key] = result
+        if moving is None:
+            self._geometry_cache[cache_key] = result
         return result
 
     @staticmethod
@@ -5080,6 +5121,53 @@ class RuntimeOutputSnapshot:
             raise ValueError(
                 "%s output snapshot requires a native MPI ExecutionContext" % mode.name
             )
+        # Moving geometry capture is collective. Establish the entire ordered
+        # request list and converge local preparation failures BEFORE calling
+        # it; the subsequent per-quantity preflight never enters a new geometry
+        # collective after a rank-local metadata exception.
+        geometry_requests = {}
+        prepared_geometries = {}
+        geometry_error = None
+        try:
+            for quantity in (*manifest.quantities, *manifest.diagnostic_quantities):
+                layout = self._layout(quantity.layout_id)
+                selected = quantity.levels or tuple(row.index for row in layout.levels)
+                for level in _active_output_levels(self._owner, layout, tuple(selected)):
+                    geometry_requests[(layout.handle.qualified_id, level)] = (
+                        layout, self._moving_declaration(layout))
+                    prepared_geometries[(layout.handle.qualified_id, level)] = self._geometry(
+                        layout, level, reference_only=True)
+                    if geometry_requests[(layout.handle.qualified_id, level)][1] is not None:
+                        engine = self._owner._executor_for_layout(layout.handle.qualified_id)._s
+                        if not callable(getattr(engine, "_output_moving_geometry_snapshot", None)):
+                            raise RuntimeError("installed native provider lacks its accepted moving geometry view")
+        except Exception as error:
+            geometry_error = "%s: %s" % (type(error).__name__, error)
+        geometry_schema = tuple((layout_id, level, declaration)
+            for (layout_id, level), (_layout, declaration) in sorted(geometry_requests.items()))
+        envelopes = ([{"error": geometry_error, "requests": geometry_schema}] if communicator is None else
+                     allgather_value(communicator, {"error": geometry_error, "requests": geometry_schema}))
+        if any(row["error"] is not None for row in envelopes):
+            raise RuntimeError("output geometry preparation failed: %s" %
+                               "; ".join(row["error"] for row in envelopes if row["error"] is not None))
+        if any(row["requests"] != geometry_schema for row in envelopes):
+            raise ValueError("output geometry collective request order differs between ranks")
+        for (layout_id, level), (layout, declaration) in sorted(geometry_requests.items()):
+            if declaration is None:
+                continue
+            capture_error = None
+            try:
+                engine = self._owner._executor_for_layout(layout_id)._s
+                snapshot = engine._output_moving_geometry_snapshot(*declaration)
+                prepared_geometries[(layout_id, level)] = self._geometry(
+                    layout, level, moving_snapshot=snapshot)
+            except Exception as error:
+                capture_error = "%s: %s" % (type(error).__name__, error)
+            failures = ([capture_error] if communicator is None else
+                        allgather_value(communicator, capture_error))
+            if any(error is not None for error in failures):
+                raise RuntimeError("moving output capture failed: %s" %
+                                   "; ".join(error for error in failures if error is not None))
         entries: list[dict[str, Any]] = []
         embedded_entries: dict[tuple[str, int], dict[str, Any]] = {}
         sidecar_entries: tuple[dict[str, Any], ...] = ()
@@ -5100,7 +5188,7 @@ class RuntimeOutputSnapshot:
                 )
                 component_manifest = self._owner._component_manifests[block].manifest_digest
                 for level in levels:
-                    geometry = self._geometry(layout, level)
+                    geometry = prepared_geometries[(layout.handle.qualified_id, level)]
                     geometries[geometry.key] = geometry
                     if isinstance(quantity.reference, FieldHandle):
                         plan = self._owner._install_plan.artifact.plan.field_plans.get(
@@ -5179,7 +5267,7 @@ class RuntimeOutputSnapshot:
                 selected = quantity.levels or tuple(row.index for row in layout.levels)
                 levels = _active_output_levels(self._owner, layout, tuple(selected))
                 for level in levels:
-                    geometry = self._geometry(layout, level)
+                    geometry = prepared_geometries[(layout.handle.qualified_id, level)]
                     geometries[geometry.key] = geometry
                     sidecar_entry = self._embedded_boundary_output_entry(layout, geometry)
                     if sidecar_entry is not None:

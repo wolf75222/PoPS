@@ -307,6 +307,9 @@ def _emit_commit_group(commits: Any, bases: Any, var: Any, *, phase: int) -> lis
         base = bases[state_ref.block_ref]
         destination = var[base.id]
         source = var[committed.id]
+        if committed.vtype == "state_geometry":
+            lines.append("ctx.commit_moving_interval(%s);" % source)
+            continue
         if committed.vtype == "scalar_field":
             token = "commit_source_%d_%d" % (base.id, phase)
             lines.append("auto* %s = &%s;" % (token, source))
@@ -354,6 +357,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # IR value id -> C++ token: a MultiFab variable name (states / RHS scratches), a scalar variable
     # name (reductions, ``s{id}``) or a parenthesized boolean expression (compares).
     var = {}
+    from .program_emit_moving import deferred_moving_rates
+    var[("moving_deferred_rates",)] = deferred_moving_rates(program)
     from pops.codegen.program_partition_stability import explicit_update_consumers
     var[("explicit_state_updates",)] = explicit_update_consumers(program)
     if provider_plans is not None:

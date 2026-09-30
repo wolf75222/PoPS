@@ -1,8 +1,8 @@
 """Inert geometry evolution requests, contract pops.geometry-evolution@1.
 
 This extension describes the coordinate law through the existing analytic algebra.
-The current native resolve gate deliberately refuses it: a static Cartesian layout
-does not provide trial/accepted measures or swept-volume exchanges.
+Preparation selects a coupled native realization with trial/accepted measures
+and swept-volume exchanges, or reports the exact missing provider.
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ class GeometryEvolution:
     """
 
     coordinate_map: tuple[ScalarExpr, ...]
+    __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         values = self.coordinate_map
@@ -69,9 +70,9 @@ class GeometryEvolution:
 class MovingControlVolumes(MeshDescriptor):
     """Compose a layout with an explicit moving-geometry requirement.
 
-    Production resolution refuses the missing native carrier before JIT. The
-    wrapper is useful for authoring and inspection; it executes no numerical
-    solver, remap or host callback and does not claim ALE/AMR support.
+    The wrapper declares the reference layout and exact geometry obligation.
+    Preparation selects an authenticated coupled native realization or refuses
+    the missing provider before JIT; the descriptor executes no solver itself.
     """
 
     category = "layout"
