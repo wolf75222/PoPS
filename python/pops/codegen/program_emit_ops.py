@@ -1401,13 +1401,18 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 var[u.id],
                 comp,
             )
-        else:  # dot
+        elif kind in ("dot", "dot_all"):
+            if kind == "dot_all" and v.attrs.get("component_contract") != "pops.program.dot-all@1":
+                raise ValueError("dot_all lost its exact vector pairing contract")
             a, b = v.inputs
-            reduction = "ctx.dot(%d, %s, %s)" % (
+            reduction = "ctx.%s(%d, %s, %s)" % (
+                kind,
                 owner,
                 var[a.id],
                 var[b.id],
             )
+        else:
+            raise ValueError("unsupported Program reduction kind %r" % kind)
         from pops.codegen.program_balance_due import balance_value_due_expression
 
         due = balance_value_due_expression(var, v.id)

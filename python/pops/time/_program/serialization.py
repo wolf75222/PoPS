@@ -268,6 +268,26 @@ class _ProgramSerialization(_ProgramBase):
                 "nodes": [self._serialize_node(
                     node, include_provenance=include_provenance) for node in block],
                 "result": value.id}
+        # The vector pairing extension has its own IR discrimination. Preserve
+        # the previously selected schema for every program that does not use it,
+        # including the older prepared-constitutive trace profile.
+        pending = list(self._values)
+        if self._dt_bound is not None:
+            pending.extend(self._dt_bound[0])
+        seen = set()
+        while pending:
+            node = pending.pop()
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            if node.op == "reduce" and node.attrs.get("kind") == "dot_all":
+                result["version"] = 7
+                break
+            for key in ("cond_block", "body_block", "true_block", "false_block",
+                        "apply_block", "residual_block"):
+                block = node.attrs.get(key)
+                if isinstance(block, (tuple, list)):
+                    pending.extend(block)
         return result
 
     def _ir_hash(self) -> str:

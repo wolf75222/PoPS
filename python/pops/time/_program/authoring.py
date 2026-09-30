@@ -284,15 +284,35 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         return self._new("scalar", "reduce", (state,), {"kind": "norm2"}, None, state.block)
 
     def dot(self, a: Any, b: Any) -> Any:
-        """The inner product ``<a, b>`` of two States (collective, Scalar): ``pops::dot(a, b)``."""
+        """Collective inner product of component zero; returns a Scalar.
+
+        Use ``dot_all`` to pair every component of a vector State explicitly.
+        """
+        return self._dot_reduction(a, b, all_components=False)
+
+    def dot_all(self, a: Any, b: Any) -> Any:
+        """Pair all components on the owned active domain, collectively.
+
+        Contract ``pops.program.dot-all@1``: raw cell algebra, without physical
+        volume/kappa weights; one Scalar reduction shared by every rank.
+        """
+        return self._dot_reduction(a, b, all_components=True)
+
+    def _dot_reduction(self, a: Any, b: Any, *, all_components: bool) -> Any:
+        operation = "dot_all" if all_components else "dot"
         if not (isinstance(a, ProgramValue) and a.is_field() and isinstance(b, ProgramValue) and b.is_field()):
-            raise ValueError("dot: two State/RHS values are required")
+            raise ValueError(operation + ": two State/RHS values are required")
         if a.block != b.block:
-            raise ValueError("dot: both fields must belong to the same block")
-        require_compatible_spaces(a.space, b.space, "dot", typed_pair=True)
+            raise ValueError(operation + ": both fields must belong to the same block")
+        require_compatible_spaces(a.space, b.space, operation, typed_pair=True)
         if self._ncomp(a) != self._ncomp(b):
-            raise ValueError("dot: both fields must have the same known component count")
-        return self._new("scalar", "reduce", (a, b), {"kind": "dot"}, None, a.block)
+            raise ValueError(operation + ": both fields must have the same known component count")
+        attrs = {"kind": operation}
+        if all_components:
+            if a.block is None:
+                raise NotImplementedError("dot_all requires fields with one explicit Program block owner")
+            attrs["component_contract"] = "pops.program.dot-all@1"
+        return self._new("scalar", "reduce", (a, b), attrs, None, a.block)
 
     def norm_inf(self, state: Any) -> Any:
         """The infinity norm ``max|u|`` (collective, component 0, Scalar): ``pops::norm_inf(u)``."""
@@ -359,10 +379,12 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         to ``ctx.record_scalar("<name>", <scalar>)``."""
         if not isinstance(name, str) or not name:
             raise ValueError("record_scalar: name must be a non-empty string")
-        if name.startswith(("pops.balance-term", "pops.frontier.")):
+        if name.startswith("pops.balance-term"):
             raise ValueError(
-                "record_scalar: pops.balance-term and pops.frontier. are reserved native sinks"
+                "record_scalar: pops.balance-term is reserved for Program.record_balance"
             )
+        if name.startswith("pops.frontier."):
+            raise ValueError("record_scalar: pops.frontier. is a reserved native sink")
         if not (isinstance(value, ProgramValue) and value.vtype == "scalar"):
             raise ValueError("record_scalar: value must be a Scalar value (e.g. P.norm2(R)); got %r"
                              % (value,))

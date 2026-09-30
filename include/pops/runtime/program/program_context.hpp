@@ -1084,6 +1084,24 @@ class ProgramContext {
     return static_cast<Real>(all_reduce_sum(local, lane));
   }
 
+  /// pops.program.dot-all@1: raw algebra on every component of the owned active domain.
+  /// The historical dot overload remains component-zero algebra.
+  Real dot_all(int program_block, const field_type& left, const field_type& right) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, left);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      require_same_field_contract_(left, right, "ProgramContext dot_all");
+      for (int component = 0; component < left.ncomp(); ++component)
+        local += pops::dot_active_local(left, right, component, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program dot-all reduction");
+    return static_cast<Real>(all_reduce_sum(local, lane));
+  }
+
   Geometry<Dim> geometry() const { return system_->prepared_block_geometry(); }
 
   field_type& assembly_target(field_type& field, std::string_view identity) const {

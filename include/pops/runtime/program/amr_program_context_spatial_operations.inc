@@ -326,6 +326,28 @@ Real dot(int program_block, const field_type& left, const field_type& right) con
   return static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
 }
 
+/// pops.program.dot-all@1: every component, on exact owner active levels.
+Real dot_all(int program_block, const field_type& left, const field_type& right) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::exception_ptr local_error;
+  Real local = Real(0);
+  try {
+    for_each_owner_active_level_(
+        program_block, left, &right,
+        [&](const field_type& left_field, const field_type* right_field, const field_type* active) {
+          if (right_field == nullptr)
+            throw std::logic_error("AMR Program dot_all is missing its right owner field");
+          require_same_field_contract_(left_field, *right_field, "AMR Program dot_all");
+          for (int component = 0; component < left_field.ncomp(); ++component)
+            local += pops::dot_active_local(left_field, *right_field, component, active);
+        });
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  converge_owner_reduction_(local_error, lane, "AMR Program dot-all reduction");
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
+}
+
 Geometry<Dim> geometry() const {
   require_facade_execution_();
   return facade_->prepared_amr_level_geometry(active_level_);

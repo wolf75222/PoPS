@@ -41,7 +41,7 @@ def rotation_case(*, retry=False, duration_scale=1.):
                              at=q.next.point)
     increment = program.value("increment", unrelaxed - q.n, at=q.next.point)
     # Generic energy relaxation: gamma is evaluated by native collective dot products.
-    gamma = -2. * program.dot(q.n, increment) / program.dot(increment, increment)
+    gamma = -2. * program.dot_all(q.n, increment) / program.dot_all(increment, increment)
     candidate = program.value("relaxed", q.n + increment * gamma, at=q.next.point)
     if retry:
         candidate = program.guard("requested_duration_budget", candidate, requested < .75,

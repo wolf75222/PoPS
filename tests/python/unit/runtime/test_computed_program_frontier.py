@@ -34,13 +34,45 @@ def test_rotation_authors_and_emits_a_runtime_scalar_frontier_without_host_gamma
     source = emit_cpp_program(program, model=lowered)
     assert "ctx.reached_duration(static_cast<double>(" in source
     assert "pops::Real requested_dt_" in source
-    assert "ctx.dot(" in source
+    assert "ctx.dot_all(" in source
     assert "0.8" not in source
     assert source.index("ctx.reached_duration") < source.index("ctx.commit_many")
     assert ComputedDt.from_data(program._step_strategy.to_data()) == program._step_strategy
     detached = program.eliminate_dead_nodes().eliminate_common_subexpressions()
     assert any(value.op == "reached_duration" for value in detached._values)
     assert detached.validate()
+
+
+def test_vector_pairing_is_explicit_and_keeps_component_zero_ir_unchanged():
+    from pops.codegen.module_lowering import lower_and_validate
+    from pops.codegen.program_codegen import emit_cpp_program
+    _, _, model, program = rotation_case()
+    state = next(value for value in program._values if value.op == "state")
+    legacy = program.dot(state, state)
+    vector = program.dot_all(state, state)
+    assert dict(legacy.attrs) == {"kind": "dot"}
+    assert dict(vector.attrs) == {"kind": "dot_all", "component_contract": "pops.program.dot-all@1"}
+    assert program._serialize()["version"] == 7
+    lowered, _ = lower_and_validate(model, facade=model)
+    source = emit_cpp_program(program, model=lowered)
+    assert "ctx.dot(" in source and "ctx.dot_all(" in source
+    # A forged IR object must not change the component policy silently.
+    object.__setattr__(vector, "attrs", {**vector.attrs, "component_contract": "pops.program.dot-all@99"})
+    with pytest.raises(ValueError, match="exact vector pairing contract"):
+        emit_cpp_program(program, model=lowered)
+
+
+def test_vector_pairing_schema_sees_lazy_regions_and_preserves_legacy_profile():
+    program, q = _source_fixture()
+    initial = q.n
+    program.dot(initial, initial)
+    assert program._serialize()["version"] == 5
+    program.branch(program.norm2(initial) > 0.,
+                   lambda P: P.dot_all(initial, initial),
+                   lambda P: P.dot(initial, initial))
+    assert not any(value.op == "reduce" and value.attrs.get("kind") == "dot_all"
+                   for value in program._values)
+    assert program._serialize()["version"] == 7
 
 
 def test_scalar_frontier_refuses_amr_instead_of_relabelling_its_interval_outputs():

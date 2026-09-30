@@ -77,7 +77,7 @@ class _ProgramDiagnostics(_ProgramBase):
                 return value
             seen.add(value.id)
             if value.op == "reduce":
-                if value.attrs.get("kind") not in {"sum", "dot"}:
+                if value.attrs.get("kind") not in {"sum", "dot", "dot_all"}:
                     raise ValueError(
                         "record_balance %s requires additive sum/dot reductions; got %r"
                         % (term, value.attrs.get("kind"))
