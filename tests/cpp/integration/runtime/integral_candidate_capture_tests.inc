@@ -99,7 +99,21 @@ TEST(ProgramRuntime, IntegralFeedbackRealExteriorConsumptionThenParentRollbackAn
   config.periodicity[0] = false;
   System<kNativeDimension> sim(config);
   install_execution_lane(sim,"pops.test.integral-feedback.real-exterior");
-  add_scalar(sim);
+  // Prepare the physical Outflow authority before committing the scalar block.
+  // foextrap is the native Extrapolate law; transverse faces remain periodic.
+  const std::string state_identity = "test.program-runtime.integral-feedback.tracer.state@1";
+  sim.install_block_state_route("tracer",state_identity);
+  std::vector<std::string> face_types(static_cast<std::size_t>(2*kNativeDimension),"periodic");
+  face_types[0] = face_types[1] = "foextrap";
+  std::vector<std::string> face_identities;
+  for (int face=0;face<2*kNativeDimension;++face)
+    face_identities.push_back("test:integral-feedback/outflow-face:"+std::to_string(face));
+  sim.install_hyperbolic_boundary("tracer","test:integral-feedback/outflow@1",1,
+      face_types,std::vector<double>(static_cast<std::size_t>(2*kNativeDimension),0.),
+      face_identities,{"scalar"},state_identity);
+  sim.seal_auxiliary_providers();
+  add_compiled_model(sim,"tracer",nd::ScalarAdvection<kNativeDimension>{},"none","rusanov",
+      "conservative","explicit");
   std::vector<double> initial(exact_cell_count<kNativeDimension>(n),2.);
   sim.set_state("tracer",initial);
   auto ctx = runtime::program::make_program_execution_provider(&sim);
@@ -178,8 +192,16 @@ TEST(ProgramRuntime, IntegralFeedbackRealExteriorConsumptionThenParentRollbackAn
   EXPECT_NEAR(ctx->integral_state(identity),.7+.01*2.*(1.-.01*.3*.7),2e-13);
   for (const double value : sim.get_state("tracer"))
     EXPECT_NEAR(value,2.*(1.-.01*.3*.7),2e-13);
+  const auto accepted_state = sim.get_state("tracer");
   const auto checkpoint = sim.checkpoint_program_exchanges();
   EXPECT_NO_THROW(sim.validate_checkpoint_program_exchanges(checkpoint));
-  EXPECT_NO_THROW(sim.restore_checkpoint_program_exchanges(checkpoint));
+  ASSERT_NO_THROW(sim.begin_restart_transaction());
+  ASSERT_NO_THROW(sim.restore_checkpoint_program_exchanges(checkpoint));
+  ASSERT_NO_THROW(sim.commit_restart_transaction());
+  sim.finalize_restart_transaction();
   EXPECT_EQ(sim.checkpoint_program_exchanges(),checkpoint);
+  EXPECT_EQ(sim.get_state("tracer"),accepted_state);
+  EXPECT_EQ(sim.step_transaction_depth(),0u);
+  EXPECT_DOUBLE_EQ(sim.time(),.01);
+  EXPECT_EQ(sim.macro_step(),1);
 }
