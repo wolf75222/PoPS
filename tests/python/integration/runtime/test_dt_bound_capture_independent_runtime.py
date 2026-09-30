@@ -173,9 +173,12 @@ def test_native_dot_all_invalid_bound_input_does_not_publish(
         assert all(failures), "a rank accepted an overflowing dt-bound contraction"
         # Native std::overflow_error maps to OverflowError in serial; an MPI
         # collective rejection may wrap it in RuntimeError on every participant.
-        assert all((failure[0] == "OverflowError" or failure[2])
-                   and ("dot_all" in failure[1] or "finite_local" in failure[1])
-                   for failure in failures), failures
+        assert all(
+            (failure[0] == "OverflowError"
+             and failure[1] == "Program dot_all has nonfinite active values or local overflow")
+            or (failure[2] and failure[1] == "Program dot-all reduction failed collectively")
+            for failure in failures
+        ), failures
         assert runtime.time() == 0. and runtime.macro_step() == 0
         assert runtime.consumer_cursors.to_data() == cursors
         for current, prior in zip(after, before, strict=True):
