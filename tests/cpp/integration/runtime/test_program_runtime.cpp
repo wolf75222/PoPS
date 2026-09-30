@@ -34,6 +34,9 @@
 #include <utility>
 #include <vector>
 
+// M28 fixtures below use the existing native Program/System transaction; no
+// alternate solver or host state dictionary substitutes for these buffers.
+
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
 #endif
@@ -2825,4 +2828,275 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
     EXPECT_EQ(retried_state.size(), initial.size());
     EXPECT_EQ(retried_history, retried_state);
   }
+}
+
+TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentRollback) {
+  if constexpr (kNativeDimension != 1) {
+    GTEST_SKIP() << "The first moving-interval provider requires a native Dim1 build";
+  }
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  for (int n : {8, 24}) for (bool permute : {false, true}) {
+    System<kNativeDimension> sim(distributed_boundary_domain_config<kNativeDimension>(n));
+    install_execution_lane(sim, "pops.test.moving-interval.native-transaction");
+    add_gas(sim, 1.4);
+    std::array<Real, kGasComponents> initial{};
+    for (int component = 0; component < kGasComponents; ++component)
+      initial[component] = component == 0 ? Real(2.3) :
+                           component == kGasComponents - 1 ? Real(6) : Real(0);
+    if (permute) std::swap(initial[0], initial[kGasComponents - 1]);
+    std::vector<double> values(static_cast<std::size_t>(n) * kGasComponents);
+    for (int component = 0; component < kGasComponents; ++component)
+      for (int i = 0; i < n; ++i) values[static_cast<std::size_t>(component*n + i)] = initial[component];
+    sim.set_state("gas", values);
+    sim.set_program_block_map({0});
+    auto ctx = runtime::program::make_program_execution_provider(&sim);
+    ctx->configure_primary_clock("ale-clock");
+    ctx->initialize_moving_interval_geometry("mesh", 0);
+    const auto original = sim.get_state("gas");
+    const auto original_geometry = ctx->moving_interval_geometry("mesh");
+    bool reject_after_publication = true;
+    ctx->install([&](double dt) {
+      ctx->begin_step(dt);
+      const auto& accepted = ctx->moving_interval_geometry("mesh");
+      auto proposed = accepted.coordinates;
+      auto sweeps = accepted.swept_volumes;
+      std::vector<nd::FaceField<kNativeDimension>> physical, density;
+      auto source = ctx->scratch_state_like(ctx->state(0));
+      source.set_val(Real(0));
+      for (std::size_t patch = 0; patch < ctx->state(0).local_size(); ++patch) {
+        const auto box = ctx->state(0).box(patch);
+        physical.emplace_back(box, kGasComponents);
+        density.emplace_back(box, kGasComponents);
+        const auto old = accepted.coordinates[patch].template field<0>().view();
+        const auto pos = proposed[patch].template field<0>().view();
+        const auto sw = sweeps[patch].template field<0>().view();
+        const auto flux = physical.back().template field<0>().view();
+        const auto trace = density.back().template field<0>().view();
+        const auto geom = ctx->geometry();
+        const double next_time = sim.time() + dt;
+        const auto constants = initial;
+        for_each_cell(nd::face_box(box, 0), [=] POPS_HD(const Index<kNativeDimension>& face) {
+          const Real reference = geom.face_coordinate(0, face[0]);
+          const Real shape = face[0] == geom.domain().lo[0] ||
+                             face[0] == geom.domain().hi[0] + 1 ? Real(0) :
+                             Kokkos::sin(Real(6.2831853071795864769) * reference);
+          pos(face) = reference + Real(.08) * shape * Real(next_time);
+          sw(face) = pos(face) - old(face);
+          for (int component = 0; component < kGasComponents; ++component) {
+            flux(face, component) = Real(0);
+            trace(face, component) = constants[component];
+          }
+        });
+      }
+      ctx->advance_moving_intervals("mesh", 0, proposed, sweeps, physical, density, source,
+                                   Real(128) * std::numeric_limits<Real>::epsilon());
+      if (reject_after_publication)
+        throw runtime::program::StepAttemptRejected(SolveStatus::kIterationLimit, "ale-post-publication");
+    });
+    const auto expect_original = [&] {
+      EXPECT_EQ(sim.get_state("gas"), original);
+      EXPECT_EQ(sim.time(), 0.);
+      const auto& actual = ctx->moving_interval_geometry("mesh");
+      EXPECT_EQ(actual.generation, 0u);
+      EXPECT_TRUE(actual.last_interval.empty());
+      EXPECT_TRUE(sim.program_exchange_records().empty());
+      for (std::size_t patch = 0; patch < actual.coordinates.size(); ++patch) {
+        const auto coords = actual.coordinates[patch].template field<0>().create_host_mirror();
+        const auto old = original_geometry.coordinates[patch].template field<0>().create_host_mirror();
+        actual.coordinates[patch].template field<0>().copy_to_host(coords);
+        original_geometry.coordinates[patch].template field<0>().copy_to_host(old);
+        for (std::size_t i = 0; i < coords.size(); ++i) EXPECT_DOUBLE_EQ(coords(i), old(i));
+      }
+    };
+    sim.begin_step_transaction();
+    sim.begin_nested_step_transaction();
+    EXPECT_THROW(sim.step(.1), runtime::program::StepAttemptRejected);
+    expect_original();
+    reject_after_publication = false;
+    sim.step(.2);
+    EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 1u);
+    const auto child_interval = ctx->moving_interval_geometry("mesh").last_interval;
+    sim.commit_step_transaction();
+    sim.finalize_step_transaction();
+    sim.rollback_step_transaction();
+    expect_original();
+    sim.begin_step_transaction();
+    sim.step(.3);
+    const auto& actual = ctx->moving_interval_geometry("mesh");
+    EXPECT_EQ(actual.generation, 1u);
+    EXPECT_NE(actual.last_interval, child_interval);
+    const auto& lane = sim.prepared_boundary_execution_lane();
+    const double total_measure = all_reduce_sum(pops::reduce_sum_local(actual.measures, 0), lane);
+    EXPECT_NEAR(total_measure, 1., 3e-13);
+    // Independently reconstruct Q and V from the real accepted cell/face data.
+    for (std::size_t patch = 0; patch < ctx->state(0).local_size(); ++patch) {
+      const auto coords = actual.coordinates[patch].template field<0>().create_host_mirror();
+      const auto measures = actual.measures.fab(patch).create_host_mirror();
+      const auto state = ctx->state(0).fab(patch).create_host_mirror();
+      actual.coordinates[patch].template field<0>().copy_to_host(coords);
+      actual.measures.fab(patch).copy_to_host(measures);
+      ctx->state(0).fab(patch).copy_to_host(state);
+      const auto view = ctx->state(0).fab(patch).view();
+      const auto box = ctx->state(0).box(patch);
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+        const auto local = static_cast<std::size_t>(i - box.lo[0]);
+        const Real volume = coords(local + 1) - coords(local);
+        EXPECT_DOUBLE_EQ(measures(local), volume);
+        for (int component = 0; component < kGasComponents; ++component) {
+          const auto offset = static_cast<std::size_t>(i-view.origin[0]) * view.strides[0] +
+                              static_cast<std::size_t>(component) * view.component_stride;
+          EXPECT_NEAR(state(offset), initial[component], 2e-12);
+          EXPECT_NEAR(state(offset)*volume, initial[component]*volume, 2e-12);
+        }
+      }
+    }
+    const auto records = sim.program_exchange_records();
+    EXPECT_EQ(all_reduce_sum(static_cast<long>(records.size()), lane),
+              static_cast<long>(n) * (2 + 3*kGasComponents));
+    for (int component = 0; component < kGasComponents; ++component) {
+      double net = 0;
+      for (const auto& record : records)
+        if (record.operation_identity == "amount:mesh/component:" + std::to_string(component))
+          net += record.integrated_amount();
+      EXPECT_NEAR(all_reduce_sum(net, lane), 0., 3e-13);
+    }
+    sim.commit_step_transaction();
+    sim.finalize_step_transaction();
+  }
+}
+
+TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforePublication) {
+  if constexpr (kNativeDimension != 1) {
+    GTEST_SKIP() << "The moving-interval provider requires a native Dim1 build";
+  }
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System<kNativeDimension> sim(distributed_boundary_domain_config<kNativeDimension>(16));
+  install_execution_lane(sim, "pops.test.moving-interval.stale-sweep");
+  add_gas(sim, 1.4);
+  std::vector<double> initial;
+  fill_ic(initial, 16, 1.4);
+  sim.set_state("gas", initial);
+  sim.set_program_block_map({0});
+  auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ctx->configure_primary_clock("ale-stale-clock");
+  ctx->initialize_moving_interval_geometry("mesh", 0);
+  const auto before = sim.get_state("gas");
+  bool stale = true;
+  ctx->install([&](double dt) {
+    ctx->begin_step(dt);
+    const auto& accepted = ctx->moving_interval_geometry("mesh");
+    auto proposed = accepted.coordinates;
+    auto sweep = accepted.swept_volumes;
+    std::vector<nd::FaceField<kNativeDimension>> physical, density;
+    auto source = ctx->scratch_state_like(ctx->state(0)); source.set_val(0);
+    for (std::size_t patch = 0; patch < ctx->state(0).local_size(); ++patch) {
+      const auto box = ctx->state(0).box(patch);
+      physical.emplace_back(box, kGasComponents); physical.back().set_val(0);
+      density.emplace_back(box, kGasComponents); density.back().set_val(1);
+      const auto pos = proposed[patch].template field<0>().view();
+      const auto sw = sweep[patch].template field<0>().view();
+      const auto old = accepted.coordinates[patch].template field<0>().view();
+      const auto geom = ctx->geometry();
+      const bool use_stale = stale;
+      for_each_cell(nd::face_box(box, 0), [=] POPS_HD(const Index<kNativeDimension>& face) {
+        const Real x = geom.face_coordinate(0, face[0]);
+        const Real shift = face[0] == geom.domain().lo[0] ||
+                           face[0] == geom.domain().hi[0] + 1 ? Real(0) :
+                           Real(.1) * Real(dt) * Kokkos::sin(Real(6.2831853071795864769)*x);
+        pos(face) = old(face) + shift;
+        sw(face) = use_stale ? shift/Real(2) : shift;
+      });
+    }
+    ctx->advance_moving_intervals("mesh", 0, proposed, sweep, physical, density, source, Real(1e-13));
+  });
+  sim.begin_step_transaction();
+  EXPECT_THROW(sim.step(.2), runtime::program::StepAttemptRejected);
+  EXPECT_EQ(sim.get_state("gas"), before);
+  EXPECT_EQ(sim.time(), 0.);
+  EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 0u);
+  EXPECT_TRUE(sim.program_exchange_records().empty());
+  stale = false;
+  EXPECT_NO_THROW(sim.step(.3));
+  EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 1u);
+  sim.rollback_step_transaction();
+  EXPECT_EQ(sim.get_state("gas"), before);
+  EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 0u);
+}
+
+TEST(ProgramRuntime, MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceExactlyOnce) {
+  if constexpr (kNativeDimension != 1) {
+    GTEST_SKIP() << "The moving-interval provider requires a native Dim1 build";
+  }
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 16;
+  constexpr Real growth = Real(.4), divergence = Real(.7), duration = Real(.2);
+  auto config = distributed_boundary_domain_config<kNativeDimension>(n);
+  config.periodicity[0] = false;  // F=divergence*x is an open-boundary physical flux.
+  System<kNativeDimension> sim(config);
+  install_execution_lane(sim, "pops.test.moving-interval.source-projection");
+  add_gas(sim, 1.4);
+  std::vector<double> values(static_cast<std::size_t>(n) * kGasComponents, 0.);
+  for (int i = 0; i < n; ++i) { values[i] = 2.3; values[(kGasComponents-1)*n+i] = 6.; }
+  sim.set_state("gas", values); sim.set_program_block_map({0});
+  auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ctx->configure_primary_clock("ale-source-clock");
+  ctx->initialize_moving_interval_geometry("mesh", 0);
+  ctx->install([&](double dt) {
+    ctx->begin_step(dt);
+    const auto& accepted = ctx->moving_interval_geometry("mesh");
+    auto proposed = accepted.coordinates, sweep = accepted.swept_volumes;
+    std::vector<nd::FaceField<kNativeDimension>> physical, density;
+    auto source = ctx->scratch_state_like(ctx->state(0)); source.set_val(0);
+    for (std::size_t patch = 0; patch < ctx->state(0).local_size(); ++patch) {
+      const auto box = ctx->state(0).box(patch);
+      physical.emplace_back(box, kGasComponents); physical.back().set_val(0);
+      density.emplace_back(box, kGasComponents); density.back().set_val(0);
+      const auto old = accepted.coordinates[patch].template field<0>().view();
+      const auto pos = proposed[patch].template field<0>().view();
+      const auto sw = sweep[patch].template field<0>().view();
+      const auto flux = physical.back().template field<0>().view();
+      const auto trace = density.back().template field<0>().view();
+      const auto source_view = source.fab(patch).view();
+      const auto geom = ctx->geometry();
+      for_each_cell(nd::face_box(box, 0), [=] POPS_HD(const Index<kNativeDimension>& face) {
+        const Real x = old(face);
+        const Real shift = face[0] == geom.domain().lo[0] ||
+                           face[0] == geom.domain().hi[0] + 1 ? Real(0) :
+                           Real(.08) * Real(dt) * Kokkos::sin(Real(6.2831853071795864769)*x);
+        pos(face) = x + shift; sw(face) = shift;
+        // Manufactured PDE U_t + div F = S, U=2.3+growth*t,
+        // F=divergence*x, S=growth+divergence. These linear-in-time
+        // face paths use an exact midpoint space-time quadrature.
+        flux(face, 0) = divergence * Real(dt) * (old(face)+pos(face))/Real(2);
+        trace(face, 0) = Real(2.3) + growth * Real(dt)/Real(2);
+        trace(face, kGasComponents-1) = Real(6);
+      });
+      for_each_cell(box, [=] POPS_HD(const Index<kNativeDimension>& cell) {
+        Index<kNativeDimension> right = cell; ++right[0];
+        const Real average_volume = ((old(right)-old(cell))+(pos(right)-pos(cell)))/Real(2);
+        source_view(cell, 0) = (growth+divergence)*Real(dt)*average_volume;
+      });
+    }
+    ctx->advance_moving_intervals("mesh", 0, proposed, sweep, physical, density, source, Real(1e-13));
+  });
+  sim.begin_step_transaction(); sim.step(duration);
+  const auto result = sim.get_state("gas");
+  if (!result.empty())
+    for (int cell = 0; cell < n; ++cell) EXPECT_NEAR(result[cell], 2.3+growth*duration, 2e-12);
+  double relative_net = 0, source_total = 0;
+  for (const auto& record : sim.program_exchange_records()) {
+    if (record.operation_identity == "amount:mesh/component:0") relative_net += record.integrated_amount();
+    if (record.operation_identity == "source:mesh/component:0") source_total += record.integrated_amount();
+  }
+  const auto& lane = sim.prepared_boundary_execution_lane();
+  EXPECT_NEAR(all_reduce_sum(source_total, lane), (growth+divergence)*duration, 3e-13);
+  EXPECT_NEAR(all_reduce_sum(relative_net, lane), divergence*duration, 3e-13);
+  EXPECT_NEAR(all_reduce_sum(source_total-relative_net, lane), growth*duration, 3e-13);
+  sim.commit_step_transaction(); sim.finalize_step_transaction();
 }

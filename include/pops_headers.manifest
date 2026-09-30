@@ -59,6 +59,7 @@ api pops/mesh/boundary/prepared_hyperbolic_boundary.hpp
 api pops/mesh/execution/for_each.hpp
 api pops/mesh/geometry/coordinate_map.hpp
 api pops/mesh/geometry/geometry.hpp
+api pops/mesh/geometry/swept_interval.hpp
 api pops/mesh/geometry/prepared_metric_provider.hpp
 test-only pops/mesh/nd_proof/local_neighbors.hpp
 test-only pops/mesh/nd_proof/periodicity.hpp
@@ -331,6 +332,8 @@ sdk-root pops/runtime/program/external_riemann_brick.hpp
 sdk-support pops/runtime/program/module_metadata.hpp
 sdk-support pops/runtime/program/profiler.hpp
 sdk-root pops/runtime/program/program_context.hpp
+sdk-support pops/runtime/program/program_context_moving_interval.inc
+sdk-support pops/runtime/program/moving_interval_geometry.hpp
 sdk-root pops/runtime/program/prepared_principal_flux.hpp
 sdk-support pops/runtime/program/prepared_resource_cache.hpp
 sdk-support pops/runtime/program/prepared_resource_lifetime.hpp

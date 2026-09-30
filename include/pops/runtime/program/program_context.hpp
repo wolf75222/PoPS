@@ -6,6 +6,7 @@
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/swept_interval.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
@@ -368,6 +369,8 @@ class ProgramContext {
   field_type& state(int program_block) const {
     return system_->block_state(sys_block(program_block));
   }
+
+#include <pops/runtime/program/program_context_moving_interval.inc>
   /// One collective prerequisite publication before a generated consumer traverses local Fabs.
   /// The supplied SSA state is authenticated without substituting the accepted block state.
   /// Native DerivedAux launchers consume their declared auxiliary dependencies; state-dependent

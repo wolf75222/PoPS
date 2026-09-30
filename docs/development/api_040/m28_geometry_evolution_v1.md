@@ -50,10 +50,54 @@ They require central native rebuild/reception; no installed PoPS artifact,
 MPI/AMR execution, scientific saved-state receipt or GitHub CI is qualified by
 this document.
 
-Next connection: place a geometry carrier beside the actual ProgramRuntimeState
-storage so the existing System AcceptedSnapshot copies/restores it with state,
-cache/history and exchange ledger. The carrier must retain accepted coordinates,
-cell measures and interval-qualified swept-face occurrences; its publication
-must be transactional. Transport, CFL, source quadrature and saved outputs need
-to consume that carrier explicitly. Public requests remain refused until those
-connections are executable and independently received.
+## Native transaction connection (source implemented, execution pending)
+
+`MovingIntervalGeometry<Dim>` now lives in `ProgramRuntimeState`, alongside the
+existing ledger/history/cache. It owns Kokkos face coordinates, swept measures
+and cell measures, the exact bound physical state, generation and runtime
+interval identity. The System's existing AcceptedSnapshot deep-copies it; the
+prepared restore explicitly copies and swaps the geometry map. Child acceptance
+therefore remains provisional inside a parent transaction.
+
+`ProgramContext::initialize_moving_interval_geometry` initializes the actual
+represented geometry at an accepted boundary. `advance_moving_intervals` takes
+shared-face coordinates, swept measures, physical integrated fluxes, reconstructed
+densities and cell-integrated source. It verifies patch/partition identities,
+exact patch endpoint agreement across ranks, fixed physical boundaries,
+periodic trace compatibility, cell validity and endpoint/GCL equations before
+publishing. Only patch endpoints cross ranks; the state is updated in its native
+Kokkos partition. The complete proposal/point/component/tolerance/generation
+declaration must agree across the prepared execution lane.
+
+The native first provider implements actual 1D intervals. A higher-dimensional
+call is refused because swept surfaces/orientations have not been prepared;
+this is a missing provider, not a production dimensional restriction. It is not
+served by the public descriptor yet. AMR moving-volume transfer/reflux is also
+unimplemented. Existing static flux, CFL, source and scientific output paths
+cannot be advertised as consumers of this new carrier.
+
+The candidate state, geometry and rank-local exchange records are prepared
+before publication. Source projection is an explicit integrated cell amount.
+Reynolds relative flux records and swept-volume records retain the same cell/side
+occurrence and temporal quadrature; source records retain cell/component
+occurrence. The facade remains the sole commit/rollback authority. Duplicate
+interval publication is refused. Reuse across `.1/.2/.3` is qualified by the real
+runtime point and independently checked against proposed endpoints.
+
+Three Dim1 native tests are added to `test_program_runtime` and its MPI2
+aggregate: constant-preserving motion at 8/24 cells with component permutation,
+post-publication rejection/child acceptance/parent rollback/retry; stale-duration
+sweeps; and a manufactured open-boundary balance with nonzero physical flux
+`F=.7*x`, growth `.4`, projected source `.4+.7` and exact linear space-time
+quadrature. They inspect native state, coordinates, measures and ledger, and
+independently reconstruct inventory. Their execution remains the central
+integrator's responsibility; no runtime pass is reported in this isolated
+worktree. Source syntax is checked against the actual Kokkos/OpenMP/MPICH headers.
+
+The new carrier changes `ProgramRuntimeState` storage layout. Central integration
+must rebuild host/generated code together and advance native ABI coherently;
+there is no compatible mixed installation. No checkpoint codec for the carrier
+is added in this tranche, and no ALE checkpoint/restart or persisted scientific
+receipt is qualified. Public requests remain refused until common Program
+lowering, saved moving geometry and restart can authenticate this carrier.
+The SDK manifest includes both the primitive and carrier/include fragment.

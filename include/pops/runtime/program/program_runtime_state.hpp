@@ -60,6 +60,7 @@
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
 #include <pops/runtime/program/accepted_exchange.hpp>
+#include <pops/runtime/program/moving_interval_geometry.hpp>
 #include <pops/runtime/program/collective_step_rejection.hpp>
 #include <pops/runtime/program/cache_manager.hpp>    // CacheManager (held-node scheduler cache)
 #include <pops/runtime/program/prepared_resource_lifetime.hpp>
@@ -408,6 +409,10 @@ struct ArtifactFieldBoundaryStage {
 template <int Dim>
 struct ProgramRuntimeState {
   static_assert(Dim >= 1 && Dim <= 3, "ProgramRuntimeState only supports dimensions 1, 2, and 3");
+  /// Trial publications belong to the enclosing System transaction. Deep copies
+  /// in AcceptedSnapshot and the prepared restore below restore geometry together
+  /// with state, clock, histories, caches and the exchange mailbox.
+  std::map<std::string, MovingIntervalGeometry<Dim>> moving_interval_geometry_;
   /// Static field-boundary authoring image captured before the first successful artifact overlay.
   std::optional<ArtifactFieldBoundaryAuthorityRegistry<Dim>> artifact_field_boundary_baseline_;
   /// Candidate sink active only while pops_install_field_boundaries executes.
@@ -660,6 +665,7 @@ struct ProgramRuntimeState {
           diagnostics_(accepted.diagnostics_),
           step_balance_terms_(accepted.step_balance_terms_),
           accepted_exchanges_(accepted.accepted_exchanges_),
+          moving_interval_geometry_(accepted.moving_interval_geometry_),
           automatic_balance_terms_(accepted.automatic_balance_terms_),
           automatic_balance_due_(accepted.automatic_balance_due_),
           balance_due_window_active_(accepted.balance_due_window_active_),
@@ -688,6 +694,7 @@ struct ProgramRuntimeState {
     std::map<std::string, Real> diagnostics_;
     std::map<std::string, Real> step_balance_terms_;
     AcceptedExchangeLedger accepted_exchanges_;
+    std::map<std::string, MovingIntervalGeometry<Dim>> moving_interval_geometry_;
     std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
     bool automatic_balance_due_ = false;
     bool balance_due_window_active_ = false;
@@ -734,6 +741,7 @@ struct ProgramRuntimeState {
     diagnostics_.swap(prepared.diagnostics_);
     step_balance_terms_.swap(prepared.step_balance_terms_);
     accepted_exchanges_.swap(prepared.accepted_exchanges_);
+    moving_interval_geometry_.swap(prepared.moving_interval_geometry_);
     automatic_balance_terms_.swap(prepared.automatic_balance_terms_);
     automatic_balance_due_ = prepared.automatic_balance_due_;
     balance_due_window_active_ = prepared.balance_due_window_active_;
