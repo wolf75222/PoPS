@@ -760,7 +760,8 @@ class PreparedDiffusion {
                                     : identity + "/component:" + std::to_string(component);
                 stage_exchange({operation, occurrence, evaluation, component_identity,
                                 side == 0 ? -1 : 1, measure, faces.axes[axis](face, component),
-                                temporal_weight, 1});
+                                temporal_weight, 1, axis, side, component,
+                                ctx.is_external_trace_face(axis, side, cell)});
               }
             }
           }

@@ -25,11 +25,21 @@ def emit_integral_transfers(program, var) -> list[str]:
                 if isinstance(key, tuple) and len(key) == 2 and key[0] == "accepted_transport"}
     selected = {rate_id for rate_id, _ in accepted_transport_quadrature(
         program, {rate_id: row[0] for rate_id, row in captured.items()})}
+    requested = {row[1] for row in program._integral_transfers}
+    if any(value.op == "diffusive_rhs" and value.id in requested for value in program._values):
+        from pops.codegen.program_diffusion_exchanges import accepted_diffusive_quadrature
+        from pops.codegen.program_emit_diffusion import _resolved_diffusive_trace_selection
+
+        for value, _ in accepted_diffusive_quadrature(
+                program, partition_stability_checked=var.get(("partition_stability_checked",), ())):
+            if value.id in requested and value.id in var:
+                captured[value.id] = (value, None, *_resolved_diffusive_trace_selection(value))
+                selected.add(value.id)
     lines = []
     for name, rate_id, axis, side, component, scale in program._integral_transfers:
         if rate_id not in selected or rate_id not in captured:
             raise ValueError(
-                "integral transfer requires an accepted, exact conservative transport occurrence"
+                "integral transfer requires an accepted, exact conservative face occurrence"
             )
         rate, _, operation, occurrence = captured[rate_id]
         evaluation = "stage:" + str(rate.point) + "/evaluation:" + str(rate.id)

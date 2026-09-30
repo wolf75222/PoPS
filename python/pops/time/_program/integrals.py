@@ -47,7 +47,8 @@ class _ProgramIntegrals:
         if type(state) is not IntegralState or state.program is not self \
                 or state.name not in self._integral_states:
             raise ValueError("accepted trace requires an integral state owned by this Program")
-        if type(rate) is not ProgramValue or rate.prog is not self or rate.op != "rhs":
+        if type(rate) is not ProgramValue or rate.prog is not self \
+                or rate.op not in {"rhs", "diffusive_rhs"}:
             raise ValueError("accepted trace requires this Program's conservative RHS value")
         if type(axis) is not int or axis < 0 or type(side) is not int or side not in (0, 1) \
                 or type(component) is not int or component < 0:

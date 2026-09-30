@@ -179,7 +179,11 @@ class _ProgramSerialization(_ProgramBase):
         order = self._block_indices()
         result = {
             "name": self.name,
-            "version": 5,
+            # Version 6 extends persistent trace selectors to prepared constitutive faces.
+            # Keep existing transport-only program identities/restart authorities unchanged.
+            "version": 6 if any(
+                value.op == "diffusive_rhs" and any(row[1] == value.id
+                    for row in self._integral_transfers) for value in self._values) else 5,
             "clock": self.clock.to_data(),
             "nodes": [self._serialize_node(
                 value, include_provenance=include_provenance) for value in self._values],

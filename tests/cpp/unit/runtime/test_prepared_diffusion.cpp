@@ -22,9 +22,16 @@ struct DiffusionContext {
   }
   const Field* pointwise_active_mask(int, const Field&) const { return nullptr; }
   const Field* pointwise_exchange_coverage_mask(int, const Field&) const { return nullptr; }
+  bool is_external_trace_face(int axis, int side, const Index<2>& cell) const {
+    const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+    return !topology.is_periodic(Face<2>{axis, boundary}) &&
+           cell[axis] == (side == 0 ? geometry_.domain().lo[axis] : geometry_.domain().hi[axis]);
+  }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
-    auto records = prepare_exchange_batch(std::forward<Producer>(producer), [](auto&) {}, lane);
+    auto records = prepare_exchange_batch(
+        std::forward<Producer>(producer),
+        [](auto& record) { record.source_evaluation_identity = record.evaluation_context; }, lane);
     stage_exchange_batch_collectively(ledger, records, lane);
   }
 };
@@ -302,6 +309,18 @@ TEST(PreparedDiffusion, VariableDiagonalStaysInsideDivergenceWithPhysicalValueTr
     exchange += record.integrated_amount();
   EXPECT_EQ(context.ledger.records().size(), 16);
   EXPECT_NEAR(exchange, .05 * .75, 2e-13);
+  for (const auto& record : context.ledger.records()) {
+    EXPECT_TRUE(record.exterior_trace);
+    EXPECT_GE(record.trace_axis, 0);
+    EXPECT_LE(record.trace_axis, 1);
+    EXPECT_EQ(record.trace_component, 0);
+    EXPECT_EQ(record.orientation, record.trace_side == 0 ? -1 : 1);
+    EXPECT_EQ(record.source_evaluation_identity, "stage0");
+  }
+  const auto right =
+      context.ledger.prepare_trace({"operator", "physical-boundary", 0, 1, 0, "stage0"});
+  EXPECT_EQ(right.indices.size(), 4);
+  EXPECT_NEAR(right.local_amount, .05 * 1.25, 2e-13);
 }
 
 namespace {
@@ -320,9 +339,16 @@ struct FittedContext {
   const MultiFab<1>* pointwise_exchange_coverage_mask(int, const MultiFab<1>&) const {
     return nullptr;
   }
+  bool is_external_trace_face(int axis, int side, const Index<1>& cell) const {
+    const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+    return !topology.is_periodic(Face<1>{axis, boundary}) &&
+           cell[axis] == (side == 0 ? geometry_.domain().lo[axis] : geometry_.domain().hi[axis]);
+  }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
-    auto records = prepare_exchange_batch(std::forward<Producer>(producer), [](auto&) {}, lane);
+    auto records = prepare_exchange_batch(
+        std::forward<Producer>(producer),
+        [](auto& record) { record.source_evaluation_identity = record.evaluation_context; }, lane);
     stage_exchange_batch_collectively(ledger, records, lane);
   }
 };

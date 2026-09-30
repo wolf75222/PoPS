@@ -36,6 +36,28 @@ def _diffusive_flux_families(v):
     return constitutive, transport_family
 
 
+def _resolved_diffusive_trace_selection(value):
+    """A Rate selector names one actual conservative face producer, never its sources.
+
+    The current public selector carries no authored occurrence discriminator. Refuse
+    a mixed transport/constitutive rate instead of silently choosing either current.
+    Fitted drift/diffusion is one inseparable evaluated face carrier.
+    """
+    operation = _resolved_diffusive_operation(value)
+    rows = value.attrs["physical_balance"].occurrences
+    if value.attrs.get("fitted", False):
+        ordinals = tuple(row.ordinal for row in rows if row.kind in {"drift", "diffusion"})
+        occurrences = [operation + "/joint-occurrences:" + ",".join(map(str, ordinals))]
+        occurrences.extend(operation + "/occurrence:" + str(row.identity[1])
+                           for row in rows if row.kind == "flux")
+    else:
+        occurrences = [operation + "/occurrence:" + str(row.identity[1]) for row in rows
+                       if row.kind in {"diffusion", "coupled_gradient", "flux"}]
+    if len(occurrences) != 1:
+        raise ValueError("integral transfer requires one exact conservative diffusive occurrence")
+    return operation, occurrences[0]
+
+
 def _selected(v, node_model, *, require_realization=True):
     view=v.attrs["physical_balance"]
     rows=tuple(row for row in view.occurrences

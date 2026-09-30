@@ -8,9 +8,17 @@ conservative RHS evaluation into that scalar. The public read is
 The author chooses `initial`, support, component and signed conversion `scale`; PoPS
 does not infer a circuit or surface charge from a model name.
 
-The selected `rate` must be one finite-volume `-div(flux)` occurrence in the
-accepted affine transport quadrature. Its native FaceField supplies every active
-face integral with its actual geometric measure, orientation and temporal weight.
+The selected `rate` must identify one exact conservative face occurrence: a
+finite-volume `-div(flux)` or a prepared constitutive `div(diffusion)` in its
+accepted affine quadrature. Its native face carrier supplies every active face
+amount with its actual geometric measure, orientation and temporal weight.
+Prepared diffusion retains its evaluated flux density; transport retains spatial
+face integrals. Diffusion's cell incidence is negative on the lower side and
+positive on the upper side, the opposite of negative-divergence transport.
+Nonconservative source occurrences never contribute to an external trace.
+An inseparable fitted drift/diffusion flux is one joint occurrence; a Rate with
+both independent transport and diffusion occurrences is ambiguous to this selector
+and is refused rather than choosing a current implicitly.
 An external trace is a face on the nonperiodic physical boundary of the domain;
 interior and periodic faces are excluded. The selector also carries the exact
 source evaluation identity. Thus two SSPRK evaluations of the same physical
@@ -58,3 +66,14 @@ checkpoint envelope remain separate and unchanged. A package compiled against
 the former ABI must be rebuilt before native execution. Source-level tests cover
 real `validate → resolve → emit` for two SSPRK stages; the native transaction and
 restart tests require the corresponding rebuilt C++ targets and MPI reception.
+
+The prepared-diffusion extension uses **Program serialized IR 6** only when an
+external-trace selector names a `diffusive_rhs` evaluation. Transport-only Programs
+retain version 5 and their semantic identities. It reuses existing POPSEX02 fields,
+native integral/consumption APIs and the exact constitutive occurrence identities;
+no restart image or native method signature changes. The changed template header
+and generated package still require the matching rebuilt SDK/native installation.
+Diffusion's existing geometry, realization and stability refusals remain in force,
+including unsupported active embedded geometry and unproved explicit AMR tensor
+or coupled-gradient routes. The accepted face ledger intersects EB activity and
+finest-owner coverage when those carriers are provided by an admissible realization.

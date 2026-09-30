@@ -32,9 +32,14 @@ struct Context {
     return active_override;
   }
   const Field* pointwise_exchange_coverage_mask(int, const Field&) const { return nullptr; }
+  bool is_external_trace_face(int axis, int side, const Index<1>& cell) const {
+    return cell[axis] == (side == 0 ? geometry_.domain().lo[axis] : geometry_.domain().hi[axis]);
+  }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
-    auto records = prepare_exchange_batch(std::forward<Producer>(producer), [](auto&) {}, lane);
+    auto records = prepare_exchange_batch(
+        std::forward<Producer>(producer),
+        [](auto& record) { record.source_evaluation_identity = record.evaluation_context; }, lane);
     stage_exchange_batch_collectively(ledger, records, lane);
   }
 };
@@ -84,6 +89,17 @@ TEST(ExchangeBatches, UnequalPhysicalBoundaryOwnershipConservesAndFailuresRollba
   const Real amount = all_reduce_sum(local_amount, context.lane);
   EXPECT_NEAR(amount, .001, 1e-14);
   EXPECT_NEAR(.05 * integral(rhs, context.lane), amount, 1e-14);
+  for (const auto& row : context.ledger.records()) {
+    EXPECT_TRUE(row.exterior_trace);
+    EXPECT_EQ(row.trace_axis, 0);
+    EXPECT_EQ(row.trace_side, my_rank() == 0 ? 0 : 1);
+    EXPECT_EQ(row.trace_component, 0);
+    EXPECT_EQ(row.source_evaluation_identity, "accepted");
+  }
+  const auto selected =
+      context.ledger.prepare_trace({"diffusion", "physical", 0, 1, 0, "accepted"});
+  EXPECT_EQ(all_reduce_sum(static_cast<long>(selected.indices.size()), context.lane), 1);
+  EXPECT_NEAR(all_reduce_sum(selected.local_amount, context.lane), .0005, 1e-14);
   const auto before = context.ledger.checkpoint();
   const Real state_before = integral(q, context.lane), rhs_before = integral(rhs, context.lane);
 
