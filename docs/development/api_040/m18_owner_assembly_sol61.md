@@ -148,3 +148,62 @@ Both outside refusals must preserve the same impossible read-only target.
 `safe_rebind` is a **new bind** of the original interior target using the same
 artifact/context and zero seed. Reducing dt cannot cure the outside target;
 there is no successful retry claim for that outside runtime.
+
+## Future execution-time capture (tests/receipts only)
+
+The fixture now calls `save_entropy_execution_owner` immediately after its
+original provenance capture. The original provenance schema, ten phases and
+35/36-file owner inventory are unchanged. The new sidecar is
+`phase_directory.parent / m18-execution-owner-metadata.json`, outside the closed
+31-file phase directory. JUnit's `execution_owner_metadata` gives its actual path.
+The writer refuses an existing sidecar rather than overwriting evidence.
+
+The capture reads `pops.__file__`, `selected_native_module.__file__`,
+`toolchain.pops_include()/pops_headers.manifest` and each actual
+`artifact.blocks[*].model.so_path`. Python/SDK/native origins must reside under
+the actual interpreter prefix. It hashes file contents at execution time and
+records the source checkout's actual `git rev-parse HEAD` from the fixture
+location. HEAD is an observed checkout commit, not proof that an SDK or binary
+was built from it; the fixture/source hashes, package authentication and external
+ROOT approval must establish that relation. No source commit or path is inferred
+from a binary hash, guessed cache basename or post-run lookup.
+
+Generated files come exclusively from `CompiledProblem.generated_sources` on
+actual Program/layout-Program objects. Missing metadata or a missing recorded
+file gives `null`; a plausible neighbouring `.cpp` is never discovered by glob.
+A peer loading a verified cache can lack this metadata although the compiler
+owner retained it. The capture elects only an explicitly recorded nonempty file
+inventory, refuses differing nonempty inventories, and has every rank reopen
+and hash those exact paths before publication. Actual compiled-model loaders do
+not expose retained model-source paths; their driver uses a temporary directory.
+Recorded Program files therefore do not establish a complete System-package
+source map or a correspondence to the scientific expression. That gap remains
+explicit even when `POPS_KEEP_GENERATED=1` retains Program C++.
+
+All ranks compare actual Python/SDK/native/System origins and the observed
+checkout commit, then verify the elected C++ leaves and the canonical destination.
+Only rank0 writes after the final agreement. This remains execution-owner-attested
+metadata, with no self-approval, fabricated positive result or new physical oracle.
+External ROOT approval and the existing original-equation/compiled-expression
+oracle are unchanged. Native Serial/MPI2 execution is pending.
+
+Source/host capture tests (dummy files, no native/JIT/install):
+
+```sh
+env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python - <<'PY'
+import sys
+sys.path.insert(0, "python")
+import pytest
+raise SystemExit(pytest.main(["-q",
+ "tests/python/unit/runtime/test_m18_execution_owner_capture.py",
+ "tests/review/test_sol61_m18_owner_assemble.py"]))
+PY
+```
+
+Local result: **59 source/host PASS** (16 capture checks plus 43 existing
+assembler checks); Ruff/diff pass. The 16 capture checks cover actual file paths,
+source commit, no cache glob,
+missing source metadata/files, strict dual/target inventory, installed origins,
+cache-hit peers, three-rank parity including an empty peer, tampered elected C++,
+unchanged phase/provenance files and refusal to overwrite. These tests receive
+only source/protocol behavior; dummy `.so` bytes never represent native evidence.

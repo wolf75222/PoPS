@@ -105,3 +105,109 @@ def save_entropy_provenance(world, artifact, directory, *, fixture, example):
                                minimum_step=2.**-16, safeguard="backtracking"),
                 safe_rebind="new bind, same artifact/context/zero seed, restored interior input; no target commit"))
     return identity
+
+
+def _owner_file(path):
+    path = Path(path).resolve(strict=True)
+    if not path.is_file():
+        raise ValueError("M18 execution origin must be an actual regular file")
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return {"path": str(path), "sha256": digest.hexdigest()}
+
+
+def _fixture_commit(fixture):
+    import re
+    import subprocess
+    parent = Path(fixture).resolve(strict=True).parent
+    result = subprocess.run(["git", "-C", str(parent), "rev-parse", "HEAD"],
+                            capture_output=True, text=True, check=True)
+    commit = result.stdout.strip()
+    if re.fullmatch("[0-9a-f]{40}", commit) is None:
+        raise ValueError("M18 execution fixture checkout has no exact source commit")
+    return commit
+
+
+def _execution_owner_record(artifact, fixture):
+    import sys
+    import pops
+    from pops._native_selector import selected_native_module
+    from pops.codegen.toolchain import pops_include
+    prefix = Path(sys.prefix).resolve()
+    python = _owner_file(pops.__file__)
+    sdk = _owner_file(Path(pops_include()) / "pops_headers.manifest")
+    native = _owner_file(selected_native_module(required=True).__file__)
+    for leaf in (python, sdk, native):
+        if not Path(leaf["path"]).is_relative_to(prefix):
+            raise ValueError("M18 execution requires actual installed Python/SDK/native origins")
+    packages = {}
+    for block in artifact.blocks:
+        if block.name not in ("dual", "target") or block.name in packages:
+            raise ValueError("M18 execution System package inventory differs")
+        packages[block.name] = _owner_file(block.model.so_path)
+    if set(packages) != {"dual", "target"}:
+        raise ValueError("M18 execution requires dual and target System package paths")
+    programs = tuple(row.program for row in artifact.layout_programs) or (artifact.program,)
+    generated = {}
+    incomplete = False
+    for program in programs:
+        paths = getattr(program, "generated_sources", ()) if program is not None else ()
+        for path in paths:
+            if not Path(path).is_file():
+                incomplete = True
+                continue
+            leaf = _owner_file(path)
+            if Path(leaf["path"]).suffix != ".cpp":
+                raise ValueError("M18 generated source metadata must name actual cpp files")
+            generated[leaf["path"]] = leaf
+    cpp = None if incomplete or not generated else [generated[path] for path in sorted(generated)]
+    return dict(schema="sol61.m18-execution-owner-metadata@1", source_commit=_fixture_commit(fixture),
+                python_package=python, sdk=sdk, native=native, system_packages=packages, generated_cpp=cpp)
+
+
+def _owner_consensus(records):
+    if not records:
+        raise ValueError("M18 execution owner has no rank records")
+    base = {key: value for key, value in records[0].items() if key != "generated_cpp"}
+    if any({key: value for key, value in row.items() if key != "generated_cpp"} != base for row in records):
+        raise ValueError("M18 execution origins differ across ranks")
+    # A verified peer cache load does not retain generated_sources metadata. Only
+    # direct paths actually captured by an executing compiler owner are published.
+    stored = [row["generated_cpp"] for row in records if row["generated_cpp"] is not None]
+    if stored and any(row != stored[0] for row in stored):
+        raise ValueError("M18 recorded generated source inventories differ across ranks")
+    return dict(base, generated_cpp=stored[0] if stored else None)
+
+
+def save_entropy_execution_owner(world, artifact, directory, *, fixture):
+    """Capture actual execution origins outside the closed scientific phase inventory.
+
+    This record is execution-owner-attested; independent ROOT approval remains
+    necessary. It is not an external seal, scientific result or source/CPP mapping.
+    """
+    record = collective_call(world, lambda: _execution_owner_record(artifact, fixture))
+    if world is None:
+        records = (record,)
+    else:
+        from pops._native_collectives import allgather_value
+        records = collective_call(world, lambda: allgather_value(world, record))
+    agreed = collective_call(world, lambda: _owner_consensus(records))
+    with collective_check(world):
+        # Every rank independently reopens the explicit elected generated files.
+        for row in agreed["generated_cpp"] or ():
+            if _owner_file(row["path"]) != row:
+                raise ValueError("M18 elected generated source changed before recording")
+        destination = Path(directory).resolve().parent / "m18-execution-owner-metadata.json"
+    if world is not None:
+        paths = collective_call(world, lambda: allgather_value(world, str(destination)))
+        confirmed = collective_call(world, lambda: allgather_value(world, agreed))
+        with collective_check(world):
+            if any(path != str(destination) for path in paths) or any(row != agreed for row in confirmed):
+                raise ValueError("M18 execution owner publication differs across ranks")
+    with collective_check(world):
+        if world is None or int(world.rank) == 0:
+            with destination.open("x") as output:
+                output.write(json.dumps(agreed, indent=2, allow_nan=False) + "\n")
+    return destination

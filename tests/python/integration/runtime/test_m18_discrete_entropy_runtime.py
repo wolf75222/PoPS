@@ -17,7 +17,9 @@ from tests.python.support.discrete_entropy_oracle import (
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.collective_checks import collective_call, collective_check, state_snapshots
 from tests.python.support.integral_state_receipts import collective_directory
-from tests.python.support.m18_entropy_receipts import save_entropy_provenance, save_entropy_snapshot
+from tests.python.support.m18_entropy_receipts import (
+    save_entropy_provenance, save_entropy_snapshot, save_entropy_execution_owner,
+)
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
@@ -49,6 +51,8 @@ def test_twenty_interior_targets_and_outside_cone_refusal(
     context = collective_call(world, lambda: artifact_execution_context(artifact))
     from examples.migration.scientific import api040_m18_entropy as example
     identity = save_entropy_provenance(world, artifact, directory, fixture=__file__, example=example.__file__)
+    owner_metadata = save_entropy_execution_owner(world, artifact, directory, fixture=__file__)
+    record_property("execution_owner_metadata", str(owner_metadata))
     targets = target_moments(moderate_multipliers())
     zero_seed = np.zeros_like(targets)
 
