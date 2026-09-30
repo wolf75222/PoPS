@@ -51,6 +51,7 @@ TEST(ProgramRuntime, MovingIntervalProjectionEvaluatesBodiesWithinIssuedDuration
       auto candidate = ctx->prepare_moving_interval_update(evaluation, Real(1e-13));
       ctx->commit_moving_interval(candidate);
     });
+    sim.set_program_block_map({0});
     sim.begin_step_transaction();
     sim.step(.2);
     sim.step(.3);
