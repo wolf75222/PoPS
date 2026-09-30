@@ -60,5 +60,18 @@ emission for the listed grids and both unknown orders. These checks do **not**
 authenticate an installed native artifact. The installed native reception is
 `tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py`,
 run by the repository's `docs/development/api_040/run_installed_checks.py`
-after the root rebuilds the package for Dim1. Until that reception passes,
-the native and MPI results remain pending.
+after the root rebuilds the package for Dim1.
+
+On 2026-09-30, the installed Dim1 CPU/Kokkos/MPICH reception passed both
+tests: the four complete ten-step trajectories and the one-iteration
+collective refusal. The earlier `restart=30, max_iter=400` configuration
+reached `iteration_limit` at step 5 for N=64; its failed log and the completed
+N=16/32 saved arrays are retained in workspace
+`outputs/installed-m26-m27-native-dim1-fc0-20260930`.
+The example now exposes `solver_restart` and defaults to 128 retained Krylov
+vectors, with the same 400-iteration budget and `rel_tol=abs_tol=1e-12`.
+Neither original equation nor any saved-state acceptance threshold changed.
+This is an explicit solver configuration for the witness, not a production
+DOF limit or a dense PDE matrix. The successful receipt is
+`outputs/installed-m27-native-dim1-restart128-fc0-20260930`; MPI2 reception
+is separate and still pending at this edit.

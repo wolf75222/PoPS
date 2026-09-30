@@ -52,7 +52,8 @@ CRITERIA = {
 }
 
 
-def build_case(cells: int, *, permuted: bool = False, solver_iterations: int = 400):
+def build_case(cells: int, *, permuted: bool = False, solver_iterations: int = 400,
+               solver_restart: int = 128):
     frame = CartesianDomain("mixed_periodic", lower=(0.,), upper=(1.,)).frame(
         Cartesian1D())
     model = pops.Model("linear_concentration", frame=frame)
@@ -77,7 +78,7 @@ def build_case(cells: int, *, permuted: bool = False, solver_iterations: int = 4
             for unknown in unknowns))
     field = case.field(problem, FieldDiscretization(
         method=CellCenteredGeneralCoupled(), boundaries=(),
-        solver=GMRES(max_iter=solver_iterations, restart=30,
+        solver=GMRES(max_iter=solver_iterations, restart=solver_restart,
                      rel_tol=1e-12, abs_tol=1e-12)))
     program = pops.Program("m27_mixed_be")
     current = program.state(block[state])
