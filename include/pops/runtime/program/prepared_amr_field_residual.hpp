@@ -77,8 +77,9 @@ class PreparedAmrFieldResidual final {
 
   void require_authority(const AmrFieldResidualAuthority& current,
                          const ExecutionLane& lane) const {
+    const auto& authority_lane = op_->original_field_execution_lane();
     std::string contract;
-    local_phase_(lane, [&] {
+    local_phase_(authority_lane, [&] {
       if (&lane != &op_->original_field_execution_lane() ||
           !current.owner || current.owner != authority_.owner || !authority_.attempt.visible() ||
           !current.attempt.visible() || !authority_.attempt.same_attempt(current.attempt) ||
@@ -138,7 +139,7 @@ class PreparedAmrFieldResidual final {
             .text(p.application_identity);
       contract = std::move(exact).release();
     });
-    if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string(invocation_identity()), contract}}, lane))
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string(invocation_identity()), contract}}, authority_lane))
       throw std::logic_error(
           "original AMR field residual invocation differs across execution ranks");
   }
