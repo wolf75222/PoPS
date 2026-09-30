@@ -857,8 +857,10 @@ class System {
   POPS_EXPORT Real consume_program_external_trace(
       const std::string& integral_identity,
       const runtime::program::AcceptedExchangeLedger::TraceSelection& selection, Real scale);
-  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges() const;
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges(bool provisional_capture=false) const;
   POPS_EXPORT void validate_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) const;
+  POPS_EXPORT void validate_checkpoint_moving_geometry(std::span<const std::uint8_t> bytes,
+                                                      double accepted_time, int macro_step) const;
   POPS_EXPORT void restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes);
   /// Seal the native state while retaining its accepted snapshot until external effects publish.
   void commit_step_transaction();

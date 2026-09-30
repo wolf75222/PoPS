@@ -238,8 +238,8 @@ class AcceptedExchangeLedger {
 
   /// Canonical accepted mailbox image. It is independent of diagnostic projections and retains
   /// binary64 weights/fluxes exactly; the enclosing restart transaction remains the sole publisher.
-  std::vector<std::uint8_t> checkpoint() const {
-    const bool extended = !integrals_.empty();
+  std::vector<std::uint8_t> checkpoint(bool force_extended=false) const {
+    const bool extended = force_extended || !integrals_.empty();
     std::vector<std::uint8_t> bytes{'P', 'O', 'P', 'S', 'E', 'X', '0',
                                     static_cast<std::uint8_t>(extended ? '2' : '1')};
     const auto word = [&](std::uint64_t value) {

@@ -2864,7 +2864,8 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
     sim.set_program_block_map({0});
     auto ctx = runtime::program::make_program_execution_provider(&sim);
     ctx->configure_primary_clock("ale-clock");
-    ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval");
+    ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval",
+        Real(128)*std::numeric_limits<Real>::epsilon());
     const auto initial_geometry_image=sim.checkpoint_program_exchanges();
     ASSERT_GE(initial_geometry_image.size(),8u);
     EXPECT_EQ(std::string(initial_geometry_image.begin(),initial_geometry_image.begin()+8),"POPSEX03");
@@ -3036,6 +3037,8 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
         }
       }
     }
+    const auto staged_geometry_image=sim.checkpoint_program_exchanges(true);
+    EXPECT_THROW(sim.checkpoint_program_exchanges(),std::logic_error);
     const auto records = sim.program_exchange_records();
     EXPECT_EQ(all_reduce_sum(static_cast<long>(records.size()), lane),
               static_cast<long>(n) * (2 + 3*kGasComponents));
@@ -3049,7 +3052,11 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
     sim.commit_step_transaction();
     sim.finalize_step_transaction();
     const auto saved_geometry_image=sim.checkpoint_program_exchanges();
+    EXPECT_EQ(saved_geometry_image,staged_geometry_image);
     EXPECT_NO_THROW(sim.validate_checkpoint_program_exchanges(saved_geometry_image));
+    EXPECT_NO_THROW(sim.validate_checkpoint_moving_geometry(saved_geometry_image,.3,1));
+    EXPECT_ANY_THROW(sim.validate_checkpoint_moving_geometry(saved_geometry_image,.31,1));
+    EXPECT_ANY_THROW(sim.validate_checkpoint_moving_geometry(saved_geometry_image,.3,2));
     auto truncated_geometry_image=saved_geometry_image;
     if (sim.prepared_boundary_execution_lane().rank()==0) truncated_geometry_image.pop_back();
     sim.begin_restart_transaction();
@@ -3088,7 +3095,7 @@ TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforeP
   sim.set_program_block_map({0});
   auto ctx = runtime::program::make_program_execution_provider(&sim);
   ctx->configure_primary_clock("ale-stale-clock");
-  ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval");
+  ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval",Real(1e-13));
   const auto before = sim.get_state("gas");
   bool stale = true;
   bool inadmissible = false;
@@ -3183,7 +3190,7 @@ TEST(ProgramRuntime, MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceEx
   sim.set_state("gas", values); sim.set_program_block_map({0});
   auto ctx = runtime::program::make_program_execution_provider(&sim);
   ctx->configure_primary_clock("ale-source-clock");
-  ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval");
+  ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval",Real(1e-13));
   ctx->install([&](double dt) {
     ctx->begin_step(dt);
     auto evaluation = ctx->evaluate_moving_interval("mesh", 0, "unit-interval", "endpoint-swept@1",

@@ -4,7 +4,7 @@
   }
 
   void initialize_moving_interval_geometry(const std::string& identity, int program_block,
-                                            const std::string& physical_frame) const {
+      const std::string& physical_frame, std::optional<Real> geometry_tolerance_authority=std::nullopt) const {
     const auto& lane = prepared_execution_lane();
     std::optional<MovingIntervalGeometry<Dim>> candidate;
     std::exception_ptr error;
@@ -13,7 +13,9 @@
         throw std::logic_error("moving interval provider requires 1D face geometry; "
                                "higher-dimensional swept surfaces are not prepared");
       } else {
-        if (identity.empty() || physical_frame.empty() || runtime_state().moving_interval_geometry_.contains(identity) ||
+        if (identity.empty() || physical_frame.empty() || primary_clock_.empty() ||
+            (geometry_tolerance_authority && (!std::isfinite(*geometry_tolerance_authority) || *geometry_tolerance_authority<0)) ||
+            runtime_state().moving_interval_geometry_.contains(identity) ||
             system_->step_transaction_depth() != 0)
           throw std::invalid_argument("moving geometry initialization requires a fresh identity "
                                       "at an accepted boundary outside a transaction");
@@ -21,6 +23,8 @@
         candidate.emplace();
         candidate->runtime_block = sys_block(program_block);
         candidate->physical_frame = physical_frame;
+        candidate->clock_authority = primary_clock_;
+        candidate->geometry_tolerance_authority = geometry_tolerance_authority;
         candidate->measures = scalar_field_like_(prototype, 1, 0);
         const auto geom = geometry();
         for (std::size_t patch = 0; patch < prototype.local_size(); ++patch) {
@@ -44,8 +48,9 @@
     } catch (...) { error = std::current_exception(); }
     collectively_rethrow_exception(error, lane, "moving geometry initialization failed collectively");
     ExactContractBuilder declaration;
-    declaration.text("pops.moving-interval.v2").text(identity).text(physical_frame)
-        .scalar(std::int32_t(program_block));
+    declaration.text("pops.moving-interval.v3").text(identity).text(physical_frame).text(primary_clock_)
+        .scalar(std::int32_t(program_block)).scalar(std::int32_t(geometry_tolerance_authority.has_value()));
+    if (geometry_tolerance_authority) declaration.scalar(*geometry_tolerance_authority);
     if (!all_ranks_agree_exact_ordered_byte_pairs({{"moving-geometry", std::move(declaration).release()}}, lane))
       throw std::invalid_argument("moving geometry declaration differs across ranks");
     bool inserted = false;
@@ -78,6 +83,8 @@
                                     "stage/partial interval geometry is not prepared");
       if (moving_interval_geometry(identity).physical_frame != physical_frame)
         throw std::invalid_argument("moving interval evaluator uses a different physical frame");
+      if (moving_interval_geometry(identity).clock_authority!=primary_clock_)
+        throw std::invalid_argument("moving interval evaluator uses a different declared clock");
       evaluation.owner_ = this;
       evaluation.attempt_ = resource_attempt();
       evaluation.identity_ = identity;
@@ -123,6 +130,8 @@
           throw std::invalid_argument("moving interval update requires an enclosing transaction "
                                       "and a finite nonnegative geometry tolerance");
         const auto& accepted = moving_interval_geometry(identity);
+        if (accepted.geometry_tolerance_authority && *accepted.geometry_tolerance_authority!=geometry_tolerance)
+          throw std::invalid_argument("moving geometry tolerance differs from installed authority");
         const auto& input = state(program_block);
         if (evaluation.owner_ != this || !evaluation.attempt_.visible() ||
             evaluation.attempt_.ordinal() != resource_attempt().ordinal() ||
@@ -131,6 +140,7 @@
             logical_phase_span_ != ::pops::amr::Rational(1, 1) ||
             evaluation.point_ != boundary_evaluation_point(0) ||
             evaluation.generation_ != accepted.generation ||
+            evaluation.point_.clock != accepted.clock_authority ||
             evaluation.physical_frame_ != accepted.physical_frame)
           throw std::invalid_argument("moving interval evaluation belongs to a stale duration/point/geometry");
         mf_arith_detail::require_same_layout(input, evaluation.initial_state_, "moving evaluation state");
@@ -438,6 +448,8 @@
           proposal.point_ != boundary_evaluation_point(0) ||
           geometry_target->generation + 1 != proposal.geometry_.generation ||
           geometry_target->physical_frame != proposal.physical_frame_ ||
+          geometry_target->clock_authority != proposal.point_.clock ||
+          geometry_target->geometry_tolerance_authority != proposal.geometry_.geometry_tolerance_authority ||
           geometry_target->last_interval != proposal.previous_interval_ ||
           geometry_target->runtime_block != sys_block(proposal.program_block_))
         throw std::invalid_argument("moving SSA publication has stale point/state/geometry or was reused");

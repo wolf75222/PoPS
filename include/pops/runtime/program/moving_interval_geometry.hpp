@@ -87,6 +87,8 @@ template <int Dim>
 struct MovingIntervalGeometry {
   int runtime_block = -1;
   std::string physical_frame;
+  std::string clock_authority;
+  std::optional<Real> geometry_tolerance_authority;
   MultiFab<Dim> measures;
   std::vector<nd::FaceField<Dim>> coordinates;
   std::vector<nd::FaceField<Dim>> swept_volumes;

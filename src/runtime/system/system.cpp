@@ -274,13 +274,16 @@ Real System<Dim>::consume_program_external_trace(
 }
 
 template <int Dim>
-std::vector<std::uint8_t> System<Dim>::checkpoint_program_exchanges() const {
+std::vector<std::uint8_t> System<Dim>::checkpoint_program_exchanges(bool provisional_capture) const {
   if (!p_->program_.moving_interval_geometry_.empty()) {
-    if (step_transaction_depth()!=0 || p_->external_restart_transaction_)
+    if ((step_transaction_depth()!=0 && !(provisional_capture && step_transaction_depth()==1)) ||
+        p_->external_restart_transaction_)
       throw std::logic_error("moving geometry checkpoint export requires fully accepted state");
-    return runtime::program::checkpoint_moving_intervals(
+    const auto bytes = runtime::program::checkpoint_moving_intervals(
         p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
         [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; });
+    validate_checkpoint_moving_geometry(bytes,p_->t,p_->macro_step_);
+    return bytes;
   }
   return p_->program_.accepted_exchanges_.checkpoint();
 }
@@ -294,6 +297,15 @@ void System<Dim>::validate_checkpoint_program_exchanges(
 }
 
 template <int Dim>
+void System<Dim>::validate_checkpoint_moving_geometry(std::span<const std::uint8_t> bytes,
+                                                     double accepted_time, int macro_step) const {
+  const auto candidate=runtime::program::read_moving_checkpoint(
+      bytes,p_->program_.accepted_exchanges_,p_->program_.moving_interval_geometry_,
+      [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; });
+  runtime::program::require_moving_checkpoint_lifecycle(candidate,accepted_time,macro_step);
+}
+
+template <int Dim>
 void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) {
   const auto& lane = prepared_boundary_execution_lane();
   std::optional<runtime::program::MovingCheckpointCandidate<Dim>> candidate;
@@ -304,6 +316,8 @@ void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint
     candidate.emplace(runtime::program::read_moving_checkpoint(
         bytes, p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
         [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; }));
+    if (!candidate->geometry.empty())
+      runtime::program::require_moving_checkpoint_lifecycle(*candidate,p_->t,p_->macro_step_);
     for (const auto& [block, expected] : candidate->states) {
       const auto& restored = p_->sp.at(static_cast<std::size_t>(block)).U;
       for (std::size_t patch=0; patch<restored.local_size(); ++patch) {
@@ -876,9 +890,11 @@ template Real System<kNativeDimension>::program_integral(const std::string&) con
 template Real System<kNativeDimension>::consume_program_external_trace(
     const std::string&,
     const runtime::program::AcceptedExchangeLedger::TraceSelection&, Real);
-template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_program_exchanges() const;
+template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_program_exchanges(bool) const;
 template void System<kNativeDimension>::validate_checkpoint_program_exchanges(
     std::span<const std::uint8_t>) const;
+template void System<kNativeDimension>::validate_checkpoint_moving_geometry(
+    std::span<const std::uint8_t>,double,int) const;
 template void System<kNativeDimension>::restore_checkpoint_program_exchanges(
     std::span<const std::uint8_t>);
 

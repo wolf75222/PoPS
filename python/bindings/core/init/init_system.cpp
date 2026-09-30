@@ -1146,7 +1146,9 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("_step_transaction_depth", &System::step_transaction_depth)
       .def("_checkpoint_program_exchanges",
            [](const System& system) {
-             const auto bytes = system.checkpoint_program_exchanges();
+             // RuntimeInstance stages this image inside its outer accepted-effect
+             // transaction. It publishes the file only after native acceptance.
+             const auto bytes = system.checkpoint_program_exchanges(true);
              return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
            })
       .def("_validate_checkpoint_program_exchanges",
@@ -1165,6 +1167,13 @@ void bind_system_stepping(py::class_<System>& cls) {
                  static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
              system.restore_checkpoint_program_exchanges(std::span<const std::uint8_t>(
                  reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
+           })
+      .def("_validate_checkpoint_moving_geometry",
+           [](const System& system, py::bytes payload, double accepted_time, int macro_step) {
+             const std::string_view bytes(PyBytes_AS_STRING(payload.ptr()),
+                 static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
+             system.validate_checkpoint_moving_geometry(std::span<const std::uint8_t>(
+                 reinterpret_cast<const std::uint8_t*>(bytes.data()),bytes.size()),accepted_time,macro_step);
            })
       .def("_program_exchange_records",
            [](const System& system) {

@@ -20,7 +20,7 @@ TEST(ProgramRuntime, MovingIntervalProjectionEvaluatesBodiesWithinIssuedDuration
     sim.set_program_block_map({0});
     auto ctx = runtime::program::make_program_execution_provider(&sim);
     ctx->configure_primary_clock("project-clock");
-    ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval");
+    ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval",Real(1e-13));
     // The authored PDE is componentwise U_t + div(velocity*U) = 0.
     // The projection policy is a centered trace, integrated over the actual
     // duration, with a separately authored zero source. Runtime has no PDE case.

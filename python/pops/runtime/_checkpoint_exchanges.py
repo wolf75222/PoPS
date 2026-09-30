@@ -98,6 +98,12 @@ def prepare_checkpoint_continuation(owner, payload):
         raise ValueError("restart cannot remap rank-dependent accepted exchange mailboxes")
     selected = images[topology.rank] if len(images) == topology.size else images[0]
     owner._s._validate_checkpoint_program_exchanges(selected)
+    if selected.startswith(b"POPSEX03"):
+        accepted_time, macro_step = np.asarray(payload.get("t")), np.asarray(payload.get("macro_step"))
+        if accepted_time.ndim != 0 or accepted_time.dtype.kind != "f" or not np.isfinite(accepted_time) \
+                or macro_step.ndim != 0 or macro_step.dtype.kind not in "iu" or int(macro_step) < 0:
+            raise ValueError("moving checkpoint requires exact enclosing accepted time and macro-step")
+        owner._s._validate_checkpoint_moving_geometry(selected,float(accepted_time),int(macro_step))
     return selected
 
 
@@ -162,7 +168,9 @@ def exchange_checkpoint_byte_capacity(program, *, cells, dimension, rank_capacit
         field_words = (3 * components + 2) * max(1, sum(cells))
         face_words = (3 + 2 * components) * 2 * max(1, sum(cells))
         topology_words = (7 + 3 * dimension) * max(1, sum(cells)) + 16
-        capacity += rank_capacity * (8 * (field_words + face_words + 5 * topology_words)
+        moving_records = (2 + 3 * components) * max(1,sum(cells)) * clock_ticks
+        capacity += rank_capacity * (moving_records * record_bytes
+                                     + 8 * (field_words + face_words + 5 * topology_words)
                                      + 12 * max_text + 2048)
     if capacity > (1 << 63) - 1:
         raise OverflowError("resolved accepted exchange checkpoint capacity exceeds int64")

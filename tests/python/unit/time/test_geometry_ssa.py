@@ -81,3 +81,21 @@ def test_projection_must_preserve_constants_and_declare_source_measure_weights()
         MovingFieldProjection((1, 0), (1,))
     with pytest.raises(TypeError, match="finite scalar literals"):
         MovingFieldProjection((float("nan"), 0), (1, 0))
+
+
+@pytest.mark.parametrize("count,cells",[(8,32),(64,128)])
+def test_checkpoint_budget_covers_component_qualified_native_receipt_records(count,cells):
+    from types import SimpleNamespace
+    from pops.runtime._checkpoint_exchanges import exchange_checkpoint_byte_capacity
+    _,program,state,geometry,rate=authoring(components=tuple("component_%d"%i for i in range(count)))
+    candidate=program.reynolds_update(geometry,physical_rate=rate(state.n),projection=policy(),
+                                     geometry_tolerance=1e-13,at=state.next.point)
+    program.commit(state.next,candidate)
+    before=program._serialize(include_provenance=False)
+    capacity=exchange_checkpoint_byte_capacity(program,cells=(cells,),dimension=1,
+        rank_capacity=2,resolved_plan=SimpleNamespace(blocks=()))
+    # Each true native cell publishes ncomp sources and two geometry/relative
+    # face occurrences. 72 bytes is the legacy scalar-record lower bound,
+    # before identifiers, extended support and the real field arrays.
+    assert capacity>2*cells*(2+3*count)*72
+    assert program._serialize(include_provenance=False)==before

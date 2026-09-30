@@ -122,6 +122,9 @@ template<int Dim> void validate_local(const MovingIntervalGeometry<Dim>& geometr
   if constexpr (Dim!=1) throw std::logic_error("moving checkpoint has no higher-dimensional provider");
   require(geometry.generation==0 ? (!geometry.last_receipt && geometry.last_interval.empty()) :
           (geometry.last_receipt.has_value() && !geometry.last_interval.empty()), "generation/receipt mismatch");
+  require(!geometry.clock_authority.empty() && geometry.geometry_tolerance_authority.has_value() &&
+          std::isfinite(*geometry.geometry_tolerance_authority) && *geometry.geometry_tolerance_authority>=0,
+          "checkpoint requires explicitly installed clock and geometry tolerance authority");
   mf_arith_detail::require_same_layout(accepted_state,geometry.measures,"moving checkpoint measures",false);
   require(geometry.measures.ncomp()==1,"measure components must equal one");
   require(geometry.coordinates.size()==accepted_state.local_size() &&
@@ -135,12 +138,20 @@ template<int Dim> void validate_local(const MovingIntervalGeometry<Dim>& geometr
     const auto& actual=*found->second;
     require(actual.orientation==expected.orientation && actual.face_measure==expected.face_measure &&
             actual.numerical_flux==expected.numerical_flux && actual.temporal_weight==expected.temporal_weight &&
-            actual.multiplicity==expected.multiplicity,"receipt quantities differ from accepted exchanges");
+            actual.multiplicity==expected.multiplicity && actual.trace_axis==expected.trace_axis &&
+            actual.trace_side==expected.trace_side && actual.trace_component==expected.trace_component &&
+            actual.exterior_trace==expected.exterior_trace &&
+            actual.source_evaluation_identity==expected.source_evaluation_identity,
+            "receipt quantities/support differ from accepted exchanges");
   };
   if (geometry.last_receipt) {
     const auto& receipt=*geometry.last_receipt;
     require(receipt.physical_frame==geometry.physical_frame && !receipt.quadrature_identity.empty() &&
-            std::isfinite(receipt.geometry_tolerance) && receipt.geometry_tolerance>=0,
+            receipt.geometry_tolerance==*geometry.geometry_tolerance_authority &&
+            receipt.point.clock==geometry.clock_authority && receipt.point.stage==0 &&
+            receipt.point.stage_fraction==::pops::amr::Rational(0,1) && receipt.point.level==0 &&
+            receipt.point.substep==0 && receipt.point.graph_identity.empty() &&
+            receipt.point.rate_identity.empty() && receipt.point.application_identity.empty(),
             "receipt frame/quadrature/tolerance differs");
     ExchangeRecord point{"moving-interval","interval",identity,"endpoint-swept@1",1,1,0,1,1};
     point.qualify_runtime_point(receipt.point);
@@ -200,8 +211,8 @@ template<int Dim> void validate_local(const MovingIntervalGeometry<Dim>& geometr
               "receipt sweep differs from endpoint displacement");
     for (std::size_t cell=0; cell<cells; ++cell) {
       require(old_volume(cell)>0 && old_position(cell+1)>old_position(cell) &&
-          std::abs(volume(cell)-(position(cell+1)-position(cell)))<=tolerance &&
-          std::abs(old_volume(cell)-(old_position(cell+1)-old_position(cell)))<=tolerance &&
+          volume(cell)==position(cell+1)-position(cell) &&
+          old_volume(cell)==old_position(cell+1)-old_position(cell) &&
           std::abs((volume(cell)-old_volume(cell))-(sweep(cell+1)-sweep(cell)))<=tolerance,
           "receipt geometric conservation law failed");
       Index<Dim> index=accepted_state.box(patch).lo; index[0]+=static_cast<int>(cell);
@@ -213,7 +224,11 @@ template<int Dim> void validate_local(const MovingIntervalGeometry<Dim>& geometr
         const Real left=flux(offset)-density(offset)*sweep(cell);
         const Real right=flux(offset+1)-density(offset+1)*sweep(cell+1);
         const Real scale=std::max({Real(1),std::abs(q0),std::abs(q1),std::abs(amount),std::abs(left),std::abs(right)});
-        require(std::abs((q1-q0)+(right-left)-amount)<=Real(64)*std::numeric_limits<Real>::epsilon()*scale,
+        const Real residual=(q1-q0)+(right-left)-amount;
+        require(std::isfinite(q0) && std::isfinite(q1) && std::isfinite(left) && std::isfinite(right) &&
+                std::isfinite(amount) && std::isfinite(scale) && std::isfinite(residual),
+                "nonfinite derived receipt quantity/residual");
+        require(std::abs(residual)<=Real(64)*std::numeric_limits<Real>::epsilon()*scale,
                 "receipt independent Reynolds balance failed");
         require_record(ExchangeRecord{"source:"+identity+"/component:"+std::to_string(component),
             "cell:"+std::to_string(index[0]),identity,receipt.quadrature_identity,1,1.,double(amount),1.,1});
@@ -238,14 +253,29 @@ template<int Dim> struct MovingCheckpointCandidate {
   std::map<int,MultiFab<Dim>> states;
 };
 
+template<int Dim> void require_moving_checkpoint_lifecycle(const MovingCheckpointCandidate<Dim>& candidate,
+                                                          double accepted_time, int macro_step) {
+  moving_checkpoint_detail::require(std::isfinite(accepted_time) && macro_step>=0,
+                                    "invalid enclosing accepted lifecycle authority");
+  for (const auto& [identity,geometry]:candidate.geometry) {
+    if (!geometry.last_receipt) continue;
+    const auto& point=geometry.last_receipt->point;
+    moving_checkpoint_detail::require(std::isfinite(point.physical_time+point.dt) &&
+        point.physical_time+point.dt==accepted_time && point.tick>=0 &&
+        point.tick==static_cast<std::int64_t>(macro_step)-1,
+        "receipt interval end/tick differs from enclosing accepted lifecycle");
+  }
+}
+
 template<int Dim, class StateLookup> std::vector<std::uint8_t> checkpoint_moving_intervals(
     const AcceptedExchangeLedger& ledger, const std::map<std::string,MovingIntervalGeometry<Dim>>& geometries,
     StateLookup state) {
   using namespace moving_checkpoint_detail;
-  Writer out; out.raw(magic); out.bytes(ledger.checkpoint()); out.size(geometries.size());
+  Writer out; out.raw(magic); out.bytes(ledger.checkpoint(true)); out.size(geometries.size());
   for (const auto& [identity,geometry]:geometries) {
     const auto& physical=state(geometry.runtime_block); validate_local(geometry,physical,identity,ledger);
     out.string(identity); out.i32(geometry.runtime_block); out.string(geometry.physical_frame);
+    out.string(geometry.clock_authority); out.real(*geometry.geometry_tolerance_authority);
     out.u64(geometry.generation); out.string(geometry.last_interval); write_field(out,physical);
     write_field(out,geometry.measures); write_faces(out,geometry.coordinates,physical,1);
     write_faces(out,geometry.swept_volumes,physical,1); out.u64(geometry.last_receipt ? 1 : 0);
@@ -275,6 +305,9 @@ template<int Dim, class StateLookup> MovingCheckpointCandidate<Dim> read_moving_
     for (const auto& [identity,declaration]:declarations) {
       require(in.string()==identity && in.i32()==declaration.runtime_block &&
               in.string()==declaration.physical_frame, "geometry identity/block/frame differs");
+      require(declaration.geometry_tolerance_authority.has_value(),"installed geometry lacks tolerance authority");
+      require(in.string()==declaration.clock_authority && in.real()==*declaration.geometry_tolerance_authority,
+              "geometry clock/tolerance authority differs from installed declaration");
       MovingIntervalGeometry<Dim> geometry=declaration;
       geometry.generation=in.u64(); geometry.last_interval=in.string();
       const auto& physical=state(declaration.runtime_block);
@@ -327,6 +360,7 @@ template<int Dim> void require_moving_checkpoint_agrees_collectively(
     Writer out; out.size(candidate.geometry.size());
     for (const auto& [identity,geometry]:candidate.geometry) {
       out.string(identity); out.i32(geometry.runtime_block); out.string(geometry.physical_frame);
+      out.string(geometry.clock_authority); out.real(*geometry.geometry_tolerance_authority);
       out.u64(geometry.generation); out.string(geometry.last_interval);
       out.bytes(topology(candidate.states.at(geometry.runtime_block),false));
       out.u64(geometry.last_receipt ? 1 : 0);

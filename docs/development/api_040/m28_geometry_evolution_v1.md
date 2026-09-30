@@ -218,10 +218,34 @@ authenticates global time/topology metadata before constructing the shared-face
 broadcast schedule; local preparation and host copies vote their failures
 before the next collective. Shared endpoint values must agree exactly.
 
+The carrier's initialization can declare its clock and numerical geometry
+tolerance independently of the wire image. Checkpoint-capable Programs must
+provide that tolerance explicitly as the fourth initialization argument;
+three-argument native evaluation remains available but cannot export a coupled
+checkpoint. Receipt tolerance must equal the installed declaration. Current
+and previous volumes must equal their actual endpoint differences; geometry
+tolerance does not loosen that volume-definition identity. Inventories,
+relative fluxes, residual and comparison scale must all remain finite after
+arithmetic. The `POPSEX03` nested ledger forces the existing extended wire
+format so internal trace support and source-evaluation identities are retained
+and authenticated exactly, including when no integral state is declared.
+
+The current ordinary root-interval realization authenticates the receipt clock
+against the installation and rejects foreign coupling context identifiers. Its
+interval end and tick are checked against the enclosing checkpoint's accepted
+time and macro-step during facade preflight and native publication. This is a
+realization bound; a future stage/coupling provider must supply its own interval
+and context authority rather than dropping those checks.
+
 Physical state must already have been restored from the same checkpoint.
 Publication compares it with the envelope's independent accepted state before
 swapping geometry and exchanges inside the existing restart transaction.
-Export refuses provisional step/restart transactions. A failed install also
+Direct native export refuses provisional step/restart transactions. The private
+facade capture seam can explicitly stage a candidate image at outer step depth
+one, after its completed step passes the same lifecycle proof; nested child and
+restart captures remain refused. RuntimeInstance retains sole authority to
+publish that staged checkpoint file after accepting its parent transaction.
+A failed install also
 restores its deep-owned geometry map, and successful replacement clears stale
 geometry declarations. Source syntax checks and native test cases are provided;
 execution and persisted restart qualification require the central rebuilt SDK.
