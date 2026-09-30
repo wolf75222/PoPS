@@ -631,6 +631,19 @@ class RuntimeInstance:
         return getattr(self._executor, "last_run_identity", None)
 
     @property
+    def last_run_manifest(self) -> Any:
+        return getattr(self._executor, "last_run_manifest", None)
+
+    def _checkpoint_initial_temporal_state(self) -> Any:
+        """Read accepted executor authority for the public checkpoint reseal.
+
+        The facade owns consumers and the outer envelope, while its executor
+        owns the controller and qualified clock cursors. This named route
+        retains that ownership through a checkpoint before the first run.
+        """
+        return getattr(self._executor, "_temporal_restart_state", None)
+
+    @property
     def last_restart_identity(self) -> Any:
         return getattr(self._executor, "last_restart_identity", None)
 

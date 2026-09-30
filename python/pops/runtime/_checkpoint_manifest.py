@@ -55,7 +55,14 @@ def checkpoint_lifecycle_evidence(owner: Any) -> dict[str, Any]:
     from pops.runtime._temporal_restart import _clock
     if _clock(owner.time(), owner.macro_step()) != ((0.).hex(), 0):
         raise RuntimeError("bound_initial checkpoint requires the native initial accepted clock")
-    _require_initial_temporal(getattr(owner, "_temporal_restart_state", None))
+    provider = getattr(owner, "_checkpoint_initial_temporal_state", None)
+    if provider is None:
+        temporal = getattr(owner, "_temporal_restart_state", None)
+    else:
+        if not callable(provider):
+            raise TypeError("initial checkpoint temporal authority provider must be callable")
+        temporal = provider()
+    _require_initial_temporal(temporal)
     return {"run_identity": None, "origin": dict(_BOUND_INITIAL_ORIGIN)}
 
 

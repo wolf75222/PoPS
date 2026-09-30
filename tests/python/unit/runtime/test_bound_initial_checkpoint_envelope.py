@@ -112,6 +112,49 @@ def test_legacy_run_envelope_and_identity_remain_exactly_unchanged():
     _require_manifest_restart_identity(manifest, identity.token)
 
 
+def _public_owner(executor):
+    from pops.runtime._runtime_instance import RuntimeInstance
+
+    owner = RuntimeInstance.__new__(RuntimeInstance)
+    owner._executor = executor
+    semantic, artifact, bind = executor._checkpoint_identities()
+    owner._install_plan = SimpleNamespace(
+        artifact=SimpleNamespace(semantic_identity=semantic, artifact_identity=artifact),
+        bind_identity=bind,
+    )
+    return owner
+
+
+def test_public_initial_reseal_reads_executor_authority_without_starting_run():
+    executor = _Owner()
+    owner = _public_owner(executor)
+    before = deepcopy(executor._temporal_restart_state.__dict__)
+    native = _payload(executor)
+    seal_checkpoint_payload(executor, native, runtime_kind="uniform")
+    payload = {name: value for name, value in native.items()
+               if name not in {MANIFEST_KEY, IDENTITY_KEY}}
+    payload["runtime_consumer_cursors"] = np.asarray('{"schema_version":1,"rows":[]}')
+    identity = seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
+    manifest, inspected = inspect_checkpoint_payload_integrity(payload, runtime_kind="uniform")
+    assert identity == inspected
+    assert manifest["origin"] == {"schema_version": 1, "kind": "bound_initial"}
+    assert owner.last_run_identity is None and owner.last_run_manifest is None
+    assert executor._temporal_restart_state.__dict__ == before
+
+
+@pytest.mark.parametrize("fault", ("absent_authority", "attempted_transaction", "orphan_run"))
+def test_public_initial_reseal_refuses_missing_or_noninitial_executor_authority(fault):
+    executor = _Owner()
+    if fault == "absent_authority":
+        executor._temporal_restart_state = None
+    elif fault == "attempted_transaction":
+        executor._temporal_restart_state.transaction_stats["failed"] = 1
+    else:
+        executor._last_run_manifest = {"orphan": True}
+    with pytest.raises(RuntimeError):
+        checkpoint_lifecycle_evidence(_public_owner(executor))
+
+
 @pytest.mark.parametrize("fault", ("native_clock", "negative_zero", "native_step", "temporal_clock", "transactions"))
 def test_missing_run_alone_never_authenticates_initial_origin(fault):
     owner = _Owner()

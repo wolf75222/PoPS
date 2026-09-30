@@ -31,6 +31,15 @@ The existing authenticated restart receipt remains available. Post-run restorati
 and post-run regrid lineage preserve their existing behavior. Regridding an initial
 source does not manufacture a run before any execution request exists.
 
+The public RuntimeInstance reseal obtains the accepted temporal state through
+an explicit executor authority route and exposes the executor's actual run
+manifest. It owns neither a duplicate controller nor an invented run. This fixes
+the first native reception's ten initial-checkpoint failures at the facade layer.
+The installed ABI5/SDK307 reception subsequently passes 84 temporal/checkpoint
+tests and all six transport/restart/refusal fixtures. Three of four diffusive
+fixtures pass; the affine two-level AMR boundary balance remains unqualified.
+No wire version or legacy envelope token changes for this private ownership fix.
+
 Composite capture validates every live temporal leaf and retains actual child
 checkpoint bytes. At restart, each child is decoded/authenticated by its existing
 native preflight and resolved resource budget first; only then the composite
