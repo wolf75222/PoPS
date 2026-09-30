@@ -776,12 +776,15 @@ class RuntimeInstance:
 
     def local_boxes(self, block: str) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
         """Return rank-owned boxes as exact-rank half-open ``(lower, upper)`` bounds."""
-        provider = getattr(self._executor, "local_boxes", None)
+        executor = self._executor
+        if callable(getattr(executor, "executor_for_block", None)):
+            executor = self._executor_for_block(block)
+        provider = getattr(executor, "local_boxes", None)
         if not callable(provider):
             raise NotImplementedError(
                 "this runtime provider does not expose rank-owned local boxes"
             )
-        dimension = len(self.spatial_shape())
+        dimension = len(self._executor_spatial_shape(executor))
         result: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
         for raw_box in cast(Iterable[Iterable[Iterable[Any]]], provider(block)):
             bounds = tuple(tuple(axis for axis in bound) for bound in raw_box)
@@ -802,15 +805,19 @@ class RuntimeInstance:
         """Return the native state owned by one box from :meth:`local_boxes`."""
         if isinstance(box_index, bool) or not isinstance(box_index, int) or box_index < 0:
             raise TypeError("local_state box_index must be a non-negative integer")
-        provider = getattr(self._executor, "local_state", None)
+        executor = self._executor
+        if callable(getattr(executor, "executor_for_block", None)):
+            executor = self._executor_for_block(block)
+        provider = getattr(executor, "local_state", None)
         if not callable(provider):
             raise NotImplementedError(
                 "this runtime provider does not expose rank-owned local state"
             )
         return provider(block, box_index)
 
-    def spatial_shape(self) -> tuple[int, ...]:
-        provider: Any = getattr(self._executor, "spatial_shape", None)
+    @staticmethod
+    def _executor_spatial_shape(executor: Any) -> tuple[int, ...]:
+        provider: Any = getattr(executor, "spatial_shape", None)
         if not callable(provider):
             raise NotImplementedError("runtime provider does not expose its exact spatial shape")
         shape = _require_exact_ints(provider(), where="native runtime spatial shape")
@@ -819,6 +826,9 @@ class RuntimeInstance:
         ):
             raise TypeError("native runtime spatial shape must contain exact positive integers")
         return shape
+
+    def spatial_shape(self) -> tuple[int, ...]:
+        return self._executor_spatial_shape(self._executor)
 
     def n_levels(self) -> int:
         provider: Any = getattr(self._executor, "n_levels", None)

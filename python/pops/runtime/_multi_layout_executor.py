@@ -1147,6 +1147,14 @@ class _MultiLayoutUniformExecutor:
     def set_state(self, block: str, values: Any) -> Any:
         return self.executor_for_block(block).set_state(block, values)
 
+    def local_boxes(self, block: str) -> Any:
+        """Relay rank-owned boxes through the exact block's native executor."""
+        return self.executor_for_block(block).local_boxes(block)
+
+    def local_state(self, block: str, box_index: int) -> Any:
+        """Relay a native local piece without changing its axis/component order."""
+        return self.executor_for_block(block).local_state(block, box_index)
+
     def spatial_shape(self) -> tuple[int, ...]:
         raise ValueError(
             "multi-layout geometry requires executor_for_layout(layout_id).spatial_shape()"
