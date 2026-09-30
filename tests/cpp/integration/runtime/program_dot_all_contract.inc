@@ -115,7 +115,8 @@ TEST(ProgramRuntime, ExplicitVectorPairingUsesNativeAmrCoverageAndIgnoresCovered
   comm_init();
   constexpr int n = 8;
   AmrSystemConfig<kNativeDimension> config;
-  config.explicit_bootstrap = true;
+  // Materialize the staged coarse values; explicit bootstrap would defer their projection.
+  config.explicit_bootstrap = false;
   config.regrid_every = 0;
   config.distribute_coarse = true;
   for (int axis = 0; axis < kNativeDimension; ++axis) {
@@ -138,6 +139,19 @@ TEST(ProgramRuntime, ExplicitVectorPairingUsesNativeAmrCoverageAndIgnoresCovered
   sim.install_prepared_amr_program_flux_expression_budget(
       "pops.test.dot-all/amr-program@1", std::vector<Budget>(1, Budget{0, 0}), 0, 0);
   context->configure_primary_clock("clock.dot-all");
+  // Anchor the actual accepted coarse DOFs before creating the prescribed child.
+  // A nonnegative squared error cannot cancel between distributed owners.
+  const auto& initial_coarse = context->state(0);
+  Real local_initial_error = Real(0);
+  for (std::size_t patch = 0; patch < initial_coarse.local_size(); ++patch) {
+    const auto values = initial_coarse.fab(patch).view();
+    local_initial_error += for_each_cell_reduce_sum(
+        initial_coarse.box(patch), [=] POPS_HD(const Index<kNativeDimension>& cell) {
+          const Real difference = values(cell, 0) - Real(2);
+          return difference * difference;
+        });
+  }
+  ASSERT_DOUBLE_EQ(all_reduce_sum(local_initial_error, context->prepared_execution_lane()), 0.);
   const auto& parent_layout = sim.engine()->hierarchy().layout(0);
   Index<kNativeDimension> upper{};
   for (int axis = 0; axis < kNativeDimension; ++axis)

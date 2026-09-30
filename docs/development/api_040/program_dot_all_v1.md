@@ -112,3 +112,27 @@ selecting installed Dim2 solely for loader compatibility. Ruff and diff-check
 pass. The native provider headers pass Dim1/Dim2 syntax with the full existing
 runtime TU and generic fixture. The only compiler warning is the pre-existing
 Googletest char8_t conversion warning.
+
+
+The first central real Dim1 reception exposed a fixture initialization error:
+`ExplicitVectorPairingUsesNativeAmrCoverageAndIgnoresCoveredNaN` returned 16
+against 40, both before and after poisoning covered coarse cells. The receipt is
+`outputs/native-integrated-codec-dot-owner-amr-dim1-20260930/ctest.xml` in the
+workspace campaign. `AmrSystem::set_conservative_state` stages the vector before
+engine construction (`src/runtime/amr/amr_system.cpp:16553`). In
+`ensure_engine`'s `materialize_state`, the field is set to zero and
+`explicit_bootstrap=true` checks that a source is staged without applying it
+(`:10420`); the automatic `write_field` belongs to the other branch. The fixture
+never ran the public explicit projection. Thus the six retained coarse cells
+were zero and only the four child cells at value two contributed: 16.
+
+The bounded fixture correction selects automatic initialization with
+`explicit_bootstrap=false` and asserts collectively, before regrid, that every
+actual coarse DOF equals two using a nonnegative squared error. No tagger is
+installed, so automatic refinement is absent. The child/regrid/coverage/NaN
+checks and expected 40 are retained. `publish_regrid` does not change
+`active_level_`; `state(int)` returns the live attempt or facade accepted field,
+whose exact pointer is classified `Family::State`. That family traverses all
+live levels. No consumer, legacy reduction or header is changed by this fix.
+The corrected fixture passes syntax checking; successful real native reception
+must be re-established centrally.
