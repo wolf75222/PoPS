@@ -13,6 +13,7 @@
 #include <map>
 #include <limits>
 #include <numeric>
+#include <sstream>
 
 namespace pops::runtime::program {
 namespace moving_checkpoint_detail {
@@ -136,13 +137,21 @@ template<int Dim> void validate_local(const MovingIntervalGeometry<Dim>& geometr
     const auto found=records.find(expected.key());
     require(found!=records.end(),"receipt lacks its exact accepted exchange occurrence");
     const auto& actual=*found->second;
-    require(actual.orientation==expected.orientation && actual.face_measure==expected.face_measure &&
+    const bool matches=actual.orientation==expected.orientation && actual.face_measure==expected.face_measure &&
             actual.numerical_flux==expected.numerical_flux && actual.temporal_weight==expected.temporal_weight &&
             actual.multiplicity==expected.multiplicity && actual.trace_axis==expected.trace_axis &&
             actual.trace_side==expected.trace_side && actual.trace_component==expected.trace_component &&
             actual.exterior_trace==expected.exterior_trace &&
-            actual.source_evaluation_identity==expected.source_evaluation_identity,
-            "receipt quantities/support differ from accepted exchanges");
+            actual.source_evaluation_identity==expected.source_evaluation_identity;
+    if (!matches) {
+      std::ostringstream details;
+      details << "moving interval checkpoint: receipt quantities/support differ from accepted exchanges: "
+              << expected.operation_identity << " " << expected.occurrence_identity << std::hexfloat
+              << "; numerical_flux=" << actual.numerical_flux << " expected=" << expected.numerical_flux
+              << "; face_measure=" << actual.face_measure << " expected=" << expected.face_measure
+              << "; temporal_weight=" << actual.temporal_weight << " expected=" << expected.temporal_weight;
+      throw std::invalid_argument(details.str());
+    }
   };
   if (geometry.last_receipt) {
     const auto& receipt=*geometry.last_receipt;
