@@ -17,6 +17,13 @@ baseline mode reproduced the exact `invalid integral count` refusal, then the
 fixed-header host binary passed empty and qualified-metadata exact roundtrips,
 three independent corruptions and the existing nonempty IntegralState roundtrip.
 This is a small host receipt seam check, not a System/PDE/MPI runtime claim.
+An additional actual-header probe demonstrates that the prior parser accepted
+an exact consumed exterior key with zero declared integrals. This image cannot
+be emitted by the native API: consuming a trace requires a declared integral.
+The parser now refuses that impossible combination explicitly while retaining
+the valid unconsumed exterior metadata baseline. Four corruptions are checked.
+Neither the default POPSEX01/02 writer nor its bytes changes.
+
 The same assertions are registered in the real ProgramContext contract target;
 the authentic moving codec and staging fixtures still require central native
 reception after rebuilding the changed header.

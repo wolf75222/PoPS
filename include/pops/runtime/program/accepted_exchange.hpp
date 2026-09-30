@@ -375,6 +375,8 @@ class AcceptedExchangeLedger {
           throw std::invalid_argument("accepted exchange checkpoint has invalid integral state");
       }
       const auto consumed_count = word();
+      if (integral_count == 0 && consumed_count != 0)
+        throw std::invalid_argument("accepted exchange checkpoint consumes trace without an integral state");
       if (consumed_count > count || consumed_count > (bytes.size() - cursor) / 36)
         throw std::invalid_argument("accepted exchange checkpoint has invalid consumed trace count");
       for (std::uint64_t index = 0; index < consumed_count; ++index) {

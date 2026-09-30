@@ -2131,6 +2131,29 @@ TEST(ProgramContextContract, ExtendedAcceptedMetadataWithoutIntegralHasExactRoun
   auto invented_consumption=empty_extended;
   invented_consumption.back()=1;
   EXPECT_THROW(Ledger::from_checkpoint(invented_consumption),std::invalid_argument);
+  // Keep a valid pending exterior metadata positive before inventing its exact
+  // consumption key. Without an IntegralState no writer can consume this key.
+  Ledger pending;
+  record.trace_axis=0; record.trace_side=1; record.trace_component=0; record.exterior_trace=true;
+  pending.stage(record);
+  const auto pending_image=pending.checkpoint(true);
+  ASSERT_NO_THROW(restored=Ledger::from_checkpoint(pending_image));
+  ASSERT_EQ(restored.checkpoint(true),pending_image);
+  auto synthetic_consumption=pending_image;
+  synthetic_consumption[synthetic_consumption.size()-8]=1;
+  const auto append_text=[&](const std::string& value) {
+    for(unsigned byte=0;byte<8;++byte)
+      synthetic_consumption.push_back(static_cast<std::uint8_t>(value.size()>>(8*byte)));
+    synthetic_consumption.insert(synthetic_consumption.end(),value.begin(),value.end());
+  };
+  append_text(record.operation_identity); append_text(record.occurrence_identity);
+  append_text(record.evaluation_context); append_text(record.quadrature_identity);
+  try {
+    (void)Ledger::from_checkpoint(synthetic_consumption);
+    FAIL()<<"synthetic consumption without an integral was accepted";
+  } catch(const std::invalid_argument& error) {
+    EXPECT_STREQ(error.what(),"accepted exchange checkpoint consumes trace without an integral state");
+  }
 }
 
 TEST(ProgramContextContract, IntegralStateConsumesExactAcceptedTraceAndRollsBackParent) {
