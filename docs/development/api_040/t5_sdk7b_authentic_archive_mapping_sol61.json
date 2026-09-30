@@ -1,0 +1,408 @@
+{
+  "schema": "sol61.integral-feedback.archive-mapping@1",
+  "status": "mapping_only_root_archive_reception_pending",
+  "source_owner_pins": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-feedback-sdk7b-root-owner-pins-20260930.json",
+  "source_owner_pins_sha256": "7a6d07c39e434b256e08792ff6c89d991c8525068eb0df0c0a37e43c12521bc2",
+  "phase_payload_count": 39,
+  "entry_count": 40,
+  "total_bytes": 904051,
+  "entries": [
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/accepted.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n8/accepted.npz",
+      "sha256_from_root_owner": "ed56f88276147c8a5450ab0f6e62d56835f4a97012028bf60a4e3a2459525c7a",
+      "bytes": 14266,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "accepted",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/accepted-receipt.json",
+      "archive_path": "t5-sdk7b/positive/restart-n8/accepted-receipt.json",
+      "sha256_from_root_owner": "c5300ce61a54746a1b4b9626ebbadd9d5b412b2eb864d4044d07baf3530ffbe8",
+      "bytes": 53798,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "accepted",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/accepted-state.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n8/accepted-state.npz",
+      "sha256_from_root_owner": "1fb01d96eb9839984bba589d3d2781e862626309ed5b31100580190d2b0d2143",
+      "bytes": 1376,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "accepted",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/continuous.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n8/continuous.npz",
+      "sha256_from_root_owner": "d3d874ce16a442edeab18c42d541966f1eed9bfa87cb957f78e6699c9fcbb587",
+      "bytes": 14365,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "continuous",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/continuous-receipt.json",
+      "archive_path": "t5-sdk7b/positive/restart-n8/continuous-receipt.json",
+      "sha256_from_root_owner": "c680ed50e145626442ca71076eed9f073091d48f43ab17084ebed715ee236cc2",
+      "bytes": 54449,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "continuous",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/continuous-state.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n8/continuous-state.npz",
+      "sha256_from_root_owner": "3f96af591b4602f63bac79eb0ec2b4eb94b122167b52bfaa89def5eac5c15a1c",
+      "bytes": 1376,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "continuous",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/initial.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n8/initial.npz",
+      "sha256_from_root_owner": "a6c4d11c0fcc26e75d3a40c1f24cb6c466c03fbfe8d77b1ed2afc1355f6f6fd1",
+      "bytes": 12963,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "initial",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/initial-receipt.json",
+      "archive_path": "t5-sdk7b/positive/restart-n8/initial-receipt.json",
+      "sha256_from_root_owner": "255625bf51741016edd73f63c3d0e76ce7f653c7e643f4ca1a96fd63b64e2907",
+      "bytes": 4929,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "initial",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/initial-state.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n8/initial-state.npz",
+      "sha256_from_root_owner": "10a05a812328fb3df18e6a509d16e379a2c85b88632a044a0a03832f0038bfde",
+      "bytes": 1376,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "initial",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/replayed.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n8/replayed.npz",
+      "sha256_from_root_owner": "18f8dadce687fce93112fd583c278cfb3a3413eaadba4a9bb2c7b0a60d847e21",
+      "bytes": 14367,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "replayed",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/replayed-receipt.json",
+      "archive_path": "t5-sdk7b/positive/restart-n8/replayed-receipt.json",
+      "sha256_from_root_owner": "d39047c91e55a9ebb93b89610a0a6ce714f50945998015f613c0882f571845e1",
+      "bytes": 54445,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "replayed",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/replayed-state.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n8/replayed-state.npz",
+      "sha256_from_root_owner": "3f96af591b4602f63bac79eb0ec2b4eb94b122167b52bfaa89def5eac5c15a1c",
+      "bytes": 1376,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "replayed",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/restored.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n8/restored.npz",
+      "sha256_from_root_owner": "ed56f88276147c8a5450ab0f6e62d56835f4a97012028bf60a4e3a2459525c7a",
+      "bytes": 14266,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "restored",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/restored-receipt.json",
+      "archive_path": "t5-sdk7b/positive/restart-n8/restored-receipt.json",
+      "sha256_from_root_owner": "a2ebfc5fe726912f6ed73f757d744c119362561533a084348bdf9aa165ff3be6",
+      "bytes": 53798,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "restored",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_0/restored-state.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n8/restored-state.npz",
+      "sha256_from_root_owner": "1fb01d96eb9839984bba589d3d2781e862626309ed5b31100580190d2b0d2143",
+      "bytes": 1376,
+      "case_kind": "restart",
+      "cells": 8,
+      "phase": "restored",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/accepted.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n16/accepted.npz",
+      "sha256_from_root_owner": "3a2ce069e51c608c24102ba670869ad9580afdc0557739b3bfff0243aa40b33f",
+      "bytes": 14836,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "accepted",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/accepted-receipt.json",
+      "archive_path": "t5-sdk7b/positive/restart-n16/accepted-receipt.json",
+      "sha256_from_root_owner": "7457202c0363efdc06a85ebf78f741f69649ba343cc1c6807b9dbe1e8dbf6a4e",
+      "bytes": 101753,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "accepted",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/accepted-state.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n16/accepted-state.npz",
+      "sha256_from_root_owner": "0facd95aae903e0769475879ff6ab3a8a924d915330ea6f49a20ca392a86db99",
+      "bytes": 1504,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "accepted",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/continuous.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n16/continuous.npz",
+      "sha256_from_root_owner": "ec23911de42d20fd764cecc419476efa3a2a993441c62e3c6a6a50e78b1eec0f",
+      "bytes": 14946,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "continuous",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/continuous-receipt.json",
+      "archive_path": "t5-sdk7b/positive/restart-n16/continuous-receipt.json",
+      "sha256_from_root_owner": "26e740e55aa91a00aa4845f25ac7d7601cc71e616d5dc784f5c40dc9b0892d6d",
+      "bytes": 103042,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "continuous",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/continuous-state.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n16/continuous-state.npz",
+      "sha256_from_root_owner": "b8e7d920f2f34566bf792389037b12ca84b97c7badd9ffc84d80a68f5faad899",
+      "bytes": 1504,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "continuous",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/initial.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n16/initial.npz",
+      "sha256_from_root_owner": "7ec2392b4ae289d2fd15e3a0afd699b21c8c3e92af22ad09856794e031bfdfd5",
+      "bytes": 12996,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "initial",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/initial-receipt.json",
+      "archive_path": "t5-sdk7b/positive/restart-n16/initial-receipt.json",
+      "sha256_from_root_owner": "e41b08859e613cf426e457e137216555dfc7e5211bfe11c9686d1332210c0edb",
+      "bytes": 4929,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "initial",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/initial-state.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n16/initial-state.npz",
+      "sha256_from_root_owner": "ff66e119b96e39ed43344a2530734f2f2d2c6f4d6a133c08cd762ae5146949c7",
+      "bytes": 1504,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "initial",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/replayed.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n16/replayed.npz",
+      "sha256_from_root_owner": "72e5dfcc58f89b1bbe280fed281f1c182566c74419c1a0682b85890be4fa8ed5",
+      "bytes": 14952,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "replayed",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/replayed-receipt.json",
+      "archive_path": "t5-sdk7b/positive/restart-n16/replayed-receipt.json",
+      "sha256_from_root_owner": "74ae62add97f8b302b070041d40f435b5721260387a023fab5b8957f269e0c87",
+      "bytes": 103038,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "replayed",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/replayed-state.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n16/replayed-state.npz",
+      "sha256_from_root_owner": "b8e7d920f2f34566bf792389037b12ca84b97c7badd9ffc84d80a68f5faad899",
+      "bytes": 1504,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "replayed",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/restored.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n16/restored.npz",
+      "sha256_from_root_owner": "3a2ce069e51c608c24102ba670869ad9580afdc0557739b3bfff0243aa40b33f",
+      "bytes": 14836,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "restored",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/restored-receipt.json",
+      "archive_path": "t5-sdk7b/positive/restart-n16/restored-receipt.json",
+      "sha256_from_root_owner": "1efa31c4672a2a7bbc383f5075d94ff1733b670de2811db0d650360d2bdb9bce",
+      "bytes": 101753,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "restored",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_public_feedback_original_1/restored-state.npz",
+      "archive_path": "t5-sdk7b/positive/restart-n16/restored-state.npz",
+      "sha256_from_root_owner": "0facd95aae903e0769475879ff6ab3a8a924d915330ea6f49a20ca392a86db99",
+      "bytes": 1504,
+      "case_kind": "restart",
+      "cells": 16,
+      "phase": "restored",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_feedback_rejected_transpo0/before.npz",
+      "archive_path": "t5-sdk7b/positive/retry-n8/before.npz",
+      "sha256_from_root_owner": "56fe681eef439beed957b61cf90d0d8312fc573d89a4273ffb3fac464e4274fb",
+      "bytes": 12973,
+      "case_kind": "retry",
+      "cells": 8,
+      "phase": "before",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_feedback_rejected_transpo0/before-receipt.json",
+      "archive_path": "t5-sdk7b/positive/retry-n8/before-receipt.json",
+      "sha256_from_root_owner": "146be8ce58944c6c7c5888e9aca5d299ee6135f367ca29298ead8802671da1a2",
+      "bytes": 4927,
+      "case_kind": "retry",
+      "cells": 8,
+      "phase": "before",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_feedback_rejected_transpo0/before-state.npz",
+      "archive_path": "t5-sdk7b/positive/retry-n8/before-state.npz",
+      "sha256_from_root_owner": "10a05a812328fb3df18e6a509d16e379a2c85b88632a044a0a03832f0038bfde",
+      "bytes": 1376,
+      "case_kind": "retry",
+      "cells": 8,
+      "phase": "before",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_feedback_rejected_transpo0/rejected.npz",
+      "archive_path": "t5-sdk7b/positive/retry-n8/rejected.npz",
+      "sha256_from_root_owner": "330278b14ad518d67336daa9fb99eb77ad7ca06fe6f0574d5285175b6a4b9723",
+      "bytes": 13001,
+      "case_kind": "retry",
+      "cells": 8,
+      "phase": "rejected",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_feedback_rejected_transpo0/rejected-receipt.json",
+      "archive_path": "t5-sdk7b/positive/retry-n8/rejected-receipt.json",
+      "sha256_from_root_owner": "073a85f4627059e93672f6ef1eae8c8124eb6e617aa9125de7009316539d739e",
+      "bytes": 4931,
+      "case_kind": "retry",
+      "cells": 8,
+      "phase": "rejected",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_feedback_rejected_transpo0/rejected-state.npz",
+      "archive_path": "t5-sdk7b/positive/retry-n8/rejected-state.npz",
+      "sha256_from_root_owner": "10a05a812328fb3df18e6a509d16e379a2c85b88632a044a0a03832f0038bfde",
+      "bytes": 1376,
+      "case_kind": "retry",
+      "cells": 8,
+      "phase": "rejected",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_feedback_rejected_transpo0/retried.npz",
+      "archive_path": "t5-sdk7b/positive/retry-n8/retried.npz",
+      "sha256_from_root_owner": "ce5677fee120bd3e78dfa57ef8c22dd7987f26529c46a17fb6147c45c212cf1c",
+      "bytes": 14276,
+      "case_kind": "retry",
+      "cells": 8,
+      "phase": "retried",
+      "file_kind": "checkpoint"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_feedback_rejected_transpo0/retried-receipt.json",
+      "archive_path": "t5-sdk7b/positive/retry-n8/retried-receipt.json",
+      "sha256_from_root_owner": "a9e0a1cb15f8ce3e37458891886e55fbce487e0fde9dedc5f33fc6e2e1431294",
+      "bytes": 53796,
+      "case_kind": "retry",
+      "cells": 8,
+      "phase": "retried",
+      "file_kind": "receipt"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/pytest-tmp/test_feedback_rejected_transpo0/retried-state.npz",
+      "archive_path": "t5-sdk7b/positive/retry-n8/retried-state.npz",
+      "sha256_from_root_owner": "1fb01d96eb9839984bba589d3d2781e862626309ed5b31100580190d2b0d2143",
+      "bytes": 1376,
+      "case_kind": "retry",
+      "cells": 8,
+      "phase": "retried",
+      "file_kind": "state"
+    },
+    {
+      "source_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-spatial-original-nonlinear-integral-feedback-dim2-sdk7b-20260930/identity.json",
+      "archive_path": "t5-sdk7b/identity.json",
+      "sha256_from_root_owner": "f4123a04eb3ab5495863024e39be992b1f29e2ee6bfe9a1f09fc1162d6b05aa8",
+      "bytes": 2892
+    }
+  ],
+  "excluded": "JIT caches, installed environment, SDK/build trees, negative countermodels; no archive has been created"
+}
