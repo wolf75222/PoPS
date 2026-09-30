@@ -63,6 +63,23 @@ def native_spatial_layouts(
     rows: dict[str, NativeSpatialLayout] = {}
     selected_dimensions: set[int] = set()
     for normalized in layout_plan.layouts:
+        evolution = normalized.requirements.get("geometry_evolution")
+        if evolution is not None:
+            from pops.blockage import Blockage, BlockageClass
+
+            blockage = Blockage(
+                BlockageClass.IMPL, "resolve", "native-spatial-geometry",
+                "The native carrier has immutable Cartesian measures; no trial/accepted "
+                "coordinates, swept-volume exchange or atomic geometry/state rollback exists.",
+                capability="moving_control_volumes",
+            )
+            raise NativeSpatialLayoutError(
+                "native_geometry_evolution_unavailable",
+                "Moving control volumes require a native geometry carrier and discrete GCL; "
+                "a fixed Cartesian layout or instantaneous AMR remap cannot satisfy the request",
+                layout_id=normalized.handle.qualified_id,
+                evidence={"blockage": blockage.to_data(), "geometry_evolution": evolution},
+            )
         native = normalized.native_spatial_layout
         if native is None:
             raise NativeSpatialLayoutError(
