@@ -106,3 +106,22 @@ recomputed from the archive. The bounded injections do not constitute exhaustive
 malicious NPZ/JSON/filesystem parser validation. The two ND2 native cases belong
 to an outer eight-test run with six Integral checkpoint failures; those failures
 remain explicit and are not reclassified as passing.
+
+## Corrected checker replay
+
+The independent harness was replayed unchanged on a private copy of the corrected
+checker SHA256 `0a196a7bb2d5b5d6e44c65de08b4540e1841a06dadd7ec80b6d598a5ae676759`
+and manifest SHA256 `c3d13928659fa7b094d5b4f55c0127b8b96adb0f974cd77ffd90d8c77f6adfb1`
+(manifest version 2). The archive now includes two additional genuine M27 N16/N32
+snapshots from the original run whose subsequent N64 case failed. All eighteen
+genuine snapshots pass; that outer failed run remains failed.
+
+All twelve corruptions are refused for the expected category, exit 0. The M26/M27
+perturbations are now refused earlier by their untouched witness saved-state
+digests. ND2's coherent zero trajectory is refused by its prescribed initial
+anchor (`initial_error=1.0923055579518806`). NaNs are refused by strict JSON parsing;
+scientific inventory, foreign native identity, stale saved-state witness and
+forged JUnit counts are refused by their exact consistency checks. Independent
+alternative mathematics and the original retained source/witness/JUnit/MPI links
+continue to pass. Full observations are retained in
+`evidence/native_saved_reception_independent_0a196a7.json`.
