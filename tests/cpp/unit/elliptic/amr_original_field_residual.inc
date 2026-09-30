@@ -192,6 +192,82 @@ TEST(CompositeGeneralField, OriginalAmrNonlinearResidualTwoResolutionsAndPermuta
     }
 }
 
+TEST(CompositeGeneralField, OriginalIdentityResidualNewtonDirectionArbitraryComponents) {
+  auto lane = ExecutionLane::duplicate_world_collectively("original-amr-newton-direction");
+  for (int width : {1, 3, 5}) {
+    auto request = three_field_request(lane, 16);
+    request.components = width;
+    request.plan_identity = "witness.original-identity-field.composite@1";
+    request.operator_contract_identity = "witness.diffusion-plus-identity-minus-target@1";
+    auto& options = request.options.values;
+    for (auto it = options.begin(); it != options.end();)
+      if (it->first.starts_with("modes.") || it->first.starts_with("gauge.") ||
+          it->first.starts_with("reaction."))
+        it = options.erase(it);
+      else
+        ++it;
+    options["modes.count"] = std::uint64_t{0};
+    options["coefficient_components"] = std::uint64_t(width * width);
+    for (int i = 0; i < width; ++i)
+      for (int j = 0; j < width; ++j)
+        options["reaction." + std::to_string(i) + "." + std::to_string(j)] = 0.;
+    Provider builder;
+    auto provider = std::make_shared<Solver>(request, builder.expected_prepared_contract(request), lane);
+    provider->seal_preparation(lane);
+    Solver::hierarchy_type target, zero, error;
+    for (int level = 0; level < provider->level_count(); ++level) {
+      const auto& shape = provider->original_field_layout(level);
+      target.emplace_back(shape.layout(), shape.distribution(), shape.local_rank(), width, Extent<1>{});
+      zero.emplace_back(shape.layout(), shape.distribution(), shape.local_rank(), width, Extent<1>{});
+      error.emplace_back(shape.layout(), shape.distribution(), shape.local_rank(), width, Extent<1>{});
+      zero.back().set_val(Real(0));
+      provider->solution(level).set_val(Real(4));
+      auto& coefficients = provider->assembly_target("pops.general-field.coefficients", level);
+      for (std::size_t patch = 0; patch < coefficients.local_size(); ++patch) {
+        const auto d = coefficients.fab(patch).view();
+        const auto exact = target.back().fab(patch).view();
+        for_each_cell(coefficients.box(patch), [=] POPS_HD(const Index<1>& cell) {
+          for (int i = 0; i < width; ++i) {
+            exact(cell, i) = Real(.15) + Real(.05) * Real(i);
+            for (int j = 0; j < width; ++j)
+              d(cell, i * width + j) = i == j ? Real(1) : Real(0);
+          }
+        });
+      }
+    }
+    PreparedResourceCache cache;
+    auto authority = original_authority(provider.get(), cache.begin_attempt(lane));
+    authority.original_equation_identity = "witness.diffusion-plus-identity-minus-target@1";
+    authority.capture_identities = {"witness.target:ordered-components@1"};
+    authority.capture_components = {width};
+    const std::array<const Solver::hierarchy_type*, 1> inputs{&target};
+    auto prepared = OriginalResidual::prepare(provider, authority, inputs, original_controls(), Real(1e-5), lane);
+    auto body = [](const auto& q, const auto& captures, auto& result, int) {
+      for (std::size_t level = 0; level < result.size(); ++level)
+        for (std::size_t patch = 0; patch < result[level].local_size(); ++patch) {
+          const auto state = q[level].fab(patch).view(), load = captures[0][level].fab(patch).view();
+          const auto output = result[level].fab(patch).view();
+          const int count = result[level].ncomp();
+          for_each_cell(result[level].box(patch), [=] POPS_HD(const Index<1>& cell) {
+            for (int i = 0; i < count; ++i)
+              output(cell, i) += state(cell, i) - load(cell, i);
+          });
+        }
+    };
+    // For constant Neumann fields the real composite diffusion vanishes:
+    // original F(q)=q-target and +J_F is identity on this global mode.
+    const auto report = prepared->solve(authority, &zero, body, lane);
+    ASSERT_TRUE(report.solved_value_available()) << report.reason;
+    const auto& candidate = prepared->candidate(authority, lane);
+    for (int level = 0; level < provider->level_count(); ++level) {
+      EXPECT_EQ(norm_inf(provider->solution(level), 0), Real(4));
+      lincomb(error[level], Real(1), candidate[level], Real(-1), target[level]);
+    }
+    EXPECT_LT(std::sqrt(provider->original_field_dot(error, error)), Real(3e-8));
+    EXPECT_LE(report.residual_norm, original_controls().tolerance * std::max(Real(1), report.reference_residual_norm));
+  }
+}
+
 TEST(CompositeGeneralField, OriginalAmrResidualAuthorityAndLocalFailureDoNotPublish) {
   auto lane = ExecutionLane::duplicate_world_collectively("original-amr-field-refusals");
   auto provider = original_field_provider(lane, 16, {0, 1, 2});

@@ -153,6 +153,13 @@ class PreparedAmrFieldResidual final {
     };
     auto residual = [&](const hierarchy_type& q, hierarchy_type& result, int evaluation) {
       evaluate(q, result, evaluation);
+      // The workspace solves J_F * correction = defect and adds correction to
+      // q. Only its right-hand side is -F; finite differences and the accepted
+      // original-equation recheck continue to evaluate the authored +F.
+      local_phase_(lane, [&] {
+        for (auto& level : result)
+          scale(level, Real(-1));
+      });
     };
     auto derivative = [&](const hierarchy_type& q, const hierarchy_type& direction,
                           hierarchy_type& result, int evaluation) {

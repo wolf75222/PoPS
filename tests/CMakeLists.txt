@@ -86,7 +86,7 @@ endfunction()
 function(pops_add_gtest_suite)
   set(options ENABLE_EXPORTS NO_DISCOVER RUNTIME_DISCOVERY)
   set(oneValueArgs NAME TIMEOUT RESOURCE_LOCK)
-  set(multiValueArgs SOURCES EXTRA_LIBS LABELS COMPILE_DEFINITIONS RESOURCE_GROUPS)
+  set(multiValueArgs SOURCES DISCOVERY_SOURCES EXTRA_LIBS LABELS COMPILE_DEFINITIONS RESOURCE_GROUPS)
   cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
   if(NOT ARG_NAME)
     message(FATAL_ERROR "pops_add_gtest_suite requires NAME")
@@ -174,7 +174,7 @@ endforeach()
       # a test declaration changes.
       gtest_add_tests(
         TARGET ${ARG_NAME}
-        SOURCES ${ARG_SOURCES}
+        SOURCES ${ARG_SOURCES} ${ARG_DISCOVERY_SOURCES}
         TEST_LIST _pops_discovered_tests)
       if(NOT _pops_discovered_tests)
         message(FATAL_ERROR
@@ -209,6 +209,11 @@ function(pops_add_test name)
     # The full manufactured-fluid convergence case is intentionally retained under ASan/UBSan.
     # Instrumentation makes it slightly slower than the ordinary ten-minute per-case ceiling.
     pops_add_gtest_suite(NAME ${name} TIMEOUT 900)
+  elseif(name STREQUAL "test_composite_general_field")
+    # The original-equation cases are compiled through this included fragment.
+    # gtest_add_tests does not recursively scan #include declarations.
+    pops_add_gtest_suite(NAME ${name} DISCOVERY_SOURCES
+      "${CMAKE_CURRENT_SOURCE_DIR}/cpp/unit/elliptic/amr_original_field_residual.inc")
   else()
   pops_add_gtest_suite(NAME ${name})
   endif()
