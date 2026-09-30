@@ -133,20 +133,8 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
             % (name, sorted(impl._source_terms)))
     if (evaluation is not None and evaluation.attrs.get("physical_global_inputs_v1")
             and getattr(evaluation.prog, "_compiled_detached", False)):
-        from pops.model.hash_data import canonical_hash_data
-        from pops.model.state_symbols import rebind_state_symbols
-        from pops.time._program.global_source_plan import require_detached_source_global
-        source_module = getattr(model, "module", None)
-        require_detached_source_global(evaluation, module=source_module)
-        if source_module is None:
-            raise ValueError("detached physical global source requires Module/body authority")
-        states = source_module.state_spaces()
-        expected_body = rebind_state_symbols(
-            source_module.operator_registry().get(name).body,
-            states[evaluation.state_ref.declaration_ref.local_id], states.values(),
-            module=source_module)
-        if canonical_hash_data(expected_body) != canonical_hash_data(impl._source_terms[name]):
-            raise ValueError("physical global source lowered body changed from its Module authority")
+        from .program_source_authority import require_lowered_source_authority
+        require_lowered_source_authority(model, impl, name, evaluation)
     exprs = list(expand_evaluation_boundaries(impl._source_terms[name], impl.prim_defs))
     from pops.model.global_quantity import global_references
     if global_references(tuple(impl.prim_defs.values())):
