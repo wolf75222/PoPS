@@ -9,7 +9,7 @@
   "capability_vocabulary_version": 4,
   "component_interface_abi_version": 1,
   "native_abi_version": 5,
-  "checkpoint_envelope_schema_version": 1,
+  "checkpoint_envelope_schema_version": 2,
   "checkpoint_spatial_schema_version": 1,
   "uniform_checkpoint_payload_version": 8,
   "amr_checkpoint_payload_version": 11,

@@ -93,6 +93,7 @@ def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
     assert source["public_api_version"] == 3
     assert source["semantic_ir_version"] == 3
     assert source["native_abi_version"] == 5
+    assert source["checkpoint_envelope_schema_version"] == 2
     assert source["uniform_checkpoint_payload_version"] == 8
     assert source["amr_checkpoint_payload_version"] == 11
     assert source["checkpoint_spatial_schema_version"] == 1
