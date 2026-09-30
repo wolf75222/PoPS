@@ -495,6 +495,9 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             open_map_continuation(v, values[:index + 1], var, lines)
             mapping_continuations += 1
         index += 1
+    if any(value.op == "reached_duration" for value in values):
+        from pops.codegen.program_computed_frontier import require_computed_frontier_support
+        require_computed_frontier_support(program, target=target)
     from .program_interaction_exchanges import emit_accepted_interaction_exchanges
     lines += emit_accepted_interaction_exchanges(program, var, block_idx, target=target)
     from pops.codegen.program_partition_stability import require_deferred_partition_bounds

@@ -318,6 +318,13 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         if not self._commits:
             raise ValueError("a time Program must commit each advanced block exactly once "
                              "(no block was committed)")
+        from pops.time._step.strategy import ComputedDt
+        computed = [v for v in self._values if v.op == "reached_duration"]
+        if type(self._step_strategy) is ComputedDt:
+            if len(computed) != 1:
+                raise ValueError("ComputedDt requires exactly one Program.reached_duration Scalar")
+        elif computed:
+            raise ValueError("Program.reached_duration requires ComputedDt")
         seen = set()
         for v in self._values:
             for inp in v.inputs:

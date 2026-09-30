@@ -98,6 +98,8 @@ _ALLOWED_OPS = frozenset(
         "fill_boundary",
         "project",
         "record_scalar",
+        "requested_dt",
+        "reached_duration",
         "record_balance_term",
         "cell_compare",
         "where",

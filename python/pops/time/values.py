@@ -463,6 +463,12 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return _to_affine(other) - self._affine()
 
     def __mul__(self, other: Any) -> Any:
+        resolved = _resolve_handle(other)
+        from pops.time.expressions import ProgramExpression, as_expression
+        if self.vtype == "scalar" and (_is_field_value(resolved) or isinstance(resolved, ProgramExpression)):
+            return as_expression(resolved) * self
+        if self.is_field() and isinstance(resolved, ProgramValue) and resolved.vtype == "scalar":
+            return as_expression(self) * resolved
         if self.vtype == "scalar":
             return self._scalar_op(other, "mul")
         if self.vtype == "operator":  # a linear-source operator: scalar/dt * L -> an _Operator term
@@ -491,6 +497,9 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return NotImplemented
 
     def __rmul__(self, other: Any) -> Any:
+        if self.vtype == "scalar" and _is_field_value(_resolve_handle(other)):
+            from pops.time.expressions import as_expression
+            return as_expression(_resolve_handle(other)) * self
         if self.vtype == "scalar":
             return self._scalar_op(other, "mul", swap=True)
         return self.__mul__(other)

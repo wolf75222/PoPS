@@ -14,6 +14,8 @@ from pops._ir.symbolic import ImmutableSymbolic
 
 
 def component_names(value: Any) -> tuple[str, ...]:
+    if value.vtype == "scalar":
+        return ("scalar",)
     space = value.space
     if getattr(space, "kind", None) == "rate":
         space = space.base_space
@@ -59,6 +61,25 @@ class ProgramComponent(ir.Expr):
         return "%s[%d]" % (self.value.name, self.component)
 
 
+class ProgramScalar(ir.Expr):
+    """One exact collective Scalar value broadcast into a native cell expression."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __pops_ir_children__(self):
+        return ()
+
+    def __pops_ir_key__(self, recurse):
+        return ("program_scalar", str(self.value.prog.owner_path), self.value.id)
+
+    def to_cpp(self):
+        raise TypeError("a Program Scalar requires an authenticated Program lowering")
+
+    def _str(self):
+        return self.value.name
+
+
 class ProgramExpression(ImmutableSymbolic):
     """A componentwise expression product retaining its output StateSpace."""
 
@@ -101,6 +122,10 @@ def as_expression(value, *, template=None):
     value = _resolve_handle(value)
     if isinstance(value, ProgramExpression):
         return value
+    if isinstance(value, ProgramValue) and value.vtype == "scalar":
+        if template is None:
+            raise TypeError("a broadcast Program Scalar needs a State template")
+        return ProgramExpression((ProgramScalar(value),) * len(component_names(template)), template)
     if isinstance(value, ProgramValue):
         return ProgramExpression(tuple(ProgramComponent(value, c)
                                        for c in range(len(component_names(value)))), value)
@@ -161,7 +186,15 @@ def encode_expressions(expressions, program):
         node = ir._wrap(node)
         if id(node) in memo:
             return memo[id(node)][1]
-        if type(node) is ProgramComponent:
+        if type(node) is ProgramScalar:
+            value = require_owned(program, node.value, "pointwise scalar expression")
+            if value.vtype != "scalar":
+                raise TypeError("pointwise scalar expression requires an exact Scalar")
+            if value.id not in by_id:
+                by_id[value.id] = len(inputs)
+                inputs.append(value)
+            encoded = ("input", by_id[value.id], 0)
+        elif type(node) is ProgramComponent:
             value = require_owned(program, node.value, "pointwise expression")
             if value.id not in by_id:
                 by_id[value.id] = len(inputs)

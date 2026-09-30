@@ -871,6 +871,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (var[v.id], int(v.id), var[a_in.id]))
         output_setup_end = len(lines)
         lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
+    elif v.op == "requested_dt":
+        var[v.id] = "requested_dt_%d" % v.id
+        lines.append("const pops::Real %s = static_cast<pops::Real>(dt);" % var[v.id])
+    elif v.op == "reached_duration":
+        if dict(v.attrs) != {"schema_version": 1, "interval_rule": "no_spatial_exchanges"}:
+            raise ValueError("computed frontier has an unsupported interval contract")
+        var[v.id] = var[v.inputs[0].id]
+        lines.append("ctx.reached_duration(static_cast<double>(%s));" % var[v.id])
     elif v.op == "record_scalar":
         # Store the (already-computed) Scalar into the System diagnostics map under its name. A
         # side-effecting op; its var maps to the recorded scalar (a harmless alias). The scalar input

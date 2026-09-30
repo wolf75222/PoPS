@@ -247,7 +247,7 @@ def _validate_program_schedule(value: Any) -> dict[str, Any]:
 def _validate_controller_state(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) not in (
         {"last_accepted_dt"}, {"last_accepted_dt", "fixed_dt_grid"},
-        {"last_accepted_dt", "external_frontier"},
+        {"last_accepted_dt", "external_frontier"}, {"last_accepted_dt", "program_frontier"},
     ):
         raise ValueError("temporal controller state has incomplete keys")
     last_dt = value["last_accepted_dt"]
@@ -300,6 +300,27 @@ def _validate_controller_state(value: Any) -> dict[str, Any]:
                 or coordinates["start"] + coordinates["duration"] != coordinates["reached"] \
                 or coordinates["reached"] <= coordinates["start"]:
             raise ValueError("computed frontier duration and reached coordinate disagree")
+    if "program_frontier" in value:
+        row = value["program_frontier"]
+        if type(row) is not dict or set(row) != {
+            "schema_version", "start", "requested_duration", "duration", "reached", "limit", "rejections",
+        } or type(row["schema_version"]) is not int or row["schema_version"] != 1:
+            raise ValueError("computed Program frontier has an invalid version or keys")
+        if type(row["rejections"]) is not int or row["rejections"] < 0:
+            raise ValueError("computed Program frontier rejections must be nonnegative")
+        numbers = {}
+        for name in ("start", "requested_duration", "duration", "reached", "limit"):
+            try:
+                number = float.fromhex(row[name])
+            except (TypeError, ValueError):
+                raise ValueError("Program frontier coordinates must be hexadecimal floats") from None
+            if not math.isfinite(number) or number.hex() != row[name]:
+                raise ValueError("Program frontier coordinates must be canonical finite floats")
+            numbers[name] = number
+        if numbers["duration"] <= 0.0 or numbers["requested_duration"] <= 0.0 \
+                or numbers["start"] + numbers["duration"] != numbers["reached"] \
+                or numbers["reached"] <= numbers["start"]:
+            raise ValueError("computed Program duration and reached coordinate disagree")
     return _json_copy(value, where="temporal controller state")
 
 
@@ -396,6 +417,9 @@ def _validate_controller_events(
     if grid is not None:
         _validate_fixed_grid_clock(grid, descriptor, time_hex, macro_step)
     frontier = controller.get("external_frontier")
+    if descriptor["kind"] == "external_time_grid" and descriptor.get("frontier") == "computed" \
+            and macro_step > 0 and frontier is None:
+        raise ValueError("computed frontier is required after an accepted grid step")
     if frontier is not None:
         if descriptor["kind"] != "external_time_grid" or descriptor.get("frontier") != "computed":
             raise ValueError("computed frontier requires its versioned ExternalTimeGrid policy")
@@ -406,12 +430,46 @@ def _validate_controller_events(
         requested = float.fromhex(frontier["requested"])
         if float(grid_values[frontier["index"]]) != requested:
             raise ValueError("computed requested frontier differs from declared grid point")
+        previous = float(grid_values[frontier["index"] - 1])
+        start_lower = start_upper = previous
+        for _ in range(descriptor["endpoint_ulps"]):
+            start_lower = math.nextafter(start_lower, -math.inf)
+            start_upper = math.nextafter(start_upper, math.inf)
+        if not start_lower <= float.fromhex(frontier["start"]) <= start_upper:
+            raise ValueError("computed frontier start differs from the preceding declared point")
+        if controller["last_accepted_dt"] != (
+            float.fromhex(frontier["reached"]) - float.fromhex(frontier["start"])).hex():
+            raise ValueError("computed frontier differs from the last accepted duration")
         lower = upper = requested
         for _ in range(descriptor["endpoint_ulps"]):
             lower = math.nextafter(lower, -math.inf)
             upper = math.nextafter(upper, math.inf)
         if not lower <= float.fromhex(time_hex) <= upper:
             raise ValueError("computed reached frontier violates declared endpoint_ulps")
+    program_frontier = controller.get("program_frontier")
+    if descriptor["kind"] == "computed_dt" and macro_step > 0 and program_frontier is None:
+        raise ValueError("ComputedDt accepted restart lacks its computed Program frontier")
+    if program_frontier is not None:
+        from pops.time._step.strategy import ComputedDt
+        if descriptor["kind"] != "computed_dt":
+            raise ValueError("computed Program frontier requires its ComputedDt policy")
+        policy = ComputedDt.from_data(descriptor)
+        request = policy.dt
+        if program_frontier["rejections"] > policy.max_rejections:
+            raise ValueError("computed Program frontier exceeds its retry budget")
+        for _ in range(program_frontier["rejections"]):
+            request *= policy.shrink
+        if program_frontier["reached"] != time_hex \
+                or program_frontier["requested_duration"] != request.hex():
+            raise ValueError("computed Program frontier differs from checkpoint clock or request")
+        upper = float.fromhex(program_frontier["limit"])
+        for _ in range(policy.endpoint_ulps):
+            upper = math.nextafter(upper, math.inf)
+        if float.fromhex(time_hex) > upper:
+            raise ValueError("computed Program frontier crosses its declared run limit")
+        if controller["last_accepted_dt"] != (
+            float.fromhex(program_frontier["reached"]) - float.fromhex(program_frontier["start"])).hex():
+            raise ValueError("computed Program frontier differs from its last accepted duration")
     if descriptor["kind"] != "error_controlled_dt":
         if events:
             raise ValueError(
@@ -628,6 +686,7 @@ class TemporalRestartState:
             if candidate != self.strategy:
                 self.controller_state.pop("fixed_dt_grid", None)
                 self.controller_state.pop("external_frontier", None)
+                self.controller_state.pop("program_frontier", None)
             self.strategy = candidate
             if (candidate["strategy"]["kind"] == "error_controlled_dt"
                     and step == 0
@@ -699,7 +758,7 @@ class TemporalRestartState:
 
     def accept(self, *, before_time: Any, before_step: Any,
                time: Any, macro_step: Any, consumed_event: Any = None,
-               fixed_dt_grid: Any = None, external_frontier: Any = None) -> None:
+               fixed_dt_grid: Any = None, external_frontier: Any = None, program_frontier: Any = None) -> None:
         before, old_step = _clock(before_time, before_step)
         now, step = _clock(time, macro_step)
         if step != old_step + 1 or float.fromhex(now) <= float.fromhex(before):
@@ -709,6 +768,7 @@ class TemporalRestartState:
             "last_accepted_dt": (float.fromhex(now) - float.fromhex(before)).hex(),
             **({"fixed_dt_grid": fixed_dt_grid} if fixed_dt_grid is not None else {}),
             **({"external_frontier": external_frontier} if external_frontier is not None else {}),
+            **({"program_frontier": program_frontier} if program_frontier is not None else {}),
         })
         if fixed_dt_grid is not None:
             if self.strategy is None or self.strategy["strategy"]["kind"] != "fixed_dt":

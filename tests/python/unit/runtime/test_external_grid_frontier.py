@@ -178,3 +178,38 @@ def test_explicit_computed_frontier_does_not_merge_distinct_requested_grid_point
 def test_frontier_policy_refuses_implicit_or_invalid_tolerances(kwargs):
     with pytest.raises(ValueError):
         ExternalTimeGrid("grid", **kwargs)
+
+
+@pytest.mark.parametrize("fault", ("start", "index", "duration", "absent"))
+def test_computed_frontier_rejects_forged_previous_interval_before_step(fault):
+    import json
+    from pops.runtime._temporal_restart import TemporalRestartState
+
+    policy = ExternalTimeGrid("grid", frontier="computed", endpoint_ulps=1)
+    engine = _Engine(policy)
+    temporal = TemporalRestartState(time_hex=(-.125).hex())
+    engine._temporal_restart_state = temporal
+    native = _Native()
+    native.t = -.125
+    prepared = prepare_program_run(engine, {"grid": (-.125, .125, .6)})
+    prepared.begin(temporal, time=native.time(), macro_step=0)
+    prepared.run_step(native, t_end=.125)
+    baseline = json.loads(temporal.checkpoint_json(time=native.time(), macro_step=1))
+    row = baseline["controller_state"]["external_frontier"]
+    if fault == "start":
+        row["start"] = 0.0.hex()
+        row["duration"] = .125.hex()
+        baseline["controller_state"]["last_accepted_dt"] = .125.hex()
+    elif fault == "index":
+        row["index"] = 99
+    elif fault == "duration":
+        baseline["controller_state"]["last_accepted_dt"] = 42.0.hex()
+    else:
+        del baseline["controller_state"]["external_frontier"]
+    with pytest.raises(ValueError, match="computed frontier"):
+        TemporalRestartState.from_json(json.dumps(baseline), time=native.time(), macro_step=1)
+    temporal.controller_state = baseline["controller_state"]
+    calls = list(native.calls)
+    with pytest.raises(ValueError, match="computed frontier"):
+        prepared.run_step(native, t_end=.6)
+    assert native.calls == calls and native.time() == .125 and native.macro_step() == 1

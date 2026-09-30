@@ -63,7 +63,7 @@ PUBLIC = (
     "ImplicitStage", "ImplicitDiffusionStage",
     "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
     "SOLVE_STATUSES", "Schedule",
-    "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
+    "StepStrategy", "FixedDt", "ComputedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
     "ALL_PROVISIONAL_STORES", "AcceptanceGuard", "BlockProjection", "GuardRole",
     "ProjectAndRecheck", "ProvisionalStore", "StepTransactionPlan", "StepTransactionReport",
     "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",

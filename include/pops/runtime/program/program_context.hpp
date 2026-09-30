@@ -210,6 +210,13 @@ class ProgramContext {
     runtime_state().install_resource_lifetime(std::move(lifetime));
   }
 
+  void reached_duration(double duration) const {
+    runtime_state().set_computed_duration(duration);
+    // Reserved output sinks are emitted only by the authenticated frontier IR node. The ordinary
+    // accepted-state transaction snapshots these diagnostics alongside the numerical candidate.
+    record_scalar("pops.frontier.duration", static_cast<Real>(duration));
+  }
+
   void suspend_map(std::string identity, bool target, field_type& field,
                    std::function<void()> continuation) const {
     runtime_state().suspend_program_map(std::move(identity), target, {&field},

@@ -412,6 +412,10 @@ public:
 #include <pops/runtime/program/amr_program_context_history_checkpoint_services.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations_services.inc>
 
+  void reached_duration(double) const {
+    throw std::logic_error("computed Program frontier version 1 cannot remap AMR interval exchanges");
+  }
+
   template <int TestDim>
   friend struct detail::AmrProgramHistoryRemapCollectiveTestAccess;
 

@@ -41,7 +41,7 @@ def pointwise_output_template(value):
                 or value.inputs[index].state_ref != value.state_ref):
             raise ValueError("finite materialization output authority changed")
         return value.inputs[index]
-    return value.inputs[0]
+    return next(item for item in value.inputs if item.vtype == "state")
 
 
 def checked_pointwise_rows(value, inputs):
@@ -120,11 +120,12 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
     from pops.codegen.program_emit_kernels import _kernel_open, _kernel_close
     from pops.time.expressions import component_names
     names = [variables[item.id] for item in value.inputs]
+    field_names = [variables[item.id] for item in value.inputs if item.vtype != "scalar"]
     template_name = variables[pointwise_output_template(value).id]
     body = _kernel_open(output, template_name)
     index = next(i for i, line in enumerate(body) if "pops::for_each_cell" in line)
     views = []
-    for name in dict.fromkeys(names):
+    for name in dict.fromkeys(field_names):
         if name != template_name:
             views.append("  const auto %sA = std::as_const(%s).fab(li).view();" % (name, name))
     mask = "expression_active_%d" % value.id
@@ -138,7 +139,8 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
         " : pops::FieldView<const pops::Real, pops::kNativeDimension>{};" % mask,
     ])
     body[index:index] = views
-    rows = [["%sA(index, %d)" % (name, c) for c in range(len(component_names(item)))]
+    rows = [[name] if item.vtype == "scalar" else
+            ["%sA(index, %d)" % (name, c) for c in range(len(component_names(item)))]
             for item, name in zip(value.inputs, names, strict=True)]
     temporaries, rendered, invalid = checked_pointwise_rows(value, rows)
     body.append("    if (expression_has_mask_ && !(expression_mask_(index, 0) >= pops::Real(0.5))) {")
@@ -150,7 +152,7 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
     body.extend("    outA(index, %d) = %s;" % (c, expr) for c, expr in enumerate(rendered))
     if "finite_support_v1" in value.attrs:
         vote = ["{", "long finite_layout_error_ = 0;"]
-        for name in dict.fromkeys(names):
+        for name in dict.fromkeys(field_names):
             vote.append("finite_layout_error_ |= (%s.layout() != %s.layout() || "
                         "%s.distribution() != %s.distribution() || %s.local_rank() != %s.local_rank());"
                         % (name, output, name, output, name, output))

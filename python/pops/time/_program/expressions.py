@@ -22,7 +22,7 @@ class _ProgramExpressions:
         if not inputs:
             raise ValueError("a pointwise expression needs a temporal value to define its support")
         if template is None:
-            template = inputs[0]
+            template = next((item for item in inputs if item.vtype == "state"), inputs[0])
         require_owned(self, template, "pointwise expression template")
         if template.vtype != "state":
             raise TypeError("pointwise materialization currently requires a typed State template")
@@ -42,6 +42,8 @@ class _ProgramExpressions:
                     if getattr(value.space, attribute) != getattr(template.space, attribute):
                         raise ValueError("finite materialization co-location obligation: different " + attribute)
         for value in (() if finite_support is not None else inputs):
+            if value.vtype == "scalar":
+                continue
             if value.block != template.block:
                 raise ValueError("pointwise inputs require the same block support; use an explicit map")
             require_compatible_spaces(template.space, value.space, "pointwise expression", typed_pair=True)

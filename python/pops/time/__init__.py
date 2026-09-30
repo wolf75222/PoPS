@@ -53,7 +53,7 @@ from pops.time.solve_outcome import (  # noqa: F401
     SolveOutcome,
 )
 from pops.time._step.strategy import (  # noqa: F401
-    AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy,
+    AdaptiveCFL, ComputedDt, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy,
 )
 from pops.time.solve_problem import (  # noqa: F401
     CoupledImplicitEuler, LocalLinear, LocalResidual,
@@ -91,7 +91,7 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "Residua
            "ImplicitStage", "ImplicitDiffusionStage",
            "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
            "SOLVE_STATUSES", "Schedule",
-           "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
+           "StepStrategy", "FixedDt", "ComputedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
            "ALL_PROVISIONAL_STORES", "AcceptanceGuard", "BlockProjection", "GuardRole",
            "ProjectAndRecheck", "ProvisionalStore", "StepTransactionPlan", "StepTransactionReport",
            "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",

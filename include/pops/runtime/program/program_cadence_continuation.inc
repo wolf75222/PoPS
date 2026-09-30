@@ -5,6 +5,7 @@ struct CadenceContinuation {
   PreparedCadenceSubstep partition;
   double accepted_time = 0.0;
   double requested_dt = 0.0;
+  std::optional<double> computed_duration;
   int accepted_macro_step = 0;
   int substep = 0;
   bool numerical_started = false;
@@ -26,6 +27,43 @@ struct EphemeralCadenceContinuation : std::optional<CadenceContinuation> {
   }
 };
 EphemeralCadenceContinuation cadence_continuation_;
+
+/// The Program returns its candidate duration without changing any earlier stage coordinate.
+/// Version 1 deliberately has no spatial exchange remapping rule; the emitter gates that surface.
+void set_computed_duration(double duration) {
+  if (!cadence_continuation_ || !cadence_continuation_->executing || stride_ != 1 || substeps_ != 1)
+    throw std::logic_error("computed Program frontier requires one active cadence 1/1 invocation");
+  auto& frame = *cadence_continuation_;
+  if (frame.computed_duration)
+    throw std::logic_error("computed Program frontier was declared twice");
+  const double reached = frame.accepted_time + duration;
+  if (!std::isfinite(duration) || !(duration > 0.0) || !std::isfinite(reached) ||
+      !(reached > frame.accepted_time))
+    throw std::invalid_argument("computed Program frontier must make finite positive progress");
+  // keep_history captured the entry state before the tail commit. Only its outgoing interval
+  // changes; retained state samples, their entry coordinates and older stages are not relabelled.
+  const auto start_bits = std::bit_cast<std::uint64_t>(frame.accepted_time);
+  for (auto& [name, pending] : hist_.store_pending) {
+    if (!pending)
+      continue;
+    auto& samples = hist_.slot_sample.at(name);
+    auto& durations = hist_.slot_dt.at(name);
+    for (std::size_t slot = 0; slot < samples.size(); ++slot) {
+      auto& sample = samples[slot];
+      if (sample.kind == HistorySampleKind::Publication && sample.start_bits == start_bits) {
+        sample.interval_bits = std::bit_cast<std::uint64_t>(duration);
+        durations[slot] = static_cast<Real>(duration);
+        sample.validate();
+      }
+    }
+  }
+  frame.computed_duration = duration;
+  frame.cadence.window_end = reached;
+  frame.cadence.effective_dt = duration;
+  frame.cadence.numerical_dt = duration;
+  frame.partition.end = reached;
+  last_dt_ = static_cast<Real>(duration);
+}
 
 void suspend_program_map(std::string identity, bool target, std::vector<MultiFab<Dim>*> fields,
                          std::function<void()> next, std::uint64_t stage_generation = 0) {
@@ -158,6 +196,15 @@ std::string advance_cadence_region(double& physical_time_cursor, int& macro_step
         throw std::runtime_error(runtime + " Program cadence reached different map ports");
       if (!frame.port_identity.empty())
         return frame.port_identity;
+      if (frame.computed_duration) {
+        ExactContractBuilder computed;
+        computed.text("pops.program-computed-frontier.v1")
+            .scalar(frame.accepted_time).scalar(frame.requested_dt)
+            .scalar(*frame.computed_duration).scalar(frame.cadence.window_end);
+        if (!all_ranks_agree_exact_ordered_byte_pairs(
+                {{"program-computed-frontier", std::move(computed).release()}}, communicator))
+          throw std::runtime_error(runtime + " computed Program frontier differs between ranks");
+      }
       physical_time_cursor = frame.partition.end;
       ++frame.substep;
       frame.numerical_started = false;
