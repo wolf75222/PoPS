@@ -344,3 +344,6 @@ def test_dim3_fourier_faces_and_component_permutation(
             assert metrics["final_energy"] < metrics["initial_energy"] - 1.0e-9
     record_property("coupled_gradient_dim3_receipts", str(directory))
     record_property("artifact_identity", artifact.artifact_identity.token)
+    record_property("native_dimension", 3)
+    record_property("mpi_rank", world.rank)
+    record_property("mpi_size", world.size)

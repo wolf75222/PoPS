@@ -167,6 +167,13 @@ TEST(ProgramRuntime, ExplicitVectorPairingUsesNativeAmrCoverageAndIgnoresCovered
       exact_cell_count<kNativeDimension>(2) + exact_cell_count<kNativeDimension>(4);
   auto& coarse = context->state(0);
   EXPECT_DOUBLE_EQ(context->dot_all(0, coarse, coarse), 4. * retained_cells);
+  auto different_ghosts = coarse.ghosts();
+  ++different_ghosts[0];
+  MultiFab<kNativeDimension> foreign_ghosts(coarse.layout(), coarse.distribution(),
+      coarse.local_rank(), coarse.ncomp(), different_ghosts);
+  foreign_ghosts.set_val(Real(2));
+  const bool rank_zero = context->prepared_execution_lane().rank() == 0;
+  EXPECT_ANY_THROW(context->dot_all(0, coarse, rank_zero ? foreign_ghosts : coarse));
   // A covered coarse value is outside the contraction, even if it is NaN.
   const auto& coverage = sim.prepared_amr_block_level_coverage_mask(0, 0);
   for (std::size_t patch = 0; patch < coarse.local_size(); ++patch) {

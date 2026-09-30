@@ -360,6 +360,8 @@ Real dot_all(int program_block, const field_type& left, const field_type& right)
           if (right_field == nullptr)
             throw std::logic_error("AMR Program dot_all is missing its right owner field");
           require_same_field_contract_(left_field, *right_field, "AMR Program dot_all");
+          if (left_field.ghosts() != right_field->ghosts())
+            throw std::invalid_argument("AMR Program dot_all ghost count differs");
           const Real checked =
               pops::dot_owned_active_all_finite_local(left_field, *right_field, active, coverage);
           if (!left_field.distribution().replicated() || lane.rank() == 0)
