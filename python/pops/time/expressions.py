@@ -29,7 +29,7 @@ class ProgramComponent(ir.Expr):
     """A component of one exact ProgramValue, not a declaration-name lookup."""
 
     def __init__(self, value: Any, component: str | int) -> None:
-        from pops.time.values import ProgramValue
+        from pops.time.value_support import _ProgramValueBase as ProgramValue
         if not isinstance(value, ProgramValue) or not value.is_field():
             raise TypeError("component expressions require a readable Program field value")
         names = component_names(value)
@@ -118,7 +118,10 @@ class ProgramExpression(ImmutableSymbolic):
 
 
 def as_expression(value, *, template=None):
-    from pops.time.values import ProgramValue, _Affine, _Coeff, _resolve_handle
+    from pops.time.value_support import (
+        _ProgramValueBase as ProgramValue, _AffineExpressionBase as _Affine,
+        _MethodCoefficientBase as _Coeff, resolve_temporal_handle as _resolve_handle,
+    )
     value = _resolve_handle(value)
     if isinstance(value, ProgramExpression):
         return value
@@ -175,7 +178,7 @@ _UNARY = {ir.Neg: "neg", ir.Sqrt: "sqrt", ir.Exp: "exp", ir.Abs: "abs", ir.Sign:
 
 def encode_expressions(expressions, program):
     """Capture exact reads and bounded scalar operations, without simplification."""
-    from pops.time._program.value_validation import require_owned
+    from pops.time.value_support import require_owned_value as require_owned
     from pops._ir.finite_linear import FiniteApplication, FiniteProjection
     inputs = []
     by_id = {}

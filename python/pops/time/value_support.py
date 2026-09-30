@@ -12,6 +12,31 @@ class _ProgramValueBase:
     block: Any
 
 
+class _MethodCoefficientBase:
+    """Nominal coefficient marker; expressions do not import the value algebra."""
+
+    __slots__ = ()
+
+
+class _AffineExpressionBase:
+    """Nominal affine marker shared without importing concrete Program values."""
+
+    __slots__ = ()
+
+
+def require_owned_value(program: Any, value: Any, where: str, *, vtype: Any = None) -> Any:
+    """Authenticate the single issued-value table shared by expressions and Program builders."""
+    if not isinstance(value, _ProgramValueBase):
+        raise ValueError("%s: expected a ProgramValue, got %r" % (where, value))
+    if value.prog is not program:
+        raise ValueError("%s: value %r belongs to a different Program" % (where, value.name))
+    if program._issued_values.get(id(value)) is not value:
+        raise ValueError("%s: value %r was not authored by this Program" % (where, value.name))
+    if vtype is not None and value.vtype != vtype:
+        raise ValueError("%s: expected a %s value, got %s" % (where, vtype, value.vtype))
+    return value
+
+
 def resolve_temporal_handle(value: Any) -> Any:
     """Resolve a readable temporal handle through its Program-owned table."""
     from pops.time.handles import HistoryHandle, StageHandle

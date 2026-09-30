@@ -16,7 +16,7 @@ from pops._ir.symbolic import ImmutableSymbolic
 from pops.provenance import ProvenanceRecord
 from pops.time.points import point_clock
 from pops.time.value_support import (
-    _ProgramValueBase,
+    _ProgramValueBase, _MethodCoefficientBase, _AffineExpressionBase,
     authoring_source_location as _authoring_source_location,  # noqa: F401
     resolve_temporal_handle as _resolve_handle,
 )
@@ -26,7 +26,7 @@ from pops.time.value_metadata import (
 )
 
 
-class _Coeff(ImmutableSymbolic):
+class _Coeff(ImmutableSymbolic, _MethodCoefficientBase):
     """Scalar coefficient: an exact polynomial in ``dt`` (``power -> scalar``).
 
     ``dt`` is ``_Coeff({1: 1})``; a plain number is ``_Coeff({0: c})``. Multiplying a coefficient by
@@ -162,7 +162,7 @@ def _residual_wants_guess(fn: Any) -> Any:
     return len(positional) >= 3
 
 
-class _Affine(ImmutableSymbolic):
+class _Affine(ImmutableSymbolic, _AffineExpressionBase):
     """Affine combination of State/RHS values: ordered ``[(value, _Coeff)]`` terms. Built by the
     operator overloads on field values; consumed by `Program.linear_combine`."""
 

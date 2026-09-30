@@ -5,6 +5,7 @@ from typing import Any
 
 from pops.time.values import ProgramValue, _Affine
 from pops.time.points import point_clock
+from pops.time.value_support import require_owned_value
 
 
 TOP_LEVEL_REGION = 0
@@ -93,15 +94,7 @@ def merge_state_spaces(values: Any, where: str) -> Any:
 
 
 def require_owned(program: Any, value: Any, where: str, *, vtype: Any = None) -> ProgramValue:
-    if not isinstance(value, ProgramValue):
-        raise ValueError("%s: expected a ProgramValue, got %r" % (where, value))
-    if value.prog is not program:
-        raise ValueError("%s: value %r belongs to a different Program" % (where, value.name))
-    if program._issued_values.get(id(value)) is not value:
-        raise ValueError("%s: value %r was not authored by this Program" % (where, value.name))
-    if vtype is not None and value.vtype != vtype:
-        raise ValueError("%s: expected a %s value, got %s" % (where, vtype, value.vtype))
-    return value
+    return require_owned_value(program, value, where, vtype=vtype)
 
 
 def validate_input_clocks(

@@ -94,8 +94,7 @@ class LocalResidual:
 
     def build_with(self, *, program: Any, prepared_solver: Any, name: Any = None) -> Any:
         if isinstance(self.initial, Mapping):
-            from pops.time._program.local_product import build_local_product
-            return build_local_product(program, self, prepared_solver, name=name)
+            return program._build_local_product(self, prepared_solver, name=name)
         return program._solve_local_nonlinear(
             residual=self.residual, initial_guess=self.initial, captures=self.captures,
             prepared=prepared_solver, name=name)

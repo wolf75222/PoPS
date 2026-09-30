@@ -82,6 +82,10 @@ def _prepared_local_nonlinear_controls(prepared: Any, *, where: str) -> dict[str
 class _ProgramLocal(_ProgramConstants, _ProgramBase):
     """Local solves, matrix-free operators, laplacian/gradient/divergence and the coefficiented apply."""
 
+    def _build_local_product(self, problem: Any, prepared: Any, *, name: Any = None) -> Any:
+        from pops.time._program.local_product import build_local_product
+        return build_local_product(self, problem, prepared, name=name)
+
     def _solve_local_linear(self, *, operator: Any, rhs: Any, prepared: Any,
                             fields: Any = None, name: Any = None) -> Any:
         """Solve a LOCAL linear system ``operator U = rhs`` cell by cell, where
