@@ -3,15 +3,44 @@
 The requested migration is **in progress**. Source implementation, native
 reception, scientific witnesses and backend qualification are recorded separately.
 
-## Current integration and reception: SDK20d build, SDK7b execution (2026-09-30)
+## Current integration and reception: SDK20d native C++, SDK7b saved-state physics (2026-09-30)
 
 Migration remains open. The real installed Dim2 package now builds successfully
 with native ABI5 and SDK signature
 `20d956005fe76c85c846c9ef36ddf769a80fb0d5d78d9f1e98ad220238f99e58`;
 native DSO SHA256 is
 `f0f2f2fdba6c16930f80f5f0a33ea8a8e04b178feae7f0e2d8ff0b6b2e60f7a7`.
-The build's doctor passes. Its independent native C++ and installed Python
-receptions are running; no earlier SDK execution is promoted to this SDK.
+The build's doctor passes. The completed installed source/host campaign has
+363 cases: 362 pass, one fails, zero skip. The remaining failure pins the entire
+historical T5 fixture despite the legitimate physical-global extension; its
+repair must preserve the external historic source/state pins. Receipt:
+`outputs/installed-canonical-units-physical-global-integrated-dim2-sdk20d-20260930`,
+identity `2ff1180fe0fe66db9eaf35134b951972474abc5d6123d7b14410faf39d74ed78`,
+log `be20e76cc6b299339307ee8eee3b125f64ce6cfd0adcd3b55716941b02be1166`.
+These paths refer to the task workspace output directory, not repository
+`outputs/`. No earlier SDK execution is promoted to this SDK.
+
+The SDK20d native C++ wave5b receives 194 cases: 189 pass, zero fail, five
+serial-only skips for tests that require multiple MPI ranks. All six MPI CTest
+wrappers pass. Source and binary hashes are unchanged during execution at
+`ecb0fc51c2e4fdabe2b62123dfd209d51f873586`. Actual typed-unit refusal,
+candidate-capture lifetime/revocation, compensated reductions and transport
+feedback execute through the real System/Kokkos/MPI components. Its earlier
+MPI first-case setup failure was corrected by initializing comm before
+SystemConfig captures the communicator. Receipt:
+`outputs/native-canonical-units-feedback-cpp-wave5b-dim1-20260930`, identity
+`1233a15b26cfdb4375bed05268ccdca1a1749a98f5144922b489ae9adf7d3e37`, JUnit
+`5db346d4428a8015c9fd80d4e460767fd5f2163b099ba7a7d58a31c520859682`.
+
+The separate SDK20d original-field/feedback serial campaign has eleven cases:
+eight pass and three true physical-global cases fail before native compilation.
+The legitimate frozen Program loses its live block registry, while the new
+issuance guard still asks that registry for its port. This is a compiler-boundary
+defect, not a received physical-global run. A prepared immutable authority
+transport across the detached boundary is being implemented and independently
+reviewed; the live port guard stays strict. The red receipt remains at
+`outputs/installed-original-field-physical-global-feedback-dim2-sdk20d-20260930`
+(log `3d6202ef7869677a3ac9c072b34c1e6fc83c2e6c7f9daa5e3fd044f7f27449fa`).
 
 Current source includes conditional ProgramIR8, original nonlinear spatial
 residuals/captured coefficients, compensated `dot_all`, collective AMR exterior
@@ -71,11 +100,17 @@ error is at most `2.220446049250313e-16`; inventory/ledger residuals are below
 `8.31e-17`/`1.96e-18`. Nine fully resealed scientific countermodels are refused.
 No PoPS module is imported by either offline physics verifier.
 
-Public ALE Dim1 saved-state/restart/retry reception, the first genuine Dim3
+Public ALE Dim1 now has the integrated saved-state/offline reception fixtures
+(`ecb0fc51`); fourteen physical cases and externally sealed geometry/clock/state
+files still await native execution. Its source/protocol tests alone do not
+qualify a backend. The first genuine Dim3
 package and Fourier reception, and the AMR original nonlinear-field connector
 remain open. The AMR implementation is extending the true conservative
 full-hierarchy provider, with covered-cell measures and original residual
 acceptance; no independent per-level solve is called a composite solve. The
+private AMR capability is independently received at source/host scope, including
+repairs for invalid stage fractions and pre-collective shape failures; its
+public connector and native execution are still pending. The
 complete scientific corpus, GPU, official Kokkos/OpenMPI release matrix,
 ROMEO and exact-head GitHub CI remain unqualified by these local receipts.
 
