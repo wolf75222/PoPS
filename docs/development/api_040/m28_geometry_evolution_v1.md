@@ -119,3 +119,41 @@ The native retry probe now injects that state through a genuine integrated
 source and checks unchanged state, geometry and ledger before its next retry.
 The interval provider rejects active embedded-boundary masks: static masks do
 not supply the missing moving physical-cell measures.
+
+## Issued intervals and coupled candidates
+
+`RuntimeIntervalEvaluation` has a private constructor. The existing native
+`ProgramContext` issues it while executing a generic producer receiving the
+actual `BoundaryEvaluationPoint`. It owns the coordinates, swept volumes,
+integrated physical flux, face density and integrated source. Its authority
+includes the issuing context, accepted geometry generation, physical frame,
+quadrature, exact point/duration and the existing revocable attempt lease.
+The bare-vector publication overload has been removed. A rejected attempt's
+allocations may remain owned, but its interval cannot be consumed by a retry.
+The producer remains responsible for its authored physical formulas; arbitrary
+C++ callback contents are not mathematically proven by a provenance stamp.
+
+This first provider requires a complete root interval (phase `[0,1]`, start
+stage zero, physical endpoints `point.physical_time` and that time plus
+`point.dt`). Evaluation, preparation and commit all reject partial intervals or
+stage offsets until their geometry quadrature is explicitly implemented.
+
+`prepare_moving_interval_update` returns an owned `PreparedMovingIntervalUpdate`
+without publishing the state, geometry or exchange ledger. Commit authenticates
+the same point and live attempt and compares the original state against the
+actual native state before its recovery guard and coupled publication. A
+candidate is consumable once. This is the native seam for a coupled SSA value;
+it does not yet open the Python public ALE backend gate.
+
+Accepted geometry retains an independent receipt: previous coordinates,
+previous measured volumes and physical state, integrated source, physical face
+flux and density traces, runtime point, frame and quadrature. The native probe
+recomputes Reynolds and GCL directly from these stored values without calling
+the update primitive. Checkpoint codecs and public observer exposure remain
+required before Python ALE acceptance is enabled.
+
+Until that coupled wire codec exists, native exchange checkpoint export and
+validation/restore explicitly refuse a nonempty moving-geometry carrier. This
+also covers externally authored C++ Programs. The mandatory Uniform checkpoint
+continuation capture reaches this refusal before publishing a checkpoint file;
+an image that silently drops the accepted moving geometry is forbidden.

@@ -3,7 +3,8 @@
     return runtime_state().moving_interval_geometry_.at(identity);
   }
 
-  void initialize_moving_interval_geometry(const std::string& identity, int program_block) const {
+  void initialize_moving_interval_geometry(const std::string& identity, int program_block,
+                                            const std::string& physical_frame) const {
     const auto& lane = prepared_execution_lane();
     std::optional<MovingIntervalGeometry<Dim>> candidate;
     std::exception_ptr error;
@@ -12,13 +13,14 @@
         throw std::logic_error("moving interval provider requires 1D face geometry; "
                                "higher-dimensional swept surfaces are not prepared");
       } else {
-        if (identity.empty() || runtime_state().moving_interval_geometry_.contains(identity) ||
+        if (identity.empty() || physical_frame.empty() || runtime_state().moving_interval_geometry_.contains(identity) ||
             system_->step_transaction_depth() != 0)
           throw std::invalid_argument("moving geometry initialization requires a fresh identity "
                                       "at an accepted boundary outside a transaction");
         const auto& prototype = state(program_block);
         candidate.emplace();
         candidate->runtime_block = sys_block(program_block);
+        candidate->physical_frame = physical_frame;
         candidate->measures = scalar_field_like_(prototype, 1, 0);
         const auto geom = geometry();
         for (std::size_t patch = 0; patch < prototype.local_size(); ++patch) {
@@ -42,7 +44,8 @@
     } catch (...) { error = std::current_exception(); }
     collectively_rethrow_exception(error, lane, "moving geometry initialization failed collectively");
     ExactContractBuilder declaration;
-    declaration.text("pops.moving-interval.v1").text(identity).scalar(std::int32_t(program_block));
+    declaration.text("pops.moving-interval.v2").text(identity).text(physical_frame)
+        .scalar(std::int32_t(program_block));
     if (!all_ranks_agree_exact_ordered_byte_pairs({{"moving-geometry", std::move(declaration).release()}}, lane))
       throw std::invalid_argument("moving geometry declaration differs across ranks");
     bool inserted = false;
@@ -55,16 +58,56 @@
     }
   }
 
-  /// Update the real native state using supplied shared-face reconstructions and
-  /// INTEGRATED physical flux/source. The same supplied swept volumes enter GCL
-  /// and amount exchange. Accepted geometry/state/ledger remain one transaction.
-  void advance_moving_intervals(
-      const std::string& identity, int program_block,
-      const std::vector<nd::FaceField<Dim>>& proposed_coordinates,
-      const std::vector<nd::FaceField<Dim>>& swept_volumes,
-      const std::vector<nd::FaceField<Dim>>& integrated_physical_flux,
-      const std::vector<nd::FaceField<Dim>>& face_density,
-      const field_type& integrated_source, Real geometry_tolerance) const {
+  /// Execute a generic physical/geometry producer under an issued interval.
+  /// The callback must not perform collectives; local producer failures are voted
+  /// before any following preparation collective. Its output is deep owned.
+  template <class Producer>
+  RuntimeIntervalEvaluation<Dim> evaluate_moving_interval(
+      const std::string& identity, int program_block, const std::string& physical_frame,
+      const std::string& quadrature, Producer&& producer) const {
+    RuntimeIntervalEvaluation<Dim> evaluation;
+    std::exception_ptr error;
+    const auto& lane = prepared_execution_lane();
+    try {
+      if (system_->step_transaction_depth() == 0 || physical_frame.empty() || quadrature.empty())
+        throw std::invalid_argument("moving interval evaluator needs a transaction, frame and quadrature");
+      if (stage_time_ != ::pops::amr::Rational(0, 1) ||
+          logical_phase_begin_ != ::pops::amr::Rational(0, 1) ||
+          logical_phase_span_ != ::pops::amr::Rational(1, 1))
+        throw std::invalid_argument("moving interval evaluator requires a complete root interval; "
+                                    "stage/partial interval geometry is not prepared");
+      if (moving_interval_geometry(identity).physical_frame != physical_frame)
+        throw std::invalid_argument("moving interval evaluator uses a different physical frame");
+      evaluation.owner_ = this;
+      evaluation.attempt_ = resource_attempt();
+      evaluation.identity_ = identity;
+      evaluation.program_block_ = program_block;
+      evaluation.generation_ = moving_interval_geometry(identity).generation;
+      evaluation.physical_frame_ = physical_frame;
+      evaluation.quadrature_ = quadrature;
+      evaluation.point_ = boundary_evaluation_point(0);
+      evaluation.initial_state_ = state(program_block);
+      evaluation.inputs_ = std::forward<Producer>(producer)(evaluation.point_);
+      Kokkos::fence();
+      if (evaluation.point_ != boundary_evaluation_point(0) ||
+          evaluation.generation_ != moving_interval_geometry(identity).generation)
+        throw std::invalid_argument("moving interval producer changed its runtime interval");
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "moving interval evaluator failed collectively");
+    return evaluation;
+  }
+
+  /// Prepare a coupled SSA candidate without publishing geometry, state or
+  /// exchanges. Physical laws remain in the issued evaluator's producer.
+  PreparedMovingIntervalUpdate<Dim> prepare_moving_interval_update(
+      const RuntimeIntervalEvaluation<Dim>& evaluation, Real geometry_tolerance) const {
+    const auto& identity = evaluation.identity_;
+    const int program_block = evaluation.program_block_;
+    const auto& proposed_coordinates = evaluation.inputs_.coordinates;
+    const auto& swept_volumes = evaluation.inputs_.swept_volumes;
+    const auto& integrated_physical_flux = evaluation.inputs_.physical_flux;
+    const auto& face_density = evaluation.inputs_.face_density;
+    const auto& integrated_source = evaluation.inputs_.source;
     const auto& lane = prepared_execution_lane();
     std::optional<MovingIntervalGeometry<Dim>> candidate;
     std::optional<field_type> updated;
@@ -81,6 +124,16 @@
                                       "and a finite nonnegative geometry tolerance");
         const auto& accepted = moving_interval_geometry(identity);
         const auto& input = state(program_block);
+        if (evaluation.owner_ != this || !evaluation.attempt_.visible() ||
+            evaluation.attempt_.ordinal() != resource_attempt().ordinal() ||
+            stage_time_ != ::pops::amr::Rational(0, 1) ||
+            logical_phase_begin_ != ::pops::amr::Rational(0, 1) ||
+            logical_phase_span_ != ::pops::amr::Rational(1, 1) ||
+            evaluation.point_ != boundary_evaluation_point(0) ||
+            evaluation.generation_ != accepted.generation ||
+            evaluation.physical_frame_ != accepted.physical_frame)
+          throw std::invalid_argument("moving interval evaluation belongs to a stale duration/point/geometry");
+        mf_arith_detail::require_same_layout(input, evaluation.initial_state_, "moving evaluation state");
         if (accepted.runtime_block != sys_block(program_block))
           throw std::invalid_argument("moving geometry belongs to a different physical state");
         mf_arith_detail::require_same_layout(input, integrated_source, "moving source");
@@ -110,6 +163,17 @@
         candidate->swept_volumes = swept_volumes;
         candidate->last_interval = interval;
         ++candidate->generation;
+        candidate->last_receipt.emplace();
+        auto& receipt = *candidate->last_receipt;
+        receipt.point = evaluation.point_;
+        receipt.physical_frame = evaluation.physical_frame_;
+        receipt.quadrature_identity = evaluation.quadrature_;
+        receipt.previous_state = evaluation.initial_state_;
+        receipt.previous_measures = accepted.measures;
+        receipt.previous_coordinates = accepted.coordinates;
+        receipt.physical_flux = integrated_physical_flux;
+        receipt.face_density = face_density;
+        receipt.integrated_source = integrated_source;
         updated = input;
         local_endpoints.resize(input.local_size());
         // Only patch endpoints cross ranks. Interior faces already have a single
@@ -143,7 +207,8 @@
     ExactContractBuilder publication;
     try {
     const auto& input = state(program_block);
-    publication.text("pops.moving-interval-publication.v2").text(identity).text(interval)
+    publication.text("pops.moving-interval-publication.v3").text(identity).text(interval)
+        .text(evaluation.physical_frame_).text(evaluation.quadrature_)
         .scalar(std::int32_t(program_block)).scalar(geometry_tolerance)
         .scalar(std::int32_t(input.ncomp()))
         .scalar(static_cast<std::uint64_t>(input.layout().size()))
@@ -287,7 +352,7 @@
       if (all_reduce_max(publication_mask ? 1L : 0L, lane) != 0)
         throw std::invalid_argument("moving interval publication cannot use a static EB mask");
 
-      stage_exchange_batch([&](auto&& stage) {
+      auto records = prepare_exchange_batch([&](auto&& stage) {
         for (std::size_t patch = 0; patch < input.local_size(); ++patch) {
           const auto sw = swept_volumes[patch].template field<0>().create_host_mirror();
           const auto flux = integrated_physical_flux[patch].template field<0>().create_host_mirror();
@@ -325,12 +390,101 @@
             }
           }
         }
-      });
-      // All allocations, numeric checks and ledger append completed collectively.
-      // Both remaining swaps are nonthrowing; no published half-geometry exists.
-      static_assert(std::is_nothrow_swappable_v<MovingIntervalGeometry<Dim>>);
-      static_assert(std::is_nothrow_swappable_v<field_type>);
-      std::swap(runtime_state().moving_interval_geometry_.at(identity), *candidate);
-      std::swap(state(program_block), *updated);
+      }, [&](ExchangeRecord& record) {
+        record.quadrature_identity = evaluation.quadrature_;
+        record.qualify_runtime_point(evaluation.point_);
+      }, lane);
+      PreparedMovingIntervalUpdate<Dim> proposal;
+      try {
+        proposal.identity_ = identity;
+        proposal.owner_ = this;
+        proposal.attempt_ = evaluation.attempt_;
+        proposal.program_block_ = program_block;
+        proposal.physical_frame_ = evaluation.physical_frame_;
+        proposal.quadrature_ = evaluation.quadrature_;
+        proposal.point_ = evaluation.point_;
+        proposal.geometry_ = std::move(*candidate);
+        proposal.state_ = std::move(*updated);
+        proposal.initial_state_ = evaluation.initial_state_;
+        proposal.records_ = std::move(records);
+      } catch (...) { error = std::current_exception(); }
+      collectively_rethrow_exception(error, lane, "moving SSA candidate failed collectively");
+      return proposal;
     }
+    throw std::logic_error("moving interval provider requires native Dim1");
+  }
+
+  /// The only publication path for a coupled candidate. The native accepted
+  /// transaction owns state, geometry and the ledger together.
+  void commit_moving_interval(PreparedMovingIntervalUpdate<Dim>& proposal) const {
+    const auto& lane = prepared_execution_lane();
+    std::exception_ptr error;
+    MovingIntervalGeometry<Dim>* geometry_target = nullptr;
+    field_type* state_target = nullptr;
+    ExactContractBuilder contract;
+    try {
+      geometry_target = &runtime_state().moving_interval_geometry_.at(proposal.identity_);
+      state_target = &state(proposal.program_block_);
+      if (proposal.owner_ != this || !proposal.attempt_.visible() ||
+          proposal.attempt_.ordinal() != resource_attempt().ordinal() ||
+          stage_time_ != ::pops::amr::Rational(0, 1) ||
+          logical_phase_begin_ != ::pops::amr::Rational(0, 1) ||
+          logical_phase_span_ != ::pops::amr::Rational(1, 1) ||
+          proposal.published_ || system_->step_transaction_depth() == 0 ||
+          proposal.point_ != boundary_evaluation_point(0) ||
+          geometry_target->generation + 1 != proposal.geometry_.generation ||
+          geometry_target->runtime_block != sys_block(proposal.program_block_))
+        throw std::invalid_argument("moving SSA publication has stale point/state/geometry or was reused");
+      mf_arith_detail::require_same_layout(*state_target, proposal.initial_state_, "moving SSA input");
+      contract.text("pops.moving-interval-commit.v1").text(proposal.identity_)
+          .text(proposal.geometry_.last_interval).scalar(std::int32_t(proposal.program_block_))
+          .scalar(proposal.geometry_.generation).text(proposal.physical_frame_).text(proposal.quadrature_);
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "moving SSA publication preparation failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{"moving-commit", contract.view()}}, lane))
+      throw std::invalid_argument("moving SSA publication contract differs across ranks");
+    Real changed = 0;
+    try {
+      for (std::size_t patch = 0; patch < state_target->local_size(); ++patch) {
+        const auto actual = state_target->fab(patch).view();
+        const auto expected = proposal.initial_state_.fab(patch).view();
+        const int components = state_target->ncomp();
+        changed = std::max(changed, for_each_cell_reduce_max(state_target->box(patch),
+            [=] POPS_HD(const Index<Dim>& cell) {
+          for (int component = 0; component < components; ++component)
+            if (actual(cell, component) != expected(cell, component)) return Real(1);
+          return Real(0);
+        }));
+      }
+      Kokkos::fence();
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "moving SSA input validation failed collectively");
+    if (all_reduce_max(static_cast<double>(changed), lane) != 0)
+      throw std::invalid_argument("moving SSA input state changed after interval evaluation");
+    const auto* mask = system_->validate_program_state_publication_candidate_(
+        sys_block(proposal.program_block_), proposal.state_, lane);
+    if (all_reduce_max(mask ? 1L : 0L, lane) != 0)
+      throw std::invalid_argument("moving SSA publication cannot use a static EB mask");
+    // Preserve the issued SSA candidate after publication. Accepted storage
+    // receives independent copies, so a later rollback cannot mutate it.
+    std::optional<MovingIntervalGeometry<Dim>> accepted_geometry;
+    std::optional<field_type> accepted_state;
+    try {
+      accepted_geometry = proposal.geometry_;
+      accepted_state = proposal.state_;
+      Kokkos::fence();
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "moving SSA publication staging failed collectively");
+    system_->stage_program_exchanges(proposal.records_);
+    static_assert(std::is_nothrow_swappable_v<MovingIntervalGeometry<Dim>>);
+    static_assert(std::is_nothrow_swappable_v<field_type>);
+    std::swap(*geometry_target, *accepted_geometry);
+    std::swap(*state_target, *accepted_state);
+    proposal.published_ = true;
+  }
+
+  void advance_moving_intervals(const RuntimeIntervalEvaluation<Dim>& evaluation,
+                                Real geometry_tolerance) const {
+    auto proposal = prepare_moving_interval_update(evaluation, geometry_tolerance);
+    commit_moving_interval(proposal);
   }

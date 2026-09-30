@@ -274,12 +274,17 @@ Real System<Dim>::consume_program_external_trace(
 
 template <int Dim>
 std::vector<std::uint8_t> System<Dim>::checkpoint_program_exchanges() const {
+  if (!p_->program_.moving_interval_geometry_.empty())
+    throw std::logic_error("moving geometry checkpoint export requires the coupled geometry/receipt codec; "
+                           "omitting accepted moving state is forbidden");
   return p_->program_.accepted_exchanges_.checkpoint();
 }
 
 template <int Dim>
 void System<Dim>::validate_checkpoint_program_exchanges(
     std::span<const std::uint8_t> bytes) const {
+  if (!p_->program_.moving_interval_geometry_.empty())
+    throw std::logic_error("moving geometry checkpoint restore requires the coupled geometry/receipt codec");
   const auto candidate = runtime::program::AcceptedExchangeLedger::from_checkpoint(bytes);
   if (!candidate.same_integral_declarations(p_->program_.accepted_exchanges_))
     throw std::invalid_argument("accepted exchange checkpoint lacks exact integral-state authority");
@@ -293,6 +298,8 @@ void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint
   try {
     if (!p_->external_restart_transaction_)
       throw std::logic_error("accepted exchange restore requires the native restart transaction");
+    if (!p_->program_.moving_interval_geometry_.empty())
+      throw std::logic_error("moving geometry checkpoint restore requires the coupled geometry/receipt codec");
     candidate.emplace(runtime::program::AcceptedExchangeLedger::from_checkpoint(bytes));
     if (!candidate->same_integral_declarations(p_->program_.accepted_exchanges_))
       throw std::invalid_argument("accepted exchange checkpoint lacks exact integral-state authority");
