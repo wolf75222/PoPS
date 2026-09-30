@@ -47,6 +47,8 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
     width, stem = value.attrs["ncomp"], "amr_original_field_%d" % value.id
     captures = value.inputs[2:2 + value.attrs["capture_count"]]
     options = spatial_newton_options(value.attrs["newton_controls"])
+    policy_argument = (", pops::runtime::program::AmrFieldRightPreconditioner::kSpatialBasisJacobi"
+                       if value.attrs.get("right_preconditioner") is not None else "")
     controls = "pops::FieldNewtonOptions{" + ", ".join(".%s = %s" %
         (key, str(options[key]) if type(options[key]) is int else scalar_cpp(options[key]))
         for key in ("tolerance", "max_iterations", "linear_tolerance", "linear_max_iterations",
@@ -120,8 +122,8 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
                   "  ctx.prepare_spatial_collectively([&] { %s_seed.emplace_back(seed); });" % stem]
     lines += ["});", "std::vector<const %s_Core::hierarchy_type*> %s_capture_views;" % (stem, stem),
               "ctx.prepare_spatial_collectively([&] { for (const auto& tower : %s_captures) %s_capture_views.push_back(&tower); });" % (stem, stem),
-              "auto %s_core = %s_Core::prepare(%s_provider, %s_authority, %s_capture_views, %s, %s, ctx.prepared_execution_lane());" %
-              (stem, stem, stem, stem, stem, controls, scalar_cpp(spatial_scalar(value.attrs["finite_difference_step"])))]
+              "auto %s_core = %s_Core::prepare(%s_provider, %s_authority, %s_capture_views, %s, %s, ctx.prepared_execution_lane()%s);" %
+              (stem, stem, stem, stem, stem, controls, scalar_cpp(spatial_scalar(value.attrs["finite_difference_step"])), policy_argument)]
     unknowns = tuple(Handle.from_canonical_identity(_json_ready(item))
                      for item in value.attrs["source_contract"]["unknown_components"])
     callback = stem + "_body"

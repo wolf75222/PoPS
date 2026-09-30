@@ -143,13 +143,17 @@ def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict
     equation_id = make_identity("solve-equation", equation).token
     problem = {"equation": equation_id, "physical_problem": physical, "unknowns": [unknown.to_data()],
                "residual_interpretation": "original_field_equations", "error_interpretation": "spatial_residual_l2"}
-    return {"schema_version": 1, **problem, "equation_identity": equation_id, "equation_inputs": equation,
+    result = {"schema_version": 1, **problem, "equation_identity": equation_id, "equation_inputs": equation,
             "problem_identity": make_identity("solve-problem", problem).token, "seed": seed,
             "initialization_identity": make_identity("solve-initialization", seed).token,
             "outputs": [unknown.name], "solver_identity": token.attrs["solver_identity"],
             "derivative": {"route": "finite_difference", "scheme": "central_full_residual",
                            "step": token.attrs["finite_difference_step"]},
             "lowering": {"disposition": "native", "adapter": CONTRACT}}
+    if "right_preconditioner" in token.attrs:
+        result["schema_version"] = 2
+        result["realization"] = {"right_preconditioner": token.attrs["right_preconditioner"]}
+    return result
 
 
 def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, name: Any) -> Any:
@@ -182,6 +186,9 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
              "local_expressions": residual.local_expressions, "physical_boundary": residual.physical_boundary,
              "finite_difference_step": scalar_data(residual.finite_difference_step),
              "newton_controls": prepared.controls.to_data(), "solver_identity": prepared.identity.token}
+    prepared.__post_init__()
+    if prepared.right_preconditioner is not None:
+        attrs["right_preconditioner"] = prepared.right_preconditioner
     token = program._new("scalar_field", "solve_spatial_field", inputs if seed is None else (*inputs, seed), attrs,
                          name, None, point=residual.coefficients.point, inherit_state_ref=False)
     data = _request_data(program, token, unknown, _json_ready(request.problem_metadata.to_data()))
@@ -197,7 +204,7 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
 
 
 def validate_nonlinear_field_request(program: Any, token: Any) -> None:
-    from pops.time._program.spatial_solve import spatial_newton_options
+    from pops.time._program.spatial_solve import spatial_newton_options, spatial_solver_identity
     from pops.time.canonical_data import CanonicalData
     from pops.time._program.equation_identity import _equation_value
 
@@ -244,5 +251,7 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
         raise SolveRequestError("equation_identity_drift", "field residual/seed/solver contract changed")
     controls = _json_ready(token.attrs["newton_controls"])
     spatial_newton_options(controls)
-    if token.attrs["solver_identity"] != make_identity("prepared-spatial-newton", controls).token:
+    if "right_preconditioner" in token.attrs and token.attrs["right_preconditioner"] is None:
+        raise SolveRequestError("unsupported_realization", "identity realization must retain legacy omission")
+    if token.attrs["solver_identity"] != spatial_solver_identity(controls, token.attrs.get("right_preconditioner")).token:
         raise SolveRequestError("solver_identity_drift", "field Newton controls changed")

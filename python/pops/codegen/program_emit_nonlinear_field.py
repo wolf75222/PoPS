@@ -19,6 +19,8 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
         from pops.codegen.program_emit_amr_original_field import emit_amr_original_field
         emit_amr_original_field(program, value, variables, lines, prelude, block_indices)
         return
+    if value.attrs.get("right_preconditioner") is not None:
+        raise NotImplementedError("SpatialBasisJacobi@1 is an original composite AMR realization; Uniform is unsupported")
     if target != "system" or prelude is None:
         raise NotImplementedError("pops.spatial-field-residual@1 requires a Uniform Cartesian native body")
     width, stem = value.attrs["ncomp"], "field_residual_%d" % value.id

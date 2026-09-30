@@ -287,7 +287,8 @@ class _ProgramSerialization(_ProgramBase):
                 continue
             seen.add(id(node))
             if node.op in ("solve_spatial_field", "integral_candidate"):
-                result["version"] = 8
+                result["version"] = max(result["version"],
+                    9 if node.op == "solve_spatial_field" and "right_preconditioner" in node.attrs else 8)
             elif node.op == "reduce" and node.attrs.get("kind") == "dot_all":
                 result["version"] = max(result["version"], 7)
             for key in ("cond_block", "body_block", "true_block", "false_block",

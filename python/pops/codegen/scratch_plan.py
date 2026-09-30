@@ -433,10 +433,11 @@ def _persistent_solver_buffers(program: Any) -> list:
             from pops.time._program.spatial_solve import spatial_newton_options
 
             restart = spatial_newton_options(v.attrs["newton_controls"])["restart"]
+            selected_jacobi = v.attrs.get("right_preconditioner") is not None
             persistent.append({
                 "kind": "prepared_spatial_residual",
                 "name": v.name,
-                "buffers": restart + 13 + (2 + v.attrs["capture_count"] if v.op == "solve_spatial_field" else 0),
+                "buffers": restart + 13 + (2 + v.attrs["capture_count"] if v.op == "solve_spatial_field" else 0) + int(selected_jacobi),
                 "exact": False,
                 "per_materialized_level": True,
                 "note": (
@@ -444,7 +445,9 @@ def _persistent_solver_buffers(program: Any) -> list:
                     "fields + one full-halo trial field; lower bound excludes the selected "
                     "diffusion face/boundary workspace and residual-operation scratch"
                     + ("; includes one finite-status field, one independent solved output and exact frozen captures"
-                       if v.op == "solve_spatial_field" else "")),
+                       if v.op == "solve_spatial_field" else "")
+                    + ("; selected SpatialBasisJacobi@1 adds one inverse field and prepares with 1 + stored DOFs composite operator applications"
+                       if selected_jacobi else "")),
             })
         elif v.op == "matrix_free_operator":
             operator_bundle = _operator_bundle_footprint(v)

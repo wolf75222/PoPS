@@ -220,7 +220,12 @@ class Newton(Descriptor):
         restart: Any = 30,
         armijo: Any = 1.0e-4,
         minimum_step: Any = 1.0 / 1024.0,
+        right_preconditioner: str | None = None,
     ) -> None:
+        if right_preconditioner is not None and (type(right_preconditioner) is not str or
+                right_preconditioner != "SpatialBasisJacobi@1"):
+            raise ValueError("Newton right_preconditioner must be None or SpatialBasisJacobi@1")
+        self._right_preconditioner = right_preconditioner
         self.tolerance = _positive_float(tolerance, "tolerance")
         self.max_iterations = _positive_int(max_iterations, "max_iterations")
         self.linear_tolerance = _positive_float(linear_tolerance, "linear_tolerance")
@@ -236,7 +241,7 @@ class Newton(Descriptor):
         return "newton_krylov"
 
     def options(self) -> dict[str, Any]:
-        return {
+        data = {
             "tolerance": self.tolerance,
             "max_iterations": self.max_iterations,
             "linear_tolerance": self.linear_tolerance,
@@ -245,9 +250,30 @@ class Newton(Descriptor):
             "armijo": self.armijo,
             "minimum_step": self.minimum_step,
         }
+        if self.right_preconditioner is not None:
+            data["right_preconditioner"] = self.right_preconditioner
+        return data
+
+    def numerical_options(self) -> dict[str, Any]:
+        """The seven unchanged Newton/GMRES numerical controls."""
+        return {key: value for key, value in self.options().items()
+                if key != "right_preconditioner"}
+
+    @property
+    def right_preconditioner(self) -> str | None:
+        """Explicit AMR original-operator realization; None preserves identity GMRES.
+
+        SpatialBasisJacobi@1 prepares one inverse field with 1 + stored spatial
+        DOFs actual composite operator applications. It is a reference provider,
+        not the efficient cached-diagonal provider of a future realization.
+        """
+        return self._right_preconditioner
 
     def to_data(self) -> dict[str, Any]:
-        return {"scheme": self.scheme, **self.options()}
+        data = {"scheme": self.scheme, **self.options()}
+        if self.right_preconditioner is not None:
+            data["right_preconditioner"] = self.right_preconditioner
+        return data
 
     def capabilities(self) -> CapabilitySet:
         return CapabilitySet(
@@ -256,7 +282,7 @@ class Newton(Descriptor):
                 "jvp": True,
                 "line_search": True,
                 "publication_atomic": True,
-                "uniform": True,
+                "uniform": self.right_preconditioner is None,
                 "amr": True,
             }
         )
@@ -272,6 +298,8 @@ class Newton(Descriptor):
 
     def lower_field_nonlinear(self, *, target: str, layout: Any) -> PreparedFieldNonlinear:
         del layout
+        if self.right_preconditioner is not None:
+            raise ValueError("SpatialBasisJacobi@1 requires a Program original FieldProblem on AMR; installed field plans do not implement it")
         if target not in ("system", "amr_system"):
             raise ValueError("Newton field outer solve requires a uniform or AMR system")
         authored = self.options()

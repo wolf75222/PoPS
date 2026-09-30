@@ -16,12 +16,22 @@ from pops.time.values import ProgramValue
 class PreparedSpatialNewton:
     controls: CanonicalData
     identity: Any
+    right_preconditioner: str | None = None
+
+    def __post_init__(self) -> None:
+        expected = spatial_solver_identity(self.controls.to_data(), self.right_preconditioner)
+        if self.identity != expected:
+            raise SolveRequestError("solver_identity_drift", "prepared spatial solver realization changed")
 
     def build_program_solve(self, *, program: Any, problem: Any, name: Any = None) -> Any:
         from pops.time.solve_request import SolveRequest
 
         if type(problem) is not SolveRequest:
             raise SolveRequestError("unsupported_lowering", "spatial Newton requires a SolveRequest")
+        self.__post_init__()
+        from pops.time.solve_problem import _SpatialFieldResidual
+        if self.right_preconditioner is not None and type(problem.problem) is not _SpatialFieldResidual:
+            raise SolveRequestError("unsupported_realization", "SpatialBasisJacobi@1 implements only original AMR FieldProblem residuals")
         return problem.build_program_solve(program=program, prepared_solver=self, name=name)
 
 
@@ -32,9 +42,28 @@ def prepare_spatial_newton(solver: Any) -> PreparedSpatialNewton:
     if type(solver) is not Newton:
         raise SolveRequestError("unsupported_solver", "spatial adapter requires the declared Newton")
     controls = {key: value if type(value) is int else scalar_data(value)
-                for key, value in solver.options().items()}
+                for key, value in solver.numerical_options().items()}
     frozen = CanonicalData(controls, where="spatial Newton controls")
-    return PreparedSpatialNewton(frozen, make_identity("prepared-spatial-newton", frozen.to_data()))
+    policy = None if solver.right_preconditioner is None else SPATIAL_BASIS_JACOBI
+    # Revalidate the authored descriptor even if private storage was mutated.
+    if solver.right_preconditioner is not None and (type(solver.right_preconditioner) is not str or
+            solver.right_preconditioner != "SpatialBasisJacobi@1"):
+        raise SolveRequestError("unsupported_realization", "unknown Newton right-preconditioner")
+    return PreparedSpatialNewton(frozen, spatial_solver_identity(frozen.to_data(), policy), policy)
+
+
+SPATIAL_BASIS_JACOBI = "pops.amr.original-spatial-jacobi.basis-response@1"
+
+
+def spatial_solver_identity(controls: Any, policy: Any = None) -> Any:
+    spatial_newton_options(controls)
+    controls = CanonicalData(controls, where="spatial Newton controls").to_data()
+    if policy is None:
+        return make_identity("prepared-spatial-newton", controls)
+    if type(policy) is not str or policy != SPATIAL_BASIS_JACOBI:
+        raise SolveRequestError("unsupported_realization", "unknown original AMR right-preconditioner contract")
+    return make_identity("prepared-spatial-newton-v2", {"controls": controls,
+                         "right_preconditioner": policy})
 
 
 def spatial_scalar(value: Any) -> int | float:
@@ -173,6 +202,9 @@ def build_spatial_request(program: Any, request: Any, prepared: Any, *, name: An
     stage = request.problem
     if type(stage) is not ImplicitStage or type(prepared) is not PreparedSpatialNewton:
         raise SolveRequestError("unsupported_lowering", "implicit stage requires spatial Newton")
+    prepared.__post_init__()
+    if prepared.right_preconditioner is not None:
+        raise SolveRequestError("unsupported_realization", "SpatialBasisJacobi@1 implements only original AMR FieldProblem residuals")
     if len(request.unknowns) != 1:
         raise SolveRequestError("unsupported_unknown_product", "spatial adapter requires one vector unknown from one block")
     if request.derivative.route != "finite_difference":
