@@ -21,6 +21,20 @@ TEST(ProgramRuntime, MovingIntervalProjectionEvaluatesBodiesWithinIssuedDuration
     auto ctx = runtime::program::make_program_execution_provider(&sim);
     ctx->configure_primary_clock("project-clock");
     ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval",Real(1e-13));
+    // set_state consumes a global component-major image; get_state returns
+    // the compact component-major image of this rank's native owned cells.
+    const auto initial_local = sim.get_state("gas");
+    const auto& native_state = ctx->state(0);
+    std::size_t local_cells = 0;
+    for (std::size_t patch = 0; patch < native_state.local_size(); ++patch)
+      local_cells += static_cast<std::size_t>(native_state.box(patch).numPts());
+    const auto& lane = ctx->prepared_execution_lane();
+    ASSERT_EQ(all_reduce_max(initial_local.size() == local_cells*kGasComponents ? 0L : 1L,
+                             lane), 0L);
+    ASSERT_EQ(all_reduce_sum(static_cast<long>(local_cells), lane), n);
+    for (int component = 0; component < kGasComponents; ++component)
+      for (std::size_t cell = 0; cell < local_cells; ++cell)
+        EXPECT_DOUBLE_EQ(initial_local[component*local_cells+cell], constants[component]);
     // The authored PDE is componentwise U_t + div(velocity*U) = 0.
     // The projection policy is a centered trace, integrated over the actual
     // duration, with a separately authored zero source. Runtime has no PDE case.
@@ -57,10 +71,10 @@ TEST(ProgramRuntime, MovingIntervalProjectionEvaluatesBodiesWithinIssuedDuration
     sim.step(.3);
     EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 2u);
     const auto accepted = sim.get_state("gas");
-    if (!accepted.empty())
-      for (int component = 0; component < kGasComponents; ++component)
-        for (int cell = 0; cell < n; ++cell)
-          EXPECT_NEAR(accepted[component*n+cell], constants[component], 4e-13);
+    ASSERT_EQ(all_reduce_max(accepted.size() == initial_local.size() ? 0L : 1L, lane), 0L);
+    for (int component = 0; component < kGasComponents; ++component)
+      for (std::size_t cell = 0; cell < local_cells; ++cell)
+        EXPECT_NEAR(accepted[component*local_cells+cell], constants[component], 4e-13);
     const auto& geometry = ctx->moving_interval_geometry("mesh");
     ASSERT_TRUE(geometry.last_receipt.has_value());
     EXPECT_DOUBLE_EQ(geometry.last_receipt->point.physical_time, .2);
@@ -69,7 +83,7 @@ TEST(ProgramRuntime, MovingIntervalProjectionEvaluatesBodiesWithinIssuedDuration
     EXPECT_NEAR(all_reduce_sum(pops::reduce_sum_local(geometry.measures, 0),
                               sim.prepared_boundary_execution_lane()), 1., 4e-13);
     sim.rollback_step_transaction();
-    EXPECT_EQ(sim.get_state("gas"), initial);
+    EXPECT_EQ(sim.get_state("gas"), initial_local);
     EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 0u);
     EXPECT_FALSE(ctx->moving_interval_geometry("mesh").last_receipt.has_value());
     EXPECT_TRUE(sim.program_exchange_records().empty());

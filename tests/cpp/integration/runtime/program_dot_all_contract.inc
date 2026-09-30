@@ -46,11 +46,27 @@ TEST(ProgramRuntime, ExplicitVectorPairingIncludesEveryComponentAndKeepsLegacyDo
       accepted.local_rank(), accepted.ncomp(), different_ghosts);
   foreign_ghosts.set_val(Real(1));
   EXPECT_ANY_THROW(context.dot_all(0, accepted, rank_zero ? foreign_ghosts : increment));
-  // A poisoned replica must be refused even on a noncontributing rank.
-  const int poisoned_rank = context.prepared_execution_lane().size() - 1;
-  increment.set_val(context.prepared_execution_lane().rank() == poisoned_rank
+  // A one-box System is partitioned to one owner, leaving empty ranks in MPI.
+  // Poison an actual owner: setting a scalar on an empty MultiFab writes no DOF.
+  const auto& lane = context.prepared_execution_lane();
+  std::size_t local_cells = 0;
+  for (std::size_t patch = 0; patch < increment.local_size(); ++patch)
+    local_cells += static_cast<std::size_t>(increment.box(patch).numPts());
+  const long poisoned_rank = all_reduce_max(local_cells != 0 ? lane.rank() : -1L, lane);
+  ASSERT_GE(poisoned_rank, 0L);
+  ASSERT_GT(all_reduce_sum(lane.rank() == poisoned_rank ? static_cast<long>(local_cells) : 0L,
+                          lane), 0L);
+  increment.set_val(lane.rank() == poisoned_rank
       ? std::numeric_limits<Real>::quiet_NaN() : Real(1));
   EXPECT_ANY_THROW(context.dot_all(0, increment, increment));
+  // An empty participant still enters every vote and contributes no invented
+  // nonfinite value. This is distinct from a stored noncontributing replica.
+  const long empty_rank = all_reduce_max(local_cells == 0 ? lane.rank() : -1L, lane);
+  if (empty_rank >= 0) {
+    increment.set_val(lane.rank() == empty_rank
+        ? std::numeric_limits<Real>::quiet_NaN() : Real(1));
+    EXPECT_DOUBLE_EQ(context.dot_all(0, increment, increment), cells*kGasComponents);
+  }
   increment.set_val(Real(1e308));
   EXPECT_ANY_THROW(context.dot_all(0, increment, increment));  // finite inputs, product overflow
   auto unit = context.scratch_state_like(accepted);
