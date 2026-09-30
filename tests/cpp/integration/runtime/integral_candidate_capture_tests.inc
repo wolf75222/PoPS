@@ -1,4 +1,94 @@
 // Runtime mechanics only. The public Python fixture uses the true FV exterior trace.
+TEST(ProgramRuntime, IntegralCaptureRejectsRedigestedUntypedOrNoncanonicalUnits) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  const std::string canonical = R"({"kind":"physical_dimension","powers":[]})";
+  for (const std::string bad : {
+           std::string("not-json"),
+           std::string(R"({"powers":[],"kind":"physical_dimension"})"),
+           std::string(R"({"kind":"physical_dimension","powers":[["mass",2,4]]})"),
+           std::string(R"({"kind":"physical_dimension","powers":[["mass",0,1]]})"),
+           std::string(R"({"kind":"physical_dimension","powers":[["mass",1,1],["mass",2,1]]})")}) {
+    for (const bool only_rank_zero : {false, true}) {
+      SCOPED_TRACE(bad);
+      SCOPED_TRACE(only_rank_zero);
+      System<kNativeDimension> sim(unit_domain_config<kNativeDimension>(4));
+      install_execution_lane(sim, "pops.test.integral-candidate.canonical-units");
+      add_scalar(sim);
+      sim.set_state("tracer", std::vector<double>(exact_cell_count<kNativeDimension>(4), 2.));
+      auto ctx = runtime::program::make_program_execution_provider(&sim);
+      ctx->configure_primary_clock("canonical-unit-clock");
+      const auto key = [](const std::string& units) {
+        return "pops.integral.v2/native-canonical/" + identity::sha256_hex(
+            std::vector<std::uint8_t>(units.begin(), units.end())) + "/q";
+      };
+      const auto good_identity = key(canonical), bad_identity = key(bad);
+      // Both declarations are identical on every rank, so the counterprobe
+      // cannot pass merely because ledger declarations differ across ranks.
+      ctx->declare_integral_state(good_identity, .7);
+      ctx->declare_integral_state(bad_identity, .7);
+      const auto ledger = sim.checkpoint_program_exchanges();
+      const auto state = sim.get_state("tracer");
+      bool consumed = false;
+      ctx->install([&](double dt) {
+        ctx->begin_step(dt);
+        const bool inject = !only_rank_zero || ctx->prepared_execution_lane().rank() == 0;
+        const auto& units = inject ? bad : canonical;
+        const auto& identity = inject ? bad_identity : good_identity;
+        const auto capture = ctx->capture_integral_candidate(identity, units);
+        EXPECT_DOUBLE_EQ(ctx->integral_candidate_value(capture, identity, units), .7);
+        consumed = true;
+      });
+      sim.set_program_block_map({0});
+      if (ctx->prepared_execution_lane().size() == 1)
+        EXPECT_THROW(sim.step(.01), std::invalid_argument);
+      else
+        EXPECT_THROW(sim.step(.01), std::runtime_error);
+      EXPECT_FALSE(consumed);
+      EXPECT_EQ(sim.get_state("tracer"), state);
+      EXPECT_EQ(sim.checkpoint_program_exchanges(), ledger);
+      EXPECT_DOUBLE_EQ(sim.time(), 0.);
+      EXPECT_EQ(sim.macro_step(), 0);
+    }
+  }
+}
+
+TEST(ProgramRuntime, IntegralCapturePreservesCanonicalUnicodeAndLargeRationals) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  for (const std::string units : {
+           std::string(R"({"kind":"physical_dimension","powers":[]})"),
+           std::string(R"({"kind":"physical_dimension","powers":[["mass",-7,3],["\u6642\u9593",1,2]]})"),
+           std::string(R"({"kind":"physical_dimension","powers":[["huge",18446744073709551617,18446744073709551616],["\ue000",1,1],["\ud800\udc00",1,1]]})")}) {
+    SCOPED_TRACE(units);
+    System<kNativeDimension> sim(unit_domain_config<kNativeDimension>(4));
+    install_execution_lane(sim, "pops.test.integral-candidate.unicode-rational");
+    add_scalar(sim);
+    sim.set_state("tracer", std::vector<double>(exact_cell_count<kNativeDimension>(4), 2.));
+    auto ctx = runtime::program::make_program_execution_provider(&sim);
+    ctx->configure_primary_clock("unicode-unit-clock");
+    const auto identity = "pops.integral.v2/native-unicode/" + identity::sha256_hex(
+        std::vector<std::uint8_t>(units.begin(), units.end())) + "/q";
+    ctx->declare_integral_state(identity, .7);
+    const auto ledger = sim.checkpoint_program_exchanges();
+    bool consumed = false;
+    ctx->install([&](double dt) {
+      ctx->begin_step(dt);
+      const auto capture = ctx->capture_integral_candidate(identity, units);
+      EXPECT_DOUBLE_EQ(ctx->integral_candidate_value(capture, identity, units), .7);
+      consumed = true;
+    });
+    sim.set_program_block_map({0});
+    EXPECT_NO_THROW(sim.step(.01));
+    EXPECT_TRUE(consumed);
+    EXPECT_EQ(sim.checkpoint_program_exchanges(), ledger);
+    EXPECT_DOUBLE_EQ(sim.time(), .01);
+    EXPECT_EQ(sim.macro_step(), 1);
+  }
+}
+
 TEST(ProgramRuntime, IntegralCandidateCaptureAuthenticatesAndRevokesCollectively) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();

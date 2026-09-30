@@ -28,6 +28,7 @@ api pops/core/foundation/native_dimension.hpp
 api pops/core/foundation/types.hpp
 api pops/core/foundation/validation.hpp
 api pops/core/identity/canonical_value.hpp
+sdk-support pops/core/identity/physical_dimension_json.hpp
 api pops/core/identity/prepared_provider.hpp
 api pops/core/identity/prepared_provider_options.hpp
 api pops/core/identity/sha256.hpp

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/core/identity/sha256.hpp>
+#include <pops/core/identity/physical_dimension_json.hpp>
 #include <pops/runtime/program/accepted_exchange.hpp>
 #include <pops/runtime/program/prepared_resource_lifetime.hpp>
 
@@ -25,6 +26,7 @@ class PreparedIntegralCapture {
   };
 
   static void require_units_(const std::string& identity, const std::string& units) {
+    ::pops::identity::require_canonical_physical_dimension_json(units);
     const auto digest = ::pops::identity::sha256_hex(
         std::vector<std::uint8_t>(units.begin(), units.end()));
     if (!identity.starts_with("pops.integral.v2/") || units.empty() ||
