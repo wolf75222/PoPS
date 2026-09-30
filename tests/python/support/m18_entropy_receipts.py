@@ -9,10 +9,11 @@ from pathlib import Path
 import numpy as np
 
 from tests.python.support.collective_checks import collective_call, collective_check, state_snapshots
+from tests.python.support.evidence_json import ENCODING, evidence_dumps
 
 
 def _json(path, value):
-    path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
+    path.write_text(evidence_dumps(value))
 
 
 def save_entropy_snapshot(world, runtime, artifact, directory, phase, *, failures=()):
@@ -88,7 +89,8 @@ def save_entropy_provenance(world, artifact, directory, *, fixture, example):
         assert all(row == identities[0] for row in identities)
         if world is None or int(world.rank) == 0:
             _json(directory / "provenance.json", dict(
-                schema="sol61.m18-native-provenance@1", artifact_identity=artifact.artifact_identity.token,
+                schema="sol61.m18-native-provenance@1", metadata_encoding=ENCODING,
+                artifact_identity=artifact.artifact_identity.token,
                 dimension=artifact.resolved_dimension, ranks=len(identities),
                 platform=artifact.platform_manifest.to_data(), native_by_rank=identities,
                 compiled_plan=artifact.plan._payload(),

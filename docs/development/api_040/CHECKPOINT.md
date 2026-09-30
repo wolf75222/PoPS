@@ -3,7 +3,75 @@
 The requested migration is **in progress**. Source implementation, native
 reception, scientific witnesses and backend qualification are recorded separately.
 
-## Current integration and reception: SDK20d native C++/Dim3, SDK7b saved-state physics (2026-09-30)
+## Current reception: SDK375f Dim2 and scoped SDK e49c ALE (2026-10-01)
+
+Migration remains open. The current installed Dim2 native artifact was built from
+`32235b93296fe6d4337194e17d0d45569dc63a08`, with SDK signature
+`375fbdebb4b68bb43164ba3fdfa32ead3beaa8d89606925609e96507eeed3eff` and DSO SHA256
+`8dcdfacab20fffd876128c2ee4b06bd26f4c952f2d7ed6ce76fb028815bb6310`.
+Its 1,114 production Python/header files match Git `180afdc5` and the subsequent
+tests/docs-only integration through `ad0ac2cb`; module ABI5, System package ABI7
+and public API3 remain distinct. Local profile is Apple LLVM21, Kokkos5.2.0
+CPU OpenMP1, MPICH4.1.2, binary64. Dim1/Dim3 have older SDKs and need rebuilding.
+
+The true installed public field/global-source campaign passes **8 cases in
+Serial**, followed by **3 field-consumer cases in Serial**, then **11 cases on
+each of two MPI ranks**, with zero failures/errors/skips. MPI source identity,
+installation before/after and rank case parity pass. Receipts are under task
+workspace `outputs/installed-public-physical-global-field-serial-dim2-sdk375f-20261001`,
+`outputs/installed-public-field-consumers-serial-dim2-sdk375f-20261001` and
+`outputs/installed-public-physical-global-field-mpi2-dim2-sdk375f-20261001`.
+This includes direct physical `S=-gamma*q*U`, N8/N16, native trace feedback,
+rejected-attempt rollback/retry, complete field MMS/gauges and consumed gradients.
+
+Root authenticates 13 actual physical-global phases per backend against unchanged
+Git/runtime bytes. Independent saved-state/ledger mathematics passes separately.
+The external mathematical owner seals are Serial
+`8f4aeca8ad6f37d95aeeacea5a6ff14d516a9c38a8745761f9dc5e60f126b753`
+and MPI2 `d8d7dd753fb514baa7878d5758a645c246632b1ddcec91bf4a75ff6232e756a8`.
+Actual retained generated C++, DSOs and sidecars are pinned separately; independent
+source-to-compiled-artifact reception is pending. The old SDK7b Program-composition
+oracle is not silently requalified as proof of the physical connector.
+
+AMR now assembles the original Newton correction with `-F`; MGS reorthogonalization
+and a full-correction actual JVP recheck are integrated. The original nonconstant
+N32 AMR case remains a preserved native failure at the unchanged 240-column
+budget, not an accepted case. Its actual first-Jacobian independent source/math
+oracle receives the nonsymmetric coverage/reflux matrix and diagnoses insufficient
+legacy convergence. An explicit spatial-basis right Jacobi realization and its
+public Python port are frozen in worker commits, under independent review, not
+installed or qualified. It costs one zero response plus one actual spatial operator
+application per stored degree of freedom. Native Serial/MPI reception is pending.
+
+SolveOutcome contract2 adds explicit collective discard of a solved unpublished
+candidate while retaining numerical report/legacy action ordinals. It does not
+convert failed solves into accepted candidates. Host tests pass; coherent C++
+native reception with the new contract remains pending. All earlier native red
+receipts and their fresh rank XML limitations are preserved.
+
+The canonical ALE relative-amount route has separate authentic SDK e49c Serial
+and MPI2 receipts: eight cases per backend, 14 physical variants, byte-exact
+restart/replay, independent saved-state Reynolds/GCL reception and nine fully
+resealed scientific refusals. The MPI witness has one nonempty owner and one
+empty rank. These results do not qualify the newer SDK375f or GPU execution.
+
+M18 execution-owner metadata now refuses aliased origins, intra-Program duplicate
+source paths and origin drift before publication. Independent host attacks pass;
+true SDK375f Serial/MPI campaigns and external owner/scientific reception are in
+progress. The first SDK375f M18 attempt compiled, then refused JSON serialization
+of binary Identity digest bytes before any physical phase; its failed receipt is
+preserved at `outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-20261001`.
+Provenance now declares the existing `json-with-bytes-hex.v1` projection with exact
+`{bytes_hex: ...}` tags, no string coercion. This extends evidence metadata only;
+the scientific arrays/checkpoints and original equation guards are unchanged.
+The coherent owner/capture/assembler/codec source selection passes 133 checks.
+M19 finite product support uses existing common Kokkos transfer kernels,
+arbitrary component widths and explicit signed quadrature; corrected fixtures and
+independent source/math tests are integrated, native Serial/MPI reception pending.
+Neither witness is full Vlasov–Poisson/BGK. Full M26/M27 equations, unreceived
+couplings and official OpenMPI/Kokkos4.4.01/GPU/remote CI profiles remain open.
+
+## Historical reception: SDK20d native C++/Dim3, SDK7b saved-state physics (2026-09-30)
 
 Migration remains open. The real installed Dim2 package now builds successfully
 with native ABI5 and SDK signature

@@ -14,6 +14,7 @@ from tests.python.support.collective_checks import collective_call, collective_c
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
+from tests.python.support.evidence_json import ENCODING, evidence_dumps
 
 NAMES = ("population", "integral", "weighted", "extended")
 CASES = ((4, 3, 3), (2, 5, 1), (7, 3, 5))
@@ -145,7 +146,8 @@ def test_native_product_reduce_lift_restart(nx, nv, width, reverse, tmp_path, re
         native = selected_native_module(required=True)
         assert int(native.__native_dimension__) == 2
         native_path = Path(native.__file__).resolve()
-        identity = dict(schema="sol61.m19-product-native@1", native_path=str(native_path),
+        identity = dict(schema="sol61.m19-product-native@1", metadata_encoding=ENCODING,
+            native_path=str(native_path),
             native_sha256=hashlib.sha256(native_path.read_bytes()).hexdigest(), abi_key=str(native.abi_key()),
             python_package=str(Path(pops.__file__).resolve()), native_capabilities=dict(native.module_capabilities("module")),
             artifact_identity=artifact.artifact_identity.token, platform=artifact.platform_manifest.to_data(),
@@ -155,7 +157,7 @@ def test_native_product_reduce_lift_restart(nx, nv, width, reverse, tmp_path, re
                 str(Path(resolve_generic_maps.__code__.co_filename).resolve()):
                     hashlib.sha256(Path(resolve_generic_maps.__code__.co_filename).read_bytes()).hexdigest()})
         if world is None or int(world.rank) == 0:
-            (directory / "provenance.json").write_text(json.dumps(identity, indent=2, allow_nan=False) + "\n")
+            (directory / "provenance.json").write_text(evidence_dumps(identity))
     weights = tuple((-1) ** j * (j + 1) for j in range(nv))
     initial, expected = input_and_expected(nx, nv, width, weights)
     instance = collective_call(world, lambda: pops.bind(artifact, initial_state=initial, resources={"execution_context": context}))
