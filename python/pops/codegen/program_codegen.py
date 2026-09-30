@@ -531,7 +531,9 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     principal = principal_dt_bounds(program, model)
     if program._dt_bound is None and not principal:
         return "false", "    return std::numeric_limits<pops::Real>::infinity();", None
-    sub, result = ((), None) if program._dt_bound is None else program._dt_bound
+    from pops.time._program.dt_bound import readonly_dt_bound_nodes
+    sub = readonly_dt_bound_nodes(program)
+    result = None if program._dt_bound is None else program._dt_bound[1]
     block_idx = program._block_indices()
     bases = {}
     for v in sub:

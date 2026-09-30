@@ -305,6 +305,12 @@ class _ProgramSerialization(_ProgramBase):
         for value in self._values:
             if value.op == "state" and value.block not in order:
                 order[value.block] = len(order)
+        # Query-only states still need exact runtime block routes. Append them;
+        # preserve every existing top-level index and every already complete map.
+        from pops.time._program.dt_bound import readonly_dt_bound_nodes
+        for value in readonly_dt_bound_nodes(self):
+            if value.op == "state" and value.block not in order:
+                order[value.block] = len(order)
         return order
 
 
