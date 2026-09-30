@@ -1,0 +1,47 @@
+{
+  "schema_version": 3,
+  "status": "failed",
+  "pytest_base_temps": [
+    "rank0-tmp",
+    "rank1-tmp"
+  ],
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coupled-gradient-dim2-mpi2-fc0-20260930",
+    "--ranks",
+    "2",
+    "--dimension",
+    "2",
+    "--test",
+    "tests/python/integration/runtime/test_coupled_gradient_dim2_fourier_runtime.py"
+  ],
+  "returncode": null,
+  "timeout": false,
+  "seconds": 1.6668345779180527e-06,
+  "ranks": 2,
+  "threads": 1,
+  "dimension": 2,
+  "authentication_before": 1,
+  "authentication_after": 1,
+  "same_installation": false,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "status": "missing"
+    },
+    {
+      "rank": 1,
+      "status": "missing"
+    }
+  ],
+  "native_sha256": null,
+  "execution_environment": null
+}

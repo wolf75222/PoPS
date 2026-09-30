@@ -1,0 +1,1183 @@
+{
+  "schema_version": 2,
+  "native_scope": {
+    "sdk_sha256": "fc0bfd9a0ab1a6036a2e941dd16fdcbfc486125d31b8679d465d68111d16e959",
+    "native_abi_version": 4,
+    "dimension1_native_sha256": "835759c416fd40ebfe1a61ecd466feb07580c798ad12fb2488101268f2b65941",
+    "dimension2_native_sha256": "a280d9ef8d95c261be61b61f6d0b1f8da0be7a24515380eaaa03cfd9489f3943",
+    "local_backend": "Apple LLVM21, Kokkos5.2.0 CPU, MPICH4.1.2 TCP, one thread",
+    "mpi_receipts": "M26/M27 MPI2 before/after installed identity; C++ transaction MPI2 and diffusion preflight MPI3"
+  },
+  "limitations": [
+    "Archived receipts qualify their recorded ABI4 source and native images, not later ABI5 builds.",
+    "Original serial reception authenticates installed PoPS before execution; it does not claim an after-execution authentication.",
+    "M26 is a twelve-DOF measured interaction at one actual cell, not an aggregation PDE.",
+    "M27 is the frozen linear mixed pair, not nonlinear Cahn-Hilliard.",
+    "ND2 has two passed native cases inside an outer run whose six Integral checkpoint cases failed.",
+    "Both initial Integral checkpoint failure stages are retained: undeclared controller, then missing run provenance.",
+    "A source-only package-path assertion accounts for six initial-controls fixture failures; 116 other cases passed.",
+    "Default OFI finalization failure and explicit TCP reception are both retained.",
+    "The later ND2 MPI launch was refused by source/SDK authentication before any tests after new headers were integrated.",
+    "No Python Dim3, GPU, ROMEO or official OpenMPI matrix reception is asserted."
+  ],
+  "groups": [
+    {
+      "name": "installed-coherent-units-fc0-20260930",
+      "junit": {
+        "pytest.xml": {
+          "total": 234,
+          "failed": 26,
+          "skipped": 0
+        }
+      },
+      "outer_result": "runs/installed-coherent-units-fc0-20260930/result.json"
+    },
+    {
+      "name": "installed-coherent-units-fc0-corrected-20260930",
+      "junit": {
+        "pytest.xml": {
+          "total": 234,
+          "failed": 0,
+          "skipped": 0
+        }
+      },
+      "outer_result": "runs/installed-coherent-units-fc0-corrected-20260930/result.json"
+    },
+    {
+      "name": "installed-m26-m27-native-dim1-fc0-20260930",
+      "junit": {
+        "pytest.xml": {
+          "total": 3,
+          "failed": 1,
+          "skipped": 0
+        }
+      },
+      "outer_result": "runs/installed-m26-m27-native-dim1-fc0-20260930/result.json"
+    },
+    {
+      "name": "installed-m27-native-dim1-restart128-fc0-20260930",
+      "junit": {
+        "pytest.xml": {
+          "total": 2,
+          "failed": 0,
+          "skipped": 0
+        }
+      },
+      "outer_result": "runs/installed-m27-native-dim1-restart128-fc0-20260930/result.json"
+    },
+    {
+      "name": "installed-m26-m27-mpi2-fc0-20260930",
+      "junit": {
+        "rank0.xml": {
+          "total": 3,
+          "failed": 0,
+          "skipped": 0
+        },
+        "rank1.xml": {
+          "total": 3,
+          "failed": 0,
+          "skipped": 0
+        }
+      },
+      "outer_result": "runs/installed-m26-m27-mpi2-fc0-20260930/result.json"
+    },
+    {
+      "name": "installed-integral-nd-native-dim2-fc0-20260930",
+      "junit": {
+        "pytest.xml": {
+          "total": 8,
+          "failed": 6,
+          "skipped": 0
+        }
+      },
+      "outer_result": "runs/installed-integral-nd-native-dim2-fc0-20260930/result.json"
+    },
+    {
+      "name": "installed-integral-native-initial-checkpoint-fc0-20260930",
+      "junit": {
+        "pytest.xml": {
+          "total": 6,
+          "failed": 6,
+          "skipped": 0
+        }
+      },
+      "outer_result": "runs/installed-integral-native-initial-checkpoint-fc0-20260930/result.json"
+    },
+    {
+      "name": "installed-initial-checkpoint-controls-fc0-20260930",
+      "junit": {
+        "pytest.xml": {
+          "total": 122,
+          "failed": 6,
+          "skipped": 0
+        }
+      },
+      "outer_result": "runs/installed-initial-checkpoint-controls-fc0-20260930/result.json"
+    },
+    {
+      "name": "installed-coupled-gradient-dim2-mpi2-fc0-20260930",
+      "junit": {},
+      "outer_result": "runs/installed-coupled-gradient-dim2-mpi2-fc0-20260930/result.json"
+    },
+    {
+      "name": "native-integral-coverage-cpp-20260930",
+      "junit": {
+        "coverage-preflight-diffusion-mpi3-tcp-20260930.xml": {
+          "total": 20,
+          "failed": 0,
+          "skipped": 0
+        },
+        "integral-transaction-native-tcp-20260930.xml": {
+          "total": 8,
+          "failed": 0,
+          "skipped": 0
+        }
+      },
+      "outer_result": null
+    }
+  ],
+  "scientific_states": [
+    {
+      "kind": "m26_finite12_v1",
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/state_canonical_base.npz"
+    },
+    {
+      "kind": "m26_finite12_v1",
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/state_canonical_variation.npz"
+    },
+    {
+      "kind": "m26_finite12_v1",
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/state_permuted_base.npz"
+    },
+    {
+      "kind": "m27_mixed_linear_v1",
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz"
+    },
+    {
+      "kind": "m27_mixed_linear_v1",
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_permuted.npz"
+    },
+    {
+      "kind": "m27_mixed_linear_v1",
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz"
+    },
+    {
+      "kind": "m27_mixed_linear_v1",
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_64_canonical.npz"
+    },
+    {
+      "kind": "m26_finite12_v1",
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/state_canonical_base.npz"
+    },
+    {
+      "kind": "m26_finite12_v1",
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/state_canonical_variation.npz"
+    },
+    {
+      "kind": "m26_finite12_v1",
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/state_permuted_base.npz"
+    },
+    {
+      "kind": "m27_mixed_linear_v1",
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz"
+    },
+    {
+      "kind": "m27_mixed_linear_v1",
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_16_permuted.npz"
+    },
+    {
+      "kind": "m27_mixed_linear_v1",
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz"
+    },
+    {
+      "kind": "m27_mixed_linear_v1",
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_64_canonical.npz"
+    },
+    {
+      "kind": "coupled_gradient_dim2_v1",
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co0/coupled_gradient_dim2.npz",
+      "ledger": "runs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co0/coupled_gradient_dim2_ledger.json"
+    },
+    {
+      "kind": "coupled_gradient_dim2_v1",
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co1/coupled_gradient_dim2.npz",
+      "ledger": "runs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co1/coupled_gradient_dim2_ledger.json"
+    },
+    {
+      "kind": "m27_mixed_linear_v1",
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz"
+    },
+    {
+      "kind": "m27_mixed_linear_v1",
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz"
+    }
+  ],
+  "files": [
+    {
+      "path": "runs/installed-coherent-units-fc0-20260930/identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-20260930/identity.json",
+      "bytes": 2892,
+      "sha256": "e0846eea8777fcb1765f5c2326d43b46e7749eaa2c20b8e351ab4efbc7d3068f"
+    },
+    {
+      "path": "runs/installed-coherent-units-fc0-20260930/pytest.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-20260930/pytest.log",
+      "bytes": 64404,
+      "sha256": "9180becbb10d6b3ad114c2a5b624399c73cfae81fdaf94e1df0770335c71a757"
+    },
+    {
+      "path": "runs/installed-coherent-units-fc0-20260930/pytest.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-20260930/pytest.xml",
+      "bytes": 69693,
+      "sha256": "154a99adc2340b4ba9246e37b6134d201ef08850f731846429dcbc7374b0d4cc"
+    },
+    {
+      "path": "runs/installed-coherent-units-fc0-20260930/result.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-20260930/result.json",
+      "bytes": 3033,
+      "sha256": "66c1de93c4fb0d2a014fe259ceab44109b005023c3bc0e9a8eb647bc5d4c59f6"
+    },
+    {
+      "path": "runs/installed-coherent-units-fc0-20260930/source-files.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-20260930/source-files.json",
+      "bytes": 127291,
+      "sha256": "32f6d44addd5df058a1984e0a3bd8250652fd8b5b89dd00a73fbf9c15848b281"
+    },
+    {
+      "path": "runs/installed-coherent-units-fc0-corrected-20260930/identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-corrected-20260930/identity.json",
+      "bytes": 2892,
+      "sha256": "14cdc602d30e79f0d705d10005721a37377c3f455cc894c2203212532e9b1e75"
+    },
+    {
+      "path": "runs/installed-coherent-units-fc0-corrected-20260930/pytest.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-corrected-20260930/pytest.log",
+      "bytes": 35264,
+      "sha256": "29225a9220237f99533e7f14b5ce6a588ca4b79a38b02bc261739173d85f5766"
+    },
+    {
+      "path": "runs/installed-coherent-units-fc0-corrected-20260930/pytest.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-corrected-20260930/pytest.xml",
+      "bytes": 41025,
+      "sha256": "e3ad1b13bf6fd1a1fdb80715af3c3c09c601edf9d127239e24f561ce244de4cb"
+    },
+    {
+      "path": "runs/installed-coherent-units-fc0-corrected-20260930/result.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-corrected-20260930/result.json",
+      "bytes": 3052,
+      "sha256": "db1ffa41909b0d9bba7f42fb73f789c9b5ff01cc45b3a77d7de67a854b4cf97c"
+    },
+    {
+      "path": "runs/installed-coherent-units-fc0-corrected-20260930/source-files.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-corrected-20260930/source-files.json",
+      "bytes": 127291,
+      "sha256": "32f6d44addd5df058a1984e0a3bd8250652fd8b5b89dd00a73fbf9c15848b281"
+    },
+    {
+      "path": "runs/installed-coupled-gradient-dim2-mpi2-fc0-20260930/after.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coupled-gradient-dim2-mpi2-fc0-20260930/after.log",
+      "bytes": 710,
+      "sha256": "33a07ef8d43b5110d847ac1ad594ccc301921ee1e527df979bbb3f01f9a5eb2f"
+    },
+    {
+      "path": "runs/installed-coupled-gradient-dim2-mpi2-fc0-20260930/before.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coupled-gradient-dim2-mpi2-fc0-20260930/before.log",
+      "bytes": 710,
+      "sha256": "33a07ef8d43b5110d847ac1ad594ccc301921ee1e527df979bbb3f01f9a5eb2f"
+    },
+    {
+      "path": "runs/installed-coupled-gradient-dim2-mpi2-fc0-20260930/result.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coupled-gradient-dim2-mpi2-fc0-20260930/result.json",
+      "bytes": 1221,
+      "sha256": "38a8c1908040a92c8ed8e8638aa5f60725b0e6ecf4134728b20cddb74bf4a1b3"
+    },
+    {
+      "path": "runs/installed-coupled-gradient-dim2-mpi2-fc0-20260930/test-sources.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coupled-gradient-dim2-mpi2-fc0-20260930/test-sources.json",
+      "bytes": 403,
+      "sha256": "d0e801ed3bbd18d36bbca72cd710f60e85911a607056968f80a0bf23b0f44da0"
+    },
+    {
+      "path": "runs/installed-initial-checkpoint-controls-fc0-20260930/identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-initial-checkpoint-controls-fc0-20260930/identity.json",
+      "bytes": 2892,
+      "sha256": "15c47606959c47fabb1ad6ca692937c3b2949cf6eb8e7f2d11ed5b92aec3ade7"
+    },
+    {
+      "path": "runs/installed-initial-checkpoint-controls-fc0-20260930/pytest.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-initial-checkpoint-controls-fc0-20260930/pytest.log",
+      "bytes": 26800,
+      "sha256": "cf149e1c8c2758900b940698a428e6e04fc03f287c59c73a86a812ee15482175"
+    },
+    {
+      "path": "runs/installed-initial-checkpoint-controls-fc0-20260930/pytest.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-initial-checkpoint-controls-fc0-20260930/pytest.xml",
+      "bytes": 33782,
+      "sha256": "7bb8e1171c6074062c507e894a6ed9290b0583bd39f08c7cf2c28ab64a706760"
+    },
+    {
+      "path": "runs/installed-initial-checkpoint-controls-fc0-20260930/result.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-initial-checkpoint-controls-fc0-20260930/result.json",
+      "bytes": 1746,
+      "sha256": "fc3ab4a0e41cca1e31b85af8aaef58bbef9da7fb92225291cdc6ae8ac361d50c"
+    },
+    {
+      "path": "runs/installed-initial-checkpoint-controls-fc0-20260930/source-files.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-initial-checkpoint-controls-fc0-20260930/source-files.json",
+      "bytes": 127291,
+      "sha256": "4fceeb46df0c56066eed5504258bea12ece84e923ba4fc9a36dff2598e0fcbfc"
+    },
+    {
+      "path": "runs/installed-integral-native-initial-checkpoint-fc0-20260930/identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-native-initial-checkpoint-fc0-20260930/identity.json",
+      "bytes": 2892,
+      "sha256": "15c47606959c47fabb1ad6ca692937c3b2949cf6eb8e7f2d11ed5b92aec3ade7"
+    },
+    {
+      "path": "runs/installed-integral-native-initial-checkpoint-fc0-20260930/pytest.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-native-initial-checkpoint-fc0-20260930/pytest.log",
+      "bytes": 11337,
+      "sha256": "40b0f59f304216f5aa72c3bd43ec0c4d00e6eb4eb26e71f7db299598eb40cec7"
+    },
+    {
+      "path": "runs/installed-integral-native-initial-checkpoint-fc0-20260930/pytest.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-native-initial-checkpoint-fc0-20260930/pytest.xml",
+      "bytes": 8644,
+      "sha256": "18f95e8406a0242b0c682d2321f850dcecbafdd70238c59c27321dd1b0b61a42"
+    },
+    {
+      "path": "runs/installed-integral-native-initial-checkpoint-fc0-20260930/result.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-native-initial-checkpoint-fc0-20260930/result.json",
+      "bytes": 1725,
+      "sha256": "1d03b8e04af900e8949ce7bdef35b04bf254740e06670d8d36150f1d82d5b576"
+    },
+    {
+      "path": "runs/installed-integral-native-initial-checkpoint-fc0-20260930/source-files.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-native-initial-checkpoint-fc0-20260930/source-files.json",
+      "bytes": 127291,
+      "sha256": "4fceeb46df0c56066eed5504258bea12ece84e923ba4fc9a36dff2598e0fcbfc"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/identity.json",
+      "bytes": 2892,
+      "sha256": "14cdc602d30e79f0d705d10005721a37377c3f455cc894c2203212532e9b1e75"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co0/coupled_gradient_dim2.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co0/coupled_gradient_dim2.npz",
+      "bytes": 3314,
+      "sha256": "8e720a21f04f4a9a096c1d5b88de92905c6ba66c1f7c4d8d0921f5892e337b87"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co0/coupled_gradient_dim2_ledger.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co0/coupled_gradient_dim2_ledger.json",
+      "bytes": 1625705,
+      "sha256": "b3f961295d82756856126d84f36fa9e115ac59530316e86a600e3a00e71ca416"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co1/coupled_gradient_dim2.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co1/coupled_gradient_dim2.npz",
+      "bytes": 3313,
+      "sha256": "8e152dc531e06471ab4b99be1832b04f956aa024a532f930df8f566aa40ac77d"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co1/coupled_gradient_dim2_ledger.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/pytest-tmp/test_dim2_fourier_faces_and_co1/coupled_gradient_dim2_ledger.json",
+      "bytes": 1625705,
+      "sha256": "db0923db3702eb64c7513b4d1d7bc9ec813c1cc482828ec42084efa47416eed3"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/pytest.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/pytest.log",
+      "bytes": 11618,
+      "sha256": "47597b194ca59419bbf7f9adf29c04f00957a4c4aa434959fcfe63c0a6559abc"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/pytest.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/pytest.xml",
+      "bytes": 8918,
+      "sha256": "9c3e805a14bc8846c273c46cbd913edda53301a372aa8b9791e7b0965d69e7aa"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/result.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/result.json",
+      "bytes": 1789,
+      "sha256": "bcc495172d7c14aad97f2fd5536552f62cf77cda710a09efa41bf2285b1a8421"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-files.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-files.json",
+      "bytes": 127291,
+      "sha256": "32f6d44addd5df058a1984e0a3bd8250652fd8b5b89dd00a73fbf9c15848b281"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_checks.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_checks.py",
+      "bytes": 8807,
+      "sha256": "1613e85e1390eedb719ac7c1520b23afb0e8b023fd989c9e7447e08b90d6cb96"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_mpi_checks.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_mpi_checks.py",
+      "bytes": 8931,
+      "sha256": "1364b8283a89a728e7ae07809c31525a8e8da3891dc2ff341bf827d643ee926f"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_interaction.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_interaction.py",
+      "bytes": 15291,
+      "sha256": "56ba1e62462c5529456ef1f5152f0fd35e19d6120c1d5996a59859f884a1f576"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_oracle.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_oracle.py",
+      "bytes": 2481,
+      "sha256": "fef5e4cfcbb5498c143ac5d4d7bd79cfcc0dee8181330d554d1e232ede5df280"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_linear.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_linear.py",
+      "bytes": 15233,
+      "sha256": "ac0c2dd7dfdaf3514196f72cac3921fd20df7c8157b07bfa6142f02ce86bac15"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_oracle.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_oracle.py",
+      "bytes": 2904,
+      "sha256": "c394d64a8c2e6890492da25ff09241788847fea62fef1651a4fc235e8e8fd93d"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_receipts.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_receipts.py",
+      "bytes": 705,
+      "sha256": "bda36e0cbe7bbfd9e52073f1889e6858974525c9e4357b5bfb7fd88a289beed2"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/manifest.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/manifest.json",
+      "bytes": 1984,
+      "sha256": "06533ac187c70115a614826603e6b56233e21d0da5ddbf40d64c147a610620c8"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py",
+      "bytes": 1634,
+      "sha256": "173e3bf807453591d85c7a771f2e2a04f0519b51ab5e6f0a1aad66a39c2cdd45"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py",
+      "bytes": 4381,
+      "sha256": "0ae17bb9651465af956a506b47ee93426acc135c44949f5614b7cab9e01d61ee"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_coupled_gradient_dim2_fourier_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_coupled_gradient_dim2_fourier_runtime.py",
+      "bytes": 8710,
+      "sha256": "1dc829b03dcb03abee7f48c1e1715b7eedaaadfe5ff0838b41863d63256e9358"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_public_restart.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_public_restart.py",
+      "bytes": 11442,
+      "sha256": "bb4e1659c79809fea0a0c62f20d43be427e3f3254de2e4b3071ae815f399906f"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_trace_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_trace_runtime.py",
+      "bytes": 9849,
+      "sha256": "dfe1fda45c45be76ee4f00a9a02835743ad39a97d0793e591293d29072dc68f2"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/support/amr_snapshots.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/support/amr_snapshots.py",
+      "bytes": 4227,
+      "sha256": "d3bb422215691d89a04f1318a6cfec0db9b784da2e485db2c98f9b37f739c0f0"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/support/collective_checks.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/support/collective_checks.py",
+      "bytes": 1952,
+      "sha256": "f135d322e35e27fba908d2d65781b5d1fe7598f9033a0e424220263e3a0266d5"
+    },
+    {
+      "path": "runs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/support/integral_state_receipts.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-nd-native-dim2-fc0-20260930/source-snapshot/tests/python/support/integral_state_receipts.py",
+      "bytes": 6102,
+      "sha256": "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/after.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/after.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/after/identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/after/identity.json",
+      "bytes": 2892,
+      "sha256": "6f6a5772d4fa25a8c88b86867a90516bc4f7b97b41dba63319043312d2016cf9"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/after/source-files.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/after/source-files.json",
+      "bytes": 127291,
+      "sha256": "32f6d44addd5df058a1984e0a3bd8250652fd8b5b89dd00a73fbf9c15848b281"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/before.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/before.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/before/identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/before/identity.json",
+      "bytes": 2892,
+      "sha256": "6f6a5772d4fa25a8c88b86867a90516bc4f7b97b41dba63319043312d2016cf9"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/before/source-files.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/before/source-files.json",
+      "bytes": 127291,
+      "sha256": "32f6d44addd5df058a1984e0a3bd8250652fd8b5b89dd00a73fbf9c15848b281"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/launcher.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/launcher.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/receipt.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/receipt.json",
+      "bytes": 9228,
+      "sha256": "c7333b49a1bd1340cc43c803d3ea15676fc2c7000b809d09b551dca75f357b1e"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/state_canonical_base.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/state_canonical_base.npz",
+      "bytes": 1569,
+      "sha256": "150e8ea3c0ef70a9c894f058af5470b5f788b99bcc9774b20150432f41e5ece4"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/state_canonical_variation.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/state_canonical_variation.npz",
+      "bytes": 1529,
+      "sha256": "8e82b2e0efad32453e1155a9c76674629cefd37e10846aa4753429393bab2d36"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/state_permuted_base.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_finite_interaction_two_de0/state_permuted_base.npz",
+      "bytes": 1572,
+      "sha256": "681f1a22afd9f8d3897f4b8ddc8e917627ef86f2d0823d8e52b6d6d4b71641bd"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/receipt.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/receipt.json",
+      "bytes": 65606,
+      "sha256": "c45908981a8cb1ab895cee7fcaeb85670d8ba011f438d54ed4e38a0ed79053d1"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz",
+      "bytes": 3169,
+      "sha256": "54fb319601d9f330540b85b768cfe580e60cc10dd9906d5dc162489205adba3f"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_16_permuted.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_16_permuted.npz",
+      "bytes": 3170,
+      "sha256": "4abd6de47180a790ae22f493f5af0e99d922eebb2fac2e9da266e56ccacdd76f"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz",
+      "bytes": 5591,
+      "sha256": "6a63b49b15098e26567d824308754ed254272d341b5b3bf7c3f9e2e54837fb4e"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_64_canonical.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_64_canonical.npz",
+      "bytes": 10448,
+      "sha256": "32235176f0c8ee3d65011b0a1a80ac9716ed4c75079227b4df35fce00c3a9336"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0.identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0.identity.json",
+      "bytes": 569,
+      "sha256": "e50ecc4e33784bcb873eff6aedf6245074ec636bb0ede1f6072c66eec8a3cd0c"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0.log",
+      "bytes": 1695,
+      "sha256": "f36dbbf2be8e27da9c3abc9f37413dbea3184be0f81bdefb7cf26bad174ec8b6"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank0.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0.xml",
+      "bytes": 812,
+      "sha256": "4f246ba597f840ee28e3310a00ff498809aeba4409aff4ba2dd47ec5c28748bd"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank1.identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank1.identity.json",
+      "bytes": 569,
+      "sha256": "2d5e1c7accbf40e0b691338c4414da338bab2542998fe67468637abf230b7569"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank1.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank1.log",
+      "bytes": 1695,
+      "sha256": "3953610b5dc4b14d711defe9ad54521005bb7bef1c498238513c3578bd677e26"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/rank1.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank1.xml",
+      "bytes": 812,
+      "sha256": "274998fd7fd71751175980e387da4f7d102a7679ce7df3b1ff15cac407e63218"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/result.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/result.json",
+      "bytes": 3189,
+      "sha256": "1f4020a7823ebb1e14547a5768a513a2c37f3aa2f1d6526416f20f8c9d9e2930"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_checks.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_checks.py",
+      "bytes": 8807,
+      "sha256": "1613e85e1390eedb719ac7c1520b23afb0e8b023fd989c9e7447e08b90d6cb96"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_mpi_checks.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_mpi_checks.py",
+      "bytes": 8931,
+      "sha256": "1364b8283a89a728e7ae07809c31525a8e8da3891dc2ff341bf827d643ee926f"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_interaction.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_interaction.py",
+      "bytes": 15291,
+      "sha256": "56ba1e62462c5529456ef1f5152f0fd35e19d6120c1d5996a59859f884a1f576"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_oracle.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_oracle.py",
+      "bytes": 2481,
+      "sha256": "fef5e4cfcbb5498c143ac5d4d7bd79cfcc0dee8181330d554d1e232ede5df280"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_linear.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_linear.py",
+      "bytes": 15233,
+      "sha256": "ac0c2dd7dfdaf3514196f72cac3921fd20df7c8157b07bfa6142f02ce86bac15"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_oracle.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_oracle.py",
+      "bytes": 2904,
+      "sha256": "c394d64a8c2e6890492da25ff09241788847fea62fef1651a4fc235e8e8fd93d"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_receipts.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/examples/migration/scientific/api040_receipts.py",
+      "bytes": 705,
+      "sha256": "bda36e0cbe7bbfd9e52073f1889e6858974525c9e4357b5bfb7fd88a289beed2"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/manifest.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/manifest.json",
+      "bytes": 1984,
+      "sha256": "06533ac187c70115a614826603e6b56233e21d0da5ddbf40d64c147a610620c8"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py",
+      "bytes": 1634,
+      "sha256": "173e3bf807453591d85c7a771f2e2a04f0519b51ab5e6f0a1aad66a39c2cdd45"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py",
+      "bytes": 4381,
+      "sha256": "0ae17bb9651465af956a506b47ee93426acc135c44949f5614b7cab9e01d61ee"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_coupled_gradient_dim2_fourier_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_coupled_gradient_dim2_fourier_runtime.py",
+      "bytes": 8710,
+      "sha256": "1dc829b03dcb03abee7f48c1e1715b7eedaaadfe5ff0838b41863d63256e9358"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_public_restart.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_public_restart.py",
+      "bytes": 11442,
+      "sha256": "bb4e1659c79809fea0a0c62f20d43be427e3f3254de2e4b3071ae815f399906f"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_trace_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_trace_runtime.py",
+      "bytes": 9849,
+      "sha256": "dfe1fda45c45be76ee4f00a9a02835743ad39a97d0793e591293d29072dc68f2"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/support/amr_snapshots.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/support/amr_snapshots.py",
+      "bytes": 4227,
+      "sha256": "d3bb422215691d89a04f1318a6cfec0db9b784da2e485db2c98f9b37f739c0f0"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/support/collective_checks.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/support/collective_checks.py",
+      "bytes": 1952,
+      "sha256": "f135d322e35e27fba908d2d65781b5d1fe7598f9033a0e424220263e3a0266d5"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/support/integral_state_receipts.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/source-snapshot/tests/python/support/integral_state_receipts.py",
+      "bytes": 6102,
+      "sha256": "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca"
+    },
+    {
+      "path": "runs/installed-m26-m27-mpi2-fc0-20260930/test-sources.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/test-sources.json",
+      "bytes": 549,
+      "sha256": "2edeef71df1e4e90f04db6af9930aa6795a635b9238d3e10470ea06e9117d5b0"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/identity.json",
+      "bytes": 2892,
+      "sha256": "e0846eea8777fcb1765f5c2326d43b46e7749eaa2c20b8e351ab4efbc7d3068f"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/receipt.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/receipt.json",
+      "bytes": 9228,
+      "sha256": "159c647fa62cfe8bb9fbe2bbeecfe233ca2c28e3f301bd620793f175edabb1d1"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/state_canonical_base.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/state_canonical_base.npz",
+      "bytes": 1569,
+      "sha256": "150e8ea3c0ef70a9c894f058af5470b5f788b99bcc9774b20150432f41e5ece4"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/state_canonical_variation.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/state_canonical_variation.npz",
+      "bytes": 1529,
+      "sha256": "8e82b2e0efad32453e1155a9c76674629cefd37e10846aa4753429393bab2d36"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/state_permuted_base.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_finite_interaction_two_de0/state_permuted_base.npz",
+      "bytes": 1572,
+      "sha256": "681f1a22afd9f8d3897f4b8ddc8e917627ef86f2d0823d8e52b6d6d4b71641bd"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz",
+      "bytes": 3169,
+      "sha256": "54fb319601d9f330540b85b768cfe580e60cc10dd9906d5dc162489205adba3f"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz",
+      "bytes": 5597,
+      "sha256": "51ac7a05d63dc2df7e64774c16f9e49625dbd0f28b4fe1d20231725b7e282c1a"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/pytest.log",
+      "bytes": 3179,
+      "sha256": "6b2047241e9918091dc8ef545485feb27e53c4e2b989010520f4afb03da177ec"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/pytest.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/pytest.xml",
+      "bytes": 1608,
+      "sha256": "9d0294be056f66d59359679c5d5d60c4e5332b28c55895eacadd75a64befbf12"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/result.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/result.json",
+      "bytes": 1707,
+      "sha256": "fa02fd2cd789e221dbe349f84966aa52ff4d6cf001c13a61796cdb4f18ed55cf"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/source-files.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/source-files.json",
+      "bytes": 127291,
+      "sha256": "32f6d44addd5df058a1984e0a3bd8250652fd8b5b89dd00a73fbf9c15848b281"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_interaction.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_interaction.py",
+      "bytes": 15291,
+      "sha256": "56ba1e62462c5529456ef1f5152f0fd35e19d6120c1d5996a59859f884a1f576"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_oracle.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_oracle.py",
+      "bytes": 2481,
+      "sha256": "fef5e4cfcbb5498c143ac5d4d7bd79cfcc0dee8181330d554d1e232ede5df280"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_linear.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_linear.py",
+      "bytes": 15179,
+      "sha256": "b2ba3f3733beaa7c9b2e3640423ab6c8b9a19c6f24e32c1e51585536676e84b2"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_oracle.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_oracle.py",
+      "bytes": 2904,
+      "sha256": "c394d64a8c2e6890492da25ff09241788847fea62fef1651a4fc235e8e8fd93d"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/examples/migration/scientific/api040_receipts.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/examples/migration/scientific/api040_receipts.py",
+      "bytes": 705,
+      "sha256": "bda36e0cbe7bbfd9e52073f1889e6858974525c9e4357b5bfb7fd88a289beed2"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/manifest.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/manifest.json",
+      "bytes": 950,
+      "sha256": "14799c4b9c9aa5c159add1ac7aa00ec787498cb37e63ce7f50e52dd00afb9f05"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py",
+      "bytes": 1634,
+      "sha256": "173e3bf807453591d85c7a771f2e2a04f0519b51ab5e6f0a1aad66a39c2cdd45"
+    },
+    {
+      "path": "runs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-native-dim1-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py",
+      "bytes": 4381,
+      "sha256": "0ae17bb9651465af956a506b47ee93426acc135c44949f5614b7cab9e01d61ee"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/identity.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/identity.json",
+      "bytes": 2892,
+      "sha256": "ee0aa6787365d4fa30cccfc5a2d9f5f611f23c2a2e34a8f2bacf8720f5653c45"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/receipt.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/receipt.json",
+      "bytes": 65606,
+      "sha256": "ea5ec2927285da3a387d19f8bd5ea3986442a7375b0f884d49737d5f3ba84428"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz",
+      "bytes": 3169,
+      "sha256": "54fb319601d9f330540b85b768cfe580e60cc10dd9906d5dc162489205adba3f"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_permuted.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_permuted.npz",
+      "bytes": 3170,
+      "sha256": "4abd6de47180a790ae22f493f5af0e99d922eebb2fac2e9da266e56ccacdd76f"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz",
+      "bytes": 5591,
+      "sha256": "6a63b49b15098e26567d824308754ed254272d341b5b3bf7c3f9e2e54837fb4e"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_64_canonical.npz",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_64_canonical.npz",
+      "bytes": 10448,
+      "sha256": "32235176f0c8ee3d65011b0a1a80ac9716ed4c75079227b4df35fce00c3a9336"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest.log",
+      "bytes": 945,
+      "sha256": "42d52aa3e707ed5c07b7a5bc6500cc42202f89ee50daf3e59caf6065330e5680"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/pytest.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest.xml",
+      "bytes": 623,
+      "sha256": "166f3799add735c4084efa73577ddd99977a10943a278f2dcf5a8bfb0e434dea"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/result.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/result.json",
+      "bytes": 1635,
+      "sha256": "f8d90c0170f5588315eaee7e8f51b53d0175a17531727f320913e80ee8ae0114"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-files.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-files.json",
+      "bytes": 127291,
+      "sha256": "32f6d44addd5df058a1984e0a3bd8250652fd8b5b89dd00a73fbf9c15848b281"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_checks.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_checks.py",
+      "bytes": 8807,
+      "sha256": "1613e85e1390eedb719ac7c1520b23afb0e8b023fd989c9e7447e08b90d6cb96"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_mpi_checks.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/docs/development/api_040/run_installed_mpi_checks.py",
+      "bytes": 8931,
+      "sha256": "1364b8283a89a728e7ae07809c31525a8e8da3891dc2ff341bf827d643ee926f"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_interaction.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_interaction.py",
+      "bytes": 15291,
+      "sha256": "56ba1e62462c5529456ef1f5152f0fd35e19d6120c1d5996a59859f884a1f576"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_oracle.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m26_finite_oracle.py",
+      "bytes": 2481,
+      "sha256": "fef5e4cfcbb5498c143ac5d4d7bd79cfcc0dee8181330d554d1e232ede5df280"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_linear.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_linear.py",
+      "bytes": 15233,
+      "sha256": "ac0c2dd7dfdaf3514196f72cac3921fd20df7c8157b07bfa6142f02ce86bac15"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_oracle.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/examples/migration/scientific/api040_m27_mixed_oracle.py",
+      "bytes": 2904,
+      "sha256": "c394d64a8c2e6890492da25ff09241788847fea62fef1651a4fc235e8e8fd93d"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/examples/migration/scientific/api040_receipts.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/examples/migration/scientific/api040_receipts.py",
+      "bytes": 705,
+      "sha256": "bda36e0cbe7bbfd9e52073f1889e6858974525c9e4357b5bfb7fd88a289beed2"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/manifest.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/manifest.json",
+      "bytes": 1984,
+      "sha256": "06533ac187c70115a614826603e6b56233e21d0da5ddbf40d64c147a610620c8"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py",
+      "bytes": 1634,
+      "sha256": "173e3bf807453591d85c7a771f2e2a04f0519b51ab5e6f0a1aad66a39c2cdd45"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py",
+      "bytes": 4381,
+      "sha256": "0ae17bb9651465af956a506b47ee93426acc135c44949f5614b7cab9e01d61ee"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_coupled_gradient_dim2_fourier_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_coupled_gradient_dim2_fourier_runtime.py",
+      "bytes": 8710,
+      "sha256": "1dc829b03dcb03abee7f48c1e1715b7eedaaadfe5ff0838b41863d63256e9358"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_public_restart.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_public_restart.py",
+      "bytes": 11442,
+      "sha256": "bb4e1659c79809fea0a0c62f20d43be427e3f3254de2e4b3071ae815f399906f"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_trace_runtime.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/integration/runtime/test_integral_state_trace_runtime.py",
+      "bytes": 9849,
+      "sha256": "dfe1fda45c45be76ee4f00a9a02835743ad39a97d0793e591293d29072dc68f2"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/support/amr_snapshots.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/support/amr_snapshots.py",
+      "bytes": 4227,
+      "sha256": "d3bb422215691d89a04f1318a6cfec0db9b784da2e485db2c98f9b37f739c0f0"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/support/collective_checks.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/support/collective_checks.py",
+      "bytes": 1952,
+      "sha256": "f135d322e35e27fba908d2d65781b5d1fe7598f9033a0e424220263e3a0266d5"
+    },
+    {
+      "path": "runs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/support/integral_state_receipts.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/source-snapshot/tests/python/support/integral_state_receipts.py",
+      "bytes": 6102,
+      "sha256": "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/build-coverage-preflight-native-cpp-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/build-coverage-preflight-native-cpp-20260930.log",
+      "bytes": 10189,
+      "sha256": "d734d95c73ea056ea53477c54cff52664b86fa63f8d5a6eb49f4a8c18b2769cd"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/coverage-preflight-diffusion-mpi3-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/coverage-preflight-diffusion-mpi3-20260930.log",
+      "bytes": 2685,
+      "sha256": "a5a846d7b00653b04f19cf5817c422e5b553dbcbef210d8c8309db9fb130787d"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/coverage-preflight-diffusion-mpi3-tcp-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/coverage-preflight-diffusion-mpi3-tcp-20260930.log",
+      "bytes": 5274,
+      "sha256": "84e413b209579a63f193a1e160d431411219e808fdd8add2c581a08538eceeb9"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/coverage-preflight-diffusion-mpi3-tcp-20260930.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/coverage-preflight-diffusion-mpi3-tcp-20260930.xml",
+      "bytes": 20452,
+      "sha256": "567d7a1aa3afbdfb43f6031ebd367837d9622ec07e8e0b7d407457c7101a9110"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/integral-transaction-native-tcp-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/integral-transaction-native-tcp-20260930.log",
+      "bytes": 2488,
+      "sha256": "85626365b5db83e22e05eb975bdab00f388f4aee6c6ecfdd454ab3954f83b9af"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/integral-transaction-native-tcp-20260930.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/integral-transaction-native-tcp-20260930.xml",
+      "bytes": 9058,
+      "sha256": "09ebff0f102755d19073159a65c98ee159970e77c4aedd6f8b399bb79d61ccc2"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/mpi-provider-tcp-diffusion-probe-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/mpi-provider-tcp-diffusion-probe-20260930.log",
+      "bytes": 589,
+      "sha256": "ddf51104cfcc8acda2ecb3828673c382532486fc050fd5eaf61eca55e2347229"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/receipt.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/receipt.json",
+      "bytes": 3187,
+      "sha256": "5e562bb82dd4a12ea709bcff901a768f4cb479fa52229bbaf4a4cf6e26dd5508"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/source/include/pops/numerics/diffusion/prepared_diffusion.hpp",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/source/include/pops/numerics/diffusion/prepared_diffusion.hpp",
+      "bytes": 39495,
+      "sha256": "91840da9cffb5d767c6cabdb2c33cea2a80f14e7c7124f67443cc520d29aa1c1"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/source/include/pops/runtime/program/amr_program_context_history_checkpoint_public.inc",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/source/include/pops/runtime/program/amr_program_context_history_checkpoint_public.inc",
+      "bytes": 20184,
+      "sha256": "11dd270a2520736d1c5e4419423c267f0b82d000a5294bac46557bad1e7660a7"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/source/python/pops/codegen/program_emit_ops.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/source/python/pops/codegen/program_emit_ops.py",
+      "bytes": 88385,
+      "sha256": "1ccf260e434467a1a33b01309c9bc46ae7495635ed1b5292efda9ca13f3ba689"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/source/tests/CMakeLists.txt",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/source/tests/CMakeLists.txt",
+      "bytes": 66943,
+      "sha256": "129d8f3389c13ae8cb7ad03d37c6d3e4e9ebf4333a3e5b97214b6a4f01d19c63"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/source/tests/cpp/integration/mpi/test_mpi_exchange_batches.cpp",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/source/tests/cpp/integration/mpi/test_mpi_exchange_batches.cpp",
+      "bytes": 8225,
+      "sha256": "c5f9d28a8fa029b8905fe675037be63a65a3b366753baa03ce51f5d22ddd0b53"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/source/tests/cpp/integration/runtime/test_program_runtime.cpp",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/source/tests/cpp/integration/runtime/test_program_runtime.cpp",
+      "bytes": 126560,
+      "sha256": "df6b185477f92f067014ddd1ba46dd5f1a2199977b7830ffdbb4184ed456648e"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/source/tests/cpp/unit/runtime/test_prepared_diffusion.cpp",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/source/tests/cpp/unit/runtime/test_prepared_diffusion.cpp",
+      "bytes": 37264,
+      "sha256": "a67a05d0bac2483b36d2014e43e9850da9e4447641738806e3efd011d1a12655"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/source/tests/cpp/unit/runtime/test_program_context_contract.cpp",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/source/tests/cpp/unit/runtime/test_program_context_contract.cpp",
+      "bytes": 130417,
+      "sha256": "3a2786b51ab8c2e176c4df101c503f94ca33029f99216ba58f225cc22dbc9b1f"
+    },
+    {
+      "path": "runs/native-integral-coverage-cpp-20260930/transaction-last-test.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-integral-coverage-cpp-20260930/transaction-last-test.log",
+      "bytes": 32309,
+      "sha256": "766fafa6f7dd3b92d00433f4b50822d1f8876cd68992782cfc0730adc7cc1ed5"
+    },
+    {
+      "path": "source/freeze-native-fc0-20260930.py",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/freeze-native-fc0-20260930.py",
+      "bytes": 5708,
+      "sha256": "24413d9c123a54232adf5b51d2f1eefedf8be0ffeeee53d6b35e973d670d8cde"
+    },
+    {
+      "path": "supplemental/build-coverage-preflight-native-cpp-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/build-coverage-preflight-native-cpp-20260930.log",
+      "bytes": 10189,
+      "sha256": "d734d95c73ea056ea53477c54cff52664b86fa63f8d5a6eb49f4a8c18b2769cd"
+    },
+    {
+      "path": "supplemental/build-initial-checkpoint-python-refresh-fc0-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/build-initial-checkpoint-python-refresh-fc0-20260930.log",
+      "bytes": 69980,
+      "sha256": "7bb1e7207bc2696f95383459449f5b3ccd3ed1ec743c2aaa831b2f7ff95744e7"
+    },
+    {
+      "path": "supplemental/coverage-preflight-diffusion-mpi3-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/coverage-preflight-diffusion-mpi3-20260930.log",
+      "bytes": 2685,
+      "sha256": "a5a846d7b00653b04f19cf5817c422e5b553dbcbef210d8c8309db9fb130787d"
+    },
+    {
+      "path": "supplemental/coverage-preflight-diffusion-mpi3-tcp-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/coverage-preflight-diffusion-mpi3-tcp-20260930.log",
+      "bytes": 5274,
+      "sha256": "84e413b209579a63f193a1e160d431411219e808fdd8add2c581a08538eceeb9"
+    },
+    {
+      "path": "supplemental/coverage-preflight-diffusion-mpi3-tcp-20260930.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/coverage-preflight-diffusion-mpi3-tcp-20260930.xml",
+      "bytes": 20452,
+      "sha256": "567d7a1aa3afbdfb43f6031ebd367837d9622ec07e8e0b7d407457c7101a9110"
+    },
+    {
+      "path": "supplemental/integral-transaction-native-tcp-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/integral-transaction-native-tcp-20260930.log",
+      "bytes": 2488,
+      "sha256": "85626365b5db83e22e05eb975bdab00f388f4aee6c6ecfdd454ab3954f83b9af"
+    },
+    {
+      "path": "supplemental/integral-transaction-native-tcp-20260930.xml",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/integral-transaction-native-tcp-20260930.xml",
+      "bytes": 9058,
+      "sha256": "09ebff0f102755d19073159a65c98ee159970e77c4aedd6f8b399bb79d61ccc2"
+    },
+    {
+      "path": "supplemental/m27-native-saved-independent-recompute-20260930.json",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/m27-native-saved-independent-recompute-20260930.json",
+      "bytes": 4327,
+      "sha256": "affea7f89e3f0af6b8f8bc3a25b826d5c4efc27140df7a54a72af3b7eebae721"
+    },
+    {
+      "path": "supplemental/mpi-provider-tcp-diffusion-probe-20260930.log",
+      "origin": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/mpi-provider-tcp-diffusion-probe-20260930.log",
+      "bytes": 589,
+      "sha256": "ddf51104cfcc8acda2ecb3828673c382532486fc050fd5eaf61eca55e2347229"
+    }
+  ]
+}

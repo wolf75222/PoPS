@@ -1,0 +1,97 @@
+{
+  "schema_version": 3,
+  "status": "passed",
+  "pytest_base_temps": [
+    "rank0-tmp",
+    "rank1-tmp"
+  ],
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930",
+    "--ranks",
+    "2",
+    "--dimension",
+    "1",
+    "--test",
+    "tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py",
+    "--test",
+    "tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 35.04699679091573,
+  "ranks": 2,
+  "threads": 1,
+  "dimension": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_api040_m26_finite_interaction_runtime",
+          "test_finite_interaction_two_densities_rebind_permutation_and_adjoint"
+        ],
+        [
+          "tests.python.integration.runtime.test_api040_m27_mixed_linear_runtime",
+          "test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu"
+        ],
+        [
+          "tests.python.integration.runtime.test_api040_m27_mixed_linear_runtime",
+          "test_one_iteration_gmres_collectively_refuses_without_accepted_publication"
+        ]
+      ],
+      "xml_sha256": "4f246ba597f840ee28e3310a00ff498809aeba4409aff4ba2dd47ec5c28748bd",
+      "log_sha256": "f36dbbf2be8e27da9c3abc9f37413dbea3184be0f81bdefb7cf26bad174ec8b6"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_api040_m26_finite_interaction_runtime",
+          "test_finite_interaction_two_densities_rebind_permutation_and_adjoint"
+        ],
+        [
+          "tests.python.integration.runtime.test_api040_m27_mixed_linear_runtime",
+          "test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu"
+        ],
+        [
+          "tests.python.integration.runtime.test_api040_m27_mixed_linear_runtime",
+          "test_one_iteration_gmres_collectively_refuses_without_accepted_publication"
+        ]
+      ],
+      "xml_sha256": "274998fd7fd71751175980e387da4f7d102a7679ce7df3b1ff15cac407e63218",
+      "log_sha256": "3953610b5dc4b14d711defe9ad54521005bb7bef1c498238513c3578bd677e26"
+    }
+  ],
+  "native_sha256": "835759c416fd40ebfe1a61ecd466feb07580c798ad12fb2488101268f2b65941",
+  "execution_environment": {
+    "FI_PROVIDER": "tcp",
+    "FI_TCP_IFACE": null,
+    "OMP_NUM_THREADS": "1",
+    "OMP_PROC_BIND": "false",
+    "POPS_THREADS": "1"
+  }
+}

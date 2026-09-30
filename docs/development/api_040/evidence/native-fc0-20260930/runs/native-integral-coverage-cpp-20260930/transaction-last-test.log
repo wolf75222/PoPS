@@ -1,0 +1,360 @@
+Start testing: Sep 30 10:05 CEST
+----------------------------------------------------------
+1206/1378 Testing: ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+1206/1378 Test: ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+Command: "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_runtime" "--gtest_filter=ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" start time: Sep 30 10:05 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (18 ms)
+[----------] 1 test from ProgramRuntime (18 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (18 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   8.00 sec
+----------------------------------------------------------
+Test Passed.
+"ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" end time: Sep 30 10:05 CEST
+"ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" time elapsed: 00:00:08
+----------------------------------------------------------
+
+1207/1378 Testing: ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+1207/1378 Test: ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+Command: "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_runtime" "--gtest_filter=ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" start time: Sep 30 10:05 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.60 sec
+----------------------------------------------------------
+Test Passed.
+"ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" end time: Sep 30 10:05 CEST
+"ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" time elapsed: 00:00:00
+----------------------------------------------------------
+
+1233/1378 Testing: ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges
+1233/1378 Test: ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges
+Command: "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_context_contract" "--gtest_filter=ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges" start time: Sep 30 10:05 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramContextContract
+[ RUN      ] ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges
+[       OK ] ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges (11 ms)
+[----------] 1 test from ProgramContextContract (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.97 sec
+----------------------------------------------------------
+Test Passed.
+"ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges" end time: Sep 30 10:05 CEST
+"ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges" time elapsed: 00:00:00
+----------------------------------------------------------
+
+1236/1378 Testing: ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent
+1236/1378 Test: ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent
+Command: "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_context_contract" "--gtest_filter=ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent" start time: Sep 30 10:05 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramContextContract
+[ RUN      ] ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent
+[       OK ] ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent (6 ms)
+[----------] 1 test from ProgramContextContract (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent" end time: Sep 30 10:05 CEST
+"ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent" time elapsed: 00:00:00
+----------------------------------------------------------
+
+1237/1378 Testing: ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption
+1237/1378 Test: ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption
+Command: "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_context_contract" "--gtest_filter=ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption" start time: Sep 30 10:05 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramContextContract
+[ RUN      ] ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption
+[       OK ] ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption (8 ms)
+[----------] 1 test from ProgramContextContract (8 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (8 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption" end time: Sep 30 10:05 CEST
+"ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption" time elapsed: 00:00:00
+----------------------------------------------------------
+
+1238/1378 Testing: ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation
+1238/1378 Test: ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation
+Command: "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_context_contract" "--gtest_filter=ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation" start time: Sep 30 10:05 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramContextContract
+[ RUN      ] ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation
+[       OK ] ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation (6 ms)
+[----------] 1 test from ProgramContextContract (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation" end time: Sep 30 10:05 CEST
+"ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation" time elapsed: 00:00:00
+----------------------------------------------------------
+
+1366/1378 Testing: test_program_runtime_np2
+1366/1378 Test: test_program_runtime_np2
+Command: "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec" "-n" "2" "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_runtime" "--gtest_output=xml:/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/test-results/gtest/test_program_runtime_np2.xml" "--gtest_filter=ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"test_program_runtime_np2" start time: Sep 30 10:05 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+Note: Google Test filter = ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+[       OK ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource[       OK ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource (17 ms)
+ (17 ms)
+[ RUN      ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep
+[ RUN      ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep
+[       OK ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep (3 ms)
+[ RUN      ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication
+[       OK ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep (3 ms)
+[ RUN      ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication
+[       OK ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication (2 ms)
+[ RUN      ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption
+[       OK ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication (2 ms)
+[ RUN      ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption
+[       OK ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption (8 ms)
+[ RUN      ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[       OK ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption (8 ms)
+[ RUN      ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[       OK ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching (5 ms)
+[ RUN      ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional
+[       OK ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching (5 ms)
+[ RUN      ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional
+[       OK ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional (2 ms)
+[ RUN      ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal
+[       OK ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional (2 ms)
+[ RUN      ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal
+[       OK ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal (17 ms)
+[ RUN      ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally
+[       OK ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal (17 ms)
+[ RUN      ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally
+[       OK ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally (24 ms)
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally (24 ms)
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (3 ms)
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (3 ms)
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (10 ms)
+[----------] 10 tests from ProgramRuntime (96 ms total)
+
+[----------] Global test environment tear-down
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (10 ms)
+[----------] 10 tests from ProgramRuntime (96 ms total)
+
+[----------] Global test environment tear-down
+[==========] 10 tests from 1 test suite ran. (96 ms total)
+[  PASSED  ] 10 tests.
+[==========] 10 tests from 1 test suite ran. (96 ms total)
+[  PASSED  ] 10 tests.
+<end of output>
+Test time =   0.70 sec
+----------------------------------------------------------
+Test Passed.
+"test_program_runtime_np2" end time: Sep 30 10:05 CEST
+"test_program_runtime_np2" time elapsed: 00:00:00
+----------------------------------------------------------
+
+1367/1378 Testing: test_program_context_contract_np2
+1367/1378 Test: test_program_context_contract_np2
+Command: "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec" "-n" "2" "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/bin/test_program_context_contract" "--gtest_output=xml:/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/test-results/gtest/test_program_context_contract_np2.xml" "--gtest_filter=ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation:ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges:ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent:ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption:ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork:ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation:ProgramContextContract.ConsumedFieldPublicationIsExactCollectiveAndTransactional:ProgramContextContract.AmrProgramTopologyPublishesAndRollsBackExactContracts:ProgramContextContract.AmrProgramSingleCarrierTopologyRejectsMultipleBlocks:ProgramContextContract.PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt:ProgramContextContract.CancelledNativeTaskFailsCollectivelyBeforeNextSubstep:ProgramContextContract.PreparedTaskTypedRejectionRemainsCollectiveAndRetryable:ProgramContextContract.ArtifactInstallRollbackRestoresWeakLifetimeHookWithoutRevivingAttempt:ProgramContextContract.PendingSolveBlocksEveryNativeStepEntryBeforeBody:ProgramContextContract.RevokedPreparedLinearOutcomeReleasesSurvivingWorkspace:ProgramContextContract.NativeStepRevokesEscapedSolveBeforeAcceptedSnapshotRestore"
+Directory: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests
+"test_program_context_contract_np2" start time: Sep 30 10:05 CEST
+Output:
+----------------------------------------------------------
+Note: Google Test filter = ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation:ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges:ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent:ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption:ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork:ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation:ProgramContextContract.ConsumedFieldPublicationIsExactCollectiveAndTransactional:ProgramContextContract.AmrProgramTopologyPublishesAndRollsBackExactContracts:ProgramContextContract.AmrProgramSingleCarrierTopologyRejectsMultipleBlocks:ProgramContextContract.PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt:ProgramContextContract.CancelledNativeTaskFailsCollectivelyBeforeNextSubstep:ProgramContextContract.PreparedTaskTypedRejectionRemainsCollectiveAndRetryable:ProgramContextContract.ArtifactInstallRollbackRestoresWeakLifetimeHookWithoutRevivingAttempt:ProgramContextContract.PendingSolveBlocksEveryNativeStepEntryBeforeBody:ProgramContextContract.RevokedPreparedLinearOutcomeReleasesSurvivingWorkspace:ProgramContextContract.NativeStepRevokesEscapedSolveBeforeAcceptedSnapshotRestore
+[==========] Running 19 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 19 tests from ProgramContextContract
+[ RUN      ] ProgramContextContract.PendingSolveBlocksEveryNativeStepEntryBeforeBody
+Note: Google Test filter = ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation:ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges:ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent:ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption:ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork:ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation:ProgramContextContract.ConsumedFieldPublicationIsExactCollectiveAndTransactional:ProgramContextContract.AmrProgramTopologyPublishesAndRollsBackExactContracts:ProgramContextContract.AmrProgramSingleCarrierTopologyRejectsMultipleBlocks:ProgramContextContract.PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt:ProgramContextContract.CancelledNativeTaskFailsCollectivelyBeforeNextSubstep:ProgramContextContract.PreparedTaskTypedRejectionRemainsCollectiveAndRetryable:ProgramContextContract.ArtifactInstallRollbackRestoresWeakLifetimeHookWithoutRevivingAttempt:ProgramContextContract.PendingSolveBlocksEveryNativeStepEntryBeforeBody:ProgramContextContract.RevokedPreparedLinearOutcomeReleasesSurvivingWorkspace:ProgramContextContract.NativeStepRevokesEscapedSolveBeforeAcceptedSnapshotRestore
+[==========] Running 19 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 19 tests from ProgramContextContract
+[ RUN      ] ProgramContextContract.PendingSolveBlocksEveryNativeStepEntryBeforeBody
+[       OK ] ProgramContextContract.PendingSolveBlocksEveryNativeStepEntryBeforeBody (25 ms)
+[ RUN      ] ProgramContextContract.RevokedPreparedLinearOutcomeReleasesSurvivingWorkspace
+[       OK ] ProgramContextContract.PendingSolveBlocksEveryNativeStepEntryBeforeBody (25 ms)
+[ RUN      ] ProgramContextContract.RevokedPreparedLinearOutcomeReleasesSurvivingWorkspace
+[       OK ] ProgramContextContract.RevokedPreparedLinearOutcomeReleasesSurvivingWorkspace (7 ms)
+[ RUN      ] [       OK ] ProgramContextContract.RevokedPreparedLinearOutcomeReleasesSurvivingWorkspace (7 ms)
+[ RUN      ] ProgramContextContract.NativeStepRevokesEscapedSolveBeforeAcceptedSnapshotRestore
+ProgramContextContract.NativeStepRevokesEscapedSolveBeforeAcceptedSnapshotRestore
+[       OK ] ProgramContextContract.NativeStepRevokesEscapedSolveBeforeAcceptedSnapshotRestore (8 ms)
+[ RUN      ] ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors
+[       OK ] ProgramContextContract.NativeStepRevokesEscapedSolveBeforeAcceptedSnapshotRestore (8 ms)
+[ RUN      ] ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors
+[       OK ] ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors (19 ms)
+[ RUN      ] ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch
+[       OK ] ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors (19 ms)
+[ RUN      ] ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch
+[       OK ] ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch (5 ms)
+[ RUN      ] ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection
+[       OK ] ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch (5 ms)
+[ RUN      ] ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection
+[       OK ] ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection (8 ms)
+[ RUN      ] ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation
+[       OK ] ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection (8 ms)
+[ RUN      ] ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation
+[       OK ] ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation (1 ms)
+[ RUN      ] ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges
+[       OK ] ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation (1 ms)
+[ RUN      ] ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges
+[       OK ] ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges (22 ms)
+[ RUN      ] ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork
+[       OK ] ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges (22 ms)
+[ RUN      ] ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork
+[       OK ] ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork (6 ms)
+[ RUN      ] ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent
+[       OK ] ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork (6 ms)
+[ RUN      ] ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent
+[       OK ] ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent (6 ms)
+[ RUN      ] ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption
+[       OK ] ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent (6 ms)
+[ RUN      ] ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption
+[       OK ] ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption (4 ms)
+[ RUN      ] ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation
+[       OK ] ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption (4 ms)
+[ RUN      ] ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation
+[       OK ] ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation (3 ms)
+[ RUN      ] ProgramContextContract.ConsumedFieldPublicationIsExactCollectiveAndTransactional
+[       OK ] ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation (3 ms)
+[ RUN      ] ProgramContextContract.ConsumedFieldPublicationIsExactCollectiveAndTransactional
+[       OK ] ProgramContextContract.ConsumedFieldPublicationIsExactCollectiveAndTransactional (14 ms)
+[ RUN      ] ProgramContextContract.AmrProgramTopologyPublishesAndRollsBackExactContracts
+[       OK ] ProgramContextContract.ConsumedFieldPublicationIsExactCollectiveAndTransactional (14 ms)
+[ RUN      ] ProgramContextContract.AmrProgramTopologyPublishesAndRollsBackExactContracts
+[       OK ] ProgramContextContract.AmrProgramTopologyPublishesAndRollsBackExactContracts (119 ms)
+[ RUN      ] ProgramContextContract.AmrProgramSingleCarrierTopologyRejectsMultipleBlocks
+[       OK ] ProgramContextContract.AmrProgramTopologyPublishesAndRollsBackExactContracts (119 ms)
+[ RUN      ] ProgramContextContract.AmrProgramSingleCarrierTopologyRejectsMultipleBlocks
+[       OK ] ProgramContextContract.AmrProgramSingleCarrierTopologyRejectsMultipleBlocks (20 ms)
+[ RUN      ] ProgramContextContract.PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt
+[       OK ] ProgramContextContract.AmrProgramSingleCarrierTopologyRejectsMultipleBlocks (20 ms)
+[ RUN      ] ProgramContextContract.PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt
+[       OK ] ProgramContextContract.PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt (3 ms)
+[ RUN      ] ProgramContextContract.CancelledNativeTaskFailsCollectivelyBeforeNextSubstep
+[       OK ] ProgramContextContract.PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt (3 ms)
+[ RUN      ] ProgramContextContract.CancelledNativeTaskFailsCollectivelyBeforeNextSubstep
+[       OK ] ProgramContextContract.CancelledNativeTaskFailsCollectivelyBeforeNextSubstep (3 ms)
+[ RUN      ] ProgramContextContract.PreparedTaskTypedRejectionRemainsCollectiveAndRetryable
+[       OK ] ProgramContextContract.CancelledNativeTaskFailsCollectivelyBeforeNextSubstep (3 ms)
+[ RUN      ] ProgramContextContract.PreparedTaskTypedRejectionRemainsCollectiveAndRetryable
+[       OK ] ProgramContextContract.PreparedTaskTypedRejectionRemainsCollectiveAndRetryable (3 ms)
+[ RUN      ] ProgramContextContract.ArtifactInstallRollbackRestoresWeakLifetimeHookWithoutRevivingAttempt
+[       OK ] ProgramContextContract.PreparedTaskTypedRejectionRemainsCollectiveAndRetryable (3 ms)
+[ RUN      ] ProgramContextContract.ArtifactInstallRollbackRestoresWeakLifetimeHookWithoutRevivingAttempt
+[       OK ] ProgramContextContract.ArtifactInstallRollbackRestoresWeakLifetimeHookWithoutRevivingAttempt (0 ms)
+[----------] 19 tests from ProgramContextContract (286 ms total)
+
+[----------] Global test environment tear-down
+[       OK ] ProgramContextContract.ArtifactInstallRollbackRestoresWeakLifetimeHookWithoutRevivingAttempt (0 ms)
+[----------] 19 tests from ProgramContextContract (286 ms total)
+
+[----------] Global test environment tear-down
+[==========] 19 tests from 1 test suite ran. (286 ms total)
+[  PASSED  ] 19 tests.
+[==========] 19 tests from 1 test suite ran. (286 ms total)
+[  PASSED  ] 19 tests.
+<end of output>
+Test time =   0.35 sec
+----------------------------------------------------------
+Test Passed.
+"test_program_context_contract_np2" end time: Sep 30 10:05 CEST
+"test_program_context_contract_np2" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Sep 30 10:05 CEST
+
+backend =   2.10 sec*proc
+
+cpp-target:test_program_context_contract =   1.86 sec*proc
+
+cpp-target:test_program_runtime =  10.00 sec*proc
+
+fast =   1.16 sec*proc
+
+integration =   8.60 sec*proc
+
+medium =  10.70 sec*proc
+
+mpi =   2.10 sec*proc
+
+runtime =   9.76 sec*proc
+
+unit =   1.16 sec*proc
+

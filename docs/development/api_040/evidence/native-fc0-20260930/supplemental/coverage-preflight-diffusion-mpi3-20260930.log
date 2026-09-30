@@ -1,0 +1,45 @@
+Test project /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi
+      Start  944: PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting
+ 1/20 Test  #944: PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting ........................***Failed   76.36 sec
+Note: Google Test filter = PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting
+[       OK ] PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting (27 ms)
+[----------] 1 test from PreparedDiffusion (27 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (27 ms total)
+[  PASSED  ] 1 test.
+Abort(868842383): Fatal error in internal_Finalize: Other MPI error, error stack:
+internal_Finalize(50)...........: MPI_Finalize failed
+MPII_Finalize(400)..............: 
+MPID_Finalize(652)..............: 
+MPIDI_OFI_mpi_finalize_hook(830): 
+flush_send_queue(789)...........: 
+MPIDI_OFI_handle_cq_error(627)..: OFI poll failed (ofi_events.c:627:MPIDI_OFI_handle_cq_error:Input/output error)
+
+      Start  945: PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive
+ 2/20 Test  #945: PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive ..............***Failed   75.11 sec
+Note: Google Test filter = PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive
+[       OK ] PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive (18 ms)
+[----------] 1 test from PreparedDiffusion (18 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (18 ms total)
+[  PASSED  ] 1 test.
+Abort(868842383): Fatal error in internal_Finalize: Other MPI error, error stack:
+internal_Finalize(50)...........: MPI_Finalize failed
+MPII_Finalize(400)..............: 
+MPID_Finalize(652)..............: 
+MPIDI_OFI_mpi_finalize_hook(830): 
+flush_send_queue(789)...........: 
+MPIDI_OFI_handle_cq_error(627)..: OFI poll failed (ofi_events.c:627:MPIDI_OFI_handle_cq_error:Input/output error)
+
+      Start  946: PreparedDiffusion.RejectsFailedConstitutiveEvaluationInPreparedInternalGhost
+[rtk] env: process terminated by signal 15

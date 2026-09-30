@@ -1,0 +1,582 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 234 items
+
+tests/python/unit/codegen/test_integral_state_trace.py::test_two_stage_trace_has_two_exact_evaluations_and_one_persistent_identity[system] PASSED [  0%]
+tests/python/unit/codegen/test_integral_state_trace.py::test_two_stage_trace_has_two_exact_evaluations_and_one_persistent_identity[amr_system] PASSED [  0%]
+tests/python/unit/codegen/test_integral_state_trace.py::test_amr_accepted_trace_intersects_finest_owner_coverage_with_physical_activity PASSED [  1%]
+tests/python/unit/codegen/test_integral_state_trace.py::test_unaccepted_rate_cannot_supply_a_persistent_integral PASSED [  1%]
+tests/python/unit/codegen/test_integral_state_trace.py::test_exact_integral_handle_rejects_foreign_program_and_duplicate_selector PASSED [  2%]
+tests/python/unit/codegen/test_integral_state_independent.py::test_ssprk_same_physical_occurrence_has_two_exact_evaluation_selectors PASSED [  2%]
+tests/python/unit/codegen/test_integral_state_independent.py::test_unaccepted_diagnostic_rate_cannot_supply_an_integral PASSED [  2%]
+tests/python/unit/codegen/test_integral_state_independent.py::test_integral_handle_cannot_be_reused_by_a_homonymous_program PASSED [  3%]
+tests/python/unit/codegen/test_integral_state_independent.py::test_detachment_preserves_integral_identity_and_transfer_rate_ids PASSED [  3%]
+tests/python/unit/codegen/test_integral_state_independent.py::test_amr_delivery_is_in_post_synchronization_not_each_level_step PASSED [  4%]
+tests/python/unit/codegen/test_integral_state_names.py::test_embedded_nul_is_refused_before_it_can_truncate_the_native_identity PASSED [  4%]
+tests/python/unit/codegen/test_integral_state_names.py::test_valid_unicode_names_reach_native_declaration_with_exact_utf8_bytes PASSED [  5%]
+tests/python/unit/codegen/test_integral_state_public_receipts.py::test_independent_popsex_reader_preserves_signed_incidence_and_consumption PASSED [  5%]
+tests/python/unit/codegen/test_integral_state_public_receipts.py::test_upwind_oracle_distinguishes_stages_and_conserves_mass_with_boundary_current PASSED [  5%]
+tests/python/unit/codegen/test_integral_state_public_receipts.py::test_public_native_receipt_cases_resolve_and_emit_without_jit[0.01-0] PASSED [  6%]
+tests/python/unit/codegen/test_integral_state_public_receipts.py::test_public_native_receipt_cases_resolve_and_emit_without_jit[0.5-0] PASSED [  6%]
+tests/python/unit/codegen/test_integral_state_public_receipts.py::test_public_native_receipt_cases_resolve_and_emit_without_jit[0.01-1] PASSED [  7%]
+tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py::test_actual_transport_emitter_intersects_coverage_and_embedded_boundary FAILED [  7%]
+tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py::test_actual_diffusion_producer_intersects_coverage_and_embedded_boundary FAILED [  8%]
+tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py::test_production_coverage_lookup_does_not_reenter_collective_preparation FAILED [  8%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_oblique_cell_average_symbol_permutation_and_energy[order0-cells0-lengths0-modes0] PASSED [  8%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_oblique_cell_average_symbol_permutation_and_energy[order0-cells1-lengths1-modes1] PASSED [  9%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_oblique_cell_average_symbol_permutation_and_energy[order1-cells0-lengths0-modes0] PASSED [  9%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_oblique_cell_average_symbol_permutation_and_energy[order1-cells1-lengths1-modes1] PASSED [ 10%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_face_measures_orientations_and_ssprk2_ledger[cells0-lengths0-modes0] PASSED [ 10%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_face_measures_orientations_and_ssprk2_ledger[cells1-lengths1-modes1] PASSED [ 11%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_null_direction_constant_mode_and_skew_temporal_limit[cells0-lengths0-modes0] PASSED [ 11%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_null_direction_constant_mode_and_skew_temporal_limit[cells1-lengths1-modes1] PASSED [ 11%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_rank_one_kernel_and_checkerboard_are_distinct[cells0-lengths0-modes0] PASSED [ 12%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_rank_one_kernel_and_checkerboard_are_distinct[cells1-lengths1-modes1] PASSED [ 12%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_old_frequency_factor_does_not_bound_discrete_checkerboard[1] PASSED [ 13%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_old_frequency_factor_does_not_bound_discrete_checkerboard[2] PASSED [ 13%]
+tests/python/unit/numerics/test_coupled_gradient_nd_independent.py::test_old_frequency_factor_does_not_bound_discrete_checkerboard[3] PASSED [ 14%]
+tests/python/unit/codegen/test_coupled_gradient_nd_review.py::test_nd_complete_ssprk2_program_and_amr_refusal[2-False] PASSED [ 14%]
+tests/python/unit/codegen/test_coupled_gradient_nd_review.py::test_nd_complete_ssprk2_program_and_amr_refusal[3-True] PASSED [ 14%]
+tests/python/unit/codegen/test_coupled_gradient_nd_review.py::test_sdk_signature_changes_artifact_spec_despite_unchanged_method_schema PASSED [ 15%]
+tests/python/unit/fields/test_m27_mixed_public_source.py::test_mixed_c_mu_full_public_lowering_preserves_general_matrix_and_identity[False] PASSED [ 15%]
+tests/python/unit/fields/test_m27_mixed_public_source.py::test_mixed_c_mu_full_public_lowering_preserves_general_matrix_and_identity[True] PASSED [ 16%]
+tests/python/unit/fields/test_m27_mixed_public_source.py::test_cell_mean_projection_refuses_unstated_sampling_without_program_mutation PASSED [ 16%]
+tests/python/unit/fields/test_m27_mixed_public_source.py::test_default_spd_field_route_does_not_admit_general_coupling PASSED [ 17%]
+tests/python/unit/fields/test_m27_mixed_public_source.py::test_general_coupling_refuses_cg_spd_claim PASSED [ 17%]
+tests/python/unit/physics/test_api040_m27_mixed_oracle.py::test_fourier_oracle_keeps_both_original_equations_and_mass[16] PASSED [ 17%]
+tests/python/unit/physics/test_api040_m27_mixed_oracle.py::test_fourier_oracle_keeps_both_original_equations_and_mass[32] PASSED [ 18%]
+tests/python/unit/physics/test_api040_m27_mixed_oracle.py::test_fourier_oracle_keeps_both_original_equations_and_mass[64] PASSED [ 18%]
+tests/python/unit/physics/test_api040_m27_mixed_oracle.py::test_permuted_two_equation_oracle_agrees_without_eliminating_mu PASSED [ 19%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_cell_mean_projection_refuses_foreign_authority_atomically[point] PASSED [ 19%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_cell_mean_projection_refuses_foreign_authority_atomically[state] PASSED [ 20%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_cell_mean_projection_refuses_foreign_authority_atomically[unknown] PASSED [ 20%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_projection_carries_exact_consumed_original_load_and_selected_unknown[False] PASSED [ 20%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_projection_carries_exact_consumed_original_load_and_selected_unknown[True] PASSED [ 21%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_actual_field_lowering_matrices_match_both_original_equations[False] PASSED [ 21%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_actual_field_lowering_matrices_match_both_original_equations[True] PASSED [ 22%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_closed_coefficient_grammar_refuses_non_state_captures[coordinate] PASSED [ 22%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_closed_coefficient_grammar_refuses_non_state_captures[runtime_parameter] PASSED [ 23%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_closed_coefficient_grammar_refuses_non_state_captures[named_variable] PASSED [ 23%]
+tests/python/unit/fields/test_m27_projection_independent_review.py::test_detached_empty_dependency_metadata_cannot_hide_coefficient_state_read PASSED [ 23%]
+tests/python/unit/physics/test_m27_independent_mixed_equations.py::test_mixed_block_equations_permutation_and_unconverged_candidate[False-5] PASSED [ 24%]
+tests/python/unit/physics/test_m27_independent_mixed_equations.py::test_mixed_block_equations_permutation_and_unconverged_candidate[False-8] PASSED [ 24%]
+tests/python/unit/physics/test_m27_independent_mixed_equations.py::test_mixed_block_equations_permutation_and_unconverged_candidate[False-13] PASSED [ 25%]
+tests/python/unit/physics/test_m27_independent_mixed_equations.py::test_mixed_block_equations_permutation_and_unconverged_candidate[True-5] PASSED [ 25%]
+tests/python/unit/physics/test_m27_independent_mixed_equations.py::test_mixed_block_equations_permutation_and_unconverged_candidate[True-8] PASSED [ 26%]
+tests/python/unit/physics/test_m27_independent_mixed_equations.py::test_mixed_block_equations_permutation_and_unconverged_candidate[True-13] PASSED [ 26%]
+tests/python/unit/codegen/test_m27_complete_program_review.py::test_m27_full_program_syntax[False-False] FAILED [ 26%]
+tests/python/unit/codegen/test_m27_complete_program_review.py::test_m27_full_program_syntax[True-True] FAILED [ 27%]
+tests/python/unit/numerics/test_api040_m26_finite_interaction.py::test_independent_fourier_oracle_equals_direct_periodic_quadrature[False] PASSED [ 27%]
+tests/python/unit/numerics/test_api040_m26_finite_interaction.py::test_independent_fourier_oracle_equals_direct_periodic_quadrature[True] PASSED [ 28%]
+tests/python/unit/numerics/test_api040_m26_finite_interaction.py::test_measure_and_kernel_authorities_reject_bad_weights_and_asymmetry PASSED [ 28%]
+tests/python/unit/numerics/test_api040_m26_finite_interaction.py::test_complete_program_uses_native_finite_map_and_preserves_two_captures[False] PASSED [ 29%]
+tests/python/unit/numerics/test_api040_m26_finite_interaction.py::test_complete_program_uses_native_finite_map_and_preserves_two_captures[True] PASSED [ 29%]
+tests/python/unit/numerics/test_api040_m26_finite_interaction.py::test_two_rebinds_keep_ordered_support_and_distinct_positive_densities PASSED [ 29%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_nonuniform_action_adjoint_energy_variation_and_joint_permutation[False-order0] PASSED [ 30%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_nonuniform_action_adjoint_energy_variation_and_joint_permutation[False-order1] PASSED [ 30%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_nonuniform_action_adjoint_energy_variation_and_joint_permutation[True-order0] PASSED [ 31%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_nonuniform_action_adjoint_energy_variation_and_joint_permutation[True-order1] PASSED [ 31%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_measure_is_not_silently_normalized[0.0] PASSED [ 32%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_measure_is_not_silently_normalized[-1.0] PASSED [ 32%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_measure_is_not_silently_normalized[nan] PASSED [ 32%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_measure_is_not_silently_normalized[inf] PASSED [ 33%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_measure_is_not_silently_normalized[-inf] PASSED [ 33%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_measure_is_not_silently_normalized[True] PASSED [ 34%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_kernel_rejected_before_action[kernel0-support] PASSED [ 34%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_kernel_rejected_before_action[kernel1-support] PASSED [ 35%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_kernel_rejected_before_action[kernel2-finite numeric] PASSED [ 35%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_kernel_rejected_before_action[kernel3-finite numeric] PASSED [ 35%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_kernel_rejected_before_action[kernel4-finite numeric] PASSED [ 36%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_kernel_rejected_before_action[kernel5-finite numeric] PASSED [ 36%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_kernel_rejected_before_action[kernel6-finite numeric] PASSED [ 37%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_kernel_rejected_before_action[kernel7-exactly symmetric] PASSED [ 37%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_zero_kernel_and_nonuniform_measure_are_admissible PASSED [ 38%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_overflowed_measured_matrix_is_rejected_before_action PASSED [ 38%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_kernel_symmetry_is_exact_and_inputs_are_immutable PASSED [ 38%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_initial_arrays_keep_physical_label_provenance[False-False] PASSED [ 39%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_initial_arrays_keep_physical_label_provenance[False-True] PASSED [ 39%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_initial_arrays_keep_physical_label_provenance[True-False] PASSED [ 40%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_initial_arrays_keep_physical_label_provenance[True-True] PASSED [ 40%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_witness_density_refused_before_binding[0.0] PASSED [ 41%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_witness_density_refused_before_binding[nan] PASSED [ 41%]
+tests/python/unit/numerics/test_m26_measured_independent_review.py::test_invalid_witness_density_refused_before_binding[inf] PASSED [ 41%]
+tests/python/unit/codegen/test_m26_complete_program_review.py::test_m26_full_program_syntax[False-False] FAILED [ 42%]
+tests/python/unit/codegen/test_m26_complete_program_review.py::test_m26_full_program_syntax[False-True] FAILED [ 42%]
+tests/python/unit/codegen/test_m26_complete_program_review.py::test_m26_full_program_syntax[True-False] FAILED [ 43%]
+tests/python/unit/codegen/test_m26_complete_program_review.py::test_m26_full_program_syntax[True-True] FAILED [ 43%]
+tests/python/unit/runtime/test_program_ir_nodes.py::test_program_ir_nodes.py PASSED [ 44%]
+tests/python/unit/identity/test_artifact_identity.py::test_target_and_routes_change_artifact_spec_not_semantics PASSED [ 44%]
+tests/python/unit/identity/test_artifact_identity.py::test_final_artifact_authenticates_exact_binary_bytes PASSED [ 44%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_default_phi_requires_exact_native_ranked_storage[logical_shape0] PASSED [ 45%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_default_phi_requires_exact_native_ranked_storage[logical_shape1] PASSED [ 45%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_default_phi_requires_exact_native_ranked_storage[logical_shape2] PASSED [ 46%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_field_free_legacy_logical_storage_stays_exact[slots0-logical_shape0] PASSED [ 46%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_field_free_legacy_logical_storage_stays_exact[slots0-logical_shape1] PASSED [ 47%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_field_free_legacy_logical_storage_stays_exact[slots0-logical_shape2] PASSED [ 47%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_field_free_legacy_logical_storage_stays_exact[slots1-logical_shape0] PASSED [ 47%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_field_free_legacy_logical_storage_stays_exact[slots1-logical_shape1] PASSED [ 48%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_field_free_legacy_logical_storage_stays_exact[slots1-logical_shape2] PASSED [ 48%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[logical_shape-phi] PASSED [ 49%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[logical_shape-field_potential_0] PASSED [ 49%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[binary32-phi] PASSED [ 50%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[binary32-field_potential_0] PASSED [ 50%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[fortran-phi] PASSED [ 50%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[fortran-field_potential_0] PASSED [ 51%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[signed_zero_mismatch-phi] PASSED [ 51%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[signed_zero_mismatch-field_potential_0] PASSED [ 52%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_field_free_retains_exact_zero_representation[binary32] PASSED [ 52%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_field_free_retains_exact_zero_representation[fortran] PASSED [ 52%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_field_free_retains_exact_zero_representation[negative_zero] PASSED [ 53%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_field_free_retains_exact_zero_representation[nonzero] PASSED [ 53%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_field_free_retains_exact_zero_representation[nan] PASSED [ 54%]
+tests/python/unit/runtime/test_uniform_checkpoint_layout.py::test_rectangular_default_alias_cannot_borrow_named_field_bytes PASSED [ 54%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_restart_field_recompute_dt_accepts_only_honest_initial_zero PASSED [ 55%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans PASSED [ 55%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_preflight_returns_exact_native_payload_and_counters PASSED [ 55%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_checkpoint_temporal_partition_kind_is_strict_and_data_only PASSED [ 56%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_preflight_refuses_any_static_provenance_mismatch[ratio] PASSED [ 56%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_preflight_refuses_any_static_provenance_mismatch[route] PASSED [ 57%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_preflight_refuses_any_static_provenance_mismatch[guarantee] PASSED [ 57%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[history_qualifications] PASSED [ 58%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[clocks] PASSED [ 58%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[ledger] PASSED [ 58%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[interface_ledger] PASSED [ 59%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[temporal_partition] PASSED [ 59%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[synchronization] PASSED [ 60%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_legacy_wire_compares_original_rows_without_discarding_new_wire_provenance PASSED [ 60%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_restored_interface_audit_must_match_the_live_hierarchy[8-3-2] PASSED [ 61%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_restored_interface_audit_must_match_the_live_hierarchy[7-1-2] PASSED [ 61%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_restored_interface_audit_must_match_the_live_hierarchy[7-3-1] PASSED [ 61%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_regridded_contract_authenticates_transformed_topology_and_level_axes PASSED [ 62%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_native_route_requires_no_program_blob_and_compiled_route_requires_one PASSED [ 62%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_checkpoint_level_envelope_accepts_derefined_active_depth PASSED [ 63%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_amr_archive_authority_requires_a_canonical_signed_int64_scalar[n_ranks] PASSED [ 63%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_amr_archive_authority_requires_a_canonical_signed_int64_scalar[n_levels] PASSED [ 64%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_amr_archive_authority_requires_a_canonical_signed_int64_scalar[configured_n_levels] PASSED [ 64%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_checkpoint_level_envelope_refuses_a_different_configured_depth PASSED [ 64%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_incomplete_v5_level_envelope_is_an_offline_migration_input PASSED [ 65%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_uniform_and_amr_payload_versions_are_exact_current_integer_scalars[Uniform-pops_checkpoint_version-8] PASSED [ 65%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_uniform_and_amr_payload_versions_are_exact_current_integer_scalars[AMR-pops_amr_checkpoint_version-11] PASSED [ 66%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_historical_version_refusal_happens_before_restart_transaction[Uniform-pops_checkpoint_version-8] PASSED [ 66%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_historical_version_refusal_happens_before_restart_transaction[AMR-pops_amr_checkpoint_version-11] PASSED [ 67%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_field_provider_depth_must_equal_the_complete_active_hierarchy[checkpoint capture] PASSED [ 67%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_field_provider_depth_must_equal_the_complete_active_hierarchy[restart] PASSED [ 67%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_topology_owner_alignment_is_level_local_and_strict PASSED [ 68%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_boxes_round_trip_dim2_without_coordinate_flattening PASSED [ 68%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_decoder_preserves_inclusive_singletons_and_adjacency PASSED [ 69%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_encoder_refuses_unordered_carriers[rows0] PASSED [ 69%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_encoder_refuses_unordered_carriers[rows1] PASSED [ 70%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_contract_refuses_subclassed_live_values PASSED [ 70%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_archive_requires_exact_dtype_and_refuses_overlap PASSED [ 70%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_round_trip_retains_dim1_and_dim3_shape[1-rows0-shapes0] PASSED [ 71%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_round_trip_retains_dim1_and_dim3_shape[3-rows1-shapes1] PASSED [ 71%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_decoder_accepts_the_typed_empty_matrix PASSED [ 72%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_encoder_refuses_malformed_rank_level_and_order[rows0-rank 2] PASSED [ 72%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_encoder_refuses_malformed_rank_level_and_order[rows1-outside] PASSED [ 73%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_encoder_refuses_malformed_rank_level_and_order[rows2-order drifted] PASSED [ 73%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_decoder_refuses_malformed_archive[archived0-spatial axis] PASSED [ 73%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_decoder_refuses_malformed_archive[archived1-outside] PASSED [ 74%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_decoder_refuses_malformed_archive[archived2-invalid] PASSED [ 74%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_decoder_refuses_malformed_archive[archived3-duplicate] PASSED [ 75%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_ranked_patch_box_decoder_refuses_malformed_archive[archived4-order drifted] PASSED [ 75%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_recorded_rank_topology_keeps_one_canonical_program_image_and_owner_map PASSED [ 76%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_recorded_rank_topology_refuses_missing_canonical_owner_map PASSED [ 76%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_recorded_rank_topology_refuses_out_of_range_recorded_ownership PASSED [ 76%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_recorded_rank_topology_refuses_non_uint8_program_image PASSED [ 77%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_recorded_rank_topology_authenticates_replicated_empty_maps_and_sentinel_rebuild_rows PASSED [ 77%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_restart_base_distribution_keeps_exact_partition_map_at_unchanged_rank_count PASSED [ 78%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_restart_base_distribution_allows_only_complete_rank_changed_target_partition PASSED [ 78%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_restart_base_distribution_preserves_replicated_empty_map_across_rank_change PASSED [ 79%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_recorded_rank_topology_refuses_mode_map_schema_ambiguity[distribution_mode_1-value0-unknown] PASSED [ 79%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_recorded_rank_topology_refuses_mode_map_schema_ambiguity[dmap_1-value1-partitioned.*owner map] PASSED [ 79%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_recorded_rank_topology_refuses_mode_map_schema_ambiguity[dmap_1-value2-int64] PASSED [ 80%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_recorded_rank_topology_refuses_mode_map_schema_ambiguity[dmap_2-value3-surplus] PASSED [ 80%]
+tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure PASSED [ 81%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_ranked_history_flux_snapshot_archive_roundtrips_and_preserves_empty_image PASSED [ 81%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_capture_fences_presence_and_local_capacity_before_gather PASSED [ 82%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_capture_fences_canonicalization_and_agrees_digest PASSED [ 82%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_preflight_refuses_malformed_rank_archive[state0-offsets0-64-uint8] PASSED [ 82%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_preflight_refuses_malformed_rank_archive[state1-offsets1-64-int64] PASSED [ 83%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_preflight_refuses_malformed_rank_archive[state2-offsets2-64-canonical] PASSED [ 83%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_preflight_refuses_malformed_rank_archive[state3-offsets3-64-canonical] PASSED [ 84%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_preflight_refuses_malformed_rank_archive[state4-offsets4-1-capacity] PASSED [ 84%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_preflight_preserves_legacy_absence_but_refuses_partial_pair PASSED [ 85%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_capture_converges_final_serialization_failure[state] PASSED [ 85%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_capture_converges_final_serialization_failure[offsets] PASSED [ 85%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_history_flux_snapshot_capture_converges_final_serialization_failure[assignment] PASSED [ 86%]
+tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py::test_legacy_archive_absence_clears_live_sources_before_program_import PASSED [ 86%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_checkpoint_migration_provenance_has_a_fixed_budgeted_envelope PASSED [ 87%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart PASSED [ 87%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_uniform_v2_authority_requires_an_empty_native_exchange_mailbox PASSED [ 88%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[1.0] PASSED [ 88%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[-0.0] PASSED [ 88%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[nan] PASSED [ 89%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_dense_uniform_authority_refuses_spurious_regrid_replay_schedule FAILED [ 89%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts FAILED [ 90%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-content SHA-256] FAILED [ 90%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-Program hash] FAILED [ 91%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-live resource budget] FAILED [ 91%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-authority or target lifecycle pins] FAILED [ 91%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-auxiliary checkpoint SHA-256] FAILED [ 92%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-auxiliary registry contract] FAILED [ 92%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-block mapping] FAILED [ 93%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-complete authority transfer set] FAILED [ 93%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_ambiguous_legacy_schema_is_refused_without_publication FAILED [ 94%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_tampered_current_authority_is_refused_without_publication FAILED [ 94%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_resealed_tampered_auxiliary_authority_is_refused_without_publication FAILED [ 94%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_resealed_nonempty_auxiliary_authority_is_refused_without_publication FAILED [ 95%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_authority_history_ledger_must_match_the_legacy_trajectory FAILED [ 95%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_existing_destination_is_never_replaced FAILED [ 96%]
+tests/python/unit/codegen/test_checkpoint_migration.py::test_destination_race_at_atomic_link_is_no_clobber FAILED [ 96%]
+tests/python/unit/runtime/test_m23_m05_converged_checker.py::test_receipts_preserve_states_ledgers_and_historical_failures PASSED [ 97%]
+tests/python/unit/runtime/test_m23_m05_converged_checker.py::test_corrupt_saved_state_is_refused PASSED [ 97%]
+tests/python/unit/runtime/test_m23_m05_converged_checker.py::test_missing_rank_receipt_is_refused PASSED [ 97%]
+tests/python/unit/runtime/test_m23_m05_converged_checker.py::test_historical_failure_cannot_be_erased_by_rehashing PASSED [ 98%]
+tests/python/unit/runtime/test_m23_m05_converged_checker.py::test_nan_ledger_is_refused_even_after_manifest_rehash PASSED [ 98%]
+tests/python/unit/runtime/test_m23_m05_converged_checker.py::test_python_refresh_cannot_be_attached_to_previous_source_window PASSED [ 99%]
+tests/python/unit/runtime/test_m23_m05_converged_checker.py::test_nested_artifact_identity_must_match_across_backends PASSED [ 99%]
+tests/python/unit/runtime/test_m23_m05_converged_checker.py::test_cache_binary_cannot_be_added_by_rehashing PASSED [100%]
+
+=================================== FAILURES ===================================
+___ test_actual_transport_emitter_intersects_coverage_and_embedded_boundary ____
+tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py:168: in test_actual_transport_emitter_intersects_coverage_and_embedded_boundary
+    assert compiled.returncode == 0, compiled.stderr
+E   AssertionError: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-20260930/pytest-tmp/test_actual_transport_emitter_0/coverage.cpp:1:10: fatal error: 'pops/runtime/program/accepted_exchange.hpp' file not found
+E         1 | #include <pops/runtime/program/accepted_exchange.hpp>
+E           |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+E     1 error generated.
+E     
+E   assert 1 == 0
+E    +  where 1 = CompletedProcess(args=['/usr/bin/clang++', '-std=c++20', '-O2', '-I', '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/include', '/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-20260930/pytest-tmp/test_actual_transport_emitter_0/coverage.cpp', '-o', '/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-20260930/pytest-tmp/test_actual_transport_emitter_0/coverage'], returncode=1, stdout='', stderr="/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-20260930/pytest-tmp/test_actual_transport_emitter_0/coverage.cpp:1:10: fatal error: 'pops/runtime/program/accepted_exchange.hpp' file not found\n    1 | #include <pops/runtime/program/accepted_exchange.hpp>\n      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n1 error generated.\n").returncode
+___ test_actual_diffusion_producer_intersects_coverage_and_embedded_boundary ___
+tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py:185: in test_actual_diffusion_producer_intersects_coverage_and_embedded_boundary
+    header = (root / "include/pops/numerics/diffusion/prepared_diffusion.hpp").read_text()
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/pathlib.py:1013: in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/include/pops/numerics/diffusion/prepared_diffusion.hpp'
+___ test_production_coverage_lookup_does_not_reenter_collective_preparation ____
+tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py:285: in test_production_coverage_lookup_does_not_reenter_collective_preparation
+    "amr_program_context_history_checkpoint_public.inc").read_text()
+                                                         ^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/pathlib.py:1013: in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/include/pops/runtime/program/amr_program_context_history_checkpoint_public.inc'
+__________________ test_m27_full_program_syntax[False-False] ___________________
+tests/python/unit/codegen/test_m27_complete_program_review.py:36: in test_m27_full_program_syntax
+    compiler.test_m23_complete_ssprk2_program_syntax(tmp_path, 2, permuted, insufficient)
+E   TypeError: test_m23_complete_ssprk2_program_syntax() missing 1 required positional argument: 'repeated'
+___________________ test_m27_full_program_syntax[True-True] ____________________
+tests/python/unit/codegen/test_m27_complete_program_review.py:36: in test_m27_full_program_syntax
+    compiler.test_m23_complete_ssprk2_program_syntax(tmp_path, 2, permuted, insufficient)
+E   TypeError: test_m23_complete_ssprk2_program_syntax() missing 1 required positional argument: 'repeated'
+__________________ test_m26_full_program_syntax[False-False] ___________________
+tests/python/unit/codegen/test_m26_complete_program_review.py:43: in test_m26_full_program_syntax
+    compiler.test_m23_complete_ssprk2_program_syntax(tmp_path, 12, permuted, nonuniform)
+E   TypeError: test_m23_complete_ssprk2_program_syntax() missing 1 required positional argument: 'repeated'
+___________________ test_m26_full_program_syntax[False-True] ___________________
+tests/python/unit/codegen/test_m26_complete_program_review.py:43: in test_m26_full_program_syntax
+    compiler.test_m23_complete_ssprk2_program_syntax(tmp_path, 12, permuted, nonuniform)
+E   TypeError: test_m23_complete_ssprk2_program_syntax() missing 1 required positional argument: 'repeated'
+___________________ test_m26_full_program_syntax[True-False] ___________________
+tests/python/unit/codegen/test_m26_complete_program_review.py:43: in test_m26_full_program_syntax
+    compiler.test_m23_complete_ssprk2_program_syntax(tmp_path, 12, permuted, nonuniform)
+E   TypeError: test_m23_complete_ssprk2_program_syntax() missing 1 required positional argument: 'repeated'
+___________________ test_m26_full_program_syntax[True-True] ____________________
+tests/python/unit/codegen/test_m26_complete_program_review.py:43: in test_m26_full_program_syntax
+    compiler.test_m23_complete_ssprk2_program_syntax(tmp_path, 12, permuted, nonuniform)
+E   TypeError: test_m23_complete_ssprk2_program_syntax() missing 1 required positional argument: 'repeated'
+_____ test_dense_uniform_authority_refuses_spurious_regrid_replay_schedule _____
+tests/python/unit/codegen/test_checkpoint_migration.py:320: in test_dense_uniform_authority_refuses_spurious_regrid_replay_schedule
+    authority, owner, _restart, _ = _write_authority(tmp_path, native_cxx)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+_______ test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts ________
+tests/python/unit/codegen/test_checkpoint_migration.py:437: in test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts
+    authority, owner, authority_restart, _ = _write_authority(tmp_path, native_cxx)
+                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+___ test_refused_mapping_publishes_no_destination[<lambda>-content SHA-256] ____
+tests/python/unit/codegen/test_checkpoint_migration.py:538: in test_refused_mapping_publishes_no_destination
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+_____ test_refused_mapping_publishes_no_destination[<lambda>-Program hash] _____
+tests/python/unit/codegen/test_checkpoint_migration.py:538: in test_refused_mapping_publishes_no_destination
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+_ test_refused_mapping_publishes_no_destination[<lambda>-live resource budget] _
+tests/python/unit/codegen/test_checkpoint_migration.py:538: in test_refused_mapping_publishes_no_destination
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+_ test_refused_mapping_publishes_no_destination[<lambda>-authority or target lifecycle pins] _
+tests/python/unit/codegen/test_checkpoint_migration.py:538: in test_refused_mapping_publishes_no_destination
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+_ test_refused_mapping_publishes_no_destination[<lambda>-auxiliary checkpoint SHA-256] _
+tests/python/unit/codegen/test_checkpoint_migration.py:538: in test_refused_mapping_publishes_no_destination
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+_ test_refused_mapping_publishes_no_destination[<lambda>-auxiliary registry contract] _
+tests/python/unit/codegen/test_checkpoint_migration.py:538: in test_refused_mapping_publishes_no_destination
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+____ test_refused_mapping_publishes_no_destination[<lambda>-block mapping] _____
+tests/python/unit/codegen/test_checkpoint_migration.py:538: in test_refused_mapping_publishes_no_destination
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+_ test_refused_mapping_publishes_no_destination[<lambda>-complete authority transfer set] _
+tests/python/unit/codegen/test_checkpoint_migration.py:538: in test_refused_mapping_publishes_no_destination
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+_________ test_ambiguous_legacy_schema_is_refused_without_publication __________
+tests/python/unit/codegen/test_checkpoint_migration.py:559: in test_ambiguous_legacy_schema_is_refused_without_publication
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+________ test_tampered_current_authority_is_refused_without_publication ________
+tests/python/unit/codegen/test_checkpoint_migration.py:584: in test_tampered_current_authority_is_refused_without_publication
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+__ test_resealed_tampered_auxiliary_authority_is_refused_without_publication ___
+tests/python/unit/codegen/test_checkpoint_migration.py:609: in test_resealed_tampered_auxiliary_authority_is_refused_without_publication
+    authority, owner, authority_restart, _ = _write_authority(tmp_path, native_cxx)
+                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+__ test_resealed_nonempty_auxiliary_authority_is_refused_without_publication ___
+tests/python/unit/codegen/test_checkpoint_migration.py:650: in test_resealed_nonempty_auxiliary_authority_is_refused_without_publication
+    authority, owner, authority_restart, _ = _write_authority(tmp_path, native_cxx)
+                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+________ test_authority_history_ledger_must_match_the_legacy_trajectory ________
+tests/python/unit/codegen/test_checkpoint_migration.py:688: in test_authority_history_ledger_must_match_the_legacy_trajectory
+    authority, owner, restart, _ = _write_authority(
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+_________________ test_existing_destination_is_never_replaced __________________
+tests/python/unit/codegen/test_checkpoint_migration.py:708: in test_existing_destination_is_never_replaced
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+______________ test_destination_race_at_atomic_link_is_no_clobber ______________
+tests/python/unit/codegen/test_checkpoint_migration.py:726: in test_destination_race_at_atomic_link_is_no_clobber
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/unit/codegen/test_checkpoint_migration.py:253: in _write_authority
+    runtime = _bound_history_runtime(native_cxx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/native_loader/test_uniform_restart_missing_history.py:82: in _bound_history_runtime
+    artifact = pops.compile(resolved)
+               ^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:49: in compile
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native_selector.py:245: in select_native_dimension
+    raise RuntimeError(
+E   RuntimeError: this process already selected PoPS Dim=1 and cannot switch to Dim=2; use a separate process
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-coherent-units-fc0-20260930/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py::test_actual_transport_emitter_intersects_coverage_and_embedded_boundary
+FAILED tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py::test_actual_diffusion_producer_intersects_coverage_and_embedded_boundary
+FAILED tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py::test_production_coverage_lookup_does_not_reenter_collective_preparation
+FAILED tests/python/unit/codegen/test_m27_complete_program_review.py::test_m27_full_program_syntax[False-False]
+FAILED tests/python/unit/codegen/test_m27_complete_program_review.py::test_m27_full_program_syntax[True-True]
+FAILED tests/python/unit/codegen/test_m26_complete_program_review.py::test_m26_full_program_syntax[False-False]
+FAILED tests/python/unit/codegen/test_m26_complete_program_review.py::test_m26_full_program_syntax[False-True]
+FAILED tests/python/unit/codegen/test_m26_complete_program_review.py::test_m26_full_program_syntax[True-False]
+FAILED tests/python/unit/codegen/test_m26_complete_program_review.py::test_m26_full_program_syntax[True-True]
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_dense_uniform_authority_refuses_spurious_regrid_replay_schedule
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-content SHA-256]
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-Program hash]
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-live resource budget]
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-authority or target lifecycle pins]
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-auxiliary checkpoint SHA-256]
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-auxiliary registry contract]
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-block mapping]
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_refused_mapping_publishes_no_destination[<lambda>-complete authority transfer set]
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_ambiguous_legacy_schema_is_refused_without_publication
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_tampered_current_authority_is_refused_without_publication
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_resealed_tampered_auxiliary_authority_is_refused_without_publication
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_resealed_nonempty_auxiliary_authority_is_refused_without_publication
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_authority_history_ledger_must_match_the_legacy_trajectory
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_existing_destination_is_never_replaced
+FAILED tests/python/unit/codegen/test_checkpoint_migration.py::test_destination_race_at_atomic_link_is_no_clobber
+======================= 26 failed, 208 passed in 53.91s ========================

@@ -1,0 +1,121 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 6 items
+
+tests/python/integration/runtime/test_integral_state_trace_runtime.py::test_native_accepted_face_amount_and_initial_read[uniform] FAILED [ 16%]
+tests/python/integration/runtime/test_integral_state_trace_runtime.py::test_native_accepted_face_amount_and_initial_read[amr1] FAILED [ 33%]
+tests/python/integration/runtime/test_integral_state_trace_runtime.py::test_native_accepted_face_amount_and_initial_read[amr2] FAILED [ 50%]
+tests/python/integration/runtime/test_integral_state_public_restart.py::test_public_ssprk_integral_restart_in_fresh_instance FAILED [ 66%]
+tests/python/integration/runtime/test_integral_state_public_restart.py::test_public_integral_refusal_restores_envelope_and_safe_retry[absent_periodic_trace] FAILED [ 83%]
+tests/python/integration/runtime/test_integral_state_public_restart.py::test_public_integral_refusal_restores_envelope_and_safe_retry[unsafe_dt] FAILED [100%]
+
+=================================== FAILURES ===================================
+__________ test_native_accepted_face_amount_and_initial_read[uniform] __________
+tests/python/integration/runtime/test_integral_state_trace_runtime.py:144: in test_native_accepted_face_amount_and_initial_read
+    save_public_snapshot(world, runtime, artifact, quantity, directory, "initial", amr=kind != "uniform")
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', "collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.AttributeError: 'NoneType' object has no attribute 'to_data'", True),)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] integral-uniform: compile and publish start
+[rank 0] integral-uniform: compile and publish done
+___________ test_native_accepted_face_amount_and_initial_read[amr1] ____________
+tests/python/integration/runtime/test_integral_state_trace_runtime.py:144: in test_native_accepted_face_amount_and_initial_read
+    save_public_snapshot(world, runtime, artifact, quantity, directory, "initial", amr=kind != "uniform")
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', "collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint AMR accepted-state capture preflight failed: rank 0: builtins.AttributeError: 'NoneType' object has no attribute 'to_data'", True),)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] integral-amr1: compile and publish start
+[rank 0] integral-amr1: compile and publish done
+___________ test_native_accepted_face_amount_and_initial_read[amr2] ____________
+tests/python/integration/runtime/test_integral_state_trace_runtime.py:144: in test_native_accepted_face_amount_and_initial_read
+    save_public_snapshot(world, runtime, artifact, quantity, directory, "initial", amr=kind != "uniform")
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', "collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint AMR accepted-state capture preflight failed: rank 0: builtins.AttributeError: 'NoneType' object has no attribute 'to_data'", True),)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] integral-amr2: compile and publish start
+[rank 0] integral-amr2: compile and publish done
+_____________ test_public_ssprk_integral_restart_in_fresh_instance _____________
+tests/python/integration/runtime/test_integral_state_public_restart.py:142: in test_public_ssprk_integral_restart_in_fresh_instance
+    _save(world, runtime, artifact, quantity, directory, "initial")
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', "collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.AttributeError: 'NoneType' object has no attribute 'to_data'", True),)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] integral-public-restart: compile and publish start
+[rank 0] integral-public-restart: compile and publish done
+_ test_public_integral_refusal_restores_envelope_and_safe_retry[absent_periodic_trace] _
+tests/python/integration/runtime/test_integral_state_public_restart.py:188: in test_public_integral_refusal_restores_envelope_and_safe_retry
+    _, before = _save(world, runtime, artifact, quantity, directory, "before")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', "collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.AttributeError: 'NoneType' object has no attribute 'to_data'", True),)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] integral-public-restart: compile and publish start
+[rank 0] integral-public-restart: compile and publish done
+___ test_public_integral_refusal_restores_envelope_and_safe_retry[unsafe_dt] ___
+tests/python/integration/runtime/test_integral_state_public_restart.py:188: in test_public_integral_refusal_restores_envelope_and_safe_retry
+    _, before = _save(world, runtime, artifact, quantity, directory, "before")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', "collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.AttributeError: 'NoneType' object has no attribute 'to_data'", True),)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] integral-public-restart: compile and publish start
+[rank 0] integral-public-restart: compile and publish done
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_integral_state_trace_runtime.py::test_native_accepted_face_amount_and_initial_read[uniform]
+tests/python/integration/runtime/test_integral_state_trace_runtime.py::test_native_accepted_face_amount_and_initial_read[amr1]
+tests/python/integration/runtime/test_integral_state_trace_runtime.py::test_native_accepted_face_amount_and_initial_read[amr2]
+  tests/python/integration/runtime/test_integral_state_trace_runtime.py:107: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("kind", ("uniform", "amr1", "amr2"))
+
+tests/python/integration/runtime/test_integral_state_public_restart.py::test_public_ssprk_integral_restart_in_fresh_instance
+  tests/python/integration/runtime/test_integral_state_public_restart.py:134: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    def test_public_ssprk_integral_restart_in_fresh_instance(
+
+tests/python/integration/runtime/test_integral_state_public_restart.py::test_public_integral_refusal_restores_envelope_and_safe_retry[absent_periodic_trace]
+tests/python/integration/runtime/test_integral_state_public_restart.py::test_public_integral_refusal_restores_envelope_and_safe_retry[unsafe_dt]
+  tests/python/integration/runtime/test_integral_state_public_restart.py:178: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("failure", ("absent_periodic_trace", "unsafe_dt"))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-native-initial-checkpoint-fc0-20260930/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_integral_state_trace_runtime.py::test_native_accepted_face_amount_and_initial_read[uniform]
+FAILED tests/python/integration/runtime/test_integral_state_trace_runtime.py::test_native_accepted_face_amount_and_initial_read[amr1]
+FAILED tests/python/integration/runtime/test_integral_state_trace_runtime.py::test_native_accepted_face_amount_and_initial_read[amr2]
+FAILED tests/python/integration/runtime/test_integral_state_public_restart.py::test_public_ssprk_integral_restart_in_fresh_instance
+FAILED tests/python/integration/runtime/test_integral_state_public_restart.py::test_public_integral_refusal_restores_envelope_and_safe_retry[absent_periodic_trace]
+FAILED tests/python/integration/runtime/test_integral_state_public_restart.py::test_public_integral_refusal_restores_envelope_and_safe_retry[unsafe_dt]
+================== 6 failed, 6 warnings in 212.08s (0:03:32) ===================

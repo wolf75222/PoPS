@@ -1,0 +1,55 @@
+Test project /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi
+      Start  944: PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting
+ 1/20 Test  #944: PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting ........................   Passed    0.06 sec
+      Start  945: PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive
+ 2/20 Test  #945: PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive ..............   Passed    0.04 sec
+      Start  946: PreparedDiffusion.RejectsFailedConstitutiveEvaluationInPreparedInternalGhost
+ 3/20 Test  #946: PreparedDiffusion.RejectsFailedConstitutiveEvaluationInPreparedInternalGhost .................   Passed    0.04 sec
+      Start  947: PreparedDiffusion.SparseAmrLevelPreservesFullDomainRefusalAndUsesPreparedGhosts
+ 4/20 Test  #947: PreparedDiffusion.SparseAmrLevelPreservesFullDomainRefusalAndUsesPreparedGhosts ..............   Passed    0.04 sec
+      Start  948: PreparedDiffusion.SparsePeriodicEdgesAndCornersUsePreparedGhostsWithoutFineDonors
+ 5/20 Test  #948: PreparedDiffusion.SparsePeriodicEdgesAndCornersUsePreparedGhostsWithoutFineDonors ............   Passed    0.04 sec
+      Start  949: PreparedDiffusion.SparsePeriodicVariableLawMatchesFullDomainReference
+ 6/20 Test  #949: PreparedDiffusion.SparsePeriodicVariableLawMatchesFullDomainReference ........................   Passed    0.04 sec
+      Start  950: PreparedDiffusion.SparsePeriodicGhostStatusAndNonfiniteValuesFailBeforeWriting
+ 7/20 Test  #950: PreparedDiffusion.SparsePeriodicGhostStatusAndNonfiniteValuesFailBeforeWriting ...............   Passed    0.04 sec
+      Start  951: PreparedDiffusion.SparseMixedBoundaryExcludesPhysicalExteriorFromConstitutiveLaw
+ 8/20 Test  #951: PreparedDiffusion.SparseMixedBoundaryExcludesPhysicalExteriorFromConstitutiveLaw .............   Passed    0.04 sec
+      Start  952: PreparedDiffusion.VariableDiagonalStaysInsideDivergenceWithPhysicalValueTrace
+ 9/20 Test  #952: PreparedDiffusion.VariableDiagonalStaysInsideDivergenceWithPhysicalValueTrace ................   Passed    0.04 sec
+      Start  953: PreparedDiffusion.BernoulliRetainsZeroJumpAndLargeDriftLimits
+10/20 Test  #953: PreparedDiffusion.BernoulliRetainsZeroJumpAndLargeDriftLimits ................................   Passed    0.03 sec
+      Start  954: PreparedDiffusion.FittedZeroPotentialIsTheSameConservativeDiffusion
+11/20 Test  #954: PreparedDiffusion.FittedZeroPotentialIsTheSameConservativeDiffusion ..........................   Passed    0.04 sec
+      Start  955: PreparedDiffusion.FittedExponentialEquilibriumHasZeroOrientedFaceExchange
+12/20 Test  #955: PreparedDiffusion.FittedExponentialEquilibriumHasZeroOrientedFaceExchange ....................   Passed    0.04 sec
+      Start  956: PreparedDiffusion.FailedConstitutiveOutputsStayUnreadAndPreserveExactWorstReason
+13/20 Test  #956: PreparedDiffusion.FailedConstitutiveOutputsStayUnreadAndPreserveExactWorstReason .............   Passed    0.04 sec
+      Start  957: PreparedDiffusion.ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEachInventory
+14/20 Test  #957: PreparedDiffusion.ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEachInventory ..........   Passed    0.04 sec
+      Start  958: PreparedDiffusion.FullVariableTensorAndCrossGradientsDissipateAndConvergeInThreeDimensions
+15/20 Test  #958: PreparedDiffusion.FullVariableTensorAndCrossGradientsDissipateAndConvergeInThreeDimensions ...   Passed    2.01 sec
+      Start  959: PreparedDiffusion.TensorRejectsAnIndefiniteMetricBeforePublishingFaces
+16/20 Test  #959: PreparedDiffusion.TensorRejectsAnIndefiniteMetricBeforePublishingFaces .......................   Passed    0.04 sec
+      Start  960: PreparedDiffusion.DistinctComponentValueTracesDriveTheirOwnBoundaryFluxes
+17/20 Test  #960: PreparedDiffusion.DistinctComponentValueTracesDriveTheirOwnBoundaryFluxes ....................   Passed    0.04 sec
+      Start  961: PreparedDiffusion.FittedThreeAxisPeriodicEquilibriumUsesEveryPotentialGradient
+18/20 Test  #961: PreparedDiffusion.FittedThreeAxisPeriodicEquilibriumUsesEveryPotentialGradient ...............   Passed    0.04 sec
+      Start  962: PreparedDiffusion.TensorRejectsAnIndefiniteConstitutiveJacobianWithPositiveSpatialMetric
+19/20 Test  #962: PreparedDiffusion.TensorRejectsAnIndefiniteConstitutiveJacobianWithPositiveSpatialMetric .....   Passed    0.04 sec
+      Start 1278: test_mpi_exchange_batches_np3
+20/20 Test #1278: test_mpi_exchange_batches_np3 ................................................................   Passed    0.42 sec
+
+100% tests passed out of 20
+
+Label Time Summary:
+backend                                 =   1.26 sec*proc (1 test)
+cpp-target:test_mpi_exchange_batches    =   1.26 sec*proc (1 test)
+cpp-target:test_prepared_diffusion      =   2.71 sec*proc (19 tests)
+fast                                    =   2.71 sec*proc (19 tests)
+medium                                  =   1.26 sec*proc (1 test)
+mpi                                     =   1.26 sec*proc (1 test)
+runtime                                 =   2.71 sec*proc (19 tests)
+unit                                    =   2.71 sec*proc (19 tests)
+
+Total Test time (real) =   3.19 sec

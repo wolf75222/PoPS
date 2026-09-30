@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_checks.py", line 161, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_checks.py", line 108, in main
+    raise RuntimeError(f"installed/source mismatch for {name}: {installed}")
+RuntimeError: installed/source mismatch for include/pops/mesh/geometry/swept_interval.hpp: /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/mesh/geometry/swept_interval.hpp
