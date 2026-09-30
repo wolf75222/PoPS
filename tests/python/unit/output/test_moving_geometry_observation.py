@@ -43,3 +43,37 @@ def test_moving_geometry_requires_exact_positive_endpoint_measures():
         replace(geometry,cell_volumes=np.full(3,1/3))
     with pytest.raises(ValueError,match="finite shape"):
         replace(geometry,node_coordinates=np.zeros((3,1)))
+
+
+@pytest.mark.parametrize("coordinate,measure", [
+    ("pops://coordinates/moving-cartesian-1d@1", None),
+    (None, "pops://cell-measures/endpoint-length@1"),
+    ("pops://coordinates/moving-cartesian-1d@1",
+     "pops://cell-measures/endpoint-length@1"),
+])
+def test_versioned_1d_geometry_refuses_rank_two(coordinate, measure):
+    geometry = _frame(cell_shape=(2, 2)).snapshot.geometries[0]
+    with pytest.raises(ValueError, match="spatial rank one"):
+        replace(geometry,
+                coordinate_system=coordinate or geometry.coordinate_system,
+                cell_measure=measure or geometry.cell_measure,
+                node_coordinates=np.zeros((3, 3, 2)))
+
+
+@pytest.mark.parametrize("attribute,value", [
+    ("coordinate_system", "pops://coordinates/cartesian-1d@1"),
+    ("cell_measure", "pops://cell-measures/cartesian@1"),
+])
+def test_versioned_1d_geometry_requires_coherent_pair(attribute, value):
+    frame, _ = moving_frame()
+    with pytest.raises(ValueError, match="coordinate/measure pair"):
+        replace(frame.snapshot.geometries[0], **{attribute: value})
+
+
+def test_future_geometry_uris_are_not_restricted_to_current_1d_contract():
+    geometry = _frame(cell_shape=(2, 2)).snapshot.geometries[0]
+    future = replace(geometry,
+                     coordinate_system="pops://coordinates/future-curvilinear-2d@1",
+                     cell_measure="pops://cell-measures/future-area@1",
+                     node_coordinates=np.zeros((3, 3, 2)))
+    assert future.spatial_rank == 2

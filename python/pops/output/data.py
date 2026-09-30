@@ -351,8 +351,14 @@ class LevelGeometry:
             raise ValueError("cell_volumes must be finite and strictly positive")
         object.__setattr__(self, "coverage", coverage)
         object.__setattr__(self, "cell_volumes", volumes)
-        if (self.coordinate_system == "pops://coordinates/moving-cartesian-1d@1" or
-            self.cell_measure == "pops://cell-measures/endpoint-length@1") and self.node_coordinates is None:
+        moving_1d_coordinates = self.coordinate_system == "pops://coordinates/moving-cartesian-1d@1"
+        endpoint_length_measure = self.cell_measure == "pops://cell-measures/endpoint-length@1"
+        if moving_1d_coordinates or endpoint_length_measure:
+            if dimension != 1:
+                raise ValueError("versioned moving 1D geometry requires spatial rank one")
+            if not (moving_1d_coordinates and endpoint_length_measure):
+                raise ValueError("versioned moving 1D geometry requires its coordinate/measure pair")
+        if moving_1d_coordinates and self.node_coordinates is None:
             raise ValueError("moving geometry requires explicit physical node_coordinates")
         if self.node_coordinates is not None:
             nodes = _array(self.node_coordinates, dtype=np.float64, borrow=native)
