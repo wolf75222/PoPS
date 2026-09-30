@@ -99,7 +99,8 @@ class CellCenteredNonlinearCoupled(CellCenteredGeneralCoupled):
     """Original mixed residual with explicitly selected central finite differences.
 
     The first realization admits constant diffusion and local nonlinear reactions,
-    on a Uniform Cartesian layout. Unknowns remain one coupled spatial product.
+    on Cartesian Uniform or synchronized AMR layouts. The AMR realization applies
+    one covered composite operator and solves the full coupled hierarchy.
     """
 
     def __init__(self, *, finite_difference_step: Any) -> None:

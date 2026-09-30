@@ -319,7 +319,7 @@ def program_provider_consumer_qid(model: Any, value_id: Any, block: Any = None) 
     return str(canonical()) + "/program/" + str(value_id)
 
 
-def _prepared_native_components(program: Any) -> tuple[Any, ...]:
+def _prepared_native_components(program: Any, *, target: str = "system") -> tuple[Any, ...]:
     """Return used native components in first-use order after authenticating every provider."""
 
     def walk(values: Any) -> Any:
@@ -340,6 +340,14 @@ def _prepared_native_components(program: Any) -> tuple[Any, ...]:
     components: list[Any] = []
     seen: set[str] = set()
     for value in walk(program._values):
+        if target == "amr_system" and value.op == "solve_spatial_field":
+            from pops.fields._program_nonlinear_problem import validate_nonlinear_field_request
+            from pops.codegen.program_emit_amr_original_field import original_amr_native_component
+            validate_nonlinear_field_request(program, value)
+            component = original_amr_native_component()
+            if component.manifest_sha256 not in seen:
+                seen.add(component.manifest_sha256)
+                components.append(component)
         from pops.native_calls import NativeFunction
         for function in value.attrs.get("native_functions", ()):
             if type(function) is not NativeFunction:
@@ -380,7 +388,7 @@ def _prepared_native_components(program: Any) -> tuple[Any, ...]:
     return tuple(components)
 
 
-def _prepared_native_component_includes(program: Any) -> str:
+def _prepared_native_component_includes(program: Any, *, target: str = "system") -> str:
     """Return entry headers from the typed native components used by prepared providers.
 
     Provider selection is fully data-driven: no backend name, include root or arbitrary compiler
@@ -388,7 +396,7 @@ def _prepared_native_component_includes(program: Any) -> str:
     """
     headers: list[str] = []
     seen: set[str] = set()
-    for component in _prepared_native_components(program):
+    for component in _prepared_native_components(program, target=target):
         for header in component.entry_headers:
             if header not in seen:
                 seen.add(header)

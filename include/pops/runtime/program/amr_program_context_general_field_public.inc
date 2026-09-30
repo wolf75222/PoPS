@@ -88,6 +88,68 @@ field_type& hierarchy_field_solution(std::int64_t key) const {
   return configured_hierarchy_field_solver_(key).solution(active_level_);
 }
 
+/// Retain the actual prepared provider across attempt rejection/resource retirement.
+std::shared_ptr<hierarchy_tensor_solver_type> retain_hierarchy_field_solver(
+    std::int64_t key) const {
+  (void)configured_hierarchy_field_solver_(key);
+  return hierarchy_field_resources_.at(key).solver;
+}
+
+/// Build authority by visiting the synchronized attempt envelopes themselves.
+/// Resource-only level selection is insufficient to authenticate a physical point.
+AmrFieldResidualAuthority original_hierarchy_field_authority(
+    std::int64_t key, const std::string& equation_identity, const std::string& graph_identity,
+    const std::string& clock_identity, ::pops::amr::Rational expected_stage,
+    const std::vector<std::string>& capture_identities, const std::vector<int>& capture_components,
+    const std::vector<int>& capture_blocks) const {
+  (void)configured_hierarchy_field_solver_(key);
+  // Materialization can enter collectives, so every rank performs this before
+  // inspecting local EB/capture metadata, including ranks with empty levels.
+  const bool shared = facade_->prepared_amr_multiblock_hierarchy_().has_interface_flux_provider();
+  AmrFieldResidualAuthority authority;
+  prepare_spatial_collectively([&] {
+    const auto& resource = hierarchy_field_resources_.at(key);
+    if (equation_identity.empty() ||
+        resource.selection.operator_contract_identity != equation_identity ||
+        graph_identity.empty() || graph_identity != facade_->installed_program_hash() || shared ||
+        clock_identity.empty() || clock_identity != primary_clock_ ||
+        expected_stage.denominator <= 0 || expected_stage.numerator < 0 ||
+        expected_stage.numerator > expected_stage.denominator ||
+        ::pops::amr::Rational(expected_stage.numerator, expected_stage.denominator) !=
+            expected_stage ||
+        capture_identities.size() != capture_components.size() ||
+        capture_identities.size() != capture_blocks.size())
+      throw std::invalid_argument(
+          "original AMR field invocation has invalid physical/graph authority");
+    authority.owner = this;
+    authority.attempt = resource_attempt();
+    authority.topology_epoch = runtime_->topology_epoch();
+    authority.materialization_generation = runtime_->materialization_generation();
+    authority.original_equation_identity = equation_identity;
+    authority.capture_identities = capture_identities;
+    authority.capture_components = capture_components;
+    for (int level = 0; level < nlev(); ++level)
+      with_program_attempt_level(level, [&] {
+        for (int runtime_block = 0; runtime_block < facade_->n_blocks(); ++runtime_block)
+          if (facade_->prepared_amr_block_level_active_mask(runtime_block, level))
+            throw std::invalid_argument(
+                "original AMR field provider has no embedded-boundary operator authority");
+        for (int program_block : capture_blocks)
+          (void)sys_block(program_block);
+        authority.level_attempts.push_back(resource_attempt());
+        auto point = boundary_evaluation_point(0);
+        if (point.clock != clock_identity || point.stage_fraction != expected_stage)
+          throw std::invalid_argument(
+              "original AMR field physical point differs from its authored stage");
+        point.graph_identity = graph_identity;
+        point.rate_identity = equation_identity;
+        point.application_identity = resource.field_identity + ":solve:" + std::to_string(key);
+        authority.points.push_back(std::move(point));
+      });
+  });
+  return authority;
+}
+
 #include <pops/runtime/program/amr_program_context_general_field_scratch.inc>
 
 void stage_hierarchy_field_initial_guess(std::int64_t key) const {

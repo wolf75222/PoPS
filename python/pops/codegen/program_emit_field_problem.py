@@ -14,6 +14,11 @@ def hierarchy_field_solve(value: Any) -> Any:
     if value.op == "field_component":
         from pops.fields._observation_contract import validate_field_observation
         return validate_field_observation(value)[2]
+    if value.op == "field_problem_coefficients":
+        from pops.codegen.program_emit_amr_original_field import original_field_consumer
+        original = original_field_consumer(value)
+        if original is not None:
+            return original
     matches = []
     for solve in value.prog._values:
         if solve.op != "solve_linear" or solve.attrs.get("hierarchy_field_identity") != value.attrs.get("field_problem_identity"):
@@ -37,7 +42,9 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         raise NotImplementedError("field expression storage requires a supported native Program body")
     hierarchy = target == "amr_system"
     if hierarchy and value.op != "field_component" and value.attrs.get("scope") != "hierarchy":
-        raise ValueError("AMR general fields require a synchronized hierarchy numerical solver")
+        from pops.codegen.program_emit_amr_original_field import original_field_consumer
+        if value.op != "field_problem_coefficients" or original_field_consumer(value) is None:
+            raise ValueError("AMR general fields require a synchronized hierarchy numerical solver")
     identity = Identity.from_token(value.attrs.get("field_problem_identity"))
     if identity.domain != "field-problem":
         raise ValueError("field expression lost its physical field-problem identity")
@@ -45,6 +52,13 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
     if type(ncomp) is not int or ncomp < 1:
         raise ValueError("field expression requires a positive exact component count")
     component = value.op == "field_component"
+    original_hierarchy = False
+    if hierarchy:
+        original_hierarchy = hierarchy_field_solve(value).op == "solve_spatial_field"
+        if original_hierarchy:
+            from pops.codegen.program_emit_solve import _solve_stage_fraction
+            stage = _solve_stage_fraction(hierarchy_field_solve(value))
+            lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     sources = tuple(value.inputs)
     expressions = []
     if component:
@@ -116,6 +130,10 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
     lines.extend([
         "  if (pops::all_reduce_max(field_layout_invalid, ctx.prepared_execution_lane()) != 0)",
         '    throw std::invalid_argument("field expression inputs require exact layout/distribution identity");',
+    ])
+    if original_hierarchy:
+        lines += ["  pops::Real field_value_invalid = 0;", "  ctx.prepare_spatial_collectively([&] {"]
+    lines.extend([
         "  for (std::size_t li = 0; li < %s.local_size(); ++li) {" % destination,
         "    auto output = %s.fab(li).view();" % destination,
         "    auto status = %s_status->fab(li).view();" % token,
@@ -133,8 +151,13 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         "      status(index, 0) = finite ? pops::Real(0) : pops::Real(1);",
         "    });",
         "  }",
-        "  if (pops::all_reduce_max(pops::reduce_max_local(*%s_status), "
-        "ctx.prepared_execution_lane()) > 0)" % token,
+    ])
+    if original_hierarchy:
+        lines += ["    field_value_invalid = std::max(pops::Real(0), pops::reduce_max_local(*%s_status));" % token,
+                  "    Kokkos::fence();", "  });"]
+    local_invalid = "field_value_invalid" if original_hierarchy else "pops::reduce_max_local(*%s_status)" % token
+    lines.extend([
+        "  if (pops::all_reduce_max(%s, ctx.prepared_execution_lane()) > 0)" % local_invalid,
         "    throw pops::runtime::program::StepAttemptRejected("
         "pops::SolveStatus::kInvalidEvaluation, "
         "pops::runtime::program::StepAttemptDisposition::kReject, 0, "

@@ -144,7 +144,7 @@ class ResolvedProgramFieldPlan:
         }
         all_nodes = _nodes(program)
         for solve in solves:
-            if self.target == "amr_system" and solve.attrs.get("scope") != "hierarchy":
+            if self.target == "amr_system" and solve.attrs.get("scope") != "hierarchy" and solve.op != "solve_spatial_field":
                 raise ValueError("AMR field problems require an explicit synchronized hierarchy solver")
             if self.target == "system" and solve.attrs.get("scope") == "hierarchy":
                 raise ValueError("a hierarchy field solver requires an AMR layout")
@@ -159,8 +159,8 @@ class ResolvedProgramFieldPlan:
                 from pops.fields._program_problem import _physical_boundary
                 from pops.identity.scalar import scalar_data
                 validate_nonlinear_field_request(program, solve)
-                if self.target != "system" or type(self.discretization.method) is not CellCenteredNonlinearCoupled:
-                    raise ValueError("original mixed residual requires its explicit Uniform nonlinear method")
+                if self.target not in ("system", "amr_system") or type(self.discretization.method) is not CellCenteredNonlinearCoupled:
+                    raise ValueError("original mixed residual requires its explicit native nonlinear method")
                 captures = solve.inputs[2:2 + solve.attrs["capture_count"]]
                 diffusion, local = compile_equations(self.operator, captures)
                 if _canonical(local) != _canonical(solve.attrs["local_expressions"]) or \

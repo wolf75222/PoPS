@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -344,6 +345,107 @@ class PreparedHierarchyTensorSolver {
             }});
   }
 
+  /// Stage an externally evaluated original residual solution without publishing it.
+  /// The source operator owns synchronization and invocation authority; this method
+  /// only supplies the existing atomic publication images and collective Outcome.
+  SolveOutcome stage_original_field_candidate_collectively(
+      SolveReport report, const std::vector<field_type>* candidate, int maximum_iterations,
+      const ExecutionLane& lane, std::shared_ptr<PreparedHierarchyTensorSolver> owner,
+      std::function<void()> validate_authority,
+      std::function<void(std::vector<field_type>&)> synchronize_candidate) {
+    if (!prepared_lane_)
+      throw std::logic_error("original field publication has no prepared lane");
+    const auto& execution_lane = *prepared_lane_;
+    std::exception_ptr error;
+    try {
+      if (&lane != prepared_lane_ || !preparation_sealed_ || publication_active_ ||
+          owner.get() != this || !validate_authority || !synchronize_candidate ||
+          maximum_iterations < 0 || !solve_report_is_publishable(report, maximum_iterations))
+        throw std::invalid_argument("original field publication authority/report is invalid");
+    } catch (...) {
+      error = std::current_exception();
+    }
+    collectively_rethrow_exception(error, execution_lane, "original field publication admission");
+    ExactSolveReportConsensusScratch consensus;
+    if (!consensus.agrees(report, execution_lane))
+      throw std::invalid_argument("original field publication reports differ between ranks");
+    validate_authority();  // This authority callback owns its own collective protocol.
+    if (!report.solved_value_available())
+      return SolveOutcome::collective_lane(std::move(report), execution_lane);
+
+    struct Publication {
+      std::shared_ptr<PreparedHierarchyTensorSolver> owner;
+      std::function<void()> validate;
+    };
+    std::shared_ptr<Publication> publication;
+    error = {};
+    try {
+      publication = std::make_shared<Publication>(
+          Publication{std::move(owner), std::move(validate_authority)});
+      if (!candidate || candidate->size() != candidate_publication_.size())
+        throw std::invalid_argument("original field publication candidate depth differs");
+      for (std::size_t level = 0; level < candidate->size(); ++level) {
+        const auto& source = (*candidate)[level];
+        auto& target = candidate_publication_[level];
+        if (source.layout() != target.layout() || source.distribution() != target.distribution() ||
+            source.local_rank() != target.local_rank() || source.ncomp() != target.ncomp())
+          throw std::invalid_argument("original field publication candidate layout/width differs");
+        for (std::size_t patch = 0; patch < target.local_size(); ++patch) {
+          const auto input = source.fab(patch).view();
+          const auto output = target.fab(patch).view();
+          const int width = target.ncomp();
+          for_each_cell(target.box(patch), [=] POPS_HD(const Index<Dim>& cell) {
+            for (int component = 0; component < width; ++component)
+              output(cell, component) = input(cell, component);
+          });
+        }
+      }
+      Kokkos::fence();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    collectively_rethrow_exception(error, execution_lane, "original field candidate staging");
+    synchronize_candidate(candidate_publication_);
+    error = {};
+    try {
+      validate_candidate_publication_();
+      validate_finite_original_candidate_();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    collectively_rethrow_exception(error, execution_lane, "original field candidate validation");
+    publication->validate();
+    // No live field was touched while preparing these images. Accept is the
+    // single publication point; rejection merely releases the reservation.
+    publication_active_ = true;
+    return SolveOutcome::collective_lane(
+        std::move(report), execution_lane,
+        SolveOutcome::PublicationHooks{
+            publication.get(),
+            [](void* context) noexcept {
+              auto* staged = static_cast<Publication*>(context);
+              staged->owner->restore_or_terminate_(staged->owner->candidate_publication_);
+            },
+            nullptr,
+            [](void* context) noexcept {
+              static_cast<Publication*>(context)->owner->release_publication_();
+            },
+            publication,
+            [](void* context) {
+              auto* staged = static_cast<Publication*>(context);
+              std::exception_ptr error;
+              try {
+                staged->owner->validate_candidate_publication_();
+                staged->owner->validate_finite_original_candidate_();
+              } catch (...) {
+                error = std::current_exception();
+              }
+              collectively_rethrow_exception(error, *staged->owner->prepared_lane_,
+                                             "original field publication pre-Accept");
+              staged->validate();
+            }});
+  }
+
  protected:
   virtual SolveReport solve(const HierarchyTensorSolveControls& controls,
                             const ExecutionLane& lane) = 0;
@@ -385,6 +487,26 @@ class PreparedHierarchyTensorSolver {
   }
 
   void release_publication_() noexcept { publication_active_ = false; }
+
+  void validate_finite_original_candidate_() const {
+    Real invalid = Real(0);
+    for (const auto& field : candidate_publication_)
+      for (std::size_t patch = 0; patch < field.local_size(); ++patch) {
+        const auto values = field.fab(patch).view();
+        const int width = field.ncomp();
+        invalid = std::max(invalid,
+                           for_each_cell_reduce_max(
+                               field.fab(patch).grown_box(), [=] POPS_HD(const Index<Dim>& cell) {
+                                 for (int component = 0; component < width; ++component)
+                                   if (!std::isfinite(values(cell, component)))
+                                     return Real(1);
+                                 return Real(0);
+                               }));
+      }
+    Kokkos::fence();
+    if (invalid != Real(0))
+      throw std::invalid_argument("original field publication contains a nonfinite value");
+  }
 
   std::vector<field_type> accepted_publication_;
   std::vector<field_type> candidate_publication_;

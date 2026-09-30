@@ -334,7 +334,7 @@ def _emit_cpp_program_impl(
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         system_install=_emit_system_install(
             target, prelude, body, provider_plans.cpp_install(target)),
-        prepared_native_component_includes=_prepared_native_component_includes(program),
+        prepared_native_component_includes=_prepared_native_component_includes(program, target=target),
         block_inverse_include=_block_inverse_include(program),
         amr_install=_emit_amr_install(
             program,

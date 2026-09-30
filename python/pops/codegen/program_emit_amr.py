@@ -738,7 +738,7 @@ def _emit_amr_install(
         else:
             gather, solve, publish = hierarchy_bodies
             observe = None
-        spatial_solve = any(value.op == "solve_spatial_nonlinear" for value in program._values)
+        spatial_solve = any(value.op in ("solve_spatial_nonlinear", "solve_spatial_field") for value in program._values)
         direct_field_solve = any("hierarchy_field_identity" in value.attrs for value in program._values)
         hierarchy_solve_driver = (
             # The spatial solve checks out each prepared level itself for predictor

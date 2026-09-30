@@ -50,20 +50,24 @@ def mixed_case(order=(0, 1), *, width=2, solver=None, boundary=None):
     return case, field, program, current, request, block, forcing, frame
 
 
-def finish(case, field, program, current, request, block, forcing, frame, *, mutate=None):
+def finish(case, field, program, current, request, block, forcing, frame, *, mutate=None, layout=None, target="system"):
     solved = program.solve(request, solver=field.default_program_solver()).consume(action=FailRun())
     observed = field.observe(solved)
     for index, handle in enumerate(field._field_registry.resolved_registration(field).operator.unknowns):
-        program.store_history("observed_%d" % index, observed[handle], depth=1)
+        if target == "system":
+            program.store_history("observed_%d" % index, observed[handle], depth=1)
+        else:
+            program.record_scalar("observed_%d" % index, program.sum(observed[handle]))
     program.commit(current.next, program.value("constant-load", 1 * current.n, at=current.next.point))
     program.step_strategy(FixedDt(.01))
     if mutate is not None:
         mutate(program)
     case.program(program)
     case.initials.add(InitialCondition(state=block[forcing], value=BindArray(), projection=ConservativeCellAverage()))
-    layout = Uniform(CartesianGrid(frame=frame, cells=(8, 6), periodic=PeriodicAxes(frame.axes)))
+    if layout is None:
+        layout = Uniform(CartesianGrid(frame=frame, cells=(8, 6), periodic=PeriodicAxes(frame.axes)))
     resolved = pops.resolve(pops.validate(case), layout=layout)
-    return emit_cpp_program(resolved.time, model=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
+    return emit_cpp_program(resolved.time, model=ProgramModelGraph.from_resolved_blocks(resolved.blocks), target=target)
 
 
 @pytest.mark.parametrize("width,order", [(2, (0,1)), (2, (1,0)), (3, (2,0,1))])

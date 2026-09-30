@@ -290,6 +290,110 @@ TEST(CompositeGeneralField, OriginalApplyOnlyFiniteMatrixDoesNotClaimLinearSpdSo
   EXPECT_EQ(rejected.consume(SolveConsumption::kFailRun).status, SolveStatus::kInvalidEvaluation);
 }
 
+TEST(CompositeGeneralField, OriginalFieldOutcomeStagesAllLevelsAndRevalidatesBeforeAccept) {
+  auto lane = ExecutionLane::duplicate_world_collectively("original-amr-field-publication");
+  constexpr std::array<Real, 3> target{Real(.15), Real(.25), Real(.18)};
+  constexpr std::array<Real, 9> reaction{2, .2, -.1, .2, 1.8, .15, -.1, .15, 2.2};
+  std::array<Real, 3> load{};
+  for (int i = 0; i < 3; ++i) {
+    load[i] = Real(.2) * target[i] * target[i] * target[i];
+    for (int j = 0; j < 3; ++j)
+      load[i] += reaction[i * 3 + j] * target[j];
+  }
+  for (int mutation : {-1, 0, 1}) {
+    auto provider = original_field_provider(lane, 16, {0, 1, 2});
+    for (int level = 0; level < 2; ++level)
+      provider->solution(level).set_val(Real(4));
+    auto forcing = original_tower(*provider);
+    fill_constant(forcing, load);
+    PreparedResourceCache cache;
+    auto authority = original_authority(provider.get(), cache.begin_attempt(lane));
+    const std::array<const Solver::hierarchy_type*, 1> inputs{&forcing};
+    auto prepared = OriginalResidual::prepare(provider, authority, inputs, original_controls(),
+                                              Real(1e-5), lane);
+    const auto report = prepared->solve(authority, nullptr, original_local_body({0, 1, 2}), lane);
+    ASSERT_TRUE(report.solved_value_available());
+    auto validate = [&, prepared] { prepared->require_authority(authority, lane); };
+    {
+      auto outcome = provider->stage_original_field_candidate_collectively(
+          report, &prepared->candidate(authority, lane), original_controls().max_iterations, lane,
+          provider, validate,
+          [&](auto& fields) { provider->synchronize_original_field_candidate(fields); });
+      for (int level = 0; level < 2; ++level)
+        EXPECT_EQ(norm_inf(provider->solution(level), 0), Real(4));
+      if (mutation == -1) {
+        EXPECT_TRUE(outcome.consume(SolveConsumption::kAccept).solved_value_available());
+      } else {
+        if (lane.rank() == 0) {
+          if (mutation == 0)
+            authority.points[1].dt += .01;
+          else
+            authority.attempt.reject();
+        }
+        EXPECT_THROW((void)outcome.consume(SolveConsumption::kAccept), std::exception);
+        for (int level = 0; level < 2; ++level)
+          EXPECT_EQ(norm_inf(provider->solution(level), 0), Real(4));
+      }
+    }
+    if (mutation == -1) {
+      auto exact = original_tower(*provider), error = original_tower(*provider);
+      fill_constant(exact, target);
+      for (int level = 0; level < 2; ++level)
+        lincomb(error[level], Real(1), provider->solution(level), Real(-1), exact[level]);
+      EXPECT_LT(std::sqrt(provider->original_field_dot(error, error)), Real(3e-7));
+    }
+  }
+}
+
+TEST(CompositeGeneralField, OriginalSignedDiagonalFaceOperatorPreservesSign) {
+  auto lane = ExecutionLane::duplicate_world_collectively("original-amr-diagonal-sign");
+  auto request = three_field_request(lane);
+  request.options.values["coefficient_components"] = std::uint64_t{3};
+  for (auto it = request.options.values.begin(); it != request.options.values.end();)
+    if (it->first.starts_with("modes.") || it->first.starts_with("gauge."))
+      it = request.options.values.erase(it);
+    else
+      ++it;
+  request.options.values["modes.count"] = std::uint64_t{0};
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      request.options.values["reaction." + std::to_string(i) + "." + std::to_string(j)] = 0.0;
+  Provider factory;
+  Solver provider(request, factory.expected_prepared_contract(request), lane);
+  auto q = original_tower(provider), positive = original_tower(provider),
+       negative = original_tower(provider);
+  for (int level = 0; level < 2; ++level) {
+    const Real dx = Real(1) / Real(16 * (level == 0 ? 1 : 2));
+    for (std::size_t patch = 0; patch < q[level].local_size(); ++patch) {
+      const auto values = q[level].fab(patch).view();
+      for_each_cell(q[level].box(patch), [=] POPS_HD(const Index<1>& cell) {
+        for (int component = 0; component < 3; ++component)
+          values(cell, component) =
+              Real(component) + Real(.1) * std::cos(Real(2) * Real(3.14159265358979323846) *
+                                                    (Real(cell[0]) + Real(.5)) * dx);
+      });
+    }
+  }
+  for (int sign : {1, -1}) {
+    for (int level = 0; level < 2; ++level) {
+      auto& coefficients = provider.assembly_target("pops.general-field.coefficients", level);
+      for (std::size_t patch = 0; patch < coefficients.local_size(); ++patch) {
+        const auto output = coefficients.fab(patch).view();
+        for_each_cell(coefficients.box(patch), [=] POPS_HD(const Index<1>& cell) {
+          for (int component = 0; component < 3; ++component)
+            output(cell, component) = Real(sign);
+        });
+      }
+    }
+    provider.prepare_original_field_operator();
+    provider.apply_original_field_operator(q, sign == 1 ? positive : negative);
+  }
+  EXPECT_GT(provider.original_field_dot(positive, positive), Real(1e-4));
+  for (int level = 0; level < 2; ++level)
+    saxpy(negative[level], Real(1), positive[level]);
+  EXPECT_LT(provider.original_field_dot(negative, negative), Real(1e-20));
+}
+
 TEST(CompositeGeneralField, OriginalAmrResidualRefusesNoncanonicalStageFractionsBeforePreparation) {
   auto lane = ExecutionLane::duplicate_world_collectively("original-amr-stage-fractions");
   auto provider = original_field_provider(lane, 16, {0, 1, 2});

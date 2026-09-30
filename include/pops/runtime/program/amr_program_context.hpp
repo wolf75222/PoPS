@@ -25,6 +25,7 @@
 #include <pops/runtime/program/amr_history_flux_snapshot_execution.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_amr_spatial_residual.hpp>
+#include <pops/runtime/program/prepared_amr_field_residual.hpp>
 #include <pops/runtime/program/prepared_condensed_sampling.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/prepared_resource_cache.hpp>
@@ -304,7 +305,7 @@ public:
   struct HierarchyFieldResource {
     HierarchyTensorSelection selection;
     std::string field_identity;
-    std::unique_ptr<hierarchy_tensor_solver_type> solver;
+    std::shared_ptr<hierarchy_tensor_solver_type> solver;
     std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t generation = std::numeric_limits<std::uint64_t>::max();
     std::map<std::tuple<int, std::int64_t, int>, field_type> scratches{};

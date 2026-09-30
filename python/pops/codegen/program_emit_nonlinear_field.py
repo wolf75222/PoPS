@@ -15,6 +15,10 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
     from pops.codegen.program_emit_solve import _append_solve_report_guard, _consumed_solve_action
 
     validate_nonlinear_field_request(program, value)
+    if target == "amr_system":
+        from pops.codegen.program_emit_amr_original_field import emit_amr_original_field
+        emit_amr_original_field(program, value, variables, lines, prelude, block_indices)
+        return
     if target != "system" or prelude is None:
         raise NotImplementedError("pops.spatial-field-residual@1 requires a Uniform Cartesian native body")
     width, stem = value.attrs["ncomp"], "field_residual_%d" % value.id

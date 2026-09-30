@@ -341,7 +341,7 @@ class PreparedCompositeGeneralField final
       scalar.synchronize_linear_solution(lane_);
       local_field_phase_(true, [&] {
         for (int level = 0; level < level_count(); ++level)
-          copy_component_(scalar.phi_level(level), 0, value[level], component);
+          copy_component_(scalar.phi_level(level), 0, value[level], component, true);
       });
     }
   }
@@ -401,7 +401,10 @@ class PreparedCompositeGeneralField final
           for (int level = 0; level < level_count(); ++level)
             copy_component_(input[level], j, scalar.phi_level(level), 0);
         });
-        scalar.apply_linear_composite(options_.coefficients != n, guarded ? lane_ : nullptr);
+        // Original signed finite operators use arithmetic faces also for a 1x1
+        // matrix (whose packed width equals the diagonal representation).
+        scalar.apply_linear_composite(guarded || options_.coefficients != n,
+                                      guarded ? lane_ : nullptr);
         local_field_phase_(guarded, [&] {
           for (int level = 0; level < level_count(); ++level)
             add_component_(scalar.linear_image_level(level), 0, output[level], i, Real(1));
@@ -581,7 +584,8 @@ class PreparedCompositeGeneralField final
           value[level].local_rank() != solution_[level].local_rank())
         throw std::invalid_argument("composite tuple exact level layout mismatch");
   }
-  static void copy_component_(const field_type& source, int from, field_type& target, int to) {
+  static void copy_component_(const field_type& source, int from, field_type& target, int to,
+                              bool ghosts = false) {
     if (source.layout() != target.layout() || source.distribution() != target.distribution() ||
         source.local_rank() != target.local_rank() || from < 0 || from >= source.ncomp() ||
         to < 0 || to >= target.ncomp())
@@ -589,7 +593,10 @@ class PreparedCompositeGeneralField final
     for (std::size_t local = 0; local < target.local_size(); ++local) {
       const auto input = source.fab(local).view();
       const auto output = target.fab(local).view();
-      for_each_cell(target.box(local),
+      const auto box = ghosts ? target.fab(local).grown_box() : target.box(local);
+      if (!source.fab(local).grown_box().contains(box))
+        throw std::invalid_argument("composite field candidate ghosts exceed prepared storage");
+      for_each_cell(box,
                     [=] POPS_HD(const Index<Dim>& cell) { output(cell, to) = input(cell, from); });
     }
   }

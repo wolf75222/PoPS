@@ -491,7 +491,7 @@ def _compile_problem_impl(
         raise TypeError("compile_problem balance_due_contract must be an exact BalanceDueContract")
     from pops.codegen.program_emit_kernels import _prepared_native_components
 
-    native_components = _prepared_native_components(time)
+    native_components = _prepared_native_components(time, target=target)
     if shared_interface_codegen_evidence is None:
         from pops.codegen.program_graph_lowering import emit_program_graph
 

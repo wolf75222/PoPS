@@ -624,12 +624,15 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             "AMR hierarchy lowering requires exact shared-interface JVP evidence"
         )
     if has_hierarchy_continuations(program):
+        if any(value.op == "solve_spatial_field" for value in all_ops(program)):
+            raise NotImplementedError("original AMR fields require their own synchronized barrier; combined continuation scheduling is not realized")
         # Invocation-owned field resources cross each actual solve/publication barrier through
         # the same continuation scheduler as physical maps. No singleton phase split is needed.
         return None
     solves = [v for v in all_ops(program) if v.op == "solve_linear"]
     spatial = [v for v in all_ops(program) if v.op == "solve_spatial_nonlinear"]
-    scoped = [v for v in solves if v.attrs.get("scope") == "hierarchy"] + spatial
+    original = [v for v in all_ops(program) if v.op == "solve_spatial_field"]
+    scoped = [v for v in solves if v.attrs.get("scope") == "hierarchy"] + spatial + original
     if not scoped:
         return None
     top_level_ids = {id(value) for value in program._values}
@@ -638,17 +641,21 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         raise NotImplementedError(
             "a hierarchy-scoped solve must be a top-level barrier; nested solve_linear values %r "
             "cannot cross the gather/solve/publish boundary" % nested_scoped)
-    if len(scoped) != 1 or len(solves) + len(spatial) != 1:
+    if len(scoped) != 1 or len(solves) + len(spatial) + len(original) != 1:
         raise NotImplementedError(
-            ("AMR composite spatial lowering supports exactly one top-level spatial stage; " if spatial else
+            ("original AMR field scheduling currently realizes one top-level original-field barrier; " if original else
+             "AMR composite spatial lowering supports exactly one top-level spatial stage; " if spatial else
              "AMR hierarchy-scoped lowering supports exactly one top-level solve_linear; ") +
             "multiple hierarchy barriers require an explicit region schedule")
     solve = scoped[0]
     from pops.solvers.providers import prepared_hierarchy_solver_provider_from_attrs
 
-    if not spatial:
+    if not spatial and not original:
         hierarchy_provider = prepared_hierarchy_solver_provider_from_attrs(solve.attrs)
         hierarchy_provider.validate_node(solve, target="amr_system")
+    if original:
+        from pops.fields._program_nonlinear_problem import validate_nonlinear_field_request
+        validate_nonlinear_field_request(program, solve)
     split = next(index for index, value in enumerate(program._values) if value is solve)
     publications = [index for index, value in enumerate(program._values) if value.op == "field_publication"]
     observation_end = max(publications, default=split)
@@ -687,7 +694,8 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                 changed = True
     solve_inputs = [item.id for item in solve.inputs]
     missing_solve = [item for item in solve_inputs if item not in portable]
-    if missing_solve and not spatial:
+    staged_original_seed = original and solve.attrs.get("seed_index") is not None and missing_solve == [solve.inputs[-1].id]
+    if missing_solve and not spatial and not staged_original_seed:
         raise NotImplementedError(
             "hierarchy-scoped solve inputs must use persistent/state/history storage across the "
             "level barrier; non-portable value ids %r" % missing_solve)
@@ -741,6 +749,8 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         var[("hierarchy_field_phase",)] = phase
         if spatial:
             var[("spatial_hierarchy_phase",)] = phase
+        if original:
+            var[("original_field_hierarchy_phase",)] = phase
         if provider_plans is not None:
             # Hierarchy phases are still Program nodes.  Reuse the package-wide
             # plan authority so their requirements are registered before the
@@ -761,16 +771,16 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                          has_shared_interface_implicit_jacvec
                      ))
             if phase == "gather":
-                keep = index < split or (bool(spatial) and index == split)
+                keep = index < split or (bool(spatial or original) and index == split)
             elif phase == "solve":
                 keep = index == split or (index < split and value.op in binding_ops)
             elif phase == "observe":
-                keep = (split < index <= observation_end) or (index < split and value.op in binding_ops)
+                keep = (split < index <= observation_end) or (bool(original) and index == split) or (index < split and value.op in binding_ops)
             else:
-                keep = index > split or (bool(spatial) and index == split) or (index < split and value.op in binding_ops)
+                keep = index > split or (bool(spatial or original) and index == split) or (index < split and value.op in binding_ops)
             if keep:
                 lines.extend(emitted)
-            if phase == "gather" and index == split and not spatial:
+            if phase == "gather" and index == split and not spatial and not original:
                 # The ordinary solve emitter seeds one level-local iterate immediately before the
                 # solve.  A hierarchy solve instead needs one initial guess per level, gathered at the
                 # same barrier as its coefficients/RHS.  Stage it in context-owned hierarchy storage;
