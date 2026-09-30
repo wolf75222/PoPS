@@ -272,9 +272,11 @@ class _ProgramSerialization(_ProgramBase):
                 "nodes": [self._serialize_node(
                     node, include_provenance=include_provenance) for node in block],
                 "result": value.id}
-        # The vector pairing extension has its own IR discrimination. Preserve
-        # the previously selected schema for every program that does not use it,
-        # including the older prepared-constitutive trace profile.
+        # Preserve old identities unless a versioned extension is actually used.
+        # Version 8 receives original spatial-field solves and typed global
+        # integral captures; it takes precedence over vector pairing's version 7.
+        if self._integral_units:
+            result["version"] = 8
         pending = list(self._values)
         if self._dt_bound is not None:
             pending.extend(self._dt_bound[0])
@@ -284,9 +286,10 @@ class _ProgramSerialization(_ProgramBase):
             if id(node) in seen:
                 continue
             seen.add(id(node))
-            if node.op == "reduce" and node.attrs.get("kind") == "dot_all":
-                result["version"] = 7
-                break
+            if node.op in ("solve_spatial_field", "integral_candidate"):
+                result["version"] = 8
+            elif node.op == "reduce" and node.attrs.get("kind") == "dot_all":
+                result["version"] = max(result["version"], 7)
             for key in ("cond_block", "body_block", "true_block", "false_block",
                         "apply_block", "residual_block"):
                 block = node.attrs.get(key)

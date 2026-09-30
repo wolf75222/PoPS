@@ -14,7 +14,7 @@ from pops._ir.symbolic import ImmutableSymbolic
 
 
 def component_names(value: Any) -> tuple[str, ...]:
-    if value.op == "integral_candidate" and value.vtype == "scalar":
+    if getattr(value, "op", None) == "integral_candidate" and value.vtype == "scalar":
         return ("value",)
     if value.vtype == "scalar":
         return ("scalar",)
