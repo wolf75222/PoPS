@@ -1,6 +1,37 @@
 """Joint native finite map application; support order is part of every identity."""
 import math
+import weakref
 from .expr import Expr, _wrap
+
+
+# The compiler layer owns reification. Keep the identity of immutable declarations
+# across separate Expr arithmetic operations without retaining either declarations
+# or compiled expressions after their callers release them.
+_lowered_finite_declarations = {}
+
+
+def _previous_lowering(value):
+    row = _lowered_finite_declarations.get(id(value))
+    if row is not None and row[0]() is value:
+        return row[1]()
+    return None
+
+
+def _remember_lowering(value, result):
+    key = id(value)
+
+    def release(reference):
+        row = _lowered_finite_declarations.get(key)
+        if row is not None and row[0] is reference:
+            del _lowered_finite_declarations[key]
+
+    try:
+        declaration, expression = weakref.ref(value, release), weakref.ref(result)
+    except TypeError:
+        # Foreign protocols need not provide weak references; a single conversion
+        # still shares all their projections through its local memo.
+        return
+    _lowered_finite_declarations[key] = (declaration, expression)
 
 
 def _support(value):
@@ -53,8 +84,10 @@ class FiniteProjection(Expr):
 def lower_finite_scalars(values):
     """Consume immutable finite declarations through their versioned scalar protocol.
 
-    One conversion owns the memo, so all projections share one native application.
-    No lower algebra module imports or constructs compiler expressions.
+    Immutable declarations share their existing reification across conversions,
+    including separately constructed mixed Expr arithmetic. A local memo also
+    supports foreign declarations without weak references. The lower algebra
+    layer never imports or constructs compiler expressions.
     """
     from . import expr
 
@@ -67,6 +100,10 @@ def lower_finite_scalars(values):
     def application(value):
         if id(value) in memo:
             return memo[id(value)]
+        previous = _previous_lowering(value)
+        if previous is not None:
+            memo[id(value)] = previous
+            return previous
         hook = getattr(value, "__pops_finite_application__", None)
         row = hook() if callable(hook) else None
         if type(row) is not tuple or len(row) != 6 or row[0] != "pops.finite-application-plan@1":
@@ -77,6 +114,7 @@ def lower_finite_scalars(values):
         result = FiniteApplication(*row[1:5], tuple(lower(x) for x in row[5]))
         active.remove(id(value))
         memo[id(value)] = result
+        _remember_lowering(value, result)
         return result
 
     def lower(value):
@@ -85,6 +123,10 @@ def lower_finite_scalars(values):
         hook = getattr(value, "__pops_scalar_plan__", None)
         if not callable(hook):
             return _wrap(value)
+        previous = _previous_lowering(value)
+        if previous is not None:
+            memo[id(value)] = previous
+            return previous
         if id(value) in active:
             raise ValueError("finite scalar declaration contains a cycle")
         row = hook()
@@ -109,6 +151,7 @@ def lower_finite_scalars(values):
             raise ValueError("unknown finite scalar operation or operand count")
         active.remove(id(value))
         memo[id(value)] = result
+        _remember_lowering(value, result)
         return result
 
     return tuple(lower(value) for value in values)

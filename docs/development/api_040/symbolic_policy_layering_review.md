@@ -20,6 +20,8 @@ evaluate a map nor fold scalar arithmetic in Python. Registered exact literals
 use their existing literal protocol and are captured once, including units and
 target spelling. The consuming IR converts declarations through a local memo
 and cycle guard into the existing `FiniteApplication`/`FiniteProjection` nodes.
+An IR-owned weak identity cache preserves reification across separately authored
+mixed Expr operations without retaining declarations or compiler expressions.
 All projections of one map share one joint native application. The IR validates
 the complete finite contract without importing `linalg` in reverse.
 
@@ -40,6 +42,15 @@ through every AST scope, exercise exact Fraction/Decimal/registered literals,
 verify one joint application and unfurled arithmetic, refuse malformed/cyclic
 plans and shape ducks, and capture a finite result in a real model operator.
 Ruff and `git diff --check` pass.
+
+Independent follow-up caught a sharing regression in the first dependency repair:
+separate `Expr + finite_projection` operations each created an application,
+changing the encoded Program DAG. The weak reification cache fixes that defect
+without moving compiler ownership into `linalg`. Counterexamples compare the
+mixed public Program hash and encoded nodes to the former explicit IR DAG,
+verify shared literal operands, and verify both declarations and lowered
+expressions are reclaimed. The initial affected selection passes 45 source tests;
+the complete prior affected selection plus these counterexamples passes 199.
 
 The test process selected installed Dim2 for loader compatibility and imported
 Python sources from this checkout using explicit `PYTHONPATH=$PWD/python` after

@@ -70,6 +70,62 @@ def test_invalid_or_cyclic_scalar_plan_protocol_refuses_conversion():
         _wrap(Cyclic())
 
 
+def test_separate_mixed_expr_arithmetic_keeps_one_joint_application_and_old_program_dag():
+    from pops.linalg import FiniteLinearMap, FiniteSupport
+    from pops._ir.expr import Const
+    from pops._ir.finite_linear import FiniteApplication, FiniteProjection
+    from pops.time.expressions import encode_expressions
+    from tests.python.unit.time.test_program_expressions import fixture
+    support = FiniteSupport("ordered", ("rho", "m"))
+    vector = FiniteLinearMap(support, support, ((1, 2), (3, 4))).apply(support.bind((5, 6)))
+    expressions = (Const(1) + vector[0], Const(2) + vector[1])
+    assert expressions[0].b.application is expressions[1].b.application
+    _, nodes, _ = encode_expressions(expressions, None)
+    assert len(nodes) == 9
+    assert sum(node[0] == "finite_linear_v1" for node in nodes) == 1
+
+    _, _, actual, state = fixture()
+    actual.value("mixed", (state.n[0] + vector[0], state.n[1] + vector[1]))
+    _, _, legacy, previous = fixture()
+    # The exact previous compiler DAG, authored directly in its owning IR layer.
+    application = FiniteApplication("apply", support.contract, support.contract,
+                                    ((1, 2), (3, 4)), (Const(5), Const(6)))
+    legacy.value("mixed", (previous.n[0] + FiniteProjection(application, 0),
+                            previous.n[1] + FiniteProjection(application, 1)))
+    assert actual._ir_hash() == legacy._ir_hash()
+    assert actual._values[-1].attrs["expression_nodes"] == legacy._values[-1].attrs["expression_nodes"]
+
+
+def test_scalar_reuse_across_finite_vector_arithmetic_preserves_const_sharing():
+    from pops.linalg import FiniteSupport
+    from pops._ir.finite_linear import lower_finite_scalars
+    support = FiniteSupport("two", ("a", "b"))
+    values = support.bind((5, 6))
+    combined = values + values
+    roots = lower_finite_scalars(combined.components)
+    assert roots[0].a is roots[0].b
+    assert roots[1].a is roots[1].b
+
+
+def test_compiler_lowering_cache_does_not_own_math_declarations_or_expressions():
+    import gc
+    import weakref
+    from pops.linalg import FiniteLinearMap, FiniteSupport
+    from pops._ir.expr import _wrap
+    support = FiniteSupport("one", ("a",))
+    vector = FiniteLinearMap(support, support, ((2,),)).apply(support.bind((3,)))
+    declaration = vector[0]
+    declaration_ref = weakref.ref(declaration)
+    expression = _wrap(declaration)
+    expression_ref = weakref.ref(expression)
+    del vector, declaration
+    gc.collect()
+    assert declaration_ref() is None
+    del expression
+    gc.collect()
+    assert expression_ref() is None
+
+
 def test_registered_exact_literals_and_mutable_hook_values_are_captured_once():
     from pops.identity.scalar import scalar_literal
     from pops.linalg import FiniteSupport
