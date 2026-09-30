@@ -31,6 +31,14 @@ SystemConfig captures the communicator. Receipt:
 `outputs/native-canonical-units-feedback-cpp-wave5b-dim1-20260930`, identity
 `1233a15b26cfdb4375bed05268ccdca1a1749a98f5144922b489ae9adf7d3e37`, JUnit
 `5db346d4428a8015c9fd80d4e460767fd5f2163b099ba7a7d58a31c520859682`.
+The retained full CTest log and twelve XML files are pinned separately by
+`mpi-evidence.json` SHA
+`639ab816112a52e4e46dfbaeca2981d63a58d3070a3c552443a7e9062d7f2013`.
+ProgramRuntime has 31 passing tests on each rank, ProgramContextContract19,
+PreparedResourceCache15, AMRHistoryRing2 and MPI3 exchange1. The AMR diffusion
+wrapper produces a shared XML path, so its passing wrapper is not presented as
+two independent per-rank XML receipts. All copied XML files were checked for
+freshness, nonempty inventory and absence of failures/errors/skips.
 
 The separate SDK20d original-field/feedback serial campaign has eleven cases:
 eight pass and three true physical-global cases fail before native compilation.
