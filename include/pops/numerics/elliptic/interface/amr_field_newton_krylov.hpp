@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <limits>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -140,8 +141,14 @@ class AmrFieldNewtonKrylovWorkspace final {
       report.evaluations += linear.evaluations;
       if (!linear.converged) {
         report.iters = iteration;
+        std::ostringstream diagnostic;
+        diagnostic << "amr_field_newton_gmres_breakdown:" << linear_failure_name_(linear.failure)
+                   << ":newton=" << iteration << ":columns=" << linear.columns
+                   << ":evaluations=" << linear.evaluations << std::hexfloat
+                   << ":stop=" << linear_stop << ":beta=" << linear.residual_norm
+                   << ":projected=" << linear.projected_norm << ":pivot=" << linear.pivot;
         report.mark_failed(SolveStatus::kBreakdown, SolveAction::kRejectAttempt,
-                           "amr_field_newton_gmres_breakdown");
+                           diagnostic.str());
         return report;
       }
 
@@ -200,9 +207,32 @@ class AmrFieldNewtonKrylovWorkspace final {
   }
 
  private:
+  enum class LinearFailure {
+    kIterationLimit, kNonfiniteInitialNorm, kZeroArnoldiColumn, kNonfiniteArnoldiColumn,
+    kZeroTriangularPivot, kNonfiniteTriangularPivot, kNonfiniteTriangularCoefficient,
+    kNonfiniteRecomputedNorm
+  };
+  static const char* linear_failure_name_(LinearFailure failure) noexcept {
+    switch (failure) {
+      case LinearFailure::kIterationLimit: return "iteration_limit";
+      case LinearFailure::kNonfiniteInitialNorm: return "nonfinite_initial_norm";
+      case LinearFailure::kZeroArnoldiColumn: return "zero_arnoldi_column";
+      case LinearFailure::kNonfiniteArnoldiColumn: return "nonfinite_arnoldi_column";
+      case LinearFailure::kZeroTriangularPivot: return "zero_triangular_pivot";
+      case LinearFailure::kNonfiniteTriangularPivot: return "nonfinite_triangular_pivot";
+      case LinearFailure::kNonfiniteTriangularCoefficient: return "nonfinite_triangular_coefficient";
+      case LinearFailure::kNonfiniteRecomputedNorm: return "nonfinite_recomputed_norm";
+    }
+    return "invalid_failure";
+  }
   struct LinearResult {
     bool converged = false;
     int evaluations = 0;
+    int columns = 0;
+    Real residual_norm = 0;
+    Real projected_norm = 0;
+    Real pivot = 0;
+    LinearFailure failure = LinearFailure::kIterationLimit;
   };
 
   template <class JvpProvider>
@@ -212,8 +242,11 @@ class AmrFieldNewtonKrylovWorkspace final {
     copy_(rhs, linear_residual_);
     Real beta = norm_(linear_residual_, lane);
     LinearResult result;
-    if (!finite_(beta))
+    result.residual_norm = beta;
+    if (!finite_(beta)) {
+      result.failure = LinearFailure::kNonfiniteInitialNorm;
       return result;
+    }
     if (beta <= stop) {
       result.converged = true;
       return result;
@@ -258,6 +291,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         const Real diagonal = h_(column, column);
         const Real subdiagonal = h_(column + 1, column);
         const Real magnitude = std::hypot(diagonal, subdiagonal);
+        result.pivot = magnitude;
         if (!finite_(magnitude) || magnitude == Real(0)) {
           used = column;
           break;
@@ -273,12 +307,19 @@ class AmrFieldNewtonKrylovWorkspace final {
             -sine_[static_cast<std::size_t>(column)] * value;
         used = column + 1;
         ++completed;
+        result.columns = completed;
+        result.projected_norm = std::abs(rotated_rhs_[static_cast<std::size_t>(column + 1)]);
         if (std::abs(rotated_rhs_[static_cast<std::size_t>(column + 1)]) <= stop) {
           cycle_converged = true;
           break;
         }
       }
-      if (used == 0 || !update_correction_(used))
+      if (used == 0) {
+        result.failure = finite_(result.pivot) ? LinearFailure::kZeroArnoldiColumn
+                                             : LinearFailure::kNonfiniteArnoldiColumn;
+        return result;
+      }
+      if (!update_correction_(used, result))
         return result;
       if (cycle_converged) {
         result.converged = true;
@@ -290,8 +331,11 @@ class AmrFieldNewtonKrylovWorkspace final {
       ++result.evaluations;
       lincomb_(linear_residual_, Real(1), rhs, Real(-1), image_);
       beta = norm_(linear_residual_, lane);
-      if (!finite_(beta))
+      result.residual_norm = beta;
+      if (!finite_(beta)) {
+        result.failure = LinearFailure::kNonfiniteRecomputedNorm;
         return result;
+      }
       if (beta <= stop) {
         result.converged = true;
         return result;
@@ -300,18 +344,25 @@ class AmrFieldNewtonKrylovWorkspace final {
     return result;
   }
 
-  bool update_correction_(int used) {
+  bool update_correction_(int used, LinearResult& result) {
     for (int reverse = used; reverse != 0; --reverse) {
       const int row = reverse - 1;
       Real value = rotated_rhs_[static_cast<std::size_t>(row)];
       for (int column = row + 1; column < used; ++column)
         value -= h_(row, column) * coefficients_[static_cast<std::size_t>(column)];
       const Real diagonal = h_(row, row);
-      if (!finite_(diagonal) || diagonal == Real(0))
+      if (!finite_(diagonal) || diagonal == Real(0)) {
+        result.pivot = diagonal;
+        result.failure = finite_(diagonal) ? LinearFailure::kZeroTriangularPivot
+                                         : LinearFailure::kNonfiniteTriangularPivot;
         return false;
+      }
       coefficients_[static_cast<std::size_t>(row)] = value / diagonal;
-      if (!finite_(coefficients_[static_cast<std::size_t>(row)]))
+      if (!finite_(coefficients_[static_cast<std::size_t>(row)])) {
+        result.pivot = diagonal;
+        result.failure = LinearFailure::kNonfiniteTriangularCoefficient;
         return false;
+      }
     }
     for (int index = 0; index < used; ++index)
       saxpy_(correction_, coefficients_[static_cast<std::size_t>(index)],
