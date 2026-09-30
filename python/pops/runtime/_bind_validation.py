@@ -209,7 +209,7 @@ def validate_bound_initial_values(
         mesh = _layout_mesh(_layout_for_block(layout, name))
         if mesh is None:
             lines.append(
-                "typed initial value for block %r requires explicit Cartesian grid cells" % name
+                "typed initial value for block %r requires explicit ranked reference-grid cells" % name
             )
             continue
         components = int(spec.get("components", 0) or 0)
@@ -261,6 +261,15 @@ def _layout_mesh(layout: Any) -> Any:
         if not isinstance(cells, (list, tuple)) or len(cells) not in (1, 2, 3):
             return None
         return tuple(int(value) for value in cells)
+    normalizer = getattr(layout, "normalized_geometry", None)
+    if callable(normalizer):
+        from pops.mesh._layout_plan_contracts import NormalizedGeometry
+
+        geometry = normalizer()
+        # Composed layouts publish this exact reference-cell contract without a
+        # .mesh attribute. These counts qualify initial storage, not evolved
+        # cell measures; moving metric/epoch authority stays with its provider.
+        return geometry.cells if type(geometry) is NormalizedGeometry else None
     mesh = getattr(layout, "mesh", None)
     cells = getattr(mesh, "cells", None)
     if isinstance(cells, (tuple, list)):
