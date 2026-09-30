@@ -9,11 +9,25 @@ remain the existing measured System operations. Both inputs require compatible
 field Spaces, component counts and one explicit identical Program block owner.
 General field-problem storage without such an owner is refused in this version.
 
-The native providers authenticate the complete field layout/component contract,
-loop over every component using the existing active-cell local reduction, then
-perform one error-convergence vote and one sum on the prepared execution lane.
-Ranks with no owned patches still participate. This does not introduce a second
-runtime, a host gamma evaluator, or a numerical tolerance.
+The native providers authenticate the complete field layout/component contract.
+Their dedicated local kernel intersects the EB active mask with the native AMR
+coverage mask (`1` retained, `0` covered), while retaining raw component algebra.
+The coverage consumer reuses the existing owner traversal and recovers each
+resolved field's actual level from its native owner identity; callback order does
+not identify levels because Scratch/Direct inputs can skip them. The coverage
+getter is a prepared local lookup, and never materializes hierarchy data or enters
+collectives from inside local validation. Legacy traversal and kernels are unchanged.
+
+Every rank validates its local data before one error-convergence vote and one
+sum on the prepared execution lane. A distributed field contributes its local
+patches. A physically replicated field is validated on every rank and contributes
+only on lane rank zero, without division by rank count. Ranks with no owned
+patches still participate. Active nonfinite inputs, nonfinite masks, product
+overflow and component/patch/level accumulation overflow are refused before
+the sum; a nonfinite global sum is refused after that common collective. Field
+values excluded by coverage or EB activity do not enter the contraction. No
+physical volume weights, numerical tolerance, host gamma evaluator or second
+runtime are introduced.
 
 The historical `dot`, `norm2` and `norm_inf` component-zero meanings are retained.
 Their existing serialized attrs and Program identities are unchanged. New
@@ -66,3 +80,35 @@ These checks do not qualify native execution. Rebuild/relink both installed
 dimensions after integrating the changed provider headers, select ProgramIRv7
 support centrally, run this C++ fixture and the existing installed computed
 frontier rotation/retry/restart plus MPI refusal fixtures on that exact SDK.
+
+
+The bounded AMR/numeric correction following independent review `f212b9c`
+adds a direct-source host fixture
+`tests/python/unit/runtime/test_dot_all_native_contract_host.py`. It compiles
+and executes the actual local kernel, local accumulator, provider methods,
+field-contract checks and full legacy/new owner traversals extracted from the
+checkout. Its 24 assertions cover coverage/EB intersection, covered NaN exclusion,
+active NaN refusal, local/product/global overflow, five field-contract divergences,
+Direct level selection, unique replicated contribution and invalid data on a
+noncontributing replica. Storage, ownership classification, iteration and MPI
+collectives are explicit host substitutes; this is not native execution evidence.
+The old six component-zero methods and complete legacy AMR owner visitor are
+byte-identical to `21a56b9`.
+
+The enlarged generic C++ fixture additionally calls real providers for an AMR
+regrid with an analytically prescribed two-cell coarse footprint, exclusion of
+covered coarse NaNs, rank-local width/ghost-contract refusal, poisoned last-rank
+replicas, product/local overflow and distributed global overflow (MPI2 required).
+These cases must run on the newly built central SDK. The author only syntax-checks
+the complete existing runtime TU plus these fixtures in Dim1 and Dim2; no installed
+native state, real MPI collectives, GPU execution or scientific reception is
+qualified by these source/host/syntax checks. No JIT, installation, shared environment
+or central release/ABI contracts are changed by this correction.
+
+The final correction source selection passes **54 tests** in 12.79s: the host
+fixture, computed-frontier contracts, strict import-graph gate, Program expression
+and authoring atomicity suites. It explicitly imports this checkout's Python,
+selecting installed Dim2 solely for loader compatibility. Ruff and diff-check
+pass. The native provider headers pass Dim1/Dim2 syntax with the full existing
+runtime TU and generic fixture. The only compiler warning is the pre-existing
+Googletest char8_t conversion warning.

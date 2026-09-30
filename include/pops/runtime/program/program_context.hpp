@@ -1093,13 +1093,17 @@ class ProgramContext {
     Real local = Real(0);
     try {
       require_same_field_contract_(left, right, "ProgramContext dot_all");
-      for (int component = 0; component < left.ncomp(); ++component)
-        local += pops::dot_active_local(left, right, component, active);
+      const Real checked = pops::dot_owned_active_all_finite_local(left, right, active);
+      // Every physical replica is validated; exactly one enters the lane SUM.
+      local = left.distribution().replicated() && lane.rank() != 0 ? Real(0) : checked;
     } catch (...) {
       local_error = std::current_exception();
     }
     converge_owner_reduction_(local_error, lane, "Program dot-all reduction");
-    return static_cast<Real>(all_reduce_sum(local, lane));
+    const Real result = static_cast<Real>(all_reduce_sum(local, lane));
+    if (!std::isfinite(result))
+      throw std::overflow_error("Program dot_all collective sum is nonfinite");
+    return result;
   }
 
   Geometry<Dim> geometry() const { return system_->prepared_block_geometry(); }

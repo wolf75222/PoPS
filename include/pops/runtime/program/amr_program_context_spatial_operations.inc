@@ -326,26 +326,55 @@ Real dot(int program_block, const field_type& left, const field_type& right) con
   return static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
 }
 
-/// pops.program.dot-all@1: every component, on exact owner active levels.
+private:
+// Reuse the authenticated owner traversal without changing its legacy users.
+// A resolved field's identity carries its actual level, including State/history;
+// callback order cannot identify a level because Scratch/Direct may skip levels.
+template <class Visitor>
+void for_each_owner_finest_active_level_(int program_block, const field_type& left,
+                                         const field_type& right, Visitor&& visitor) const {
+  for_each_owner_active_level_(
+      program_block, left, &right,
+      [&](const field_type& level_left, const field_type* level_right,
+          const field_type* active) {
+        const int owner = sys_block(program_block);
+        const Identity identity = classify_owner_field_(owner, level_left, "AMR dot_all coverage");
+        const field_type& coverage =
+            facade_->prepared_amr_block_level_coverage_mask(owner, identity.direct_level);
+        require_same_layout_(coverage, level_left, "AMR dot_all coverage mask");
+        visitor(level_left, level_right, active, &coverage);
+      });
+}
+
+public:
+/// pops.program.dot-all@1: every component, on exact finest-owner active levels.
 Real dot_all(int program_block, const field_type& left, const field_type& right) const {
   const ExecutionLane& lane = prepared_execution_lane();
   std::exception_ptr local_error;
   Real local = Real(0);
   try {
-    for_each_owner_active_level_(
-        program_block, left, &right,
-        [&](const field_type& left_field, const field_type* right_field, const field_type* active) {
+    for_each_owner_finest_active_level_(
+        program_block, left, right,
+        [&](const field_type& left_field, const field_type* right_field,
+            const field_type* active, const field_type* coverage) {
           if (right_field == nullptr)
             throw std::logic_error("AMR Program dot_all is missing its right owner field");
           require_same_field_contract_(left_field, *right_field, "AMR Program dot_all");
-          for (int component = 0; component < left_field.ncomp(); ++component)
-            local += pops::dot_active_local(left_field, *right_field, component, active);
+          const Real checked =
+              pops::dot_owned_active_all_finite_local(left_field, *right_field, active, coverage);
+          if (!left_field.distribution().replicated() || lane.rank() == 0)
+            local += checked;
+          if (!std::isfinite(local))
+            throw std::overflow_error("AMR Program dot_all level accumulation is nonfinite");
         });
   } catch (...) {
     local_error = std::current_exception();
   }
   converge_owner_reduction_(local_error, lane, "AMR Program dot-all reduction");
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
+  const Real result = static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
+  if (!std::isfinite(result))
+    throw std::overflow_error("AMR Program dot_all collective sum is nonfinite");
+  return result;
 }
 
 Geometry<Dim> geometry() const {

@@ -10,6 +10,7 @@
 #include <pops/parallel/comm.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
@@ -239,6 +240,33 @@ struct MeasuredDotKernel {
       return Real{0};
     Real value = left(index, component) * right(index, component);
     return has_inverse ? value * inverse(index, 0) : value;
+  }
+};
+
+// The explicit Program vector-pairing contract intersects EB activity and AMR
+// finest-owner coverage. Legacy component reductions keep their original kernel.
+template <int Dim>
+struct FiniteOwnedDotKernel {
+  FieldView<const Real, Dim> left{};
+  FieldView<const Real, Dim> right{};
+  FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> coverage{};
+  int component = 0;
+  bool has_active = false;
+  bool has_coverage = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    const Real active_value = has_active ? active(index, 0) : Real{1};
+    const Real coverage_value = has_coverage ? coverage(index, 0) : Real{1};
+    if (!Kokkos::isfinite(active_value) || !Kokkos::isfinite(coverage_value))
+      return std::numeric_limits<Real>::infinity();
+    if (active_value < Real{0.5} || coverage_value < Real{0.5})
+      return Real{0};
+    const Real a = left(index, component);
+    const Real b = right(index, component);
+    const Real product = a * b;
+    return Kokkos::isfinite(a) && Kokkos::isfinite(b) && Kokkos::isfinite(product)
+               ? product : std::numeric_limits<Real>::infinity();
   }
 };
 
@@ -640,6 +668,34 @@ Real dot_active_local(const MultiFab<Dim, MemorySpace>& left,
                                                                  {},
                                                                  component,
                                                                  false});
+  return result;
+}
+
+/// Allocation-free, finite local algebra for pops.program.dot-all@1 only.
+/// Masked field values do not participate; malformed masks fail closed.
+template <int Dim, class MemorySpace>
+Real dot_owned_active_all_finite_local(const MultiFab<Dim, MemorySpace>& left,
+                                      const MultiFab<Dim, MemorySpace>& right,
+                                      const MultiFab<Dim, MemorySpace>* active_cells,
+                                      const MultiFab<Dim, MemorySpace>* coverage_cells = nullptr) {
+  constexpr const char* operation = "pops::dot_owned_active_all_finite_local";
+  mf_arith_detail::require_same_layout(left, right, operation);
+  mf_arith_detail::validate_measure(left, {active_cells, nullptr}, operation);
+  mf_arith_detail::validate_measure(left, {coverage_cells, nullptr}, operation);
+  Real result = Real{0};
+  for (int component = 0; component < left.ncomp(); ++component) {
+    for (std::size_t local = 0; local < left.local_size(); ++local) {
+      const Real patch = for_each_cell_reduce_sum(
+          left.box(local), mf_arith_detail::FiniteOwnedDotKernel<Dim>{
+              left.fab(local).view(), right.fab(local).view(),
+              active_cells ? active_cells->fab(local).view() : FieldView<const Real, Dim>{},
+              coverage_cells ? coverage_cells->fab(local).view() : FieldView<const Real, Dim>{},
+              component, active_cells != nullptr, coverage_cells != nullptr});
+      result += patch;
+      if (!std::isfinite(patch) || !std::isfinite(result))
+        throw std::overflow_error("Program dot_all has nonfinite active values or local overflow");
+    }
+  }
   return result;
 }
 
