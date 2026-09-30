@@ -545,6 +545,105 @@ void expect_identical_numerical_report(const SolveReport& left, const SolveRepor
   EXPECT_EQ(left.reason, right.reason);
 }
 
+TEST(CompositeGeneralField, OriginalForeignLaneValidationRefusesCollectivelyAndRetries) {
+  auto lane = ExecutionLane::duplicate_world_collectively("original-amr-prepared-lane-retry");
+  // The unnamed borrowed world constructor is local: no collective is entered
+  // on this foreign context, including when only rank 0 supplies it below.
+  auto foreign = ExecutionLane::world();
+  ASSERT_NE(&lane, &foreign);  // Also distinct objects in a serial build/run.
+  auto provider = original_field_provider(lane, 16, {0, 1, 2});
+  auto exact = original_tower(*provider), forcing = original_tower(*provider);
+  fill_constant(exact, std::array<Real, 3>{Real(.15), Real(.25), Real(.18)});
+  provider->prepare_original_field_operator();
+  provider->synchronize_original_field_candidate(exact);
+  provider->apply_original_field_operator(exact, forcing);
+  std::vector<Solver::hierarchy_type> zeros;
+  zeros.push_back(original_tower(*provider));
+  for (auto& field : zeros[0]) field.set_val(Real(0));
+  auto body = original_local_body({0, 1, 2});
+  body(exact, zeros, forcing, 0);  // Actual original F(exact), no guessed forcing.
+  for (int level = 0; level < provider->level_count(); ++level)
+    provider->solution(level).set_val(Real(4));
+  PreparedResourceCache cache;
+  auto authority = original_authority(provider.get(), cache.begin_attempt(lane));
+  const std::array<const Solver::hierarchy_type*, 1> inputs{&forcing};
+  auto prepared = OriginalResidual::prepare(provider, authority, inputs, original_controls(),
+      Real(1e-5), lane, AmrFieldRightPreconditioner::kSpatialBasisJacobi);
+  const auto report = prepared->solve(authority, nullptr, body, lane);
+  ASSERT_TRUE(report.solved_value_available()) << report.reason;
+  auto snapshot = original_tower(*provider);
+  const auto& candidate = prepared->candidate(authority, lane);
+  for (std::size_t level = 0; level < snapshot.size(); ++level)
+    lincomb(snapshot[level], Real(1), candidate[level], Real(0), candidate[level]);
+  bool inject_foreign = false;
+  int validation_calls = 0;
+  auto validate = [&] {
+    ++validation_calls;
+    const auto& supplied = inject_foreign && lane.rank() == 0 ? foreign : lane;
+    prepared->require_authority(authority, supplied);
+  };
+  auto outcome = provider->stage_original_field_candidate_collectively(
+      report, &candidate, original_controls().max_iterations, lane, provider, validate,
+      [&](auto& fields) { provider->synchronize_original_field_candidate(fields); });
+  // Staging itself authenticates twice before creating the pending outcome.
+  EXPECT_EQ(all_reduce_max(validation_calls == 2 ? 0L : 1L, lane), 0L);
+  inject_foreign = true;
+  bool refused = false;
+  try {
+    (void)outcome.consume(SolveConsumption::kAccept);
+  } catch (const std::exception& error) {
+    refused = true;
+    EXPECT_NE(std::string(error.what()).find("stale owner/attempt/point/capture authority"),
+              std::string::npos) << error.what();
+  }
+  // Every vote after injection deliberately uses the authenticated lane. The
+  // old guard voting on the supplied lane diverges here under MPI2.
+  EXPECT_EQ(all_reduce_max(refused ? 0L : 1L, lane), 0L);
+  EXPECT_EQ(all_reduce_max(validation_calls == 3 ? 0L : 1L, lane), 0L);
+  expect_identical_numerical_report(outcome.report(), report);
+  EXPECT_NO_THROW(prepared->require_authority(authority, lane));
+  const auto& preserved = prepared->candidate(authority, lane);
+  Real local_change = 0;
+  for (std::size_t level = 0; level < preserved.size(); ++level)
+    for (std::size_t patch = 0; patch < preserved[level].local_size(); ++patch) {
+      const auto current = preserved[level].fab(patch).view();
+      const auto previous = std::as_const(snapshot[level]).fab(patch).view();
+      local_change = std::max(local_change,
+          for_each_cell_reduce_max(preserved[level].box(patch),
+            [=] POPS_HD(const Index<1>& cell) {
+              Real change = 0;
+              for (int component = 0; component < 3; ++component)
+                change = std::max(change, std::abs(current(cell, component) - previous(cell, component)));
+              return change;
+            }));
+    }
+  EXPECT_EQ(all_reduce_max(local_change, lane), Real(0));
+  Real publication_change = 0;
+  for (int level = 0; level < provider->level_count(); ++level)
+    for (std::size_t patch = 0; patch < provider->solution(level).local_size(); ++patch) {
+      const auto live = std::as_const(provider->solution(level)).fab(patch).view();
+      publication_change = std::max(publication_change,
+          for_each_cell_reduce_max(provider->solution(level).box(patch),
+            [=] POPS_HD(const Index<1>& cell) {
+              Real change = 0;
+              for (int component = 0; component < 3; ++component)
+                change = std::max(change, std::abs(live(cell, component) - Real(4)));
+              return change;
+            }));
+    }
+  EXPECT_EQ(all_reduce_max(publication_change, lane), Real(0));
+  // The same staged candidate remains retryable. Only this explicit, now
+  // authenticated acceptance publishes; the numeric report is never rewritten.
+  inject_foreign = false;
+  EXPECT_TRUE(outcome.consume(SolveConsumption::kAccept).solved_value_available());
+  EXPECT_EQ(all_reduce_max(validation_calls == 4 ? 0L : 1L, lane), 0L);
+  expect_identical_numerical_report(outcome.report(), report);
+  auto error = original_tower(*provider);
+  for (int level = 0; level < provider->level_count(); ++level)
+    lincomb(error[level], Real(1), provider->solution(level), Real(-1), exact[level]);
+  EXPECT_LT(std::sqrt(provider->original_field_dot(error, error)), Real(3e-7));
+}
+
 TEST(CompositeGeneralField, SolvedCandidateDiscardPreservesReportAndRetryableValidation) {
   static_assert(static_cast<int>(SolveConsumption::kAccept) == 0);
   static_assert(static_cast<int>(SolveConsumption::kRejectAttempt) == 1);

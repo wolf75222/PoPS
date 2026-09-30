@@ -48,7 +48,9 @@ right-preconditioner contract is `pops.amr.original-spatial-jacobi.basis-respons
 SolveRequest is schema 2, and its Program IR is version 9. These fields enter request
 validation and the compiled IR digest/source cache. Native invocation identity @2 also
 includes the realization, current operator generation, owner, live attempt, captures,
-point and prepared execution lane. There is no new native ABI, wire, or header manifest.
+point and prepared execution lane. Native ABI and wire ordinals are unchanged, and the existing header-manifest schema
+remains. The installed SDK signature changes with the actual c7 headers, so all native
+dimensions must rebuild before receiving this port.
 
 Uniform original-field residuals refuse this AMR-only provider during resolution, and the
 Uniform emitter independently refuses it. Installed standalone nonlinear field plans and
@@ -84,3 +86,41 @@ AMR convergence qualification**. Root must rebuild the matching source/SDK and r
 serial/MPI execution, original saved residual, rollback/retry and checkpoint/restart.
 The identity N32 iteration-limit evidence and preconditioned C++ profile remain distinct;
 no claim is made that an unchanged identity realization converges within budget 240.
+
+## Native fixture for rank-local foreign-lane refusal
+
+`CompositeGeneralField.OriginalForeignLaneValidationRefusesCollectivelyAndRetries`
+uses the real two-level original composite provider, exact native spatial operator,
+original coupled cubic body, prepared SpatialBasisJacobi realization and a real staged
+SolveOutcome. The forcing is recomputed by the original operator/body from the specified
+constant target. No physical equation, tolerance, iteration budget or production source
+changes in this fixture.
+
+Preparation and solve use a duplicated world execution lane. A distinct unnamed borrowed
+`ExecutionLane::world()` object is created locally, without communicator duplication or
+any collective on that foreign lane. Only rank 0 supplies this foreign object to
+`PreparedAmrFieldResidual::require_authority` inside pre-Accept validation; all other ranks
+supply the prepared lane. In serial the two objects also differ. Production fix `3a03a2e`
+must vote the refusal on the provider's prepared lane; the earlier implementation would
+diverge when rank 0 voted on the foreign communicator and its peers on the prepared one.
+
+The two staging validations run on the authenticated lane before injection. The
+fixture then requires refusal on every rank and the exact authority-failure cause, not an
+unrelated exception. It verifies that pre-Accept validation actually ran once per rank in addition to
+the two authentic staging validations, the full
+numerical report is byte-value preserved, every owned cell/component of the deep-owned
+candidate is unchanged (including covered storage), and every live publication value
+remains 4. An explicit check with the authenticated lane then succeeds. The same outcome
+is retried with authenticated validation and accepted once; only this explicit acceptance
+publishes. The report remains unchanged and the published original solution is checked
+against the independently specified target with the existing physical error criterion.
+
+This is one case in the already registered `amr_original_field_residual.inc`, automatically
+discovered by the existing serial CMake fragment inventory and the MPI wrapper. No extra
+CMake hunk is required. The existing nonlinear-profile fixture already verifies
+`spatial_jacobi_applications() == 1 + stored spatial DOFs`, and identity preparation count
+zero, so no redundant counter test is added.
+
+Author reception is source inspection plus Clang syntax-only of the actual GoogleTest /
+Kokkos / MPI translation unit. Root owns real serial/MPI execution and timeout reception;
+this document makes no claim that the new native case has executed here.
