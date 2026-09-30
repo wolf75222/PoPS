@@ -25,7 +25,7 @@ from pops.fields import CellCenteredNonlinearCoupled, FieldBoundary, FieldDiscre
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import BergerRigoutsos, StateTransfer
 from pops.lib.initial import Analytic
 from pops.math import ValueExpr, ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
@@ -47,7 +47,7 @@ DIFFUSION = np.array(((.04, .006, 0.), (-.003, .05, 0.), (0., 0., .03)))
 DT, TOL = .01, 3e-8
 
 
-def build(cells, order=(0, 1, 2), *, guarded=False, seed=False):
+def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditioner=None):
     width = len(order)
     frame = Rectangle("closed-original-field-box", lower=(0, 0), upper=(1, 1)).frame(Cartesian2D())
     fluid = pops.Model("actual-field-consumer", frame=frame)
@@ -93,8 +93,9 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False):
         block = case.block(name, model)
         case.numerics(numerical, block=block)
         blocks.append(block)
+    realization = {} if right_preconditioner is None else {"right_preconditioner": right_preconditioner}
     solver = Newton(tolerance=1e-10, max_iterations=20, linear_tolerance=1e-8,
-                    linear_max_iterations=240, restart=60)
+                     linear_max_iterations=240, restart=60, **realization)
     field = case.field(problem, FieldDiscretization(method=CellCenteredNonlinearCoupled(
         finite_difference_step=1e-6), boundaries=(), solver=solver))
     program = pops.Program("one-original-composite-product")
@@ -123,7 +124,9 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False):
         program.after_synchronization(require_response)
     for time in (load, coefficient):
         program.commit(time.next, program.value("fixed-" + time.n.name, 1 * time.n, at=time.next.point))
-    program.step_strategy(FixedDt(DT))
+    # The guarded variant proposes a large interval; public run clips it to the
+    # requested endpoint for the safe attempt without replacing its controller.
+    program.step_strategy(FixedDt(10*DT if guarded else DT))
     case.program(program)
 
     a = 1 + .04 * cos(2 * np.pi * x(frame))
@@ -140,18 +143,21 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False):
         case.initials.add(InitialCondition(state=block[handle], value=Analytic(frame=frame, components=initial),
                                           projection=ConservativeCellAverage()))
         transfer.state(block[handle], StateTransfer())
-    threshold = case.param(RuntimeParam("mesh-refinement-threshold", default=1.0))
+    # A central strip avoids wrapping disconnected tags into a full-domain fine
+    # bounding box. This changes only the observation fixture's mesh selection.
+    threshold = case.param(RuntimeParam("mesh-refinement-threshold", default=.97))
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(cells, cells), periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[2][parameter]) > case.value(threshold)), Buffer(cells=1)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[2][parameter]) < case.value(threshold)), Buffer(cells=1)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(1000, clock=program.clock)), transfer=transfer,
-        execution=AMRExecution.synchronous())
+        execution=AMRExecution.synchronous(), clustering=BergerRigoutsos(maximum_box_size=8))
     return case, layout
 
 
-def bind_case(world, cells, order, *, guarded=False, seed=False):
-    case, layout = collective_call(world, lambda: build(cells, order, guarded=guarded, seed=seed))
+def bind_case(world, cells, order, *, guarded=False, seed=False, right_preconditioner=None):
+    case, layout = collective_call(world, lambda: build(cells, order, guarded=guarded, seed=seed,
+                                                      right_preconditioner=right_preconditioner))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
     artifact = compile_resolved_plan_once(world, resolved, route="original nonlinear composite AMR field", compile_artifact=pops.compile)
     context = collective_call(world, lambda: artifact_execution_context(artifact))
@@ -236,7 +242,7 @@ def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_ca
     world = native.mpi_world()
     with collective_check(world):
         assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
-    runtime, artifact = bind_case(world, cells, order, seed=seed)
+    runtime, artifact = bind_case(world, cells, order, seed=seed, right_preconditioner="SpatialBasisJacobi@1")
     directory = collective_directory(world, tmp_path / "original-amr-field")
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     accepted = capture(world, runtime)
@@ -256,7 +262,9 @@ def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_ca
                 "native_dimension": 2, "mpi_size": world.size, "cells": cells, "order": order,
                 "native_path": str(native.__file__), "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
                 "saved_sha256": hashlib.sha256(saved.read_bytes()).hexdigest(), "errors": errors,
-                "original_constant_solution_reaction_residuals": residuals, "tolerance": TOL}, indent=2) + "\n")
+                "original_constant_solution_reaction_residuals": residuals, "tolerance": TOL,
+                "fixture_contract": "sol61.public-original-amr-fixture@2",
+                "right_preconditioner": "SpatialBasisJacobi@1"}, indent=2) + "\n")
     collective_call(world, lambda: pops.run(runtime, t_end=2*DT, max_steps=1, console=False))
     continuous = capture(world, runtime)
     restored = collective_call(world, lambda: pops.bind(artifact, resources={"execution_context": artifact_execution_context(artifact)}))
@@ -289,9 +297,10 @@ def test_public_original_amr_published_fields_parent_rollback_and_retry(isolated
     world = native.mpi_world()
     with collective_check(world):
         assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
-    runtime, artifact = bind_case(world, 16, (2, 0, 1), guarded=True)
+    runtime, artifact = bind_case(world, 16, (2, 0, 1), guarded=True,
+                                  right_preconditioner="SpatialBasisJacobi@1")
     before = capture(world, runtime)
-    _, errors = collective_attempt(world, lambda: runtime.step(10*DT))
+    _, errors = collective_attempt(world, lambda: pops.run(runtime, t_end=runtime.time()+10*DT, max_steps=1, console=False))
     after = capture(world, runtime)
     with collective_check(world):
         assert all(errors), errors
@@ -300,9 +309,9 @@ def test_public_original_amr_published_fields_parent_rollback_and_retry(isolated
         for left, right in zip(after[0], before[0], strict=True):
             for a, b in zip(left, right, strict=True):
                 np.testing.assert_array_equal(a, b)
-    collective_call(world, lambda: runtime.step(DT))
-    clean, _ = bind_case(world, 16, (2, 0, 1), guarded=True)
-    collective_call(world, lambda: clean.step(DT))
+    collective_call(world, lambda: pops.run(runtime, t_end=runtime.time()+DT, max_steps=1, console=False))
+    clean, _ = bind_case(world, 16, (2, 0, 1), guarded=True, right_preconditioner="SpatialBasisJacobi@1")
+    collective_call(world, lambda: pops.run(clean, t_end=clean.time()+DT, max_steps=1, console=False))
     retried, fresh = capture(world, runtime), capture(world, clean)
     with collective_check(world):
         assert retried[1:] == fresh[1:]
@@ -315,7 +324,7 @@ def test_public_original_amr_published_fields_parent_rollback_and_retry(isolated
     # Repeat the rejection after an accepted field image already exists. The
     # parent transaction must preserve its accepted fields and history bytes.
     prior = capture(world, runtime)
-    _, errors = collective_attempt(world, lambda: runtime.step(10*DT))
+    _, errors = collective_attempt(world, lambda: pops.run(runtime, t_end=runtime.time()+10*DT, max_steps=1, console=False))
     restored = capture(world, runtime)
     with collective_check(world):
         assert all(errors), errors
@@ -324,8 +333,8 @@ def test_public_original_amr_published_fields_parent_rollback_and_retry(isolated
         for left, right in zip(restored[0], prior[0], strict=True):
             for a, b in zip(left, right, strict=True):
                 np.testing.assert_array_equal(a, b)
-    collective_call(world, lambda: runtime.step(DT))
-    collective_call(world, lambda: clean.step(DT))
+    collective_call(world, lambda: pops.run(runtime, t_end=runtime.time()+DT, max_steps=1, console=False))
+    collective_call(world, lambda: pops.run(clean, t_end=clean.time()+DT, max_steps=1, console=False))
     final, reference = capture(world, runtime), capture(world, clean)
     with collective_check(world):
         assert final[1:] == reference[1:]
