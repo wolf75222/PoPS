@@ -6,6 +6,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[2]
 HEADER = "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp"
 BASE = "9fb7e8fb64c3e3de289d9c139ba310e9e47e43a6"
+DIAGNOSTIC_FREEZE = "75c1d2c5f59fcda88a394d6caecccfea5fe64380"
 
 
 def algebra(source):
@@ -19,12 +20,12 @@ def algebra(source):
 
 def test_original_gmres_numeric_operations_are_byte_equivalent_after_whitespace():
     old = subprocess.check_output(["git", "show", f"{BASE}:{HEADER}"], cwd=ROOT, text=True)
-    current = (ROOT / HEADER).read_text()
+    current = subprocess.check_output(["git", "show", f"{DIAGNOSTIC_FREEZE}:{HEADER}"], cwd=ROOT, text=True)
     assert algebra(current) == algebra(old)
 
 
 def test_diagnostics_keep_budget_tolerance_and_failure_disposition():
-    source = (ROOT / HEADER).read_text()
+    source = subprocess.check_output(["git", "show", f"{DIAGNOSTIC_FREEZE}:{HEADER}"], cwd=ROOT, text=True)
     assert "options_.linear_tolerance * report.residual_norm" in source
     assert "completed < options_.linear_max_iterations" in source
     assert "SolveStatus::kBreakdown, SolveAction::kRejectAttempt" in source

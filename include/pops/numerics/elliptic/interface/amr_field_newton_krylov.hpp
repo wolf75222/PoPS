@@ -264,7 +264,6 @@ class AmrFieldNewtonKrylovWorkspace final {
       rotated_rhs_[0] = beta;
 
       int used = 0;
-      bool cycle_converged = false;
       for (int column = 0; column < cycle; ++column) {
         apply_jvp(iterate, basis_[static_cast<std::size_t>(column)], work_, nonlinear_iteration);
         project_unknowns_(work_);
@@ -273,6 +272,13 @@ class AmrFieldNewtonKrylovWorkspace final {
         for (int row = 0; row <= column; ++row) {
           h_(row, column) = dot_(work_, basis_[static_cast<std::size_t>(row)], lane);
           saxpy_(work_, -h_(row, column), basis_[static_cast<std::size_t>(row)]);
+        }
+        // A second MGS pass restores orthogonality after cancellation without
+        // changing the Krylov column, restart or iteration budgets.
+        for (int row = 0; row <= column; ++row) {
+          const Real correction = dot_(work_, basis_[static_cast<std::size_t>(row)], lane);
+          h_(row, column) += correction;
+          saxpy_(work_, -correction, basis_[static_cast<std::size_t>(row)]);
         }
         h_(column + 1, column) = norm_(work_, lane);
         if (h_(column + 1, column) > Real(0)) {
@@ -310,7 +316,6 @@ class AmrFieldNewtonKrylovWorkspace final {
         result.columns = completed;
         result.projected_norm = std::abs(rotated_rhs_[static_cast<std::size_t>(column + 1)]);
         if (std::abs(rotated_rhs_[static_cast<std::size_t>(column + 1)]) <= stop) {
-          cycle_converged = true;
           break;
         }
       }
@@ -321,10 +326,9 @@ class AmrFieldNewtonKrylovWorkspace final {
       }
       if (!update_correction_(used, result))
         return result;
-      if (cycle_converged) {
-        result.converged = true;
-        return result;
-      }
+      // A small rotated RHS only ends Arnoldi. The requested linear tolerance
+      // is authenticated by the actual JVP on the complete correction, also
+      // for a happy breakdown or a direction-dependent approximate JVP.
       apply_jvp(iterate, correction_, image_, nonlinear_iteration);
       project_unknowns_(image_);
       local_phase_([] { Kokkos::fence(); });
