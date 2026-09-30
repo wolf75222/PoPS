@@ -106,6 +106,15 @@ def _entry(value, authority):
         raise NotImplementedError("the selected reconstruction needs a moving stencil metric provider")
     if method.riemann.native_id != "pops::RusanovFlux":
         raise NotImplementedError("the selected numerical flux needs a moving FaceContext provider")
+    # Native Rusanov averages the two physical trace fluxes. Applying it to
+    # F-wg*U therefore fixes its mesh-density trace to (UL+UR)/2. A different
+    # declared projection cannot be cancelled in a receipt decomposition and
+    # silently leave this numerical discretization unchanged.
+    weights=tuple(_decode_scalar(item) for item in value.attrs["projection"]["face_weights"])
+    if weights != (.5,.5):
+        raise NotImplementedError("the selected centered Rusanov moving face provider requires "
+            "face_weights=(1/2,1/2); this projection needs a prepared numerical-face provider "
+            "that consumes its declared density weights")
     return entry
 
 

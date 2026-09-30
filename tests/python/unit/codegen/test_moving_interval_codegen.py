@@ -16,7 +16,8 @@ from pops.codegen.program_models import ProgramModelGraph
 
 
 def declared_case(*, components=("density",), velocity=.7, with_source=False,
-                  selected_reconstruction=None, cells=16, output_mode=None):
+                  selected_reconstruction=None, cells=16, output_mode=None,
+                  face_weights=(Fraction(1,2),Fraction(1,2)),source_measure_weights=(1,0)):
     frame=CartesianDomain("domain",(0.,),(1.,)).frame(Cartesian1D())
     model=pops.Model("arbitrary_transport",frame=frame)
     state=model.state("q",components=components)
@@ -39,7 +40,7 @@ def declared_case(*, components=("density",), velocity=.7, with_source=False,
     geometry=program.geometry_state(temporal.n,evolution=evolution)
     candidate=program.reynolds_update(geometry,physical_rate=physical(temporal.n),
         source_rate=None if source_rate is None else source_rate(temporal.n),
-        projection=MovingFieldProjection((Fraction(1,2),Fraction(1,2)),(1,0)),
+        projection=MovingFieldProjection(face_weights,source_measure_weights),
         geometry_tolerance=1e-13,at=temporal.next.point)
     program.commit(temporal.next,candidate); program.step_strategy(FixedDt(.001)); case.program(program)
     layout=MovingControlVolumes(Uniform(CartesianGrid(frame=frame,cells=(cells,),
@@ -84,3 +85,27 @@ def test_moving_scientific_consumer_resolves_its_exact_state_and_layout():
     resolved=pops.resolve(pops.validate(case),layout=layout)
     assert len(resolved.consumer_graph.nodes)==1
     assert resolved.consumer_graph.nodes[0].quantities[0].layout_id==resolved.layout_plan.layouts[0].handle.qualified_id
+
+
+@pytest.mark.parametrize("weights",[(1,0),(0,1),(2,-1),(Fraction(1,3),Fraction(2,3))])
+def test_noncentered_density_policy_requires_its_own_numerical_face_provider(weights):
+    # Authoring keeps the general policy. This selected realization refuses it
+    # during resolve, before any compiler/runtime materialization.
+    case,layout=declared_case(face_weights=weights)
+    validated=pops.validate(case)
+    with pytest.raises(NotImplementedError,match="centered Rusanov.*face_weights=.*prepared numerical-face provider"):
+        pops.resolve(validated,layout=layout)
+
+
+def test_source_measure_quadratures_remain_general_and_operant():
+    sources=[]
+    for weights in ((1,0),(0,1),(Fraction(1,2),Fraction(1,2)),(2,-1)):
+        case,layout=declared_case(with_source=True,source_measure_weights=weights,
+                                 face_weights=(.5,.5))
+        resolved=pops.resolve(pops.validate(case),layout=layout)
+        source=emit_cpp_program(resolved.time,model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
+        measure=next(line for line in source.splitlines() if "const auto measure=" in line)
+        assert "cell.previous_measure" in measure and "cell.measure" in measure
+        assert "time.duration*measure*" in source
+        sources.append(measure)
+    assert len(set(sources))==4,"distinct authored quadratures must change the real source projection"

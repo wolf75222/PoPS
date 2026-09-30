@@ -18,6 +18,19 @@ projection. The native receipt retains physical amounts, density traces,
 endpoint displacements and source amounts on the same authenticated interval.
 The numerical CFL check uses the actual adjacent moving cell lengths.
 
+The selected native Rusanov formula averages the two physical trace fluxes.
+Applied to `F-wg*U`, its mesh-density trace is therefore `(UL+UR)/2`. Preparation
+requires explicit `face_weights=(1/2,1/2)` for this realization. Other density
+policies remain valid authoring/carrier contracts but require a numerical-face
+provider that actually consumes them. They cannot merely alter a receipt
+decomposition while cancelling from the numerical update. For example,
+`a=.3`, `wg=.7`, `UL=1`, `UR=4` gives the centered relative upwind flux `-1.6`;
+substituting a declared left trace into the same physical Rusanov construction
+would give a different relative flux. Source old/new measure weights remain
+general and affect the actual source amount, including `(1,0)`, `(0,1)`,
+centered and other exact affine quadratures. No native carrier/header restriction
+on quadrature is added by this provider-specific prepare gate.
+
 Preparation currently selects the periodic Uniform1D, FirstOrder/Rusanov,
 single complete state realization with a 1D analytic coordinate law. It proves
 the initial map is identity at time zero and validates its actual finite
