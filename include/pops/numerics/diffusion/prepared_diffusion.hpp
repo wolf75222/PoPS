@@ -688,10 +688,12 @@ class PreparedDiffusion {
     const Field* coverage = nullptr;
     std::exception_ptr active_error;
     long active_layout_error = 0;
+    bool owner_contributes = false;
     try {
       sync_host();
       active = ctx.pointwise_active_mask(program_block, variable_);
       coverage = ctx.pointwise_exchange_coverage_mask(program_block, variable_);
+      owner_contributes = accepted_exchange_contributes(variable_, *lane_);
       for (const Field* mask : {active, coverage}) {
         if (mask == nullptr)
           continue;
@@ -715,6 +717,8 @@ class PreparedDiffusion {
       throw std::invalid_argument(
           "accepted diffusive face mask differs from local patches collectively");
     ctx.stage_exchange_batch([&](auto&& stage_exchange) {
+      if (!owner_contributes)
+        return;
       for (std::size_t local = 0; local < variable_.local_size(); ++local) {
         const auto box = variable_.box(local);
         const auto extent = box.extent();

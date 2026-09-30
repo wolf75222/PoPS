@@ -147,7 +147,16 @@ def test_native_accepted_face_amount_and_initial_read(
             if world is None or int(world.rank) == 0:
                 np.savez(directory / "composite-ownership.npz", coarse_active=coarse)
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
-    save_public_snapshot(world, runtime, artifact, quantity, directory, "accepted", amr=kind != "uniform")
+    _, accepted = save_public_snapshot(
+        world, runtime, artifact, quantity, directory, "accepted", amr=kind != "uniform")
+    with collective_check(world):
+        if world is None or int(world.rank) == 0:
+            records = [row for ledger in accepted[2] for row in ledger["records"]
+                       if row["exterior"] and (row["axis"], row["side"], row["component"]) == (0, 1, 0)]
+            keys = [(row["operation"], row["occurrence"], row["context"], row["quadrature"])
+                    for row in records]
+            assert len(keys) == len(set(keys)), "MPI ranks duplicate a physical trace contribution"
+            assert len(keys) == (4 * n if kind == "amr2" else n)
     if kind == "amr2":
         def physical_right_faces():
             selected = []

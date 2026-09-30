@@ -49,11 +49,22 @@ struct Fab {
 };
 template<int D> struct MultiFab {
   std::vector<Fab> fields;
+  bool replicated=false;
+  struct Distribution {
+    bool value;
+    bool replicated() const { return value; }
+  };
+  Distribution distribution() const { return {replicated}; }
   std::size_t local_size() const { return fields.size(); }
   const Box& box(std::size_t i) const { return fields.at(i).bounds; }
   const Fab& fab(std::size_t i) const { return fields.at(i); }
 };
-struct Lane { int size() const { return 1; } };
+struct Lane {
+  int ordinal=0;
+  int ranks=1;
+  int size() const { return ranks; }
+  int rank() const { return ordinal; }
+};
 inline long all_reduce_max(long value,const Lane&) { return value; }
 inline void sync_host() {}
 }
@@ -74,6 +85,7 @@ struct Context {
   std::vector<Faces> faces;
   std::vector<Record> records;
   bool use_coverage=true, use_embedded=false;
+  int rank=0, ranks=1;
   double hy=.25;
   Context(int nx,int ny,bool empty=false) : hy(1./ny) {
     if(empty) return;
@@ -89,7 +101,7 @@ struct Context {
   const pops::MultiFab<2>* pointwise_exchange_coverage_mask(int,const pops::MultiFab<2>&) const {
     return use_coverage?&coverage:nullptr;
   }
-  pops::Lane prepared_execution_lane() const { return {}; }
+  pops::Lane prepared_execution_lane() const { return {rank,ranks}; }
   struct Geometry { double hy; double spacing(int axis) const { return axis?hy:.5; } };
   Geometry geometry() const { return {hy}; }
   bool is_external_trace_face(int axis,int side,pops::Index cell) const {
@@ -149,6 +161,15 @@ int main() {
   // Uniform retains the prior no-coverage behavior.
   Context uniform(2,4); uniform.use_coverage=false; emit(uniform,.01);
   count(selected(uniform).first,4); close(selected(uniform).second,-.012);
+  Context replica0(2,4),replica1(2,4);
+  replica0.field.replicated=replica1.field.replicated=true;
+  replica0.ranks=replica1.ranks=2; replica1.rank=1;
+  emit(replica0,.01); emit(replica1,.01);
+  count(selected(replica0).first,4); count(replica1.records.size(),0);
+  close(selected(replica0).second+selected(replica1).second,-.012);
+  Context owner1(2,4); owner1.rank=1; owner1.ranks=2;
+  emit(owner1,.01); count(selected(owner1).first,4);
+  close(selected(owner1).second,-.012);
   // A foreign mask cannot publish a partial batch.
   Context foreign(2,4); foreign.coverage.fields[0].bounds.hi[0]=0;
   std::string diagnostic;
@@ -223,7 +244,7 @@ struct Producer {
 ''' + producer + r'''
 };
 void emit(Context& ctx,double dt) {
-  pops::Lane lane;
+  pops::Lane lane{ctx.rank,ctx.ranks};
   const auto domain=ctx.field.local_size()?ctx.field.box(0):pops::Box{};
   Producer producer{ctx.field,ctx.faces,{domain,ctx.hy},{},&lane};
   producer.physical_[1].kind=DiffusiveBoundaryKind::prescribed;
@@ -261,6 +282,15 @@ int main() {
   Context empty(2,4,true); emit(empty,.01); count(empty.records.size(),0);
   Context uniform(2,4); uniform.use_coverage=false; emit(uniform,.01);
   count(selected(uniform).first,4); close(selected(uniform).second,.012);
+  Context replica0(2,4),replica1(2,4);
+  replica0.field.replicated=replica1.field.replicated=true;
+  replica0.ranks=replica1.ranks=2; replica1.rank=1;
+  emit(replica0,.01); emit(replica1,.01);
+  count(selected(replica0).first,4); count(replica1.records.size(),0);
+  close(selected(replica0).second+selected(replica1).second,.012);
+  Context owner1(2,4); owner1.rank=1; owner1.ranks=2;
+  emit(owner1,.01); count(selected(owner1).first,4);
+  close(selected(owner1).second,.012);
   Context foreign(2,4); foreign.coverage.fields[0].bounds.hi[0]=0;
   std::string diagnostic;
   try { emit(foreign,.01); } catch(const std::invalid_argument& e) { diagnostic=e.what(); }

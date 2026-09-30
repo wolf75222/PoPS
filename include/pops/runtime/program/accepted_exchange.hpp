@@ -22,6 +22,15 @@
 
 namespace pops::runtime::program {
 
+/// A replicated carrier represents one physical field on the lane. Its accepted
+/// currents contribute once, on lane rank zero. A distributed carrier already
+/// contains only its local owners. This selection never skips the collective
+/// preparation/staging boundary on ranks with no contribution.
+template <class Field, class Lane>
+bool accepted_exchange_contributes(const Field& field, const Lane& lane) {
+  return !field.distribution().replicated() || lane.rank() == 0;
+}
+
 /// One resolved mathematical occurrence selected by the accepted temporal quadrature.
 /// Numerical evaluations and nonlinear iterates do not stage records by themselves. The generated
 /// affine update supplies its signed weight once, retaining repeated mathematical use explicitly.

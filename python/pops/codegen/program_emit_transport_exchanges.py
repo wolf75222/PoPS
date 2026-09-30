@@ -18,11 +18,13 @@ def emit_transport_exchanges(
         "const pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % coverage_name,
         "std::exception_ptr accepted_mask_error;",
         "long accepted_mask_layout_error = 0;",
+        "bool accepted_owner_contributes = false;",
         "try {",
         "  pops::sync_host();",
         "  %s = ctx.pointwise_active_mask(%d, %s);" % (active_name, program_block, active),
         "  %s = ctx.pointwise_exchange_coverage_mask(%d, %s);" % (
             coverage_name, program_block, active),
+        "  accepted_owner_contributes = pops::runtime::program::accepted_exchange_contributes(%s, ctx.prepared_execution_lane());" % active,
         "  for (const auto* mask : {%s, %s}) {" % (active_name, coverage_name),
         "  if (mask != nullptr) {",
         "    pops::sync_host();",
@@ -42,6 +44,7 @@ def emit_transport_exchanges(
         "if (pops::all_reduce_max(accepted_mask_layout_error, ctx.prepared_execution_lane()) != 0)",
         '  throw std::invalid_argument("accepted transport face mask differs from local patches collectively");',
         "ctx.stage_exchange_batch([&](auto&& stage_exchange) {",
+        "if (!accepted_owner_contributes) return;",
         "for (std::size_t %s = 0; %s < %s.size(); ++%s) {"
         % (local_name, local_name, faces, local_name),
         "  const auto& accepted_faces = %s[%s];" % (faces, local_name),
