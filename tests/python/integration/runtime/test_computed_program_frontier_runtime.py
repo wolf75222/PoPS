@@ -129,10 +129,11 @@ def test_native_invalid_or_overshooting_scalar_frontier_rolls_back(
     runtime = pops.bind(artifact, initial_values={subject: initial},
                        resources={"execution_context": artifact_execution_context(artifact)})
     temporal = runtime._executor._temporal_restart_state.to_data()
+    before = np.asarray(runtime.state_global("rotation")).copy()
     with pytest.raises((RuntimeError, ValueError), match="frontier"):
         pops.run(runtime, t_end=.8, max_steps=1, console=False)
     assert runtime.time() == 0. and runtime.macro_step() == 0
-    np.testing.assert_array_equal(runtime.state_global("rotation"), initial)
+    np.testing.assert_array_equal(runtime.state_global("rotation"), before)
     assert runtime._executor._temporal_restart_state.time_hex == temporal["clock"]["time"]
     assert "program_frontier" not in runtime._executor._temporal_restart_state.controller_state
 
@@ -153,7 +154,8 @@ def test_native_computed_frontier_rank_local_run_limit_is_collectively_refused(
     subject = artifact.plan.initial_condition_plan.bindings[0].subject
     runtime = pops.bind(artifact, initial_values={subject: initial},
                        resources={"execution_context": context})
+    before = np.asarray(runtime.state_global("rotation")).copy()
     with pytest.raises(RuntimeError, match="ComputedDt preparation differs"):
         pops.run(runtime, t_end=.8 if int(world.rank) == 0 else .7, max_steps=1, console=False)
     assert runtime.time() == 0. and runtime.macro_step() == 0
-    np.testing.assert_array_equal(runtime.state_global("rotation"), initial)
+    np.testing.assert_array_equal(runtime.state_global("rotation"), before)
