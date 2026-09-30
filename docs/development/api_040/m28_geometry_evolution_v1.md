@@ -187,3 +187,21 @@ Generation equality alone is insufficient. Rank-local mutation of any of those
 inputs after preparation is rejected before ledger/publication. The ordinary
 native `commit_many` refuses a state that owns moving geometry, so a bare density
 publication cannot bypass the coupling contract.
+
+## Coupled Python authoring
+
+`Program.geometry_state(U.n, evolution=...)` binds a qualified physical state
+to the common analytic coordinate law. `Program.reynolds_update` records the
+physical rate operator, optional source rate, exact root interval and explicit
+`MovingFieldProjection` (face density weights and source measure weights).
+The result is a `state_geometry` SSA value rather than a bare density. Commit to
+`U.next` requires that coupled candidate; ordinary field algebra cannot discard
+its geometry while retaining a publishable state.
+
+The authoring layer retains the original Equation operator handle. It neither
+executes a numerical stage in Python nor grants a native capability. The
+production geometry gate remains closed until this IR is connected to prepared
+native model/source bodies, coupled observers and the geometry/receipt restart
+codec. Tests cover scalar and permuted vector states, unchanged serialization
+on refused authoring, exact frame/clock ownership and constant-preserving
+projection weights. They are source/contract checks, not public ALE execution.

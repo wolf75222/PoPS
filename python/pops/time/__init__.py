@@ -45,6 +45,7 @@ from pops.time._program.pass_api import (  # noqa: F401
     optimize,
 )
 from pops.time._program.api import Program
+from pops.time._program.geometry import MovingFieldProjection
 from pops.time._program.hold_catchup import (  # noqa: F401
     HoldCatchupBlock, adaptive_strides, hold_catchup_program, step_adaptive_program,
 )
@@ -85,7 +86,7 @@ from pops.time.value_collections import StageStateSet  # noqa: F401
 from pops.time.values import ProgramValue  # noqa: F401
 from pops.time.stencil import StencilAccess  # noqa: F401
 
-__all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "ResidualSolution",
+__all__ = ["Program", "ProgramValue", "MovingFieldProjection", "StageStateSet", "StencilAccess", "ResidualSolution",
            "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
            "DerivativeStrategy", "SolveRequest", "SolveRequestError", "SolveUnknown",
            "ImplicitStage", "ImplicitDiffusionStage",

@@ -29,6 +29,7 @@ from pops.time._program.solve import _ProgramSolve
 from pops.time._program.time_handles import _ProgramTimeHandles
 from pops.time._program.physical_maps import _ProgramPhysicalMaps
 from pops.time._program.integrals import _ProgramIntegrals
+from pops.time._program.geometry import _ProgramGeometry
 from pops.time.references import bind_program_block, block_name
 from pops.time._step.transaction import (
     ALL_PROVISIONAL_STORES,
@@ -48,6 +49,7 @@ class Program(
     _ProgramTimeHandles,
     _ProgramPhysicalMaps,
     _ProgramIntegrals,
+    _ProgramGeometry,
     _ProgramCore,
     _ProgramLocal,
     _ProgramCondensed,
@@ -101,6 +103,7 @@ class Program(
         self._issued_values = {}  # id -> strong identity, including stale immutable replacement records
         self._next_id = 0
         self._commits = {}  # qualified state Handle -> State value
+        self._geometry_states = {}  # qualified physical State -> coupled geometry SSA
         self._recording = []  # stack of sub-block lists (a control-flow body); see _new / while_
         self._next_region = 1
         self._recording_regions = {}  # id(list) -> (strong list ref, exact authoring-region token)

@@ -421,8 +421,14 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         ):
             raise TypeError("_commit_state: target must be a block-qualified state Handle")
         block = state_ref.block_ref
-        if not (isinstance(state, ProgramValue) and state.vtype in ("state", "scalar_field")):
+        if not (isinstance(state, ProgramValue) and state.vtype in ("state", "scalar_field", "state_geometry")):
             raise TypeError("_commit_state: a State (or scalar_field) ProgramValue is required")
+        geometry = self._geometry_states.get(state_ref)
+        if geometry is not None and (state.vtype != "state_geometry" or state.op != "reynolds_update"
+                                     or state.inputs[0] is not geometry):
+            raise ValueError("moving physical state requires its coupled state/geometry candidate")
+        if state.vtype == "state_geometry" and geometry is None:
+            raise ValueError("coupled geometry commit lacks its physical-state binding")
         if state.prog is not self:
             raise ValueError("_commit_state: the State value belongs to a different Program")
         if not getattr(self, "_post_sync_recording", False):
