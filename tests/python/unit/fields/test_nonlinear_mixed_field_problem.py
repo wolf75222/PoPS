@@ -158,6 +158,17 @@ def test_wrong_seed_width_refuses_atomically():
     assert (program._next_id, tuple(program._values)) == before
 
 
+@pytest.mark.parametrize("binding", ("capture_0", "coefficients"))
+def test_foreign_equation_binding_refuses_without_symbolic_comparison(binding):
+    _, field, program, _, request, *_ = mixed_case()
+    replacement = program.scalar_field("foreign-equation-value", ncomp=2)
+    before = (program._next_id, tuple(program._values))
+    inputs = {**request.equation_inputs, binding: replacement}
+    with pytest.raises(SolveRequestError, match="equation_input_mismatch"):
+        program.solve(replace(request, equation_inputs=inputs), solver=field.default_program_solver())
+    assert (program._next_id, tuple(program._values)) == before
+
+
 def test_captured_clock_cannot_be_relabelled_after_binding():
     _, field, program, current, request, *_ = mixed_case()
     # value(SSA, at=...) replaces the same record; the frozen equation sees this drift.

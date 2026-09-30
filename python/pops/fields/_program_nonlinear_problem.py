@@ -163,7 +163,9 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
     unknown = request.unknowns[0]
     expected = {"prototype": residual.prototype, "coefficients": residual.coefficients,
                 **{"capture_%d" % i: value for i, value in enumerate(residual.captures)}}
-    if dict(request.equation_inputs) != expected or unknown.template is not residual.prototype or request.outputs != (unknown.name,):
+    if set(request.equation_inputs) != set(expected) or \
+            any(request.equation_inputs[key] is not value for key, value in expected.items()) or \
+            unknown.template is not residual.prototype or request.outputs != (unknown.name,):
         raise SolveRequestError("equation_input_mismatch", "field residual bindings changed")
     if request.derivative.route != "finite_difference" or request.residual_interpretation != "original_field_equations" or request.error_interpretation != "spatial_residual_l2":
         raise SolveRequestError("unsupported_derivative", "select central full-residual finite differences and original spatial residual explicitly")

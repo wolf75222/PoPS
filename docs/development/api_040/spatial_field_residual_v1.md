@@ -180,3 +180,10 @@ After checking, the generated bodies, parent export and complete parity JSON are
 preserved outside the Git checkout in the workspace's
 `outputs/sol61-t3-spatial-nonlinear-author-20260930/` directory. The commands above
 record the paths used during the actual checks; relocation changes no payload.
+
+Independent review found that dictionary equality on altered equation bindings
+could invoke the symbolic `ProgramValue.__eq__` and leak `SymbolicTruthValueError`.
+The follow-up compares exact keys and each binding by object identity, as required
+for retained SSA inputs. The two additional refusal probes and existing new-seam
+batch pass **22 tests** (13.20 s), with atomic authoring rollback. Emitted native
+code and successful graph data are unchanged by this error-route correction.
