@@ -63,6 +63,18 @@ def test_global_quantity_manifest_version_requires_exact_integer(version):
         ModuleManifest.from_dict(forged)
 
 
+@pytest.mark.parametrize("slot,value",((1,True),(2,True),(1,1.0),(2,1.0),(1,"1"),(2,"1")))
+def test_global_quantity_manifest_exponents_require_exact_integers(slot,value):
+    module = Module("physical_port_exponent")
+    module.global_quantity("q",units=PhysicalDimension((("charge",1),)))
+    data = module.manifest().to_dict()
+    assert ModuleManifest.from_dict(data).to_dict() == data
+    forged = json.loads(json.dumps(data))
+    forged["global_quantities"]["q"]["units"]["powers"][0][slot] = value
+    with pytest.raises(ValueError):
+        ModuleManifest.from_dict(forged)
+
+
 def test_two_physical_source_ports_keep_their_own_bodies_and_occurrences():
     from pops.math import ddt
     from pops.domain import Rectangle

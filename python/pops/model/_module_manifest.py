@@ -274,7 +274,13 @@ class ModuleManifest:
                     or row["scope"] != "global" or handle.owner_path != owner
                     or handle.is_instance or handle.kind != "global_quantity" or handle.local_id != key):
                 raise ValueError("ModuleManifest global quantity declaration authority changed")
-            if PhysicalDimension.from_data(row["units"]).to_data() != row["units"]:
+            units = row["units"]
+            if (not isinstance(units, Mapping) or set(units) != {"kind", "powers"}
+                    or not isinstance(units["powers"], list)
+                    or any(not isinstance(power, list) or len(power) != 3
+                           or type(power[1]) is not int or type(power[2]) is not int
+                           for power in units["powers"])
+                    or PhysicalDimension.from_data(units).to_data() != units):
                 raise ValueError("ModuleManifest global quantity units must be canonical")
         object.__setattr__(self, "global_quantities", _freeze_json(globals_, where="global quantities"))
         object.__setattr__(self, "schema_version", GLOBAL_QUANTITIES_SCHEMA_VERSION if globals_ else SCHEMA_VERSION)

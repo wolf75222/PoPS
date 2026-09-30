@@ -79,3 +79,6 @@ SSA resealing: a same-owner metadata-equal clone is rejected before conversion
 to the kernel POD. Global declaration version 1 requires an exact integer;
 float, boolean and string substitutes are rejected. Its 21 physical-source
 source tests include a separate valid emission before each mutated binding.
+The units image also requires exact integer numerators and denominators before
+decoding: JSON booleans and floats cannot impersonate canonical exponents. The
+follow-up 29-test source/manifest/hash suite passes with six such injections.
