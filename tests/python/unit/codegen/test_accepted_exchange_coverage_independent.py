@@ -225,6 +225,7 @@ using pops::Real;
 using pops::FieldView;
 using pops::sync_host;
 using pops::all_reduce_max;
+using pops::runtime::program::accepted_exchange_contributes;
 enum class DiffusiveBoundaryKind { periodic, prescribed };
 struct Boundary { DiffusiveBoundaryKind kind=DiffusiveBoundaryKind::periodic; };
 struct DiffusionGeometry {
