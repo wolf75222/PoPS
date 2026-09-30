@@ -294,7 +294,8 @@ class _SystemIO(_System):
             )
         out["cache_names"] = np.asarray(cache_names, dtype=str)
         runtime_identities = [value.to_data() for value in self._checkpoint_identities()]
-        run_identity = self.last_run_identity.to_data()
+        from pops.runtime._checkpoint_manifest import checkpoint_lifecycle_evidence
+        lifecycle = checkpoint_lifecycle_evidence(self)
         capture_identity = make_identity(
             "checkpoint-capture-plan",
             {
@@ -311,7 +312,7 @@ class _SystemIO(_System):
                 "histories": history_plan.to_data(),
                 "cache": cache_evidence,
                 "runtime_identities": runtime_identities,
-                "run_identity": run_identity,
+                **lifecycle,
             },
         ).token
         return _PreparedUniformCapture(

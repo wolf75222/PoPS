@@ -2442,7 +2442,7 @@ class RuntimeInstance:
                     raise RuntimeError(
                         "RegridOnRestart executor returned no transformed-topology receipt"
                     )
-                restored_run_identity = make_identity(
+                restored_run_identity = None if source_run_identity is None else make_identity(
                     "run",
                     {
                         "continuation": "regrid_on_restart",

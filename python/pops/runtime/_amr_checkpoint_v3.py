@@ -373,6 +373,7 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     """Freeze the complete AMR gather plan without invoking a native collective."""
     import numpy as np
     from pops.identity import make_identity
+    from pops.runtime._checkpoint_manifest import checkpoint_lifecycle_evidence
     from pops.output._checkpoint_collective import canonical_checkpoint_path, checkpoint_topology
     from pops.runtime._amr_checkpoint_contract import encode_contract
     from pops.runtime._checkpoint_spatial import (
@@ -565,7 +566,7 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
             "accepted_contract": accepted_contract,
             "histories": history_plan.to_data(),
             "runtime_identities": [value.to_data() for value in owner._checkpoint_identities()],
-            "run_identity": owner.last_run_identity.to_data(),
+            **checkpoint_lifecycle_evidence(owner),
         },
     ).token
     return _PreparedAMRCapture(

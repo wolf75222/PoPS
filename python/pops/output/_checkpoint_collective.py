@@ -226,6 +226,7 @@ def _manifest_character_budget(names: tuple[str, ...]) -> int:
         "artifact_identity": dict(identity, domain="artifact"),
         "bind_identity": dict(identity, domain="bind"),
         "run_identity": dict(identity, domain="run"),
+        "origin": {"schema_version": 1, "kind": "bound_initial"},
         "clock": {"time": "-0x1.fffffffffffffp+1023", "macro_step": -sys.maxsize},
         "arrays": evidence,
         "restart_identity": dict(identity, domain="restart"),
@@ -234,7 +235,10 @@ def _manifest_character_budget(names: tuple[str, ...]) -> int:
 
 
 def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) -> None:
-    from pops._generated_release_contract import CHECKPOINT_ENVELOPE_SCHEMA_VERSION
+    from pops.runtime._checkpoint_manifest import (
+        BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION, RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION,
+        _is_bound_initial_origin,
+    )
     from pops.identity import Identity, make_identity
 
     def identity(field: str, domain: str) -> Identity:
@@ -276,11 +280,16 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
         "arrays",
         "restart_identity",
     }
+    initial = manifest.get("schema_version") == BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION
+    if initial:
+        expected_keys.add("origin")
     if set(manifest) != expected_keys:
         raise ValueError("checkpoint manifest has an invalid exact schema")
     if (
         isinstance(manifest["schema_version"], bool)
-        or manifest["schema_version"] != CHECKPOINT_ENVELOPE_SCHEMA_VERSION
+        or not isinstance(manifest["schema_version"], int)
+        or manifest["schema_version"] not in {
+            RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION, BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION}
         or not isinstance(manifest["runtime_kind"], str)
         or manifest["runtime_kind"] not in {"uniform", "amr", "multi_layout_uniform", "multi_layout_amr"}
     ):
@@ -303,7 +312,13 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
     identity("semantic_identity", "semantic")
     identity("artifact_identity", "artifact")
     identity("bind_identity", "bind")
-    identity("run_identity", "run")
+    if initial:
+        if not _is_bound_initial_origin(manifest["origin"]) \
+                or manifest["run_identity"] is not None \
+                or clock != {"time": (0.).hex(), "macro_step": 0}:
+            raise ValueError("bound_initial checkpoint has invalid origin/run/clock authority")
+    else:
+        identity("run_identity", "run")
     base = {key: manifest[key] for key in expected_keys - {"restart_identity"}}
     expected = make_identity("restart", base)
     recorded = identity("restart_identity", "restart")

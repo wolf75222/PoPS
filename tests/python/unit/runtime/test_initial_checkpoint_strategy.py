@@ -22,7 +22,6 @@ from pops.time import (
 from pops.time._program.detach import detach_compiled_program
 
 
-ROOT = Path(__file__).resolve().parents[4]
 POLICIES = (
     FixedDt(.125), AdaptiveCFL(.4, max_dt=.25),
     ErrorControlledDt(dt_init=.125, rtol=.001, atol=.0001,
@@ -67,7 +66,10 @@ class _InstallProbe(_SystemUnifiedInstall, _AmrSystemProgram):
 @pytest.mark.parametrize("route", ("uniform", "amr"))
 @pytest.mark.parametrize("policy", POLICIES)
 def test_real_install_tail_prepares_initial_checkpoint_before_any_run(monkeypatch, route, policy):
-    assert Path(pops.__file__).resolve() == ROOT / "python/pops/__init__.py"
+    import inspect
+    package = Path(pops.__file__).resolve().parent
+    assert Path(inspect.getfile(_SystemUnifiedInstall)).resolve() == package / "runtime/_system_unified_install.py"
+    assert Path(inspect.getfile(_AmrSystemProgram)).resolve() == package / "runtime/_amr_system_program.py"
     program = _program(policy)
     compiled = SimpleNamespace(so_path="source-install-probe.so", program=program)
     owner = _InstallProbe()

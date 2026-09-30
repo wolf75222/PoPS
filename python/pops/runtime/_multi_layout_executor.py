@@ -923,9 +923,9 @@ class _MultiLayoutUniformExecutor:
     def _restore_checkpoint_run_identity(self, identity: Any) -> None:
         from pops.identity import Identity
 
-        if type(identity) is not Identity or identity.domain != "run":
+        if identity is not None and (type(identity) is not Identity or identity.domain != "run"):
             raise TypeError("multi-layout restart requires an authenticated run identity")
-        restored = Identity.from_data(identity.to_data())
+        restored = None if identity is None else Identity.from_data(identity.to_data())
         self._last_run_manifest = None
         self._last_run_identity = restored
         self._restart_lineage_identity = restored
@@ -1715,6 +1715,9 @@ class _MultiLayoutUniformExecutor:
             prepared_children.append(prepare(child_bytes, bit_identical=policy))
         children = tuple(prepared_children)
         temporal = self._prepared_temporal_state(children)
+        from pops.runtime._checkpoint_manifest import checkpoint_run_identity, require_bound_initial_children
+        if checkpoint_run_identity(stored) is None:
+            require_bound_initial_children(children, temporal)
         from pops.runtime._temporal_restart import _clock
 
         now, step = _clock(stored["t"].item(), stored["macro_step"].item())
