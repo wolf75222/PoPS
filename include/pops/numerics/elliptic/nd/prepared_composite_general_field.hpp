@@ -3,6 +3,7 @@
 #include <pops/numerics/elliptic/amr/composite_fac_poisson.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_workspace.hpp>
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
+#include <pops/runtime/amr/hierarchy_field_operator.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -219,7 +220,8 @@ amr::CompositeFacBuildRequest<Dim> fac_request(
 /// entries never invoke a scalar solve. All Krylov storage is materialized at preparation.
 template <int Dim>
 class PreparedCompositeGeneralField final
-    : public runtime::program::PreparedHierarchyTensorSolver<Dim> {
+    : public runtime::program::PreparedHierarchyTensorSolver<Dim>,
+      public runtime::program::PreparedHierarchyFieldOperator<Dim> {
  public:
   using field_type = MultiFab<Dim>;
   using request_type = runtime::program::HierarchyTensorSolverBuildRequest<Dim>;
@@ -305,27 +307,89 @@ class PreparedCompositeGeneralField final
       copy_field_(*guess, destination);
   }
   const field_type& active_cell_mask(int level) const override { return active_cells(level); }
+  std::string_view original_field_contract() const noexcept override { return contract_; }
+  const ExecutionLane& original_field_execution_lane() const noexcept override { return *lane_; }
+  int original_field_levels() const noexcept override { return level_count(); }
+  const field_type& original_field_layout(int level) const override { return solution_.at(level); }
+  const field_type& original_field_active_cells(int level) const override {
+    return active_cells(level);
+  }
+  Real original_field_cell_measure(int level) const override { return measures_.at(level); }
+  std::uint64_t original_field_preparation_generation() const noexcept override {
+    return original_field_generation_;
+  }
+  void prepare_original_field_operator() override {
+    // Newton gauge/nullspace authorization needs its own realization; do not silently
+    // borrow the linear solver's quotient/gauge for an authored nonlinear equation.
+    local_field_phase_(true, [&] {
+      if (!options_.modes.empty())
+        throw std::logic_error("original field operator v1 has no nonlinear gauge realization");
+    });
+    prepare_coefficients_impl_(true, false);
+  }
+  void apply_original_field_operator(const hierarchy_type& input, hierarchy_type& output) override {
+    apply_impl_(input, output, true);
+  }
+  void synchronize_original_field_candidate(hierarchy_type& value) override {
+    local_field_phase_(true, [&] { authenticate_(value); });
+    auto& scalar = *entries_.front();
+    for (int component = 0; component < options_.components; ++component) {
+      local_field_phase_(true, [&] {
+        for (int level = 0; level < level_count(); ++level)
+          copy_component_(value[level], component, scalar.phi_level(level), 0);
+      });
+      scalar.synchronize_linear_solution(lane_);
+      local_field_phase_(true, [&] {
+        for (int level = 0; level < level_count(); ++level)
+          copy_component_(scalar.phi_level(level), 0, value[level], component);
+      });
+    }
+  }
+  Real original_field_dot(const hierarchy_type& left, const hierarchy_type& right) const override {
+    return composite_dot_impl_(left, right, true);
+  }
   const field_type& active_cells(int level) const {
     return entries_.front()->linear_active_level(level);
   }
 
   /// Prepared operator witness useful for MMS and conservation checks. This does not solve
   /// or publish. Coefficients must be frozen through prepare_coefficients first.
-  void prepare_coefficients() {
-    if (!validate_coefficients_())
-      throw std::invalid_argument("composite diffusion matrix is not finite symmetric SPD");
+  void prepare_coefficients() { prepare_coefficients_impl_(false, true); }
+
+ private:
+  void prepare_coefficients_impl_(bool collective_local_phases, bool require_spd) {
+    local_field_phase_(collective_local_phases, [&] {
+      if (original_field_generation_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("original field coefficient preparation generation exhausted");
+    });
+    if (!validate_coefficients_(collective_local_phases, require_spd))
+      throw std::invalid_argument(require_spd
+                                      ? "composite diffusion matrix is not finite symmetric SPD"
+                                      : "original composite diffusion matrix is nonfinite");
+    ++original_field_generation_;  // Revoke previous snapshots before any entry can change.
     for (int entry = 0; entry < options_.coefficients; ++entry) {
-      for (int level = 0; level < level_count(); ++level)
-        copy_component_(coefficients_[level], entry,
-                        entries_[entry]->linear_coefficient_level(level), 0);
-      entries_[entry]->prepare_linear_coefficients();
+      local_field_phase_(collective_local_phases, [&] {
+        for (int level = 0; level < level_count(); ++level)
+          copy_component_(coefficients_[level], entry,
+                          entries_[entry]->linear_coefficient_level(level), 0);
+      });
+      entries_[entry]->prepare_linear_coefficients(collective_local_phases ? lane_ : nullptr);
     }
   }
+
+ public:
   void apply(const hierarchy_type& input, hierarchy_type& output) {
-    authenticate_(input);
-    authenticate_(output);
-    for (auto& field : output)
-      field.set_val(Real(0));
+    apply_impl_(input, output, false);
+  }
+
+ private:
+  void apply_impl_(const hierarchy_type& input, hierarchy_type& output, bool guarded) {
+    local_field_phase_(guarded, [&] {
+      authenticate_(input);
+      authenticate_(output);
+      for (auto& field : output)
+        field.set_val(Real(0));
+    });
     const int n = options_.components;
     for (int i = 0; i < n; ++i)
       for (int j = 0; j < n; ++j) {
@@ -333,42 +397,58 @@ class PreparedCompositeGeneralField final
           continue;
         const int entry = options_.coefficients == n ? i : i * n + j;
         auto& scalar = *entries_[entry];
-        for (int level = 0; level < level_count(); ++level)
-          copy_component_(input[level], j, scalar.phi_level(level), 0);
-        scalar.apply_linear_composite(options_.coefficients != n);
-        for (int level = 0; level < level_count(); ++level)
-          add_component_(scalar.linear_image_level(level), 0, output[level], i, Real(1));
-      }
-    for (int i = 0; i < n; ++i)
-      for (int j = 0; j < n; ++j)
-        if (const Real reaction = options_.reaction[i * n + j]; reaction != Real(0))
+        local_field_phase_(guarded, [&] {
           for (int level = 0; level < level_count(); ++level)
-            add_component_(input[level], j, output[level], i, reaction);
-    mask_(output);
-  }
-  Real composite_dot(const hierarchy_type& left, const hierarchy_type& right) const {
-    authenticate_(left);
-    authenticate_(right);
-    Real local_sum = Real(0);
-    const int n = options_.components;
-    for (int level = 0; level < level_count(); ++level) {
-      const auto& a = left[level];
-      if (a.distribution().replicated() && lane_->rank() != 0)
-        continue;
-      for (std::size_t patch = 0; patch < a.local_size(); ++patch) {
-        const auto av = a.fab(patch).view(), bv = right[level].fab(patch).view();
-        const auto mask = active_cells(level).fab(patch).view();
-        const Real measure = measures_[level];
-        local_sum += for_each_cell_reduce_sum(a.box(patch), [=] POPS_HD(const Index<Dim>& cell) {
-          if (mask(cell, 0) < Real(0.5))
-            return Real(0);
-          Real sum = Real(0);
-          for (int component = 0; component < n; ++component)
-            sum += av(cell, component) * bv(cell, component);
-          return measure * sum;
+            copy_component_(input[level], j, scalar.phi_level(level), 0);
+        });
+        scalar.apply_linear_composite(options_.coefficients != n, guarded ? lane_ : nullptr);
+        local_field_phase_(guarded, [&] {
+          for (int level = 0; level < level_count(); ++level)
+            add_component_(scalar.linear_image_level(level), 0, output[level], i, Real(1));
         });
       }
-    }
+    local_field_phase_(guarded, [&] {
+      for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+          if (const Real reaction = options_.reaction[i * n + j]; reaction != Real(0))
+            for (int level = 0; level < level_count(); ++level)
+              add_component_(input[level], j, output[level], i, reaction);
+      mask_(output);
+    });
+  }
+
+ public:
+  Real composite_dot(const hierarchy_type& left, const hierarchy_type& right) const {
+    return composite_dot_impl_(left, right, false);
+  }
+
+ private:
+  Real composite_dot_impl_(const hierarchy_type& left, const hierarchy_type& right,
+                           bool collective_local_phases) const {
+    Real local_sum = Real(0);
+    local_field_phase_(collective_local_phases, [&] {
+      authenticate_(left);
+      authenticate_(right);
+      const int n = options_.components;
+      for (int level = 0; level < level_count(); ++level) {
+        const auto& a = left[level];
+        if (a.distribution().replicated() && lane_->rank() != 0)
+          continue;
+        for (std::size_t patch = 0; patch < a.local_size(); ++patch) {
+          const auto av = a.fab(patch).view(), bv = right[level].fab(patch).view();
+          const auto mask = active_cells(level).fab(patch).view();
+          const Real measure = measures_[level];
+          local_sum += for_each_cell_reduce_sum(a.box(patch), [=] POPS_HD(const Index<Dim>& cell) {
+            if (mask(cell, 0) < Real(0.5))
+              return Real(0);
+            Real sum = Real(0);
+            for (int component = 0; component < n; ++component)
+              sum += av(cell, component) * bv(cell, component);
+            return measure * sum;
+          });
+        }
+      }
+    });
     return all_reduce_sum(local_sum, *lane_);
   }
 
@@ -482,6 +562,7 @@ class PreparedCompositeGeneralField final
   }
 
  private:
+  std::uint64_t original_field_generation_ = 0;
   hierarchy_type make_vector_() const {
     hierarchy_type result;
     result.reserve(request_.levels.size());
@@ -596,44 +677,66 @@ class PreparedCompositeGeneralField final
     return report;
   }
 
-  bool validate_coefficients_() {
+  bool validate_coefficients_(bool collective_local_phases = false, bool require_spd = true) {
     const int n = options_.components, width = options_.coefficients;
     Real invalid = Real(0);
-    for (int level = 0; level < level_count(); ++level)
-      for (std::size_t patch = 0; patch < coefficients_[level].local_size(); ++patch) {
-        const auto input = std::as_const(coefficients_[level]).fab(patch).view();
-        const auto scratch = validation_[level].fab(patch).view();
-        invalid += for_each_cell_reduce_sum(
-            coefficients_[level].box(patch), [=] POPS_HD(const Index<Dim>& cell) {
-              for (int slot = 0; slot < width; ++slot) {
-                const Real value = input(cell, slot);
-                if (!std::isfinite(value))
-                  return Real(1);
-                scratch(cell, slot) = value;
-              }
-              if (width == n) {
+    local_field_phase_(collective_local_phases, [&] {
+      for (int level = 0; level < level_count(); ++level)
+        for (std::size_t patch = 0; patch < coefficients_[level].local_size(); ++patch) {
+          const auto input = std::as_const(coefficients_[level]).fab(patch).view();
+          const auto scratch = validation_[level].fab(patch).view();
+          invalid += for_each_cell_reduce_sum(
+              coefficients_[level].box(patch), [=] POPS_HD(const Index<Dim>& cell) {
+                for (int slot = 0; slot < width; ++slot) {
+                  const Real value = input(cell, slot);
+                  if (!std::isfinite(value))
+                    return Real(1);
+                  scratch(cell, slot) = value;
+                }
+                // Apply-only original residuals do not borrow linear-solve SPD authority.
+                // Full matrix entries use FAC's arithmetic conservative face flux, also
+                // for signed/non-symmetric finite coefficients; no entry performs a solve.
+                if (!require_spd)
+                  return Real(0);
+                if (width == n) {
+                  for (int i = 0; i < n; ++i)
+                    if (!(input(cell, i) > Real(0)))
+                      return Real(1);
+                  return Real(0);
+                }
                 for (int i = 0; i < n; ++i)
-                  if (!(input(cell, i) > Real(0)))
+                  for (int j = 0; j < n; ++j)
+                    if (input(cell, i * n + j) != input(cell, j * n + i))
+                      return Real(1);
+                for (int k = 0; k < n; ++k) {
+                  const Real pivot = scratch(cell, k * n + k);
+                  if (!(pivot > Real(0)) || !std::isfinite(pivot))
                     return Real(1);
+                  for (int i = k + 1; i < n; ++i)
+                    for (int j = k + 1; j < n; ++j)
+                      scratch(cell, i * n + j) -=
+                          scratch(cell, i * n + k) * (scratch(cell, k * n + j) / pivot);
+                }
                 return Real(0);
-              }
-              for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
-                  if (input(cell, i * n + j) != input(cell, j * n + i))
-                    return Real(1);
-              for (int k = 0; k < n; ++k) {
-                const Real pivot = scratch(cell, k * n + k);
-                if (!(pivot > Real(0)) || !std::isfinite(pivot))
-                  return Real(1);
-                for (int i = k + 1; i < n; ++i)
-                  for (int j = k + 1; j < n; ++j)
-                    scratch(cell, i * n + j) -=
-                        scratch(cell, i * n + k) * (scratch(cell, k * n + j) / pivot);
-              }
-              return Real(0);
-            });
-      }
+              });
+        }
+    });
     return all_reduce_max(invalid, *lane_) == Real(0);
+  }
+  template <class Operation>
+  void local_field_phase_(bool guarded, Operation&& operation) const {
+    if (!guarded) {
+      operation();
+      return;
+    }
+    std::exception_ptr error;
+    try {
+      operation();
+      Kokkos::fence();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    collectively_rethrow_exception(error, *lane_, "composite original field local phase");
   }
   void prepare_nullspace_() {
     FieldNullspacePlan<Dim> plan;

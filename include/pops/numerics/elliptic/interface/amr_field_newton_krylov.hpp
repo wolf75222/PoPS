@@ -5,6 +5,7 @@
 
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 
@@ -91,9 +92,16 @@ class AmrFieldNewtonKrylovWorkspace final {
 
   template <class ResidualProvider, class JvpProvider, class GaugeProvider>
   SolveReport solve(std::span<field_type* const> destination, ResidualProvider&& evaluate_residual,
-                    JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge,
-                    const ExecutionLane& lane) {
-    authenticate_(destination, "destination");
+                    JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge, const ExecutionLane& lane,
+                    bool collective_local_phases = false) {
+    const auto* previous_lane = local_lane_;
+    local_lane_ = collective_local_phases ? &lane : nullptr;
+    struct ResetLane {
+      const ExecutionLane*& target;
+      const ExecutionLane* previous;
+      ~ResetLane() { target = previous; }
+    } reset{local_lane_, previous_lane};
+    local_phase_([&] { authenticate_(destination, "destination"); });
     copy_from_external_(destination, iterate_);
     auto&& residual_provider = evaluate_residual;
     auto&& jvp_provider = apply_jvp;
@@ -101,7 +109,7 @@ class AmrFieldNewtonKrylovWorkspace final {
     gauge_provider(iterate_);
     residual_provider(iterate_, residual_, 0);
     project_unknowns_(residual_);
-    Kokkos::fence();
+    local_phase_([] { Kokkos::fence(); });
 
     SolveReport report;
     report.evaluations = 1;
@@ -155,7 +163,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         gauge_provider(trial_);
         residual_provider(trial_, trial_residual_, iteration + 1);
         project_unknowns_(trial_residual_);
-        Kokkos::fence();
+        local_phase_([] { Kokkos::fence(); });
         ++report.evaluations;
         const Real trial_norm = norm_(trial_residual_, lane);
         if (finite_(trial_norm) &&
@@ -227,7 +235,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       for (int column = 0; column < cycle; ++column) {
         apply_jvp(iterate, basis_[static_cast<std::size_t>(column)], work_, nonlinear_iteration);
         project_unknowns_(work_);
-        Kokkos::fence();
+        local_phase_([] { Kokkos::fence(); });
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
           h_(row, column) = dot_(work_, basis_[static_cast<std::size_t>(row)], lane);
@@ -278,7 +286,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       }
       apply_jvp(iterate, correction_, image_, nonlinear_iteration);
       project_unknowns_(image_);
-      Kokkos::fence();
+      local_phase_([] { Kokkos::fence(); });
       ++result.evaluations;
       lincomb_(linear_residual_, Real(1), rhs, Real(-1), image_);
       beta = norm_(linear_residual_, lane);
@@ -314,17 +322,19 @@ class AmrFieldNewtonKrylovWorkspace final {
   // Covered/EB-inactive cells remain available to the operator but are not Krylov DOFs.
   // Project both defects and JVP images so corrections cannot evolve those stored values.
   void project_unknowns_(hierarchy_type& fields) const {
-    for (std::size_t level = 0; level < fields.size(); ++level)
-      for (std::size_t local = 0; local < fields[level].local_size(); ++local) {
-        const auto values = fields[level].fab(local).view();
-        const auto active = std::as_const(*active_cells_[level]).fab(local).view();
-        const int components = fields[level].ncomp();
-        for_each_cell(fields[level].box(local), [=] POPS_HD(const Index<Dim>& cell) {
-          if (!(active(cell, 0) >= Real(0.5)))
-            for (int component = 0; component < components; ++component)
-              values(cell, component) = Real(0);
-        });
-      }
+    local_phase_([&] {
+      for (std::size_t level = 0; level < fields.size(); ++level)
+        for (std::size_t local = 0; local < fields[level].local_size(); ++local) {
+          const auto values = fields[level].fab(local).view();
+          const auto active = std::as_const(*active_cells_[level]).fab(local).view();
+          const int components = fields[level].ncomp();
+          for_each_cell(fields[level].box(local), [=] POPS_HD(const Index<Dim>& cell) {
+            if (!(active(cell, 0) >= Real(0.5)))
+              for (int component = 0; component < components; ++component)
+                values(cell, component) = Real(0);
+          });
+        }
+    });
   }
 
   static hierarchy_type make_hierarchy_(std::span<const field_type* const> layouts) {
@@ -352,59 +362,67 @@ class AmrFieldNewtonKrylovWorkspace final {
                                     " differs from its prepared exact-ranked hierarchy");
   }
 
-  static void copy_field_(const field_type& source, field_type& destination) {
-    if (!same_layout_(source, destination) || source.ncomp() != destination.ncomp())
-      throw std::invalid_argument("AMR field Newton vector layouts differ");
-    lincomb(destination, Real(1), source, Real(0), source);
+  void copy_field_(const field_type& source, field_type& destination) {
+    local_phase_([&] {
+      if (!same_layout_(source, destination) || source.ncomp() != destination.ncomp())
+        throw std::invalid_argument("AMR field Newton vector layouts differ");
+      lincomb(destination, Real(1), source, Real(0), source);
+    });
   }
 
-  static void copy_(const hierarchy_type& source, hierarchy_type& destination) {
+  void copy_(const hierarchy_type& source, hierarchy_type& destination) {
     if (source.size() != destination.size())
       throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
     for (std::size_t level = 0; level < source.size(); ++level)
       copy_field_(source[level], destination[level]);
   }
 
-  static void copy_from_external_(std::span<field_type* const> source,
-                                  hierarchy_type& destination) {
+  void copy_from_external_(std::span<field_type* const> source, hierarchy_type& destination) {
     if (source.size() != destination.size())
       throw std::invalid_argument("AMR field Newton external hierarchy size differs");
     for (std::size_t level = 0; level < source.size(); ++level)
       copy_field_(*source[level], destination[level]);
   }
 
-  static void copy_to_external_(const hierarchy_type& source,
-                                std::span<field_type* const> destination) {
+  void copy_to_external_(const hierarchy_type& source, std::span<field_type* const> destination) {
     if (source.size() != destination.size())
       throw std::invalid_argument("AMR field Newton external hierarchy size differs");
     for (std::size_t level = 0; level < source.size(); ++level)
       copy_field_(source[level], *destination[level]);
-    Kokkos::fence();
+    local_phase_([] { Kokkos::fence(); });
   }
 
-  static void set_zero_(hierarchy_type& fields) {
-    for (field_type& field : fields)
-      field.set_val(Real(0));
+  void set_zero_(hierarchy_type& fields) {
+    local_phase_([&] {
+      for (field_type& field : fields)
+        field.set_val(Real(0));
+    });
   }
 
-  static void scale_(hierarchy_type& fields, Real factor) {
-    for (field_type& field : fields)
-      scale(field, factor);
+  void scale_(hierarchy_type& fields, Real factor) {
+    local_phase_([&] {
+      for (field_type& field : fields)
+        scale(field, factor);
+    });
   }
 
-  static void saxpy_(hierarchy_type& destination, Real factor, const hierarchy_type& source) {
-    if (destination.size() != source.size())
-      throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
-    for (std::size_t level = 0; level < destination.size(); ++level)
-      saxpy(destination[level], factor, source[level]);
+  void saxpy_(hierarchy_type& destination, Real factor, const hierarchy_type& source) {
+    local_phase_([&] {
+      if (destination.size() != source.size())
+        throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
+      for (std::size_t level = 0; level < destination.size(); ++level)
+        saxpy(destination[level], factor, source[level]);
+    });
   }
 
-  static void lincomb_(hierarchy_type& destination, Real left_factor, const hierarchy_type& left,
-                       Real right_factor, const hierarchy_type& right) {
-    if (destination.size() != left.size() || destination.size() != right.size())
-      throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
-    for (std::size_t level = 0; level < destination.size(); ++level)
-      lincomb(destination[level], left_factor, left[level], right_factor, right[level]);
+  void lincomb_(hierarchy_type& destination, Real left_factor, const hierarchy_type& left,
+                Real right_factor, const hierarchy_type& right) {
+    local_phase_([&] {
+      if (destination.size() != left.size() || destination.size() != right.size())
+        throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
+      for (std::size_t level = 0; level < destination.size(); ++level)
+        lincomb(destination[level], left_factor, left[level], right_factor, right[level]);
+    });
   }
 
   Real dot_(const hierarchy_type& left, const hierarchy_type& right,
@@ -412,16 +430,18 @@ class AmrFieldNewtonKrylovWorkspace final {
     if (left.size() != active_cells_.size() || right.size() != active_cells_.size())
       throw std::invalid_argument("AMR field Newton dot hierarchy size differs");
     Real local_result = Real(0);
-    for (std::size_t level = 0; level < left.size(); ++level) {
-      // A replicated level has one physical owner. Counting every replica weights
-      // mixed replicated/distributed hierarchies differently across MPI sizes.
-      if (left[level].distribution().replicated() &&
-          left[level].local_rank() != left[level].rank_space().coordinate(0))
-        continue;
-      for (int component = 0; component < left[level].ncomp(); ++component)
-        local_result += cell_measures_[level] * dot_active_local(left[level], right[level],
-                                                                 component, active_cells_[level]);
-    }
+    local_phase_([&] {
+      for (std::size_t level = 0; level < left.size(); ++level) {
+        // A replicated level has one physical owner. Counting every replica weights
+        // mixed replicated/distributed hierarchies differently across MPI sizes.
+        if (left[level].distribution().replicated() &&
+            left[level].local_rank() != left[level].rank_space().coordinate(0))
+          continue;
+        for (int component = 0; component < left[level].ncomp(); ++component)
+          local_result += cell_measures_[level] * dot_active_local(left[level], right[level],
+                                                                   component, active_cells_[level]);
+      }
+    });
     return static_cast<Real>(all_reduce_sum(local_result, lane));
   }
 
@@ -442,7 +462,24 @@ class AmrFieldNewtonKrylovWorkspace final {
 
   static bool finite_(Real value) noexcept { return std::isfinite(static_cast<double>(value)); }
 
+  template <class Operation>
+  void local_phase_(Operation&& operation) const {
+    if (!local_lane_) {
+      operation();
+      return;
+    }
+    std::exception_ptr error;
+    try {
+      operation();
+      Kokkos::fence();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    collectively_rethrow_exception(error, *local_lane_, "AMR field Newton local algebra");
+  }
+
   FieldNewtonOptions options_;
+  const ExecutionLane* local_lane_ = nullptr;
   std::vector<const field_type*> active_cells_;
   std::vector<Real> cell_measures_;
   hierarchy_type iterate_;

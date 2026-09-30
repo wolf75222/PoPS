@@ -88,6 +88,8 @@ api pops/mesh/topology/boundary_topology.hpp
 sdk-support pops/numerics/elliptic/amr/composite_fac_poisson.hpp
 sdk-support pops/numerics/elliptic/amr/partitioned_region_transfer.hpp
 api pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp
+sdk-support pops/runtime/amr/hierarchy_field_operator.hpp
+sdk-support pops/runtime/program/prepared_amr_field_residual.hpp
 test-only pops/numerics/elliptic/interface/elliptic_interface.hpp
 api pops/numerics/elliptic/interface/elliptic_problem.hpp
 api pops/numerics/elliptic/interface/elliptic_solver.hpp
