@@ -1,0 +1,31 @@
+{
+  "schema": "sol61.amr-newton-fix-byte-reception@1",
+  "candidate_commit": "c1009a821dca080bf1bbf8aa52641e9aa6ea247d",
+  "parent_commit": "47a7b2aa4952281091cd2d6e99e0c2151c3c638c",
+  "header_is_parent_plus_exact_seven_line_defect_adapter": true,
+  "unchanged_sources": [
+    {
+      "path": "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp",
+      "sha256": "3d2657d97048c65621ec5159485354758fdad6970b21451dac80e5f8b89a699f",
+      "byte_identical_to_parent": true
+    },
+    {
+      "path": "include/pops/runtime/program/prepared_spatial_residual.hpp",
+      "sha256": "92b9383bee5141c93b19aa780b8a316596f051612852ddea18714c9ae3c6ee23",
+      "byte_identical_to_parent": true
+    },
+    {
+      "path": "include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp",
+      "sha256": "0c5faa494b9e0d95398772df5003e3e87d3a4d03f1cd4d826a365dca930c0a2f",
+      "byte_identical_to_parent": true
+    },
+    {
+      "path": "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp",
+      "sha256": "7b90f912bc5f372d987c54dd2920e646e12144085c00515e116e95f6ab90ca3c",
+      "byte_identical_to_parent": true
+    }
+  ],
+  "tests": 38,
+  "native_execution": false,
+  "mpi_execution": false
+}

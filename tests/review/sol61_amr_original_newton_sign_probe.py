@@ -28,7 +28,7 @@ def body(source, signature):
     raise ValueError("unterminated source function")
 
 
-def source_contract(root):
+def source_contract(root, *, negative_source_copies=None):
     paths = {
         "amr": "include/pops/runtime/program/prepared_amr_field_residual.hpp",
         "workspace": "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp",
@@ -36,6 +36,10 @@ def source_contract(root):
         "fixture": "tests/cpp/unit/elliptic/amr_original_field_residual.inc",
     }
     text = {name: (root / path).read_text() for name, path in paths.items()}
+    if negative_source_copies:
+        if not set(negative_source_copies) <= set(paths):
+            raise ValueError("unknown negative source copy")
+        text.update(negative_source_copies)
     amr, workspace = text["amr"], text["workspace"]
     call = re.search(r"newton_->solve\(destinations, (\w+), derivative,", amr)
     if not call:
@@ -44,9 +48,18 @@ def source_contract(root):
     if "evaluate(q, result, evaluation);" not in callback:
         raise ValueError("unrecognized defect callback")
     sign = -1 if re.search(r"scale\([^;]*Real\(-1\)\)", callback) else 1
+    if sign == -1 and not ("for (auto& level : result)" in callback
+                           and "scale(level, Real(-1));" in callback
+                           and "local_phase_(lane" in callback):
+        raise ValueError("defect negation must cover every level under its local vote")
+    evaluate = body(amr, "auto evaluate =")
+    if re.search(r"scale\([^;]*Real\(-1\)\)", evaluate):
+        raise ValueError("physical F evaluation was negated")
     derivative = body(amr, "auto derivative =")
     if "Real(0.5) / h, plus_[level], -Real(0.5) / h, minus_[level]" not in derivative:
         raise ValueError("central original JVP changed")
+    if re.search(r"scale\([^;]*Real\(-1\)\)", derivative):
+        raise ValueError("physical JVP was negated")
     linear = body(workspace, "LinearResult solve_linear_")
     if "copy_(rhs, linear_residual_);" not in linear or "rotated_rhs_[0] = beta;" not in linear:
         raise ValueError("workspace RHS convention changed")
@@ -54,9 +67,11 @@ def source_contract(root):
         raise ValueError("workspace additive update changed")
     if "scale(result, Real(-1));" not in body(text["uniform"], "auto defect ="):
         raise ValueError("Uniform defect reference changed")
-    recheck = amr[amr.index("if (report.solved_value_available())"):]
+    recheck = body(amr, "if (report.solved_value_available())")
     if "evaluate(candidate_, recheck_, 0);" not in recheck:
         raise ValueError("original physical recheck no longer evaluates F")
+    if re.search(r"scale\([^;]*Real\(-1\)\)", recheck):
+        raise ValueError("original physical recheck was negated")
     return {
         "callback": call[1], "defect_sign": sign, "jvp_sign": 1, "update_sign": 1,
         "physical_recheck": "F", "source_sha256": {
