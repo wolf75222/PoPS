@@ -2840,6 +2840,7 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
 }
 
 #include "moving_interval_projection_tests.inc"
+#include "moving_interval_codec_independent_review.inc"
 
 TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentRollback) {
   if constexpr (kNativeDimension != 1) {
