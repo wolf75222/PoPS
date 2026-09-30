@@ -55,6 +55,13 @@ def git(*args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
 
 
+def execution_environment() -> dict[str, str | None]:
+    """Record backend controls without serializing unrelated user credentials."""
+    return {key: os.environ.get(key) for key in (
+        "FI_PROVIDER", "FI_TCP_IFACE", "OMP_NUM_THREADS", "OMP_PROC_BIND", "POPS_THREADS",
+    )}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
@@ -103,7 +110,7 @@ def main() -> int:
     source_manifest = json.dumps(sources, indent=2, sort_keys=True) + "\n"
     (output / "source-files.json").write_text(source_manifest)
     identity = {
-        "schema_version": 1, "source_commit": git("rev-parse", "HEAD"),
+        "schema_version": 2, "source_commit": git("rev-parse", "HEAD"),
         "source_diff_sha256": hashlib.sha256(git("diff", "HEAD", "--binary").encode()).hexdigest(),
         "python": sys.executable, "package_file": pops.__file__, "package_version": pops.__version__,
         "native_file": str(origin), "native_sha256": digest(origin), "abi_key": native.abi_key(),
@@ -111,6 +118,7 @@ def main() -> int:
         "source_files_sha256": digest(output / "source-files.json"),
         "scope": f"installed production PoPS, local CPU Kokkos, MPI-enabled Dim={dimension}",
         "sys_path": sys.path,
+        "execution_environment": execution_environment(),
     }
     (output / "identity.json").write_text(json.dumps(identity, indent=2) + "\n")
     if args.identity_only:

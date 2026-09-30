@@ -25,6 +25,7 @@ def digest(path: Path) -> str:
 
 
 def worker(output: Path, ranks: int, dimension: int, tests: list[str]) -> int:
+    from run_installed_checks import execution_environment
     import pops
     from pops._native_selector import select_native_dimension
     from pops._native_collectives import require_world, allgather_value
@@ -37,11 +38,13 @@ def worker(output: Path, ranks: int, dimension: int, tests: list[str]) -> int:
     observed = {"rank": world.rank, "ranks": world.size, "dimension": dimension,
                 "package_file": str(Path(pops.__file__).resolve()),
                 "native_file": str(Path(native.__file__).resolve()),
-                "native_sha256": digest(Path(native.__file__))}
+                "native_sha256": digest(Path(native.__file__)),
+                "execution_environment": execution_environment()}
     identities = allgather_value(world, observed)
     for rank, row in enumerate(identities):
         if row["rank"] != rank or any(row[key] != before[key] for key in
-                                       ("package_file", "native_file", "native_sha256")):
+                                       ("package_file", "native_file", "native_sha256",
+                                        "execution_environment")):
             raise RuntimeError(f"rank {rank} did not import the authenticated installation")
     (output / f"rank{world.rank}.identity.json").write_text(json.dumps(observed, indent=2) + "\n")
     # Redirect file descriptors as well as Python output, to retain native diagnostics.
@@ -125,7 +128,8 @@ def main() -> int:
     after = json.loads((output / "after/identity.json").read_text()) if after_code == 0 else {}
     unchanged = manifest == {str(path.relative_to(ROOT)): digest(path) for path in sorted(paths)}
     same_installation = bool(before) and all(before.get(key) == after.get(key) for key in
-                                             ("native_sha256", "source_files_sha256"))
+                                             ("native_sha256", "source_files_sha256",
+                                              "execution_environment"))
     rank_results = []
     for rank in range(args.ranks):
         xml = output / f"rank{rank}.xml"
@@ -145,7 +149,7 @@ def main() -> int:
                 for row in rank_results)
     passed = (code == 0 and before_code == after_code == 0 and unchanged
               and same_installation and rank_parity and clean)
-    receipt = {"schema_version": 2, "status": "passed" if passed else "failed",
+    receipt = {"schema_version": 3, "status": "passed" if passed else "failed",
                "pytest_base_temps": [f"rank{rank}-tmp" for rank in range(args.ranks)],
                "command": command, "returncode": code, "timeout": timed_out,
                "seconds": elapsed, "ranks": args.ranks, "threads": args.threads,
@@ -153,7 +157,8 @@ def main() -> int:
                "authentication_before": before_code, "authentication_after": after_code,
                "same_installation": same_installation, "test_sources_unchanged": unchanged,
                "rank_test_parity": rank_parity, "rank_results": rank_results,
-               "native_sha256": before.get("native_sha256")}
+               "native_sha256": before.get("native_sha256"),
+               "execution_environment": before.get("execution_environment")}
     (output / "result.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps({key: value for key, value in receipt.items()
                       if key not in ("command", "rank_results")}, indent=2))
