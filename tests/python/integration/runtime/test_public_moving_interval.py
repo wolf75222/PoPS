@@ -117,7 +117,7 @@ def test_declared_moving_public_chain(isolated_native_cache,native_cxx,kokkos_ro
         accepted,=state_snapshots(runtime,world,("fluid",))
         mailbox=collective_call(world,runtime._executor._checkpoint_program_exchanges)
         with collective_check(world):
-            assert mailbox.startswith(b"POPSEX03")
+            assert mailbox.startswith(b"POPSEX04")
         collective_call(world,lambda:pops.run(runtime,t_end=.003,max_steps=1,console=False,output_dir=directory))
         _,continuous_snapshot=save_moving_snapshot(world,runtime,artifact,identity,geometry.space.frame,directory,"continuous")
         final,=state_snapshots(runtime,world,("fluid",))

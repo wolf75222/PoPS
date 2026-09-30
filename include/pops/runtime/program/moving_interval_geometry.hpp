@@ -10,11 +10,25 @@
 #include <pops/runtime/program/prepared_resource_lifetime.hpp>
 
 #include <cstdint>
+#include <cmath>
 #include <optional>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 namespace pops::runtime::program {
+
+/// @1 fixes the rounding of the relative integrated face amount explicitly.
+/// @0 is retained only for exact historical POPSEX03 receipt interpretation.
+enum class MovingRelativeAmountConvention : std::uint64_t { kLegacyExpression = 0, kFused = 1 };
+inline Real moving_relative_face_amount(Real physical_amount, Real density, Real sweep,
+    MovingRelativeAmountConvention convention = MovingRelativeAmountConvention::kFused) {
+  if (convention == MovingRelativeAmountConvention::kFused)
+    return std::fma(-density, sweep, physical_amount);
+  if (convention == MovingRelativeAmountConvention::kLegacyExpression)
+    return physical_amount - density * sweep;
+  throw std::invalid_argument("unknown moving relative face amount realization");
+}
 
 template <int Dim> class ProgramContext;
 
@@ -74,6 +88,7 @@ struct MovingIntervalReceipt {
   runtime::multiblock::BoundaryEvaluationPoint point;
   std::string physical_frame, quadrature_identity;
   Real geometry_tolerance = 0;
+  MovingRelativeAmountConvention relative_amount_convention = MovingRelativeAmountConvention::kFused;
   MultiFab<Dim> previous_state, previous_measures, integrated_source;
   std::vector<nd::FaceField<Dim>> previous_coordinates, physical_flux, face_density;
 };
@@ -93,6 +108,7 @@ struct MovingIntervalGeometry {
   std::vector<nd::FaceField<Dim>> coordinates;
   std::vector<nd::FaceField<Dim>> swept_volumes;
   std::uint64_t generation = 0;
+  std::uint64_t checkpoint_wire_version = 4;
   std::string last_interval;
   std::optional<MovingIntervalReceipt<Dim>> last_receipt;
 };

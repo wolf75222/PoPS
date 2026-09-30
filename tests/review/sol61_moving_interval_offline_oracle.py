@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from fractions import Fraction
 import importlib.util
 import json
 import math
@@ -141,7 +142,8 @@ def context(point, identity):
 
 def moving_image(raw, case, rank, size):
     reader = Reader(raw)
-    require(reader.take(8) == b"POPSEX03", "ALE witness requires POPSEX03")
+    magic = reader.take(8)
+    require(magic in (b"POPSEX03", b"POPSEX04"), "ALE witness requires POPSEX03/04")
     ledger = common.exchange_image(reader.blob())
     require(not ledger["quantities"] and not ledger["consumed"], "unexpected integral authority in ALE witness")
     require(reader.word() == 1, "wrong moving carrier count")
@@ -160,13 +162,15 @@ def moving_image(raw, case, rank, size):
     if present:
         issued = point(reader)
         receipt_frame, quadrature, receipt_tolerance = reader.text(), reader.text(), reader.real()
+        convention = reader.word() if magic == b"POPSEX04" else 0
+        require(convention in (0, 1), "unknown relative face amount realization")
         require(receipt_frame == frame and issued["clock"] == clock and receipt_tolerance == tolerance
                 and quadrature == QUADRATURE and last_interval == context(issued, identity),
                 "wrong receipt declaration/runtime interval")
         _, previous = field(reader, n, nc, rank, size, topo)
         _, old_volumes = field(reader, n, 1, rank, size, topo)
         _, source = field(reader, n, nc, rank, size, topo)
-        receipt = dict(point=issued, previous=previous, old_volumes=old_volumes, source=source,
+        receipt = dict(point=issued, convention=convention, previous=previous, old_volumes=old_volumes, source=source,
                        old_nodes=faces(reader, topo, 1), flux=faces(reader, topo, nc),
                        density=faces(reader, topo, nc))
     reader.finish()
@@ -413,7 +417,14 @@ def step(before, after, case):
                         -1 if side == 0 else 1, displacement[cell + side])
                     for component in range(len(case["components"])):
                         key = ("amount:" + case["moving_identity"] + "/component:" + str(component), occurrence)
-                        amount = receipt["flux"][local][component, cell - lo + side] - density[component, cell + side] * displacement[cell + side]
+                        flux = float(receipt["flux"][local][component, cell - lo + side])
+                        trace = float(density[component, cell + side])
+                        sweep = float(displacement[cell + side])
+                        # @1 rounds one exact binary64 multiply/subtract once.
+                        # This uses rational arithmetic, no PoPS or native fma.
+                        amount = (float(Fraction.from_float(flux) - Fraction.from_float(trace)
+                                        * Fraction.from_float(sweep)) if receipt["convention"] == 1
+                                  else flux - trace * sweep)
                         expected_records[key] = (-1 if side == 0 else 1, amount)
         records = carrier["ledger"]["records"]
         require(len(records) == len(expected_records), "missing/extra rank-local accepted exchange")

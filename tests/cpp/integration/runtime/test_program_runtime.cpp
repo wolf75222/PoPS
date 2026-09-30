@@ -2874,7 +2874,7 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
         Real(128)*std::numeric_limits<Real>::epsilon());
     const auto initial_geometry_image=sim.checkpoint_program_exchanges();
     ASSERT_GE(initial_geometry_image.size(),8u);
-    EXPECT_EQ(std::string(initial_geometry_image.begin(),initial_geometry_image.begin()+8),"POPSEX03");
+    EXPECT_EQ(std::string(initial_geometry_image.begin(),initial_geometry_image.begin()+8),"POPSEX04");
     EXPECT_NO_THROW(sim.validate_checkpoint_program_exchanges(initial_geometry_image));
     EXPECT_ANY_THROW(ctx->commit_many({{&ctx->state(0), &ctx->state(0)}}));
     const auto original = sim.get_state("gas");

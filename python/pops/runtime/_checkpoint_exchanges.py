@@ -33,7 +33,7 @@ def capture_checkpoint_continuation(owner, payload):
         plan.require("restart")
         plan_json = plan._json
         local = owner._s._checkpoint_program_exchanges()
-        if type(local) is not bytes or not local.startswith((b"POPSEX01", b"POPSEX02", b"POPSEX03")):
+        if type(local) is not bytes or not local.startswith((b"POPSEX01", b"POPSEX02", b"POPSEX03", b"POPSEX04")):
             raise RuntimeError("checkpoint accepted exchange mailbox is not an exact native image")
     except BaseException as exc:
         error = exc
@@ -98,7 +98,7 @@ def prepare_checkpoint_continuation(owner, payload):
         raise ValueError("restart cannot remap rank-dependent accepted exchange mailboxes")
     selected = images[topology.rank] if len(images) == topology.size else images[0]
     owner._s._validate_checkpoint_program_exchanges(selected)
-    if selected.startswith(b"POPSEX03"):
+    if selected.startswith((b"POPSEX03", b"POPSEX04")):
         accepted_time, macro_step = np.asarray(payload.get("t")), np.asarray(payload.get("macro_step"))
         if accepted_time.ndim != 0 or accepted_time.dtype.kind != "f" or not np.isfinite(accepted_time) \
                 or macro_step.ndim != 0 or macro_step.dtype.kind not in "iu" or int(macro_step) < 0:
@@ -162,7 +162,7 @@ def exchange_checkpoint_byte_capacity(program, *, cells, dimension, rank_capacit
     geometry_states = getattr(program, "_geometry_states", {})
     for value in geometry_states.values():
         components = len(value.space.components)
-        # POPSEX03 keeps current/previous/source physical fields, two measures,
+        # POPSEX03/04 keep current/previous/source physical fields, two measures,
         # and old/new/swept/physical/trace faces, including each patch endpoint.
         # A partition can contain at most one nonempty patch per resolved cell.
         field_words = (3 * components + 2) * max(1, sum(cells))
@@ -171,7 +171,7 @@ def exchange_checkpoint_byte_capacity(program, *, cells, dimension, rank_capacit
         moving_records = (2 + 3 * components) * max(1,sum(cells)) * clock_ticks
         capacity += rank_capacity * (moving_records * record_bytes
                                      + 8 * (field_words + face_words + 5 * topology_words)
-                                     + 12 * max_text + 2048)
+                                     + 12 * max_text + 2048 + 8)
     if capacity > (1 << 63) - 1:
         raise OverflowError("resolved accepted exchange checkpoint capacity exceeds int64")
     return capacity

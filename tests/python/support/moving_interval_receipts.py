@@ -23,7 +23,7 @@ def save_moving_snapshot(world, runtime, artifact, identity, frame, directory, p
                 assert len(offsets) == (1 if world is None else int(world.size)) + 1
                 assert offsets[0] == 0 and offsets[-1] == len(wire)
                 images = tuple(wire[a:b] for a, b in zip(offsets[:-1], offsets[1:], strict=True))
-            assert all(image.startswith(b"POPSEX03") for image in images)
+            assert all(image.startswith(b"POPSEX04") for image in images)
             result = dict(state=state, node_coordinates=np.asarray(geometry["node_coordinates"]).copy(),
                           cell_volumes=np.asarray(geometry["cell_volumes"]).copy(),
                           generation=int(geometry["generation"]), time=float(runtime.time()),

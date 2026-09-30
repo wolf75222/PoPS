@@ -19,7 +19,8 @@ namespace pops::runtime::program {
 namespace moving_checkpoint_detail {
 using checkpoint_detail::Reader;
 using checkpoint_detail::Writer;
-inline constexpr std::array<std::uint8_t, 8> magic{'P','O','P','S','E','X','0','3'};
+inline constexpr std::array<std::uint8_t, 8> legacy_magic{'P','O','P','S','E','X','0','3'};
+inline constexpr std::array<std::uint8_t, 8> magic{'P','O','P','S','E','X','0','4'};
 inline void require(bool condition, const char* reason) {
   if (!condition) throw std::invalid_argument(std::string("moving interval checkpoint: ")+reason);
 }
@@ -121,6 +122,8 @@ template<int Dim> void validate_local(const MovingIntervalGeometry<Dim>& geometr
                                      const MultiFab<Dim>& accepted_state, const std::string& identity,
                                      const AcceptedExchangeLedger& ledger) {
   if constexpr (Dim!=1) throw std::logic_error("moving checkpoint has no higher-dimensional provider");
+  require(geometry.checkpoint_wire_version==3 || geometry.checkpoint_wire_version==4,
+          "unknown moving checkpoint realization");
   require(geometry.generation==0 ? (!geometry.last_receipt && geometry.last_interval.empty()) :
           (geometry.last_receipt.has_value() && !geometry.last_interval.empty()), "generation/receipt mismatch");
   require(!geometry.clock_authority.empty() && geometry.geometry_tolerance_authority.has_value() &&
@@ -155,6 +158,11 @@ template<int Dim> void validate_local(const MovingIntervalGeometry<Dim>& geometr
   };
   if (geometry.last_receipt) {
     const auto& receipt=*geometry.last_receipt;
+    require(receipt.relative_amount_convention==MovingRelativeAmountConvention::kLegacyExpression ||
+            receipt.relative_amount_convention==MovingRelativeAmountConvention::kFused,
+            "unknown relative face amount realization");
+    require(geometry.checkpoint_wire_version!=3 || receipt.relative_amount_convention==
+            MovingRelativeAmountConvention::kLegacyExpression,"historical image has a newer relative amount realization");
     require(receipt.physical_frame==geometry.physical_frame && !receipt.quadrature_identity.empty() &&
             receipt.geometry_tolerance==*geometry.geometry_tolerance_authority &&
             receipt.point.clock==geometry.clock_authority && receipt.point.stage==0 &&
@@ -230,8 +238,8 @@ template<int Dim> void validate_local(const MovingIntervalGeometry<Dim>& geometr
         const Real q1=current(runtime::system::marshaling::storage_ordinal(accepted_state.fab(patch),index,component))*volume(cell);
         const Real amount=source(runtime::system::marshaling::storage_ordinal(receipt.integrated_source.fab(patch),index,component));
         const auto offset=cell+(cells+1)*static_cast<std::size_t>(component);
-        const Real left=flux(offset)-density(offset)*sweep(cell);
-        const Real right=flux(offset+1)-density(offset+1)*sweep(cell+1);
+        const Real left=moving_relative_face_amount(flux(offset),density(offset),sweep(cell),receipt.relative_amount_convention);
+        const Real right=moving_relative_face_amount(flux(offset+1),density(offset+1),sweep(cell+1),receipt.relative_amount_convention);
         const Real scale=std::max({Real(1),std::abs(q0),std::abs(q1),std::abs(amount),std::abs(left),std::abs(right)});
         const Real residual=(q1-q0)+(right-left)-amount;
         require(std::isfinite(q0) && std::isfinite(q1) && std::isfinite(left) && std::isfinite(right) &&
@@ -280,7 +288,12 @@ template<int Dim, class StateLookup> std::vector<std::uint8_t> checkpoint_moving
     const AcceptedExchangeLedger& ledger, const std::map<std::string,MovingIntervalGeometry<Dim>>& geometries,
     StateLookup state) {
   using namespace moving_checkpoint_detail;
-  Writer out; out.raw(magic); out.bytes(ledger.checkpoint(true)); out.size(geometries.size());
+  // A decoded historical image re-exports its original format. Mixed retained
+  // histories use @4's explicit per-receipt realization, never an OR/tolerance.
+  const bool historical=!geometries.empty() && std::all_of(geometries.begin(),geometries.end(),[](const auto& row) {
+    return row.second.checkpoint_wire_version==3;
+  });
+  Writer out; out.raw(historical ? legacy_magic : magic); out.bytes(ledger.checkpoint(true)); out.size(geometries.size());
   for (const auto& [identity,geometry]:geometries) {
     const auto& physical=state(geometry.runtime_block); validate_local(geometry,physical,identity,ledger);
     out.string(identity); out.i32(geometry.runtime_block); out.string(geometry.physical_frame);
@@ -291,7 +304,9 @@ template<int Dim, class StateLookup> std::vector<std::uint8_t> checkpoint_moving
     if (geometry.last_receipt) {
       const auto& receipt=*geometry.last_receipt;
       write_point(out,receipt.point); out.string(receipt.physical_frame); out.string(receipt.quadrature_identity);
-      out.real(receipt.geometry_tolerance); write_field(out,receipt.previous_state);
+      out.real(receipt.geometry_tolerance);
+      if (!historical) out.u64(static_cast<std::uint64_t>(receipt.relative_amount_convention));
+      write_field(out,receipt.previous_state);
       write_field(out,receipt.previous_measures); write_field(out,receipt.integrated_source);
       write_faces(out,receipt.previous_coordinates,physical,1);
       write_faces(out,receipt.physical_flux,physical,physical.ncomp());
@@ -309,7 +324,10 @@ template<int Dim, class StateLookup> MovingCheckpointCandidate<Dim> read_moving_
   if (declarations.empty()) {
     result.exchanges=AcceptedExchangeLedger::from_checkpoint(bytes);
   } else {
-    Reader in(bytes); in.expect_raw(magic); result.exchanges=AcceptedExchangeLedger::from_checkpoint(in.bytes());
+    const bool historical=bytes.size()>=legacy_magic.size() &&
+        std::equal(legacy_magic.begin(),legacy_magic.end(),bytes.begin());
+    Reader in(bytes); in.expect_raw(historical ? legacy_magic : magic);
+    result.exchanges=AcceptedExchangeLedger::from_checkpoint(in.bytes());
     require(in.size(32)==declarations.size(), "geometry declaration count differs");
     for (const auto& [identity,declaration]:declarations) {
       require(in.string()==identity && in.i32()==declaration.runtime_block &&
@@ -318,6 +336,7 @@ template<int Dim, class StateLookup> MovingCheckpointCandidate<Dim> read_moving_
       require(in.string()==declaration.clock_authority && in.real()==*declaration.geometry_tolerance_authority,
               "geometry clock/tolerance authority differs from installed declaration");
       MovingIntervalGeometry<Dim> geometry=declaration;
+      geometry.checkpoint_wire_version=historical ? 3 : 4;
       geometry.generation=in.u64(); geometry.last_interval=in.string();
       const auto& physical=state(declaration.runtime_block);
       auto accepted=read_field(in,physical); geometry.measures=read_field(in,declaration.measures);
@@ -343,6 +362,9 @@ template<int Dim, class StateLookup> MovingCheckpointCandidate<Dim> read_moving_
       if (receipt_present) {
         auto& receipt=geometry.last_receipt.emplace(); receipt.point=read_point(in);
         receipt.physical_frame=in.string(); receipt.quadrature_identity=in.string(); receipt.geometry_tolerance=Real(in.real());
+        const auto convention=historical ? std::uint64_t{0} : in.u64();
+        require(convention<=1,"unknown relative face amount realization");
+        receipt.relative_amount_convention=static_cast<MovingRelativeAmountConvention>(convention);
         receipt.previous_state=read_field(in,physical); receipt.previous_measures=read_field(in,declaration.measures);
         receipt.integrated_source=read_field(in,physical); receipt.previous_coordinates=read_faces(in,physical,1);
         receipt.physical_flux=read_faces(in,physical,physical.ncomp()); receipt.face_density=read_faces(in,physical,physical.ncomp());
@@ -371,11 +393,13 @@ template<int Dim> void require_moving_checkpoint_agrees_collectively(
       out.string(identity); out.i32(geometry.runtime_block); out.string(geometry.physical_frame);
       out.string(geometry.clock_authority); out.real(*geometry.geometry_tolerance_authority);
       out.u64(geometry.generation); out.string(geometry.last_interval);
+      out.u64(geometry.checkpoint_wire_version);
       out.bytes(topology(candidate.states.at(geometry.runtime_block),false));
       out.u64(geometry.last_receipt ? 1 : 0);
       if (geometry.last_receipt) {
         write_point(out,geometry.last_receipt->point); out.string(geometry.last_receipt->quadrature_identity);
         out.real(geometry.last_receipt->geometry_tolerance);
+        out.u64(static_cast<std::uint64_t>(geometry.last_receipt->relative_amount_convention));
       }
     }
     metadata=std::move(out).take();

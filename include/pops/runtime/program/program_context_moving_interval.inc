@@ -176,6 +176,7 @@
         candidate->last_interval = interval;
         ++candidate->generation;
         candidate->last_receipt.emplace();
+        candidate->checkpoint_wire_version = 4;
         auto& receipt = *candidate->last_receipt;
         receipt.point = evaluation.point_;
         receipt.physical_frame = evaluation.physical_frame_;
@@ -395,7 +396,7 @@
                                    outward, 1., static_cast<double>(sw(face)), 1., 1});
               for (int component = 0; component < components; ++component) {
                 const auto offset = face + count * static_cast<std::size_t>(component);
-                const Real relative = flux(offset) - density(offset) * sw(face);
+                const Real relative = moving_relative_face_amount(flux(offset), density(offset), sw(face));
                 stage(ExchangeRecord{"amount:" + identity + "/component:" + std::to_string(component),
                                      occurrence, identity, "endpoint-swept@1", outward, 1.,
                                      static_cast<double>(relative), 1., 1});
