@@ -3,7 +3,83 @@
 The requested migration is **in progress**. Source implementation, native
 reception, scientific witnesses and backend qualification are recorded separately.
 
-## Current reception and integration freeze (2026-09-30)
+## Current integration and reception: SDK20d build, SDK7b execution (2026-09-30)
+
+Migration remains open. The real installed Dim2 package now builds successfully
+with native ABI5 and SDK signature
+`20d956005fe76c85c846c9ef36ddf769a80fb0d5d78d9f1e98ad220238f99e58`;
+native DSO SHA256 is
+`f0f2f2fdba6c16930f80f5f0a33ea8a8e04b178feae7f0e2d8ff0b6b2e60f7a7`.
+The build's doctor passes. Its independent native C++ and installed Python
+receptions are running; no earlier SDK execution is promoted to this SDK.
+
+Current source includes conditional ProgramIR8, original nonlinear spatial
+residuals/captured coefficients, compensated `dot_all`, collective AMR exterior
+geometry snapshots, typed candidate integral captures and canonical native
+physical-unit authentication. Physical `Model.global_quantity` inputs now stay
+in the original Equation source body and bind to exact candidate captures
+before its Kokkos kernel. ModuleManifest11 is conditional on those physical
+global ports; legacy manifests remain version10 with identical bytes/hashes.
+Independent public resealing probes found cloned port issuance, float schema
+versions and bool/float unit exponents accepted at separate seams. All three
+production guards are corrected; independent source reception precedes fresh
+native execution. Native physical-unit validation changes the shipped SDK,
+without changing Context layouts, the integral ledger wire or native ABI5.
+
+The authentic historical SDK7b execution uses
+`7b503163f41cc33040c296679e3b3530a9716c91ecfe4fdce6f69dca6f07dad0`
+and Dim2 native SHA
+`8a217a0fff5a131729a842dd222e2e08346034eb53b4f461fc17fc8cc291b563`.
+Backend remains Apple LLVM21, Kokkos5.2 OpenMP CPU, MPICH4.1.2 and parallel HDF5:
+
+- Eight original nonlinear-field/integral-feedback tests pass in serial and on
+  each of two MPI ranks. Original equations receive two/three unknowns, two
+  initializations, captured forcing/coefficient fields, real Newton/GMRES and
+  original residual rechecks. Nonfinite and iteration-limit attempts publish
+  no accepted state. Feedback receives real exterior FV flux, unique delivery,
+  byte-exact restart and rejection/retry. This historical feedback places q*S
+  in Program; the newer physical-source binding has separate pending evidence.
+- Computed/dtBound MPI2: nine tests pass on each rank, including the strict
+  four-ULP endpoint, restart/retry, rank-local limiting and global-overflow
+  rollback. The serial eight mathematical cases pass, but its MPI-only ninth
+  case skips: that campaign is deliberately not recorded as an all-pass run.
+  Collective checkpoint paths and the exact MPI rejection wrapper are fixed
+  in the fixtures; production numerical guards remain unchanged.
+- Real AMR1 transport MPI2 and AMR2 diffusion MPI2 pass. The former's previous
+  duplicate face delivery and collective geometry deadlock are corrected;
+  the latter receives physical affine initial transfer and accepted traces.
+- Installed source/host campaign: 266 pass, one stale source-pinning test fails,
+  zero skips. The independent pin now compares the exact `dot_all` body and its
+  helper, retaining the historical byte baseline instead of including unrelated
+  new capture methods. A coherent new-SDK rerun is pending.
+- Native C++ wave4c preserves actual negative evidence: malformed/reordered
+  unit JSON with a recomputed integral digest was consumed by the real public
+  System before the canonical guard. The transport fixture also constructed
+  zero advection velocity while its oracle expected x velocity1. Both are
+  corrected. The next CTest campaign registers all include-based tests and
+  includes unit refusals and vector cancellation under MPI2.
+
+Independent T3 offline reception now authenticates six real NPZ observations
+using externally pinned owner SHA
+`a5496e2c2d8313918b17fe0602d580118023b113a8af67f3558e95ab2745c07c`.
+Root checked 70 file pins and 2,210 source-manifest entries against the two
+executed Git commits. Original residual max is `5.467848396278896e-15`.
+T5 owner pins SHA
+`7a6d07c39e434b256e08792ff6c89d991c8525068eb0df0c0a37e43c12521bc2`
+authenticates 40 actual phase/checkpoint/identity files. The independent state
+error is at most `2.220446049250313e-16`; inventory/ledger residuals are below
+`8.31e-17`/`1.96e-18`. Nine fully resealed scientific countermodels are refused.
+No PoPS module is imported by either offline physics verifier.
+
+Public ALE Dim1 saved-state/restart/retry reception, the first genuine Dim3
+package and Fourier reception, and the AMR original nonlinear-field connector
+remain open. The AMR implementation is extending the true conservative
+full-hierarchy provider, with covered-cell measures and original residual
+acceptance; no independent per-level solve is called a composite solve. The
+complete scientific corpus, GPU, official Kokkos/OpenMPI release matrix,
+ROMEO and exact-head GitHub CI remain unqualified by these local receipts.
+
+## Previous reception: SDK307 (retained, superseded)
 
 The last installed reception used native ABI5, SDK
 `307f61570e511eae829151680b4dd2e24425907803f4ec78b2dbb32a19b82540`.
