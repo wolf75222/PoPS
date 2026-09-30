@@ -108,9 +108,20 @@ def test_native_fixture_saves_all_phases_and_converges_calls():
         assert 'directory,"' + phase + '"' in source
     assert 'velocity=-.3 if components==("a","b","c") else .7' in source
     assert 'collective_attempt(world,lambda:pops.run' in source
-    assert 'moving shared face or fixed-domain boundary is inconsistent' in source
-    assert 'expected_type="ValueError"' in source and 'expected_type="RuntimeError"' in source
-    assert 'failure[1]==expected_message' in source
+    tree = ast.parse(source)
+    assert any(isinstance(node, ast.ImportFrom) and
+               node.module == "tests.python.support.moving_interval_diagnostics" and
+               any(alias.name == "require_exact_moving_interval_refusal" for alias in node.names)
+               for node in ast.walk(tree))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and
+             isinstance(node.func, ast.Name) and node.func.id == "require_exact_moving_interval_refusal"]
+    expected = ast.parse("require_exact_moving_interval_refusal(failures, size=1 if world is None else int(world.size))", mode="eval").body
+    assert len(calls) == 1 and ast.dump(calls[0]) == ast.dump(expected)
+    diagnostic = (ROOT / "tests/python/support/moving_interval_diagnostics.py").read_text()
+    assert 'moving shared face or fixed-domain boundary is inconsistent' in diagnostic
+    assert 'expected = ("ValueError", cause, False)' in diagnostic
+    assert 'expected = ("RuntimeError", message, True)' in diagnostic
+    assert 'assert failure == expected' in diagnostic
     assert 'assert len(publications)==1' in source
     assert source.count("assert_exact_moving_snapshot(") == 3
     assert "compile_resolved_plan_once" in source and "collective_directory" in source
