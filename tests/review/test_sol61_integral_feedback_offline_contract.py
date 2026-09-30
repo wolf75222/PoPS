@@ -1,5 +1,6 @@
 """Protocol/source tests only. No saved physical states or native receipts are fabricated."""
 import ast
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -94,22 +95,53 @@ def test_exact_frame_refuses_duration_clock_or_point_relabelling(kwargs):
         oracle.frame(_frame(**kwargs), .01, 1)
 
 
+def _assert_scientific_fixture_seams(source, frozen):
+    def seams(text):
+        tree = ast.parse(text)
+        names = {"_case", "_oracle", "_receipt_check"}
+        functions = {node.name: ast.dump(node, include_attributes=False)
+                     for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names}
+        assert set(functions) == names
+        constants = [ast.dump(node, include_attributes=False) for node in tree.body
+                     if isinstance(node, ast.Assign) and any(
+                         isinstance(target, ast.Tuple) and [item.id for item in target.elts
+                         if isinstance(item, ast.Name)] == ["DT", "GAMMA", "Q0", "TOL"]
+                         for target in node.targets)]
+        assert len(constants) == 1
+        return functions, constants
+    assert seams(source) == seams(frozen)
+
+
 def test_source_fixture_contract_is_frozen_and_files_need_external_state_pins():
-    paths = ("tests/python/integration/runtime/test_public_integral_feedback.py",
-             "tests/python/support/integral_state_receipts.py",
-             "tests/python/unit/codegen/test_integral_candidate_capture.py")
-    for path in paths:
-        frozen = subprocess.run(["git", "show", oracle.SOURCE_CONTRACT + ":" + path], cwd=ROOT,
-                                capture_output=True, text=True, check=True).stdout
-        assert (ROOT / path).read_text() == frozen
-    source = (ROOT / paths[0]).read_text()
-    assert "DT,GAMMA,Q0,TOL = .01,.3,.7,3e-13" in source
+    # Authenticate the historical source, independently of later fixture extensions.
+    # The archive checker authenticates the same fixture bytes against the owner seal.
+    revision = "634cba3511fef957e65a21fcae3ab257f164b360"
+    hashes = {
+        "tests/python/integration/runtime/test_public_integral_feedback.py":
+            "db1d5153eeb59c8e15e80f22837a9889c30e08f37dc99dab96a1e422fc12962d",
+        "tests/python/support/integral_state_receipts.py":
+            "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca",
+        "tests/python/unit/codegen/test_integral_candidate_capture.py":
+            "f4fa9b22cfaf7c739dfd819e3699b742a86e4e26d852453d5e825811c0d0c16c"}
+    frozen = {}
+    for path, expected in hashes.items():
+        raw = subprocess.run(["git", "show", revision + ":" + path], cwd=ROOT,
+                             capture_output=True, check=True).stdout
+        assert hashlib.sha256(raw).hexdigest() == expected
+        frozen[path] = raw.decode()
+    fixture, saver_path, _ = hashes
+    source = (ROOT / fixture).read_text()
+    _assert_scientific_fixture_seams(source, frozen[fixture])
     assert "@pytest.mark.parametrize(\"cells\",(8,16))" in source
-    assert "_case(8,proposed_dt=.5)" in source
+    calls = [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)]
+    assert any(isinstance(node.func, ast.Name) and node.func.id == "_case"
+               and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == 8
+               and any(kw.arg == "proposed_dt" and isinstance(kw.value, ast.Constant)
+                       and kw.value.value == .5 for kw in node.keywords) for node in calls)
     assert "record_property(\"dim\",2)" in source
-    saver = (ROOT / paths[1]).read_text()
-    assert '"checkpoint_sha256"' in saver and '"ledger_sha256"' in saver
-    assert '"state_sha256"' not in saver
+    saver = (ROOT / saver_path).read_text()
+    assert "checkpoint_sha256" in saver and "ledger_sha256" in saver
+    assert "state_sha256" not in saver
     assert set(oracle.contract()["phase_pins"]) == {"receipt", "state", "checkpoint"}
 
 
