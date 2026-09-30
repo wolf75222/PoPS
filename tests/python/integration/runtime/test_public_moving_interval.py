@@ -14,6 +14,7 @@ from tests.python.support.native_execution_context import artifact_execution_con
 from tests.python.support.collective_checks import collective_call, collective_check, collective_attempt, state_snapshots
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.moving_interval_receipts import save_moving_snapshot, assert_exact_moving_snapshot
+from tests.python.support.moving_interval_diagnostics import require_exact_moving_interval_refusal
 
 pytestmark=[pytest.mark.compiler,pytest.mark.native_loader]
 def configured_resolutions():
@@ -235,15 +236,7 @@ def test_rejected_moving_interval_preserves_state_geometry_wire_and_safe_retry(
     _,before=save_moving_snapshot(world,runtime,artifact,identity,geometry.space.frame,directory,"before")
     _,failures=collective_attempt(world,lambda:pops.run(runtime,t_end=.1,max_steps=1,console=False,output_dir=directory))
     with collective_check(world):
-        diagnostic="moving shared face or fixed-domain boundary is inconsistent"
-        expected_type="ValueError"
-        expected_message=diagnostic
-        if world is not None and int(world.size)>1:
-            expected_type="RuntimeError"
-            expected_message="collective step attempt failed during solve: "+"; ".join(
-                "rank %d ValueError: %s"%(rank,diagnostic) for rank in range(int(world.size)))
-        assert all(failure and failure[0]==expected_type and failure[1]==expected_message
-                   for failure in failures),failures
+        require_exact_moving_interval_refusal(failures, size=1 if world is None else int(world.size))
         assert runtime.time()==0. and runtime.macro_step()==0
     _,rejected=save_moving_snapshot(world,runtime,artifact,identity,geometry.space.frame,directory,"rejected")
     with collective_check(world):
