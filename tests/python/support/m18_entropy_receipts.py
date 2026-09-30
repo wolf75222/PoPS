@@ -107,8 +107,16 @@ def save_entropy_provenance(world, artifact, directory, *, fixture, example):
     return identity
 
 
+def _owner_path(path):
+    path = Path(path).absolute()
+    # Inspect the supplied name before resolve erases symbolic aliases.
+    if ".." in path.parts or any(part.is_symlink() for part in (path, *path.parents)):
+        raise ValueError("M18 execution origin path aliases are forbidden")
+    return path.resolve(strict=False)
+
+
 def _owner_file(path):
-    path = Path(path).resolve(strict=True)
+    path = _owner_path(path).resolve(strict=True)
     if not path.is_file():
         raise ValueError("M18 execution origin must be an actual regular file")
     digest = hashlib.sha256()
@@ -154,13 +162,20 @@ def _execution_owner_record(artifact, fixture):
     incomplete = False
     for program in programs:
         paths = getattr(program, "generated_sources", ()) if program is not None else ()
+        seen = set()
         for path in paths:
-            if not Path(path).is_file():
+            path = _owner_path(path)
+            if path in seen:
+                raise ValueError("M18 Program generated source inventory contains duplicates")
+            seen.add(path)
+            if not path.is_file():
                 incomplete = True
                 continue
             leaf = _owner_file(path)
             if Path(leaf["path"]).suffix != ".cpp":
                 raise ValueError("M18 generated source metadata must name actual cpp files")
+            if leaf["path"] in generated and generated[leaf["path"]] != leaf:
+                raise ValueError("M18 shared generated source changed during capture")
             generated[leaf["path"]] = leaf
     cpp = None if incomplete or not generated else [generated[path] for path in sorted(generated)]
     return dict(schema="sol61.m18-execution-owner-metadata@1", source_commit=_fixture_commit(fixture),
@@ -195,13 +210,20 @@ def save_entropy_execution_owner(world, artifact, directory, *, fixture):
         records = collective_call(world, lambda: allgather_value(world, record))
     agreed = collective_call(world, lambda: _owner_consensus(records))
     with collective_check(world):
-        # Every rank independently reopens the explicit elected generated files.
-        for row in agreed["generated_cpp"] or ():
-            if _owner_file(row["path"]) != row:
-                raise ValueError("M18 elected generated source changed before recording")
         destination = Path(directory).resolve().parent / "m18-execution-owner-metadata.json"
     if world is not None:
         paths = collective_call(world, lambda: allgather_value(world, str(destination)))
+    with collective_check(world):
+        # The compiler owner's explicit CPP inventory has now been shared. Each
+        # peer reopens it, including cache peers without local source metadata.
+        for row in agreed["generated_cpp"] or ():
+            if _owner_file(row["path"]) != row:
+                raise ValueError("M18 elected generated source changed before recording")
+        # Reread actual providers and their bytes, never replace initial authority
+        # with a new hash. This also detects changed paths/selected providers.
+        if _execution_owner_record(artifact, fixture) != record:
+            raise ValueError("M18 execution origins changed before recording")
+    if world is not None:
         confirmed = collective_call(world, lambda: allgather_value(world, agreed))
         with collective_check(world):
             if any(path != str(destination) for path in paths) or any(row != agreed for row in confirmed):

@@ -171,6 +171,10 @@ from a binary hash, guessed cache basename or post-run lookup.
 Generated files come exclusively from `CompiledProblem.generated_sources` on
 actual Program/layout-Program objects. Missing metadata or a missing recorded
 file gives `null`; a plausible neighbouring `.cpp` is never discovered by glob.
+A supplied file or parent symlink (including dangling aliases), or a `..` path,
+is refused before resolution or the missing-file check. Duplicate entries in
+one Program's inventory are refused before the union, even if absent; two
+Programs may explicitly retain the same exact source.
 A peer loading a verified cache can lack this metadata although the compiler
 owner retained it. The capture elects only an explicitly recorded nonempty file
 inventory, refuses differing nonempty inventories, and has every rank reopen
@@ -181,7 +185,16 @@ source map or a correspondence to the scientific expression. That gap remains
 explicit even when `POPS_KEEP_GENERATED=1` retains Program C++.
 
 All ranks compare actual Python/SDK/native/System origins and the observed
-checkout commit, then verify the elected C++ leaves and the canonical destination.
+checkout commit and share the canonical destination. After the compiler owner's
+CPP inventory is shared, every rank reopens those elected leaves and rereads its
+actual Python/SDK/native/dual/target provider paths and bytes. The new complete
+record must exactly equal its initial record, including local CPP metadata and
+observed HEAD. Changed bytes or provider paths are refused collectively before
+the final allgather and exclusive rank0 write; hashes are never opportunistically
+updated to attest a replacement. This detects the three capture gaps demonstrated
+against `81249ef170bba6e8176b3ff54b42e58ae275e24d` by the independent historical
+review `5cbcdf4`. It does not lock files against external modifications after the
+last read; archive assembly still independently checks every captured digest.
 Only rank0 writes after the final agreement. This remains execution-owner-attested
 metadata, with no self-approval, fabricated positive result or new physical oracle.
 External ROOT approval and the existing original-equation/compiled-expression
@@ -200,10 +213,16 @@ raise SystemExit(pytest.main(["-q",
 PY
 ```
 
-Local result: **59 source/host PASS** (16 capture checks plus 43 existing
-assembler checks); Ruff/diff pass. The 16 capture checks cover actual file paths,
+Local result after the three capture-gap corrections: **83 source/host PASS**
+(40 capture checks plus 43 existing assembler checks); Ruff/diff pass. The
+historical `81249` baseline had 59 PASS and the independent review subsequently
+exposed the three gaps. The 40 capture checks cover actual file paths,
 source commit, no cache glob,
 missing source metadata/files, strict dual/target inventory, installed origins,
 cache-hit peers, three-rank parity including an empty peer, tampered elected C++,
-unchanged phase/provenance files and refusal to overwrite. These tests receive
+unchanged phase/provenance files and refusal to overwrite; file/parent/dangling
+aliases, per-Program duplicate inventories with legitimate cross-Program sharing,
+all six file categories changed after target-path sharing on ranks 0 and 2, and
+identical-byte replacements of native/System/CPP metadata. Drift refuses before
+final confirmation and before any sidecar exists. These tests receive
 only source/protocol behavior; dummy `.so` bytes never represent native evidence.

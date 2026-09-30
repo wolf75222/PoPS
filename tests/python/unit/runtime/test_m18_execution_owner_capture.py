@@ -157,3 +157,95 @@ def test_peer_mutated_elected_source_refuses_before_sidecar_write(tmp_path, monk
     with pytest.raises(AssertionError, match="elected generated source changed"):
         helper.save_entropy_execution_owner(SimpleNamespace(rank=1, size=2), artifact, directory, fixture=__file__)
     assert not (tmp_path / "m18-execution-owner-metadata.json").exists()
+
+
+@pytest.mark.parametrize("field", ("native", "cpp"))
+@pytest.mark.parametrize("alias_kind", ("file", "parent", "dangling", "dotdot"))
+def test_origin_alias_refused_before_resolve(tmp_path, monkeypatch, field, alias_kind):
+    artifact, record, cpp = origins(tmp_path, monkeypatch)
+    target = Path(record["native"]["path"]) if field == "native" else cpp
+    if alias_kind == "file":
+        alias = target.with_name("alias" + target.suffix)
+        alias.symlink_to(target)
+    elif alias_kind == "parent":
+        parent = tmp_path / "alias-parent"
+        parent.symlink_to(target.parent, target_is_directory=True)
+        alias = parent / target.name
+    elif alias_kind == "dangling":
+        alias = target.with_name("absent-alias" + target.suffix)
+        alias.symlink_to(target.with_name("absent"))
+    else:
+        alias = target.parent / ".." / target.parent.name / target.name
+    if field == "native":
+        monkeypatch.setattr(_native_selector, "selected_native_module",
+                            lambda **_: SimpleNamespace(__file__=alias))
+    else:
+        artifact.program.generated_sources = [alias]
+    with pytest.raises(ValueError, match="origin path aliases are forbidden"):
+        helper._execution_owner_record(artifact, __file__)
+
+
+def test_generated_duplicates_are_per_program_even_for_absent_files(tmp_path, monkeypatch):
+    artifact, record, cpp = origins(tmp_path, monkeypatch)
+    # Two distinct Programs can explicitly retain the same exact source.
+    artifact.layout_programs = (SimpleNamespace(program=artifact.program),
+                               SimpleNamespace(program=SimpleNamespace(generated_sources=[cpp])))
+    assert helper._execution_owner_record(artifact, __file__) == record
+    for missing in (False, True):
+        if missing:
+            cpp.unlink()
+        artifact.program.generated_sources = [cpp, cpp]
+        with pytest.raises(ValueError, match="Program generated source inventory contains duplicates"):
+            helper._execution_owner_record(artifact, __file__)
+
+
+@pytest.mark.parametrize("field", ("python_package", "sdk", "native", "dual", "target", "cpp"))
+@pytest.mark.parametrize("rank", (0, 2))
+def test_final_rehash_all_origins_after_paths_shared_before_sidecar(tmp_path, monkeypatch, field, rank):
+    artifact, record, cpp = origins(tmp_path, monkeypatch)
+    directory = tmp_path / "phases"
+    directory.mkdir()
+    path = cpp if field == "cpp" else Path(
+        record["system_packages"][field]["path"] if field in ("dual", "target") else record[field]["path"])
+    events = []
+    def gather(world, value):
+        events.append(value)
+        # Mutation after initial records/CPP inventory are shared, as the target
+        # path is agreed; the final confirmation must not be reached.
+        if isinstance(value, str) and value.endswith("m18-execution-owner-metadata.json"):
+            path.write_bytes(b"changed after initial authority capture")
+        return (value,) * world.size
+    monkeypatch.setattr(_native_collectives, "allgather_value", gather)
+    message = "elected generated source changed" if field == "cpp" else "execution origins changed"
+    with pytest.raises(AssertionError, match=message):
+        helper.save_entropy_execution_owner(SimpleNamespace(rank=rank, size=3),
+                                            artifact, directory, fixture=__file__)
+    assert sum(isinstance(value, dict) for value in events) == 1
+    assert not (directory.parent / "m18-execution-owner-metadata.json").exists()
+    assert list(directory.iterdir()) == []
+
+
+@pytest.mark.parametrize("field", ("native", "dual", "cpp"))
+def test_changed_actual_metadata_refused_even_with_identical_file_bytes(tmp_path, monkeypatch, field):
+    artifact, record, cpp = origins(tmp_path, monkeypatch)
+    directory = tmp_path / "phases"
+    directory.mkdir()
+    old = cpp if field == "cpp" else Path(
+        record["system_packages"][field]["path"] if field == "dual" else record[field]["path"])
+    new = old.with_name("replacement" + old.suffix)
+    new.write_bytes(old.read_bytes())
+    original = helper._owner_consensus
+    def changed(records):
+        result = original(records)
+        if field == "native":
+            monkeypatch.setattr(_native_selector, "selected_native_module",
+                                lambda **_: SimpleNamespace(__file__=new))
+        elif field == "dual":
+            artifact.blocks[0].model.so_path = new
+        else:
+            artifact.program.generated_sources = [new]
+        return result
+    monkeypatch.setattr(helper, "_owner_consensus", changed)
+    with pytest.raises(AssertionError, match="execution origins changed"):
+        helper.save_entropy_execution_owner(None, artifact, directory, fixture=__file__)
+    assert not (directory.parent / "m18-execution-owner-metadata.json").exists()
