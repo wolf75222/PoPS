@@ -21,6 +21,8 @@ scalars retain component `scalar`; typed integral captures use component
 `value`. Global scalars cannot define cell support by themselves.
 
 `tests/python/unit/codegen/test_program_v8_contract.py` receives real public
-declarations, vector pairings, spatial solves and lazy regions. Native receipt
+declarations, vector pairings and spatial solves, including the atomic refusal
+of a spatial solve inside a lazy region (the current provider is top-level).
+Native receipt
 of their consumers and MPI behavior is recorded separately after rebuilding;
 version selection alone is not numerical or backend qualification.
