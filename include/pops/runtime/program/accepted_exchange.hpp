@@ -361,7 +361,10 @@ class AcceptedExchangeLedger {
     }
     if (extended) {
       const auto integral_count = word();
-      if (integral_count == 0 || integral_count > (bytes.size() - cursor) / 24)
+      // Metadata-only producers explicitly select POPSEX02 to retain trace
+      // support without declaring an IntegralState. Zero is a genuine count,
+      // while the remaining wire extent still bounds every nonzero count.
+      if (integral_count > (bytes.size() - cursor) / 24)
         throw std::invalid_argument("accepted exchange checkpoint has invalid integral count");
       for (std::uint64_t index = 0; index < integral_count; ++index) {
         auto identity = text();

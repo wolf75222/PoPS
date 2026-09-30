@@ -2102,6 +2102,37 @@ TEST(ProgramContextContract, AcceptedExchangeIdentityRetainsMathematicalMultipli
   EXPECT_EQ(snapshot.records().size(), 1u);
 }
 
+TEST(ProgramContextContract, ExtendedAcceptedMetadataWithoutIntegralHasExactRoundtrip) {
+  using Ledger=runtime::program::AcceptedExchangeLedger;
+  Ledger ledger;
+  const auto default_image=ledger.checkpoint();
+  const auto empty_extended=ledger.checkpoint(true);
+  ASSERT_EQ(default_image.size(),16u);
+  ASSERT_EQ(empty_extended.size(),32u);
+  EXPECT_EQ(default_image[7],'1');
+  EXPECT_EQ(empty_extended[7],'2');
+  auto restored=Ledger::from_checkpoint(empty_extended);
+  EXPECT_EQ(restored.checkpoint(),default_image);
+  EXPECT_EQ(restored.checkpoint(true),empty_extended);
+  runtime::program::ExchangeRecord record{"mesh","volume","geometry","endpoint",1,1.,.04,.2,1};
+  record.source_evaluation_identity="mesh-original-evaluation";
+  ledger.stage(record);
+  const auto qualified=ledger.checkpoint(true);
+  restored=Ledger::from_checkpoint(qualified);
+  ASSERT_EQ(restored.records().size(),1u);
+  EXPECT_EQ(restored.records()[0].source_evaluation_identity,record.source_evaluation_identity);
+  EXPECT_EQ(restored.checkpoint(true),qualified);
+  auto oversized=empty_extended;
+  for(unsigned byte=16;byte<24;++byte) oversized[byte]=255;
+  EXPECT_THROW(Ledger::from_checkpoint(oversized),std::invalid_argument);
+  auto truncated=empty_extended;
+  truncated.resize(24);
+  EXPECT_THROW(Ledger::from_checkpoint(truncated),std::invalid_argument);
+  auto invented_consumption=empty_extended;
+  invented_consumption.back()=1;
+  EXPECT_THROW(Ledger::from_checkpoint(invented_consumption),std::invalid_argument);
+}
+
 TEST(ProgramContextContract, IntegralStateConsumesExactAcceptedTraceAndRollsBackParent) {
   using Ledger = runtime::program::AcceptedExchangeLedger;
   using Record = runtime::program::ExchangeRecord;
