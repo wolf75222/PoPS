@@ -518,6 +518,7 @@ class ResolvedSimulationPlan:
     continuation_transitions: Any = field(init=False)
     resolved_dimension: int = field(init=False)
     plan_identity: Identity = field(init=False)
+    _physical_global_sources: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         from pops.problem._snapshot import AuthoringSnapshot
@@ -689,6 +690,8 @@ class ResolvedSimulationPlan:
         self._validate_amr_authorities()
         from pops.runtime._continuation_transitions import derive_continuation_transitions
         object.__setattr__(self, "continuation_transitions", derive_continuation_transitions(self))
+        from pops.time._program.global_source_plan import prepare_source_globals
+        object.__setattr__(self, "_physical_global_sources", prepare_source_globals(self.time))
         object.__setattr__(self, "plan_identity", make_identity("resolved-plan", self._payload()))
 
     def _validate_amr_authorities(self) -> None:
@@ -780,6 +783,8 @@ class ResolvedSimulationPlan:
     def verify(self) -> None:
         from pops.runtime._continuation_transitions import require_resolved_continuation
         require_resolved_continuation(self)
+        from pops.time._program.global_source_plan import require_source_global_plan
+        require_source_global_plan(self._physical_global_sources, self.time)
         expected = make_identity("resolved-plan", self._payload())
         if self.plan_identity != expected:
             raise ValueError("ResolvedSimulationPlan identity verification failed")

@@ -73,7 +73,7 @@ class _DetachedReferences:
         return detached
 
 
-def detach_compiled_program(program: Any) -> Any:
+def detach_compiled_program(program: Any, *, physical_global_sources: Any = None) -> Any:
     """Return a deeply frozen Program clone with no live authoring graph.
 
     This is the one post-compilation boundary consumed by codegen/orchestration.  It accepts the
@@ -91,6 +91,12 @@ def detach_compiled_program(program: Any) -> Any:
             "detach_compiled_program cannot detach an incomplete active authoring sub-block"
         )
 
+    from .global_source_plan import prepare_source_globals, require_source_global_plan
+
+    if physical_global_sources is None:
+        physical_global_sources = prepare_source_globals(program)
+    else:
+        require_source_global_plan(physical_global_sources, program)
     expected_hash = program._ir_hash()
     references = _DetachedReferences()
     detached = program._rebuild(
@@ -101,6 +107,9 @@ def detach_compiled_program(program: Any) -> Any:
     )
     object.__setattr__(detached, "_compiled_detached", True)
     detached.freeze()
+    if physical_global_sources is not None:
+        object.__setattr__(detached, "_physical_global_source_bindings",
+                           physical_global_sources.bind(detached))
 
     actual_hash = detached._ir_hash()
     if actual_hash != expected_hash:

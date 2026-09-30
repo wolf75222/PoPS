@@ -4,7 +4,7 @@ from pops._ir.expr import Expr, Var
 from pops.model.global_quantity import GlobalQuantityRef, global_references
 
 
-def bind_source_globals(expressions, evaluation, variables):
+def bind_source_globals(expressions, evaluation, variables, *, source_module=None):
     import json
     from pops.time._program.integrals import integral_identity, integral_units_bytes
     references = global_references(expressions)
@@ -21,8 +21,12 @@ def bind_source_globals(expressions, evaluation, variables):
         port = row["port"]
         if not port.is_instance or port.block_ref != evaluation.state_ref.block_ref:
             raise ValueError("physical global source binding block owner changed")
-        issued = port.block_ref[port.declaration_ref]
-        if issued is not port:
+        if getattr(evaluation.prog, "_compiled_detached", False):
+            from pops.time._program.global_source_plan import require_detached_source_global
+            if source_module is None:
+                raise ValueError("detached physical global source requires Module/body authority")
+            require_detached_source_global(evaluation, module=source_module)
+        elif port.block_ref[port.declaration_ref] is not port:
             raise ValueError("physical global source input is not the registry-issued port")
         declaration = port.declaration_ref._resolved()
         if declaration not in wanted or declaration in bound or port.units != wanted[declaration]:

@@ -386,6 +386,7 @@ def _compile_resolved_problem(plan: Any) -> Any:
         balance_due_contract=balance_due_contract,
         native_dimension=plan.resolved_dimension,
         shared_interface_codegen_evidence=evidence,
+        physical_global_sources=plan._physical_global_sources,
         **options,
     )
 
@@ -409,6 +410,7 @@ def _compile_problem_impl(
     balance_due_contract: Any = None,
     native_dimension: Any = None,
     shared_interface_codegen_evidence: Any,
+    physical_global_sources: Any = None,
 ) -> Any:
     """Compile a time Program into an ABI-compatible native ``problem.so``.
 
@@ -479,7 +481,7 @@ def _compile_problem_impl(
     )
     from pops.time._program.detach import detach_compiled_program
 
-    time = detach_compiled_program(time)
+    time = detach_compiled_program(time, physical_global_sources=physical_global_sources)
     program_graph = time.to_graph()
     from pops._balance_due_contract import BalanceDueContract
 

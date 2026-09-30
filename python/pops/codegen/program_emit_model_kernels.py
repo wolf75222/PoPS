@@ -131,6 +131,22 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
         raise NotImplementedError(
             "emit_cpp_program: source '%s' is not declared on the model (m.source_term); declared: %s"
             % (name, sorted(impl._source_terms)))
+    if (evaluation is not None and evaluation.attrs.get("physical_global_inputs_v1")
+            and getattr(evaluation.prog, "_compiled_detached", False)):
+        from pops.model.hash_data import canonical_hash_data
+        from pops.model.state_symbols import rebind_state_symbols
+        from pops.time._program.global_source_plan import require_detached_source_global
+        source_module = getattr(model, "module", None)
+        require_detached_source_global(evaluation, module=source_module)
+        if source_module is None:
+            raise ValueError("detached physical global source requires Module/body authority")
+        states = source_module.state_spaces()
+        expected_body = rebind_state_symbols(
+            source_module.operator_registry().get(name).body,
+            states[evaluation.state_ref.declaration_ref.local_id], states.values(),
+            module=source_module)
+        if canonical_hash_data(expected_body) != canonical_hash_data(impl._source_terms[name]):
+            raise ValueError("physical global source lowered body changed from its Module authority")
     exprs = list(expand_evaluation_boundaries(impl._source_terms[name], impl.prim_defs))
     from pops.model.global_quantity import global_references
     if global_references(tuple(impl.prim_defs.values())):
@@ -138,7 +154,8 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
     provider_binding = _provider_binding(
         impl, exprs if plan_exprs is None else plan_exprs, provider_plans, consumer_qid)
     from .program_global_sources import bind_source_globals
-    exprs, global_prelude = bind_source_globals(exprs, evaluation, variables)
+    exprs, global_prelude = bind_source_globals(
+        exprs, evaluation, variables, source_module=getattr(model, "module", None))
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     helpers = getattr(provider_plans, "source_kernel_helpers", None)
     if helpers is not None and not global_prelude:
