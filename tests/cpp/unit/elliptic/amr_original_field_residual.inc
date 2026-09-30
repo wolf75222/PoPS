@@ -411,6 +411,17 @@ TEST(CompositeGeneralField, OriginalFieldOutcomeStagesAllLevelsAndRevalidatesBef
         EXPECT_THROW((void)outcome.consume(SolveConsumption::kAccept), std::exception);
         for (int level = 0; level < 2; ++level)
           EXPECT_EQ(norm_inf(provider->solution(level), 0), Real(4));
+        // Validation is retryable, but this caller explicitly abandons the
+        // staged candidate; a revoked attempt cannot become valid by retrying.
+        const auto numerical_report = outcome.report();
+        EXPECT_NO_THROW(outcome.discard_candidate());
+        EXPECT_EQ(outcome.report().status, numerical_report.status);
+        EXPECT_EQ(outcome.report().action, numerical_report.action);
+        EXPECT_EQ(outcome.report().reason, numerical_report.reason);
+        EXPECT_EQ(outcome.report().residual_norm, numerical_report.residual_norm);
+        EXPECT_THROW((void)outcome.consume(SolveConsumption::kAccept), std::logic_error);
+        for (int level = 0; level < 2; ++level)
+          EXPECT_EQ(norm_inf(provider->solution(level), 0), Real(4));
       }
     }
     if (mutation == -1) {
@@ -421,6 +432,107 @@ TEST(CompositeGeneralField, OriginalFieldOutcomeStagesAllLevelsAndRevalidatesBef
       EXPECT_LT(std::sqrt(provider->original_field_dot(error, error)), Real(3e-7));
     }
   }
+}
+
+struct DiscardReviewHooks {
+  int accepts = 0, rejects = 0, releases = 0, failures = 0, validations = 0;
+  bool refuse = true;
+  SolveOutcome::PublicationHooks hooks() {
+    return {this,
+            [](void* p) noexcept { ++static_cast<DiscardReviewHooks*>(p)->accepts; },
+            [](void* p) { ++static_cast<DiscardReviewHooks*>(p)->rejects; },
+            [](void* p) noexcept { ++static_cast<DiscardReviewHooks*>(p)->releases; },
+            {},
+            [](void* p) {
+              auto& self = *static_cast<DiscardReviewHooks*>(p);
+              ++self.validations;
+              if (self.refuse) throw std::logic_error("injected pre-Accept refusal");
+            },
+            [](void* p, SolveConsumption) { ++static_cast<DiscardReviewHooks*>(p)->failures; }};
+  }
+};
+
+void expect_identical_numerical_report(const SolveReport& left, const SolveReport& right) {
+  EXPECT_EQ(left.iters, right.iters);
+  EXPECT_EQ(left.evaluations, right.evaluations);
+  EXPECT_EQ(left.safeguard_steps, right.safeguard_steps);
+  EXPECT_EQ(left.rel_residual, right.rel_residual);
+  EXPECT_EQ(left.reference_residual_norm, right.reference_residual_norm);
+  EXPECT_EQ(left.residual_norm, right.residual_norm);
+  EXPECT_EQ(left.step_norm, right.step_norm);
+  EXPECT_EQ(left.condition_evidence, right.condition_evidence);
+  EXPECT_EQ(left.failure.found, right.failure.found);
+  EXPECT_EQ(left.failure.rank, right.failure.rank);
+  EXPECT_EQ(left.failure.index, right.failure.index);
+  EXPECT_EQ(left.failure.component, right.failure.component);
+  EXPECT_EQ(left.status, right.status);
+  EXPECT_EQ(left.action, right.action);
+  EXPECT_EQ(left.reason, right.reason);
+}
+
+TEST(CompositeGeneralField, SolvedCandidateDiscardPreservesReportAndRetryableValidation) {
+  static_assert(static_cast<int>(SolveConsumption::kAccept) == 0);
+  static_assert(static_cast<int>(SolveConsumption::kRejectAttempt) == 1);
+  static_assert(static_cast<int>(SolveConsumption::kFailRun) == 2);
+  static_assert(static_cast<int>(SolveConsumption::kDiscardCandidate) == 3);
+  auto lane = ExecutionLane::duplicate_world_collectively("solved-candidate-discard");
+  SolveReport numerical;
+  numerical.iters = 3; numerical.evaluations = 9; numerical.safeguard_steps = 2;
+  numerical.rel_residual = .125; numerical.reference_residual_norm = 2;
+  numerical.residual_norm = .25; numerical.step_norm = .5;
+  numerical.condition_evidence = 4;
+  numerical.mark_solved("independent-numerical-result");
+  for (bool discard : {false, true}) {
+    DiscardReviewHooks callbacks;
+    auto outcome = SolveOutcome::collective_lane(numerical, lane, callbacks.hooks());
+    EXPECT_THROW((void)outcome.consume(SolveConsumption::kAccept), std::logic_error);
+    EXPECT_EQ(callbacks.releases, 0);
+    expect_identical_numerical_report(outcome.report(), numerical);
+    if (discard) {
+      EXPECT_NO_THROW(outcome.discard_candidate());
+      EXPECT_EQ(callbacks.accepts, 0);
+    } else {
+      callbacks.refuse = false;
+      EXPECT_NO_THROW((void)outcome.consume(SolveConsumption::kAccept));
+      EXPECT_EQ(callbacks.accepts, 1);
+    }
+    EXPECT_EQ(callbacks.releases, 1);
+    EXPECT_EQ(callbacks.rejects, 0);
+    EXPECT_EQ(callbacks.failures, 0);
+    EXPECT_EQ(callbacks.validations, discard ? 1 : 2);
+    expect_identical_numerical_report(outcome.report(), numerical);
+    EXPECT_THROW(outcome.discard_candidate(), std::logic_error);
+    EXPECT_THROW((void)outcome.consume(SolveConsumption::kAccept), std::logic_error);
+    EXPECT_EQ(callbacks.releases, 1);
+  }
+}
+
+TEST(CompositeGeneralField, CandidateDiscardRequiresConsensusAndCannotBypassFailedDisposition) {
+  auto lane = ExecutionLane::duplicate_world_collectively("candidate-discard-consensus");
+  SolveReport numerical;
+  numerical.mark_solved("independent-numerical-result");
+  DiscardReviewHooks callbacks;
+  auto outcome = SolveOutcome::collective_lane(numerical, lane, callbacks.hooks());
+  if (lane.size() > 1) {
+    EXPECT_THROW((void)outcome.consume(lane.rank() == 0 ? SolveConsumption::kDiscardCandidate
+                                                      : SolveConsumption::kAccept), std::logic_error);
+    EXPECT_EQ(callbacks.validations, 0);
+    EXPECT_EQ(callbacks.releases, 0);
+  }
+  EXPECT_NO_THROW(outcome.discard_candidate());
+  EXPECT_EQ(callbacks.accepts, 0);
+  EXPECT_EQ(callbacks.validations, 0);
+  EXPECT_EQ(callbacks.releases, 1);
+  numerical.mark_failed(SolveStatus::kBreakdown, SolveAction::kFailRun, "original-failure");
+  DiscardReviewHooks failed_callbacks;
+  auto failed = SolveOutcome::collective_lane(numerical, lane, failed_callbacks.hooks());
+  EXPECT_THROW(failed.discard_candidate(), std::logic_error);
+  EXPECT_EQ(failed_callbacks.releases, 0);
+  expect_identical_numerical_report(failed.report(), numerical);
+  EXPECT_NO_THROW((void)failed.consume(SolveConsumption::kFailRun));
+  EXPECT_EQ(failed_callbacks.failures, 1);
+  EXPECT_EQ(failed_callbacks.releases, 1);
+  EXPECT_EQ(failed_callbacks.accepts, 0);
 }
 
 TEST(CompositeGeneralField, OriginalSignedDiagonalFaceOperatorPreservesSign) {

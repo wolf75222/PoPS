@@ -34,6 +34,8 @@ enum class SolveConsumption {
   kAccept,
   kRejectAttempt,
   kFailRun,
+  /// Close a solved candidate without accepting it or changing its numerical report.
+  kDiscardCandidate,
 };
 
 /// A solve report whose value/publication boundary must be consumed exactly once.
@@ -44,6 +46,7 @@ enum class SolveConsumption {
 /// exact same action on every rank before any hook runs.
 class [[nodiscard]] SolveOutcome final {
  public:
+  static constexpr unsigned publication_contract_version = 2;
   using Hook = void (*)(void*);
   using AcceptHook = void (*)(void*) noexcept;
   using ReleaseHook = void (*)(void*) noexcept;
@@ -129,6 +132,11 @@ class [[nodiscard]] SolveOutcome final {
 
   [[nodiscard]] const SolveReport& report() const noexcept { return report_; }
 
+  /// Publication contract v2: explicitly close an unaccepted solved candidate.
+  /// Collective action agreement is required even after a failed Accept validation.
+  /// The numerical report remains unchanged; only the publication reservation ends.
+  void discard_candidate() { (void)consume(SolveConsumption::kDiscardCandidate); }
+
   SolveReport consume(SolveConsumption action) {
     if (consumed_)
       throw std::logic_error("SolveOutcome has already been consumed");
@@ -186,6 +194,9 @@ class [[nodiscard]] SolveOutcome final {
         throw std::logic_error("cannot accept a failed SolveOutcome");
       if (hooks_.validate_accept != nullptr)
         require_collective_accept_validation_();
+    } else if (action == SolveConsumption::kDiscardCandidate) {
+      if (!report_.solved_value_available())
+        throw std::logic_error("cannot discard a failed SolveOutcome candidate");
     } else if (action == SolveConsumption::kRejectAttempt || action == SolveConsumption::kFailRun) {
       if (report_.solved_value_available())
         throw std::logic_error("cannot reject a solved SolveOutcome");
@@ -214,7 +225,7 @@ class [[nodiscard]] SolveOutcome final {
     if (action == SolveConsumption::kAccept) {
       if (hooks_.accept != nullptr)
         hooks_.accept(hooks_.context);
-    } else {
+    } else if (action != SolveConsumption::kDiscardCandidate) {
       report_.action = action == SolveConsumption::kRejectAttempt ? SolveAction::kRejectAttempt
                                                                   : SolveAction::kFailRun;
       if (hooks_.consume_failure != nullptr)

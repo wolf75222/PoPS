@@ -77,7 +77,16 @@ def test_real_cmake_gtest_scan_keeps_old_four_and_all_original_fragment_cases(tm
     fragment = cpp.with_name("amr_original_field_residual.inc")
     expected = set(re.findall(r"TEST\((CompositeGeneralField),\s*(\w+)\)", cpp.read_text()+fragment.read_text()))
     expected = {suite+"."+name for suite, name in expected}
-    assert len(expected) == 11
+    old_fragment = subprocess.check_output(
+        ["git", "show", "9fb7e8fb64c3e3de289d9c139ba310e9e47e43a6:" + str(fragment.relative_to(ROOT))],
+        cwd=ROOT, text=True)
+    old_cpp = subprocess.check_output(
+        ["git", "show", "9fb7e8fb64c3e3de289d9c139ba310e9e47e43a6:" + str(cpp.relative_to(ROOT))],
+        cwd=ROOT, text=True)
+    historical = {suite+"."+name for suite, name in re.findall(
+        r"TEST\((CompositeGeneralField),\s*(\w+)\)", old_cpp+old_fragment)}
+    assert len(historical) == 11
+    assert historical <= expected
     (tmp_path / "CMakeLists.txt").write_text('''cmake_minimum_required(VERSION 3.20)
 project(InventoryOnly LANGUAGES NONE)
 enable_testing()
@@ -94,4 +103,4 @@ file(WRITE "${CMAKE_BINARY_DIR}/cases.txt" "${cases}")
     found = set((tmp_path / "inventory/cases.txt").read_text().split(";"))
     assert found == expected
     ctest = (tmp_path / "inventory/CTestTestfile.cmake").read_text()
-    assert ctest.count("cpp-target:test_composite_general_field") == 11
+    assert ctest.count("cpp-target:test_composite_general_field") == len(expected)

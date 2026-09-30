@@ -1,5 +1,33 @@
 // Independent T4 acceptance cases. Included after test_program_context_contract.cpp helpers.
 // Tests use actual System field solves and PreparedLinear workspace publication, not a mock lease.
+TEST(ProgramContextContract, DiscardSolvedNativeCandidateClosesPendingAttempt) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.review.discard-native-candidate");
+  add_gas(sim);
+  sim.set_state("gas", ic(4));
+  sim.install_program_step([](double) {});
+  sim.begin_step_transaction();
+  const auto state = sim.get_state("gas");
+  const auto time = sim.time();
+  const auto step = sim.macro_step();
+  auto pending = sim.solve_fields();
+  ASSERT_TRUE(pending.report().solved_value_available()) << pending.report().reason;
+  const auto numerical = pending.report();
+  EXPECT_THROW(sim.step(.01), std::exception);
+  EXPECT_NO_THROW(pending.discard_candidate());
+  EXPECT_EQ(pending.report().status, numerical.status);
+  EXPECT_EQ(pending.report().action, numerical.action);
+  EXPECT_EQ(pending.report().reason, numerical.reason);
+  EXPECT_EQ(sim.get_state("gas"), state);
+  EXPECT_EQ(sim.time(), time);
+  EXPECT_EQ(sim.macro_step(), step);
+  EXPECT_THROW((void)pending.consume(SolveConsumption::kAccept), std::logic_error);
+  EXPECT_NO_THROW(sim.rollback_step_transaction());
+  EXPECT_NO_THROW(sim.step(.01));
+}
+
 TEST(ProgramContextContract, PendingSolveBlocksEveryNativeStepEntryBeforeBody) {
   ensure_kokkos();
   comm_init();
