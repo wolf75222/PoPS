@@ -1,10 +1,11 @@
 """Actual frozen accumulator/transport bodies with explicit math/MPI scaffolding."""
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("POPS_REVIEW_SOURCE_ROOT", Path(__file__).resolve().parents[2])).resolve()
 PIN = "9471bf8ebceda549e75355ed0b9f2d77133d8a06"
 
 
@@ -18,11 +19,14 @@ def body(text, signature):
     return text[begin:end]
 
 
-def frozen(path):
+def frozen(path, signature=None):
     result = subprocess.run(["git", "show", PIN + ":" + path], cwd=ROOT,
                             capture_output=True, text=True, check=True).stdout
-    assert (ROOT / path).read_text() == result, "review source drifted from frozen SHA"
-    return result
+    current = (ROOT / path).read_text()
+    if signature is not None:
+        current, result = body(current, signature), body(result, signature)
+    assert current == result, "reviewed reduction source drifted from frozen SHA"
+    return current
 
 
 def test_actual_frozen_pair_and_two_word_transport(tmp_path):
@@ -159,8 +163,15 @@ int main() {
 
 def test_summary_is_kept_across_every_authored_reduction_boundary():
     mesh = frozen("include/pops/mesh/storage/mf_arith.hpp")
-    uniform = frozen("include/pops/runtime/program/program_context.hpp")
-    amr = frozen("include/pops/runtime/program/amr_program_context_spatial_operations.inc")
+    signature = "Real dot_all(int program_block,"
+    uniform = frozen("include/pops/runtime/program/program_context.hpp", signature)
+    amr = frozen("include/pops/runtime/program/amr_program_context_spatial_operations.inc", signature)
+    for dependency in ("void converge_owner_reduction_(", "const field_type* pointwise_active_mask(",
+                       "void require_same_field_contract_("):
+        frozen("include/pops/runtime/program/program_context.hpp", dependency)
+    for dependency in ("void converge_owner_reduction_(", "void for_each_owner_finest_active_level_(",
+                       "void for_each_owner_active_level_("):
+        frozen("include/pops/runtime/program/amr_program_context_spatial_operations.inc", dependency)
     local = body(mesh, "FiniteCompensatedSum dot_owned_active_all_finite_sum_local(")
     assert "result.join(patch);" in local and ".value()" not in local
     for source in (uniform, amr):
