@@ -51,6 +51,10 @@ Local allocation/copy/body/JVP preparation is caught and voted before the next
 collective. The new original route opts into guarded FAC extrusion,
 interpolation, restriction and matrix flux phases, and guarded Newton algebra
 and scalar products. Legacy routes retain their prior opt-out behavior. Existing
+Mutable body outputs are authenticated within the body's vote, including their
+level count, exact ranked layout and component width. Projection, copy and dot
+validate their structure inside their local votes before any dependent reduction;
+the fixture removes a level on rank zero after a body that returns normally.
 prepared halo/region-transfer operations keep their native protocols. In
 particular, `PartitionedRegionTransfer` still terminates on a failed unpack after
 its publication gate; this carrier does not establish retry qualification for

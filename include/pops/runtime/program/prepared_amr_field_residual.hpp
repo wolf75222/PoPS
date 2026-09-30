@@ -144,6 +144,9 @@ class PreparedAmrFieldResidual final {
       op_->apply_original_field_operator(q, result);
       local_phase_(lane, [&] {
         add_local(q, captures_, result, evaluation);
+        // A physical callback may replace its mutable output without throwing.
+        // Reject that locally inside this vote, before Newton enters a reduction.
+        authenticate_(result);
         Kokkos::fence();
       });
       ++evaluations_;

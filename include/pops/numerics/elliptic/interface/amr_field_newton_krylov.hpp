@@ -323,6 +323,7 @@ class AmrFieldNewtonKrylovWorkspace final {
   // Project both defects and JVP images so corrections cannot evolve those stored values.
   void project_unknowns_(hierarchy_type& fields) const {
     local_phase_([&] {
+      authenticate_owned_(fields, "projection");
       for (std::size_t level = 0; level < fields.size(); ++level)
         for (std::size_t local = 0; local < fields[level].local_size(); ++local) {
           const auto values = fields[level].fab(local).view();
@@ -362,6 +363,17 @@ class AmrFieldNewtonKrylovWorkspace final {
                                     " differs from its prepared exact-ranked hierarchy");
   }
 
+  void authenticate_owned_(const hierarchy_type& fields, const char* role) const {
+    if (fields.size() != iterate_.size())
+      throw std::invalid_argument(std::string("AMR field Newton ") + role +
+                                  " has the wrong level count");
+    for (std::size_t level = 0; level < fields.size(); ++level)
+      if (fields[level].ncomp() != iterate_[level].ncomp() ||
+          !same_layout_(fields[level], iterate_[level]))
+        throw std::invalid_argument(std::string("AMR field Newton ") + role +
+                                    " differs from its prepared exact-ranked hierarchy");
+  }
+
   void copy_field_(const field_type& source, field_type& destination) {
     local_phase_([&] {
       if (!same_layout_(source, destination) || source.ncomp() != destination.ncomp())
@@ -371,22 +383,28 @@ class AmrFieldNewtonKrylovWorkspace final {
   }
 
   void copy_(const hierarchy_type& source, hierarchy_type& destination) {
-    if (source.size() != destination.size())
-      throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
+    local_phase_([&] {
+      authenticate_owned_(source, "copy source");
+      authenticate_owned_(destination, "copy destination");
+    });
     for (std::size_t level = 0; level < source.size(); ++level)
       copy_field_(source[level], destination[level]);
   }
 
   void copy_from_external_(std::span<field_type* const> source, hierarchy_type& destination) {
-    if (source.size() != destination.size())
-      throw std::invalid_argument("AMR field Newton external hierarchy size differs");
+    local_phase_([&] {
+      authenticate_(source, "copy source");
+      authenticate_owned_(destination, "copy destination");
+    });
     for (std::size_t level = 0; level < source.size(); ++level)
       copy_field_(*source[level], destination[level]);
   }
 
   void copy_to_external_(const hierarchy_type& source, std::span<field_type* const> destination) {
-    if (source.size() != destination.size())
-      throw std::invalid_argument("AMR field Newton external hierarchy size differs");
+    local_phase_([&] {
+      authenticate_owned_(source, "copy source");
+      authenticate_(destination, "copy destination");
+    });
     for (std::size_t level = 0; level < source.size(); ++level)
       copy_field_(source[level], *destination[level]);
     local_phase_([] { Kokkos::fence(); });
@@ -427,10 +445,12 @@ class AmrFieldNewtonKrylovWorkspace final {
 
   Real dot_(const hierarchy_type& left, const hierarchy_type& right,
             const ExecutionLane& lane) const {
-    if (left.size() != active_cells_.size() || right.size() != active_cells_.size())
-      throw std::invalid_argument("AMR field Newton dot hierarchy size differs");
     Real local_result = Real(0);
     local_phase_([&] {
+      if (left.size() != active_cells_.size() || right.size() != active_cells_.size())
+        throw std::invalid_argument("AMR field Newton dot hierarchy size differs");
+      authenticate_owned_(left, "dot left");
+      authenticate_owned_(right, "dot right");
       for (std::size_t level = 0; level < left.size(); ++level) {
         // A replicated level has one physical owner. Counting every replica weights
         // mixed replicated/distributed hierarchies differently across MPI sizes.

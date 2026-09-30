@@ -233,6 +233,19 @@ TEST(CompositeGeneralField, OriginalAmrResidualAuthorityAndLocalFailureDoNotPubl
                std::exception);
   EXPECT_GT(all_reduce_min(static_cast<long>(callbacks), lane), 0);
   EXPECT_THROW(prepared->candidate(authority, lane), std::exception);
+  callbacks = 0;
+  EXPECT_THROW(prepared->solve(
+                   authority, nullptr,
+                   [&](const auto& q, const auto& captured, auto& result, int evaluation) {
+                     ++callbacks;
+                     body(q, captured, result, evaluation);
+                     if (lane.rank() == 0)
+                       result.pop_back();
+                   },
+                   lane),
+               std::exception);
+  EXPECT_GT(all_reduce_min(static_cast<long>(callbacks), lane), 0);
+  EXPECT_THROW(prepared->candidate(authority, lane), std::exception);
   PreparedResourceCache foreign_cache;
   auto foreign = authority;
   foreign.attempt = foreign_cache.begin_attempt(lane);
