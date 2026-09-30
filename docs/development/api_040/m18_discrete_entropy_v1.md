@@ -24,10 +24,14 @@ the read-only target remains unchanged.
 
 The new public `pops.math.exp` is a distinct `Exp` expression node. Its
 structural/CSE key and closed Program DAG opcode are `exp`, with derivative
-`exp(a)*a'`. The existing Program serialization schema 3 and native package
-ABI 6 remain unchanged: opcode identity is self-describing inside the
-versioned Program payload, and the generated numerical source participates
-in artifact identity. An older emitter rejects the unknown opcode rather than
+`exp(a)*a'`. On source base `48871851`, this local M18 Program serializes as
+Program IR **version 5**. The native extension's capability vocabulary has ABI
+**5** (`pops::kAbiVersion`); the distinct detached System package contract has
+ABI **7** (`kNativeSystemPackageAbiVersion` and its exported symbol). These
+versions are not interchangeable. The early Exp review's references to schema 3
+and the earlier generated-package ABI are historical, not the current loader
+contract. Opcode identity is self-describing inside the versioned Program payload,
+and generated numerical source participates in artifact identity. An older emitter rejects the unknown opcode rather than
 interpreting it as `pow` or a polynomial. An installed source/SDK identity
 must still be rebuilt and authenticated before any runtime qualification.
 `where` retains lazy branch evaluation; an active overflow is a nonfinite
@@ -47,10 +51,15 @@ generic numerical status; it does not yet provide a dynamic per-cell cone
 certificate or separate native `E-CLOSURE-INFEASIBLE` and `BOUNDARY` codes.
 
 Source tests and an isolated host C++ probe of the emitted public residual
-are separate from installed PoPS evidence. The installed integration witness
-is collected but has not been run on a rebuilt package in this branch. It is
-designed to check all 20 accepted cells and a one-cell outside-cone refusal,
-including all-rank failure collection, the committed dual and read-only target
-buffers, time and temporal
-envelope across two failed attempts. It does not claim near-boundary solver
+are separate from installed PoPS evidence. Historical installed receipts remain
+in their original evidence directories. The expanded saved-state witness is
+pending a new, authenticated Serial/MPI2 receipt: it saves all 20 accepted cells,
+the native static geometry/support, initial and accepted checkpoints, exact
+restart/replay, and two one-cell outside-cone refusals on the same runtime with
+unchanged dual, target, clock and temporal envelope. A subsequent safe **new bind**
+uses the original interior input, the same artifact/context and zero seed. It
+does not claim an accepted retry of the impossible immutable outside target.
+An independent NumPy/stdlib reader requires external owner pins and JUnit/native
+provenance; its source checks cannot qualify that future native execution.
+It does not claim near-boundary solver
 convergence, AMR, GPU, arbitrary quadrature rank or a transport PDE.

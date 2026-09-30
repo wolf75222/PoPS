@@ -84,3 +84,17 @@ quadrature conditioning, transport, AMR or GPU. The original W09 example with no
 in `[-0.5,0.5]` and requested mean `0.9` remains distinct from this five-node
 `[-1,1]` variant. Rebuilt installed reception, including the MPI rejection/rollback
 fixture, remains mandatory before any native success claim.
+
+## Current saved-state reception addendum (source base 48871851)
+
+The historical source/host counts and receipts above are preserved. The expanded
+fixture and independent offline contract are described in
+`m18_saved_state_offline_reception_sol61.md`. They retain three multipliers,
+the exact immutable target, one dual publication and the original 12-iteration
+Newton budget with tolerance `2e-11`. They add actual native checkpoint/support
+capture, two rejected attempts, an explicitly fresh safe rebind and owner-sealed
+offline reception. Native execution of this expanded fixture is pending.
+
+Current source has native module capability ABI **5**, separate System package
+ABI **7**, and local M18 Program IR version **5**. The early generated-package
+ABI/schema wording does not authenticate a contemporary installed package.
