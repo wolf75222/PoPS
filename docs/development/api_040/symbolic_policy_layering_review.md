@@ -57,6 +57,11 @@ The algebra now captures the supplied literal payload once but retains those
 distinct per-component declarations, while sharing genuinely symbolic operands.
 An exact `vec + vec*Fraction(2,3)` materialization counterexample matches the
 previous explicit IR Program hash. The targeted finite selection passes 16 tests.
+Independent replay on `8bf5ae0` confirms all 33 parent/candidate comparisons,
+including the actual vector-arithmetic Program hash and encoded DAG, with zero
+encoded differences; its independent source/host selection passes 152 tests.
+The enlarged author selection with the separate explicit vector-pairing
+extension subsequently passes 240 direct-source tests.
 
 The test process selected installed Dim2 for loader compatibility and imported
 Python sources from this checkout using explicit `PYTHONPATH=$PWD/python` after

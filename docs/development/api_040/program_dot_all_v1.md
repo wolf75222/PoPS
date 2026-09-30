@@ -57,6 +57,11 @@ authoring/Scalar-frontier selection passes 51 tests (three native/compiler cases
 deselected). Two additional legacy process-isolated control-flow scripts were
 blocked at bootstrap by missing native dimension selection in their subprocess;
 they are not claimed as passing. Ruff and diff-check pass.
+The final complete enlarged direct-source selection at frozen implementation
+`21a56b9` passes **240 tests, three native/compiler cases deselected**, in 50.93s.
+It imports this checkout's Python via explicit `PYTHONPATH=$PWD/python` after
+`env -u PYTHONPATH`, selecting installed Dim2 only for loader compatibility.
+This source receipt does not qualify the changed native provider methods.
 These checks do not qualify native execution. Rebuild/relink both installed
 dimensions after integrating the changed provider headers, select ProgramIRv7
 support centrally, run this C++ fixture and the existing installed computed
