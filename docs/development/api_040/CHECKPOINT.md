@@ -1,4 +1,4 @@
-# Integration checkpoint — 2026-09-30
+# Integration checkpoint — 2026-10-01
 
 The requested migration is **in progress**. Source implementation, native
 reception, scientific witnesses and backend qualification are recorded separately.
@@ -10,7 +10,7 @@ Migration remains open. The current installed Dim2 native artifact was built fro
 `375fbdebb4b68bb43164ba3fdfa32ead3beaa8d89606925609e96507eeed3eff` and DSO SHA256
 `8dcdfacab20fffd876128c2ee4b06bd26f4c952f2d7ed6ce76fb028815bb6310`.
 Its 1,114 production Python/header files match Git `180afdc5` and the subsequent
-tests/docs-only integration through `ad0ac2cb`; module ABI5, System package ABI7
+tests/docs-only integration through `e98dc02f`; module ABI5, System package ABI7
 and public API3 remain distinct. Local profile is Apple LLVM21, Kokkos5.2.0
 CPU OpenMP1, MPICH4.1.2, binary64. Dim1/Dim3 have older SDKs and need rebuilding.
 
@@ -56,18 +56,36 @@ resealed scientific refusals. The MPI witness has one nonempty owner and one
 empty rank. These results do not qualify the newer SDK375f or GPU execution.
 
 M18 execution-owner metadata now refuses aliased origins, intra-Program duplicate
-source paths and origin drift before publication. Independent host attacks pass;
-true SDK375f Serial/MPI campaigns and external owner/scientific reception are in
-progress. The first SDK375f M18 attempt compiled, then refused JSON serialization
+source paths and origin drift before publication. True SDK375f Serial and MPI2
+each pass one native case, ten saved phases and two actual outside-cone refusals,
+followed by safe rebind to the interior problem. Independent reception of all
+twenty interior cells passes with original moment residual `4.548139642679416e-12`
+below the unchanged `2e-11` guard, minimum population `0.07362741560528462`,
+positive minimum entropy gap `1.1062088624547162e-4` and byte-exact readonly targets.
+Each backend's twelve fully resealed saved-data countermodels is refused; original
+inventories are reverified unchanged. These offline mutations and the actual
+native outside-cone attempts are separate evidence. The first SDK375f M18 attempt
+compiled, then refused JSON serialization
 of binary Identity digest bytes before any physical phase; its failed receipt is
 preserved at `outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-20261001`.
 Provenance now declares the existing `json-with-bytes-hex.v1` projection with exact
 `{bytes_hex: ...}` tags, no string coercion. This extends evidence metadata only;
 the scientific arrays/checkpoints and original equation guards are unchanged.
 The coherent owner/capture/assembler/codec source selection passes 133 checks.
+The independent empty exchange reader is versioned at `@2`: actual empty
+`POPSEX01` is 16 bytes, actual empty `POPSEX02` is 32 bytes. Its historical failed
+assembler receipt is retained. Exact owner seals, metrics and reproduction are in
+`m18_sdk375f_native_reception.json` and `m18_sdk375f_native_reception.md`.
 M19 finite product support uses existing common Kokkos transfer kernels,
 arbitrary component widths and explicit signed quadrature; corrected fixtures and
-independent source/math tests are integrated, native Serial/MPI reception pending.
+independent source/math tests are integrated. The first six-case SDK375f Serial
+campaign compiled and bound every case, then failed before the initial saved
+phase because the public multi-layout executor did not expose rank-owned boxes.
+The red receipt remains at
+`outputs/installed-m19-product-serial-dim2-sdk375f-codec-20261001` in the task
+workspace. A real per-block runtime observation relay is being implemented and
+counter-reviewed. Its native replay and MPI reception remain pending. Independent
+offline reception protocol is integrated but has no positive native states yet.
 Neither witness is full Vlasov–Poisson/BGK. Full M26/M27 equations, unreceived
 couplings and official OpenMPI/Kokkos4.4.01/GPU/remote CI profiles remain open.
 
