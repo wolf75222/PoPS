@@ -1,0 +1,212 @@
+{
+  "schema": "sol61.amr-original-newton-source-math@1",
+  "source_contract": {
+    "callback": "residual",
+    "defect_sign": 1,
+    "jvp_sign": 1,
+    "update_sign": 1,
+    "physical_recheck": "F",
+    "source_sha256": {
+      "amr": "d32845bda520c052a8cb9d30ddf2f21fbc9c2052929a876934186c788176d9fc",
+      "workspace": "3d2657d97048c65621ec5159485354758fdad6970b21451dac80e5f8b89a699f",
+      "uniform": "92b9383bee5141c93b19aa780b8a316596f051612852ddea18714c9ae3c6ee23",
+      "fixture": "2de84324be9111409c1148b231292da505a22b7899feed52eb5936e9be57938b"
+    },
+    "defect_body": "evaluate(q, result, evaluation);"
+  },
+  "status": "sign_defect_detected",
+  "wrong_sign": {
+    "initial": 0.7396080438576639,
+    "defect_sign": 1,
+    "trials": [
+      {
+        "iteration": 0,
+        "step": 1.0,
+        "physical_norm": 1.4823871673076465,
+        "armijo": 0.7395340830532782
+      },
+      {
+        "iteration": 0,
+        "step": 0.5,
+        "physical_norm": 1.109808382130132,
+        "armijo": 0.739571063455471
+      },
+      {
+        "iteration": 0,
+        "step": 0.25,
+        "physical_norm": 0.9245595929041228,
+        "armijo": 0.7395895536565674
+      },
+      {
+        "iteration": 0,
+        "step": 0.125,
+        "physical_norm": 0.8320652415723673,
+        "armijo": 0.7395987987571156
+      },
+      {
+        "iteration": 0,
+        "step": 0.0625,
+        "physical_norm": 0.7858343206273442,
+        "armijo": 0.7396034213073898
+      },
+      {
+        "iteration": 0,
+        "step": 0.03125,
+        "physical_norm": 0.7627208919817798,
+        "armijo": 0.7396057325825268
+      },
+      {
+        "iteration": 0,
+        "step": 0.015625,
+        "physical_norm": 0.7511644316371352,
+        "armijo": 0.7396068882200953
+      },
+      {
+        "iteration": 0,
+        "step": 0.0078125,
+        "physical_norm": 0.7453862332120763,
+        "armijo": 0.7396074660388796
+      },
+      {
+        "iteration": 0,
+        "step": 0.00390625,
+        "physical_norm": 0.7424971379679547,
+        "armijo": 0.7396077549482717
+      },
+      {
+        "iteration": 0,
+        "step": 0.001953125,
+        "physical_norm": 0.7410525908419449,
+        "armijo": 0.7396078994029679
+      },
+      {
+        "iteration": 0,
+        "step": 0.0009765625,
+        "physical_norm": 0.7403303173409462,
+        "armijo": 0.7396079716303159
+      },
+      {
+        "iteration": 0,
+        "step": 0.00048828125,
+        "physical_norm": 0.7399691805981978,
+        "armijo": 0.7396080077439898
+      },
+      {
+        "iteration": 0,
+        "step": 0.000244140625,
+        "physical_norm": 0.7397886122277925,
+        "armijo": 0.7396080258008269
+      },
+      {
+        "iteration": 0,
+        "step": 0.0001220703125,
+        "physical_norm": 0.7396983280427109,
+        "armijo": 0.7396080348292453
+      },
+      {
+        "iteration": 0,
+        "step": 6.103515625e-05,
+        "physical_norm": 0.7396531859501853,
+        "armijo": 0.7396080393434546
+      },
+      {
+        "iteration": 0,
+        "step": 3.0517578125e-05,
+        "physical_norm": 0.7396306149039242,
+        "armijo": 0.7396080416005593
+      },
+      {
+        "iteration": 0,
+        "step": 1.52587890625e-05,
+        "physical_norm": 0.7396193293807941,
+        "armijo": 0.7396080427291116
+      },
+      {
+        "iteration": 0,
+        "step": 7.62939453125e-06,
+        "physical_norm": 0.7396136866192289,
+        "armijo": 0.7396080432933877
+      },
+      {
+        "iteration": 0,
+        "step": 3.814697265625e-06,
+        "physical_norm": 0.7396108652384464,
+        "armijo": 0.7396080435755258
+      },
+      {
+        "iteration": 0,
+        "step": 1.9073486328125e-06,
+        "physical_norm": 0.7396094545480552,
+        "armijo": 0.7396080437165948
+      }
+    ],
+    "method": "independent exact-Jacobian Newton",
+    "status": "line_search_failed",
+    "iterations": 1,
+    "physical_residual": 0.7396080438576639,
+    "solution": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "target": [
+      0.15,
+      0.25,
+      0.18
+    ]
+  },
+  "corrected_convention": {
+    "initial": 0.7396080438576639,
+    "defect_sign": -1,
+    "trials": [
+      {
+        "iteration": 0,
+        "step": 1.0,
+        "physical_norm": 0.003464808861916699,
+        "armijo": 0.7395340830532782
+      },
+      {
+        "iteration": 1,
+        "step": 1.0,
+        "physical_norm": 4.253707381403372e-07,
+        "armijo": 0.0034644623810305072
+      },
+      {
+        "iteration": 2,
+        "step": 1.0,
+        "physical_norm": 8.264463332799638e-15,
+        "armijo": 4.2532820106652316e-07
+      }
+    ],
+    "method": "independent exact-Jacobian Newton",
+    "status": "converged",
+    "iterations": 3,
+    "physical_residual": 8.264463332799638e-15,
+    "solution": [
+      0.14999999999999955,
+      0.2500000000000046,
+      0.17999999999999966
+    ],
+    "target": [
+      0.15,
+      0.25,
+      0.18
+    ]
+  },
+  "exact_certificate": {
+    "direction": [
+      -0.150190761496844,
+      -0.25167955390957103,
+      -0.18042433775602215
+    ],
+    "forcing": [
+      0.332675,
+      0.510125,
+      0.4196664
+    ],
+    "all_components_strictly_uphill_for_every_positive_step": true
+  },
+  "native_execution": false,
+  "mpi_execution": false,
+  "saved_states_received": false
+}
