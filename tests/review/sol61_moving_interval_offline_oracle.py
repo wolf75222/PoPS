@@ -11,8 +11,10 @@ from fractions import Fraction
 import importlib.util
 import json
 import math
+import os
 from pathlib import Path
 import re
+import stat
 import struct
 import sys
 
@@ -32,6 +34,47 @@ EPS = np.finfo(np.float64).eps
 QUADRATURE = "left_endpoint@1/exact_endpoint_displacement@1"
 PHASES = {"restart": ("initial", "step1", "accepted", "continuous", "restored", "replayed"),
           "retry": ("before", "rejected", "retried")}
+TEMPORAL_V2_KEYS = frozenset((
+    "schema_version", "strategy", "program_schedule", "clock", "clock_cursors", "schedule_cursors",
+    "synchronization_cursors", "history_cursors", "cache_cursors", "controller_state", "event_queue",
+    "transaction_stats", "status", "synchronized",
+))
+
+
+def file_bytes(path):
+    """Read exactly the bounded regular-file extent; authenticate stability.
+
+    No implicit read-to-EOF is needed. This avoids the observed macOS readall
+    stall without relaxing length, allocation, file identity or SHA checks.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb", buffering=0) as stream:
+        before = os.fstat(stream.fileno())
+        require(stat.S_ISREG(before.st_mode) and 0 <= before.st_size <= common.MAX_FILE_BYTES,
+                "missing/nonregular/oversized pinned file")
+        chunks, position = [], 0
+        while position < before.st_size:
+            part = os.pread(stream.fileno(), min(1 << 20, before.st_size - position), position)
+            require(bool(part), "truncated bounded file read")
+            chunks.append(part)
+            position += len(part)
+        after = os.fstat(stream.fileno())
+        fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+        require(all(getattr(before, key) == getattr(after, key) for key in fields),
+                "pinned file changed during bounded read")
+        return b"".join(chunks)
+
+
+def pinned_file(base, row):
+    require(type(row) is dict and set(row) == {"path", "sha256"}, "invalid external file pin")
+    require(type(row["path"]) is str and type(row["sha256"]) is str
+            and re.fullmatch("[0-9a-f]{64}", row["sha256"]), "invalid file pin type")
+    path = Path(row["path"])
+    if not path.is_absolute():
+        path = base / path
+    raw = file_bytes(path)
+    require(digest(raw) == row["sha256"], "external SHA256 pin mismatch: " + str(path))
+    return path, raw
 
 
 class Reader:
@@ -190,9 +233,12 @@ class Snapshot:
     carriers: list
     temporal: dict
     hashes: dict
+    native_payload: dict
 
 
 def checkpoint_envelope(checkpoint, case, pins, phase, time, step):
+    require(common.scalar(checkpoint["pops_checkpoint_version"], "int") == 8,
+            "ALE reception requires Uniform checkpoint payload8")
     manifest = strict_json(str(checkpoint["pops_checkpoint_manifest"].item()))
     common.identity_token(manifest["semantic_identity"], "semantic")
     common.identity_token(manifest["bind_identity"], "bind")
@@ -223,6 +269,46 @@ def checkpoint_envelope(checkpoint, case, pins, phase, time, step):
     require(str(checkpoint["abi_key"].item()) == pins["abi_key"], "checkpoint ABI differs")
 
 
+def temporal_boundary(temporal, time, step):
+    """Exact TemporalRestartState v2, independently read without importing PoPS.
+
+    The ordinary-root witness has no authored subcycles, synchronization nodes,
+    histories or caches. Its complete accepted envelope is compared on restart
+    and rejected attempts; no cursor section or controller field is optional.
+    """
+    require(type(temporal) is dict and set(temporal) == TEMPORAL_V2_KEYS
+            and type(temporal["schema_version"]) is int and temporal["schema_version"] == 2,
+            "wrong exact temporal schema2 manifest")
+    require(temporal["status"] == "accepted" and temporal["synchronized"] is True,
+            "temporal checkpoint is not an accepted synchronized boundary")
+    require(common.cbor(temporal["clock"]) == common.cbor(dict(time=time.hex(), macro_step=step)),
+            "temporal accepted clock differs")
+    schedule = temporal["program_schedule"]
+    require(type(schedule) is dict and set(schedule) == {"schema_version", "kind", "primary_clock", "clocks",
+            "subcycles", "synchronizations", "schedules", "histories"}
+            and type(schedule["schema_version"]) is int and schedule["schema_version"] == 1
+            and schedule["kind"] == "pops.temporal-program-schedule" and len(schedule["clocks"]) == 1
+            and schedule["clocks"][0]["id"] == schedule["primary_clock"]
+            and type(schedule["clocks"][0]["ticks_per_macro"]) is int
+            and schedule["clocks"][0]["ticks_per_macro"] == 1
+            and all(schedule[name] == [] for name in ("subcycles", "synchronizations", "schedules", "histories")),
+            "wrong declared ordinary-root clock schedule")
+    expected_cursors = dict(clock_cursors={schedule["primary_clock"]:dict(time=time.hex(), tick=step, phase="accepted")},
+                            schedule_cursors={"macro_step":dict(macro_step=step, phase="accepted")},
+                            synchronization_cursors={}, history_cursors={}, cache_cursors={})
+    require(all(common.cbor(temporal[name]) == common.cbor(expected) for name, expected in expected_cursors.items()),
+            "temporal cursor is not at the declared accepted boundary")
+    stats = temporal["transaction_stats"]
+    require(type(stats) is dict and set(stats) == {"accepted", "failed", "rejected"}
+            and all(type(value) is int and value >= 0 for value in stats.values()),
+            "invalid temporal transaction statistics")
+    require(temporal["event_queue"] == [] and type(temporal["controller_state"]) is dict,
+            "ordinary fixed-step witness has an unexpected event/controller authority")
+    # Every controller field (including the restored fixed-grid origin/count)
+    # remains authenticated by the complete CBOR comparison in same_accepted.
+    return schedule
+
+
 def equal_array(a, b, label):
     require(a.shape == b.shape and a.dtype == b.dtype and a.tobytes() == b.tobytes(), label)
 
@@ -230,7 +316,7 @@ def equal_array(a, b, label):
 def load_snapshot(base, pins, case, phase):
     row = case["phases"][phase]
     require(set(row) == {"receipt", "state", "checkpoint"}, "incomplete phase pins")
-    files = {key: common.pinned_file(base, value) for key, value in row.items()}
+    files = {key: pinned_file(base, value) for key, value in row.items()}
     receipt = strict_json(files["receipt"][1])
     require(type(receipt["time"]) is float and all(type(receipt[key]) is int for key in (
         "macro_step", "generation", "dimension", "size", "rank")), "receipt scalar types differ")
@@ -258,12 +344,7 @@ def load_snapshot(base, pins, case, phase):
             and common.scalar(checkpoint["macro_step"], "int") == step, "checkpoint lifecycle differs")
     checkpoint_envelope(checkpoint, case, pins, phase, time, step)
     temporal = strict_json(str(checkpoint["temporal_restart_state"].item()))
-    require(common.cbor(temporal["clock"]) == common.cbor(dict(time=time.hex(), macro_step=step)), "temporal accepted clock differs")
-    schedule = temporal["program_schedule"]
-    require(schedule["kind"] == "pops.temporal-program-schedule" and len(schedule["clocks"]) == 1
-            and schedule["clocks"][0]["id"] == schedule["primary_clock"]
-            and type(schedule["clocks"][0]["ticks_per_macro"]) is int
-            and schedule["clocks"][0]["ticks_per_macro"] == 1, "wrong declared root clock schedule")
+    schedule = temporal_boundary(temporal, time, step)
     wire, offsets = checkpoint["program_exchange_state"], checkpoint["program_exchange_offsets"]
     require(wire.dtype == np.dtype("uint8") and wire.ndim == 1 and offsets.dtype.kind in "iu"
             and offsets.ndim == 1 and len(offsets) == pins["size"] + 1, "wrong exact rank offsets")
@@ -290,7 +371,9 @@ def load_snapshot(base, pins, case, phase):
                        for carrier in carriers]
     require(all(topo == global_topology[0] for topo in global_topology), "rank topology/ownership divergence")
     return Snapshot(state, nodes[:, 0], volumes, time, step, generation, images, carriers, temporal,
-                    {key: digest(value[1]) for key, value in files.items()})
+                    {key: digest(value[1]) for key, value in files.items()},
+                    {key: value for key, value in checkpoint.items()
+                     if key not in {"pops_checkpoint_manifest", "pops_restart_identity"}})
 
 
 def initial(snapshot, case):
@@ -310,8 +393,12 @@ def same_accepted(a, b, label):
         equal_array(getattr(a, name), getattr(b, name), label + " physical " + name)
     require(a.time.hex() == b.time.hex() and a.step == b.step and a.generation == b.generation
             and a.images == b.images, label + " clock/geometry/wire changed")
-    for name in ("clock", "program_schedule", "synchronization_state", "history_cursors", "cache_generations"):
-        require(common.cbor(a.temporal[name]) == common.cbor(b.temporal[name]), label + " accepted temporal " + name)
+    temporal_boundary(a.temporal, a.time, a.step)
+    temporal_boundary(b.temporal, b.time, b.step)
+    require(common.cbor(a.temporal) == common.cbor(b.temporal), label + " complete accepted temporal envelope changed")
+    require(set(a.native_payload) == set(b.native_payload), label + " native payload inventory changed")
+    for name in a.native_payload:
+        equal_array(a.native_payload[name], b.native_payload[name], label + " exact native payload " + name)
 
 
 def small_error(actual, expected, label):
@@ -323,9 +410,17 @@ def small_error(actual, expected, label):
 
 def scientific_output(base, pins, case, phase, snapshot):
     """Actual observer publication, independently read without NPZ.reopen/PoPS."""
-    _, raw = common.pinned_file(base, case["outputs"][phase])
+    _, raw = pinned_file(base, case["outputs"][phase])
     data = common.archive(raw)
     manifest = strict_json(str(data["pops_output_manifest"].item()))
+    require(set(manifest) == {"schema_version", "format", "snapshot", "datasets", "arrays", "output_identity"}
+            and type(manifest["schema_version"]) is int and manifest["schema_version"] == 1,
+            "scientific publication schema/keys differ")
+    base_payload = {key: value for key, value in manifest.items() if key != "output_identity"}
+    expected_identity = digest(common.cbor(dict(protocol="pops.identity", domain="scientific-output",
+                                               schema_version=1, payload=base_payload)))
+    require(manifest["output_identity"] == "pops.scientific-output.v1:sha256:" + expected_identity,
+            "scientific publication manifest identity differs")
     require(manifest["format"] == "npz" and re.fullmatch(
         r"pops\.scientific-output\.v[1-9][0-9]*:sha256:[0-9a-f]{64}", manifest["output_identity"]),
         "scientific publication identity/format differs")
@@ -339,7 +434,7 @@ def scientific_output(base, pins, case, phase, snapshot):
     require(type(clock["macro_step"]) is int and clock["clock_id"] == snapshot.temporal["program_schedule"]["primary_clock"]
             and clock["time"] == snapshot.time.hex() and clock["macro_step"] == snapshot.step,
             "scientific output accepted clock differs")
-    checkpoint = common.archive(common.pinned_file(base, case["phases"][phase]["checkpoint"])[1])
+    checkpoint = common.archive(pinned_file(base, case["phases"][phase]["checkpoint"])[1])
     checkpoint_manifest = strict_json(str(checkpoint["pops_checkpoint_manifest"].item()))
     provenance = manifest["snapshot"]["provenance"]
     require(provenance["bind_identity"] == common.identity_token(checkpoint_manifest["bind_identity"], "bind")
@@ -455,14 +550,14 @@ def step(before, after, case):
 
 
 def receive(path):
-    base, raw = path.resolve().parent, path.read_bytes()
+    base, raw = path.resolve().parent, file_bytes(path)
     pins = strict_json(raw)
     require(pins["schema"] == SCHEMA and type(pins["dimension"]) is int and pins["dimension"] == 1
             and type(pins["size"]) is int and pins["size"] > 0,
             "wrong ALE pin schema/rank/dimension")
     require(re.fullmatch("[0-9a-f]{40}", pins["source_commit"]) and re.fullmatch("[0-9a-f]{64}", pins["native_sha256"])
             and "dim=1" in pins["abi_key"], "missing source/native/SDK pins")
-    _, identity_raw = common.pinned_file(base, pins["identity_file"])
+    _, identity_raw = pinned_file(base, pins["identity_file"])
     identity = strict_json(identity_raw)
     require(all(identity[key] == pins[key] for key in ("source_commit", "native_sha256", "abi_key")), "owner runtime identity differs")
     expected = {(kind, n, names, source) for kind, n, names, source in campaign()}

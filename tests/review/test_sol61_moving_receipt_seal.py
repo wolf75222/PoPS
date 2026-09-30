@@ -1,6 +1,7 @@
 """Negative inventory/authority probes; synthetic XML is not physical evidence."""
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
@@ -72,4 +73,27 @@ def test_narrow_binary_cbor_is_type_aware_and_identity_domain_is_closed():
         seal.cbor_bytes(bytes(31))
     with pytest.raises(ValueError, match="domain/version"):
         seal.identity_data("pops.binary.v2:sha256:" + "0" * 64, "binary")
-    assert "pops" not in sys.modules
+
+
+def test_helper_and_oracle_never_import_pops_in_an_isolated_process(tmp_path):
+    script = (HERE / "sol61_moving_receipt_seal.py").resolve()
+    code = '''import importlib.abc, importlib.util, pathlib, sys
+class RefusePoPS(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "pops" or fullname.startswith("pops."):
+            raise AssertionError("PoPS/native import forbidden: " + fullname)
+sys.meta_path.insert(0, RefusePoPS())
+helper = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(helper.parent))
+spec = importlib.util.spec_from_file_location("isolated_moving_seal", helper)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert len(module.expected_nodes()) == 8
+assert module.oracle.contract()["consumes_no_pops_package"] is True
+assert not any(name == "pops" or name.startswith("pops.") for name in sys.modules)
+print("helper+oracle isolated without PoPS/native imports")
+'''
+    result = subprocess.run([sys.executable, "-I", "-c", code, str(script)], cwd=tmp_path,
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "helper+oracle isolated without PoPS/native imports"
