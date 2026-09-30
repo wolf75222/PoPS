@@ -125,3 +125,13 @@ forged JUnit counts are refused by their exact consistency checks. Independent
 alternative mathematics and the original retained source/witness/JUnit/MPI links
 continue to pass. Full observations are retained in
 `evidence/native_saved_reception_independent_0a196a7.json`.
+
+The final reception additionally uses `--complete-witness-reseal` for two
+equation-only attacks. Each starts from another genuine private archive copy,
+perturbs its M26 pairing or M27 actual μ entry, updates that snapshot's hash in
+the genuine witness receipt, then updates both outer manifest records. These
+reach the scientific guards and are refused by `pairing_error≈.001` and
+`mu_error≈.001`, respectively. All fourteen attacks reject for the correct
+category, preserving the original twelve observations. The final evidence is
+`evidence/native_saved_reception_independent_0a196a7_complete.json`. No native
+payload in the principal archive has been modified.

@@ -174,6 +174,8 @@ def main():
     parser.add_argument("--checker", required=True, type=Path)
     parser.add_argument("--archive", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--complete-witness-reseal", action="store_true",
+                        help="also reseal saved-state witness digests for two equation-only corruptions")
     args = parser.parse_args()
     spec = importlib.util.spec_from_file_location("reviewed_saved_checker", args.checker)
     checker = importlib.util.module_from_spec(spec)
@@ -306,12 +308,30 @@ def main():
                required_reason=("saved", "receipt", "digest"))
     experiment("manifest_forged_failed_junit_count", forged_junit_summary, sealed=True,
                required_reason=("JUnit", "junit", "counts", "summary"))
+    if args.complete_witness_reseal:
+        def complete_reseal(root, case, edit):
+            changed = edit(root)
+            relative = str(Path(case["path"]).with_name("receipt.json"))
+            receipt = load_json(root / relative)
+            matched = [row for row in receipt["records"]
+                       if row["saved_state"] == Path(case["path"]).name]
+            if len(matched) != 1:
+                raise AssertionError("equation probe requires one genuine saved-state witness")
+            matched[0]["saved_state_sha256"] = digest(root / case["path"])
+            write_json(root / relative, receipt)
+            return changed + [relative]
+
+        experiment("fully_resealed_m26_pairing_equation", lambda root: complete_reseal(root, m26, m26_pairing),
+                   sealed=True, required_reason=("pairing_error",))
+        experiment("fully_resealed_m27_mu_equation", lambda root: complete_reseal(root, m27, m27_mu),
+                   sealed=True, required_reason=("mu_error", "chemical_equation_residual"))
     baseline = checker.check_archive(args.archive, recompute=True)
     report = {"checker_sha256": digest(args.checker),
               "archive_manifest_sha256": digest(args.archive / "manifest.json"),
               "baseline": baseline, "independent_receipt_link_audit": audit_receipt_links(args.archive),
               "independent_scientific_audit": audit_scientific_equations(args.archive, manifest["scientific_states"]),
               "injections": observations,
+              "complete_witness_reseal": args.complete_witness_reseal,
               "limits": ["No native/JIT/MPI rerun; verifies genuine retained arrays only.",
                          "Manifest digests are integrity links, not external signatures.",
                          "Two unsealed integrity, four finite scientific, two nonfinite ledger and four metadata probes; no exhaustive malicious-file/ZIP parser audit."]}
