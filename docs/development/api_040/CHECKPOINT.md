@@ -3,7 +3,7 @@
 The requested migration is **in progress**. Source implementation, native
 reception, scientific witnesses and backend qualification are recorded separately.
 
-## Current integration and reception: SDK20d native C++, SDK7b saved-state physics (2026-09-30)
+## Current integration and reception: SDK20d native C++/Dim3, SDK7b saved-state physics (2026-09-30)
 
 Migration remains open. The real installed Dim2 package now builds successfully
 with native ABI5 and SDK signature
@@ -46,7 +46,11 @@ The legitimate frozen Program loses its live block registry, while the new
 issuance guard still asks that registry for its port. This is a compiler-boundary
 defect, not a received physical-global run. A prepared immutable authority
 transport across the detached boundary is being implemented and independently
-reviewed; the live port guard stays strict. The red receipt remains at
+reviewed; the live port guard stays strict. The first private fix preserves
+IR/manifest/C++ bytes, but independent review proved that a lowered primitive
+recipe could still be substituted without changing the Module hash. This
+remaining consumed-recipe authority defect is being repaired before integration.
+The red receipt remains at
 `outputs/installed-original-field-physical-global-feedback-dim2-sdk20d-20260930`
 (log `3d6202ef7869677a3ac9c072b34c1e6fc83c2e6c7f9daa5e3fd044f7f27449fa`).
 
@@ -106,14 +110,35 @@ T5 owner pins SHA
 authenticates 40 actual phase/checkpoint/identity files. The independent state
 error is at most `2.220446049250313e-16`; inventory/ledger residuals are below
 `8.31e-17`/`1.96e-18`. Nine fully resealed scientific countermodels are refused.
-No PoPS module is imported by either offline physics verifier.
+No PoPS module is imported by either offline physics verifier. The portable
+T5 archive's stricter checker is independently reviewed and integrated. A new
+copy is received under external manifest SHA
+`773f46e397d6bcdedad2cdce3330063f90c29ca1ed61c8df5632c9fcc8a04187` at
+`outputs/native-t5-sdk7b-portable-archive-closed-protocol-20260930`.
+All forty actual native pins and all forty-seven non-checker payload files are
+unchanged; the original archive under SHA854974 remains preserved. Two defects
+were proved against the original unchanged seal (same-content internal symlink,
+extra empty directory); the new checker refuses both. Eight protocol controls
+and twelve fully resealed scientific countermodels are rejected. This remains
+historical serial SDK7b feedback, not a received physical-global/AMR run.
+
+The first actual Dim3 build succeeds with SDK20d; its DSO SHA is
+`0ed823f5f1639172e9913a5fe5e1f15755a70a153e128e7a0f3a1274183c1bdb`.
+Two CoupledGradient Fourier cases pass in serial and on each of two MPI ranks,
+with no skips. Before/after authentication, source/test parity and native hashes
+remain unchanged. Independent offline graph/Fourier/ledger calculations receive
+3,456 face incidences per permutation; max state/flux errors are
+`4.440892098500626e-16`/`6.661338147750939e-16`. Root authenticated all1,109
+installed source/header hashes against the exact executed Git48871851 revision.
+External identity/manifest pins and reproduction commands are recorded in
+`coupled_gradient_dim3_sdk20d_native_reception.md`. This is one discrete Uniform
+Fourier witness, not continuum convergence or an AMR/GPU/official-matrix claim.
 
 Public ALE Dim1 now has the integrated saved-state/offline reception fixtures
 (`ecb0fc51`); fourteen physical cases and externally sealed geometry/clock/state
-files still await native execution. Its source/protocol tests alone do not
-qualify a backend. The first genuine Dim3
-package and Fourier reception, and the AMR original nonlinear-field connector
-remain open. The AMR implementation is extending the true conservative
+files are now being received on a freshly rebuilt Dim1 SDK20d module. Its
+source/protocol tests alone do not qualify a backend. The AMR original
+nonlinear-field connector remains open. The AMR implementation extends the true conservative
 full-hierarchy provider, with covered-cell measures and original residual
 acceptance; no independent per-level solve is called a composite solve. The
 private AMR capability is independently received at source/host scope, including
