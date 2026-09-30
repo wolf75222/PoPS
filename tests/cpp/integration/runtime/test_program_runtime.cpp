@@ -2842,6 +2842,7 @@ TEST(ProgramRuntime, NestedChildCommitThenParentRejectRestoresDurationAndExchang
 #include "moving_interval_projection_tests.inc"
 #include "moving_interval_codec_independent_review.inc"
 #include "integral_candidate_capture_tests.inc"
+#include "../../../review/sol61_t5_public_native_capture.inc"
 
 TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentRollback) {
   if constexpr (kNativeDimension != 1) {
