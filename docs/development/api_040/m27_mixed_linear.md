@@ -73,5 +73,8 @@ vectors, with the same 400-iteration budget and `rel_tol=abs_tol=1e-12`.
 Neither original equation nor any saved-state acceptance threshold changed.
 This is an explicit solver configuration for the witness, not a production
 DOF limit or a dense PDE matrix. The successful receipt is
-`outputs/installed-m27-native-dim1-restart128-fc0-20260930`; MPI2 reception
-is separate and still pending at this edit.
+`outputs/installed-m27-native-dim1-restart128-fc0-20260930`. The separate
+MPI2 group `outputs/installed-m26-m27-mpi2-fc0-20260930` passed three tests
+on both ranks, with installation authentication before and after, unchanged
+test sources and identical rank test inventories. This group also receives
+the finite M26 witness; it does not qualify its aggregation-diffusion PDE.
