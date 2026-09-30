@@ -221,8 +221,10 @@ def _owner():
     )
 
 
-def test_checkpoint_mailbox_preflight_is_exact_and_does_not_modify_the_owner():
+@pytest.mark.parametrize("wire", (b"POPSEX01", b"POPSEX02", b"POPSEX03"))
+def test_checkpoint_mailbox_preflight_is_exact_and_does_not_modify_the_owner(wire):
     owner = _owner()
+    owner._s.image = wire + bytes(8)
     payload = {}
     capture_checkpoint_continuation(owner, payload)
     assert prepare_checkpoint_continuation(owner, payload) == owner._s.image

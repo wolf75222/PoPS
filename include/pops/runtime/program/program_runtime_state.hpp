@@ -630,6 +630,7 @@ struct ProgramRuntimeState {
     std::map<int, RuntimeParams> block_params;
     std::map<std::string, Real> diagnostics;
     AcceptedExchangeLedger accepted_exchanges;
+    std::map<std::string, MovingIntervalGeometry<Dim>> moving_interval_geometry;
     CacheManager<Dim> cache;
     HistoryManager<Dim> history;
     bool artifact_backed = false;
@@ -828,6 +829,7 @@ struct ProgramRuntimeState {
                                        block_params_,
                                        diagnostics_,
                                        accepted_exchanges_,
+                                       moving_interval_geometry_,
                                        cache_,
                                        hist_,
                                        artifact_backed_};
@@ -841,6 +843,7 @@ struct ProgramRuntimeState {
   void reset_artifact_candidate_state() {
     diagnostics_.clear();
     accepted_exchanges_.reset_artifact();
+    moving_interval_geometry_.clear();
     cache_.clear();
     hist_ = HistoryManager<Dim>{};
   }
@@ -867,6 +870,7 @@ struct ProgramRuntimeState {
     block_params_ = std::move(snapshot.block_params);
     diagnostics_ = std::move(snapshot.diagnostics);
     accepted_exchanges_.swap(snapshot.accepted_exchanges);
+    moving_interval_geometry_.swap(snapshot.moving_interval_geometry);
     cache_ = std::move(snapshot.cache);
     hist_ = std::move(snapshot.history);
     artifact_backed_ = snapshot.artifact_backed;

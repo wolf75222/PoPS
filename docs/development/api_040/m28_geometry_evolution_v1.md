@@ -96,9 +96,9 @@ worktree. Source syntax is checked against the actual Kokkos/OpenMP/MPICH header
 
 The new carrier changes `ProgramRuntimeState` storage layout. Central integration
 must rebuild host/generated code together and advance native ABI coherently;
-there is no compatible mixed installation. No checkpoint codec for the carrier
-is added in this tranche, and no ALE checkpoint/restart or persisted scientific
-receipt is qualified. Public requests remain refused until common Program
+there is no compatible mixed installation. The initial carrier tranche did not
+include its checkpoint codec; the native envelope described below adds that
+storage path. Public requests remain refused until common Program
 lowering, saved moving geometry and restart can authenticate this carrier.
 The SDK manifest includes both the primitive and carrier/include fragment.
 # Collective publication review
@@ -149,14 +149,8 @@ Accepted geometry retains an independent receipt: previous coordinates,
 previous measured volumes and physical state, integrated source, physical face
 flux and density traces, runtime point, frame and quadrature. The native probe
 recomputes Reynolds and GCL directly from these stored values without calling
-the update primitive. Checkpoint codecs and public observer exposure remain
+the update primitive. Public observer exposure and native body lowering remain
 required before Python ALE acceptance is enabled.
-
-Until that coupled wire codec exists, native exchange checkpoint export and
-validation/restore explicitly refuse a nonempty moving-geometry carrier. This
-also covers externally authored C++ Programs. The mandatory Uniform checkpoint
-continuation capture reaches this refusal before publishing a checkpoint file;
-an image that silently drops the accepted moving geometry is forbidden.
 
 ## Generic native face and cell projection
 
@@ -201,7 +195,33 @@ its geometry while retaining a publishable state.
 The authoring layer retains the original Equation operator handle. It neither
 executes a numerical stage in Python nor grants a native capability. The
 production geometry gate remains closed until this IR is connected to prepared
-native model/source bodies, coupled observers and the geometry/receipt restart
-codec. Tests cover scalar and permuted vector states, unchanged serialization
+native model/source bodies and coupled observers. Tests cover scalar and permuted vector states, unchanged serialization
 on refused authoring, exact frame/clock ownership and constant-preserving
 projection weights. They are source/contract checks, not public ALE execution.
+
+## Rank-local accepted geometry checkpoint envelope
+
+`POPSEX03` wraps the existing accepted exchange image only when the installed
+Program owns moving geometry. Empty moving maps retain the exact `POPSEX01` or
+`POPSEX02` wire behavior. The envelope stores valid physical cells and the
+actual old/current measures, old/current face coordinates, swept volumes,
+physical flux, density trace and integrated source, together with the full
+interval point, frame, quadrature, generation and geometry tolerance. Ghosts
+are runtime reconstruction data and are initialized to zero on decode.
+
+Decode requires the installed identity, runtime owner, frame, components,
+every global box and owner, rank space and rank-local patch order. Counts are
+bounded by both that authority and the byte image. It independently recomputes
+endpoint displacement, GCL and Reynolds balance and matches every latest
+receipt quantity against its exact accepted exchange occurrence. Restore
+authenticates global time/topology metadata before constructing the shared-face
+broadcast schedule; local preparation and host copies vote their failures
+before the next collective. Shared endpoint values must agree exactly.
+
+Physical state must already have been restored from the same checkpoint.
+Publication compares it with the envelope's independent accepted state before
+swapping geometry and exchanges inside the existing restart transaction.
+Export refuses provisional step/restart transactions. A failed install also
+restores its deep-owned geometry map, and successful replacement clears stale
+geometry declarations. Source syntax checks and native test cases are provided;
+execution and persisted restart qualification require the central rebuilt SDK.

@@ -33,7 +33,7 @@ def capture_checkpoint_continuation(owner, payload):
         plan.require("restart")
         plan_json = plan._json
         local = owner._s._checkpoint_program_exchanges()
-        if type(local) is not bytes or not local.startswith((b"POPSEX01", b"POPSEX02")):
+        if type(local) is not bytes or not local.startswith((b"POPSEX01", b"POPSEX02", b"POPSEX03")):
             raise RuntimeError("checkpoint accepted exchange mailbox is not an exact native image")
     except BaseException as exc:
         error = exc
@@ -153,6 +153,17 @@ def exchange_checkpoint_byte_capacity(program, *, cells, dimension, rank_capacit
                       for name in integrals)
     capacity = rank_capacity * (24 + record_count * record_bytes + state_bytes) \
         + 8 * (rank_capacity + 1)
+    geometry_states = getattr(program, "_geometry_states", {})
+    for value in geometry_states.values():
+        components = len(value.space.components)
+        # POPSEX03 keeps current/previous/source physical fields, two measures,
+        # and old/new/swept/physical/trace faces, including each patch endpoint.
+        # A partition can contain at most one nonempty patch per resolved cell.
+        field_words = (3 * components + 2) * max(1, sum(cells))
+        face_words = (3 + 2 * components) * 2 * max(1, sum(cells))
+        topology_words = (7 + 3 * dimension) * max(1, sum(cells)) + 16
+        capacity += rank_capacity * (8 * (field_words + face_words + 5 * topology_words)
+                                     + 12 * max_text + 2048)
     if capacity > (1 << 63) - 1:
         raise OverflowError("resolved accepted exchange checkpoint capacity exceeds int64")
     return capacity

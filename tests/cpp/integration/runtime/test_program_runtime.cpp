@@ -590,9 +590,15 @@ TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
   state.seed_params(0, {3.0});
   state.dt_bound_ = [](Real cfl) { return Real(0.5) * cfl; };
   state.artifact_backed_ = true;
+  runtime::program::MovingIntervalGeometry<kNativeDimension> installed_geometry;
+  installed_geometry.physical_frame = "accepted-frame";
+  installed_geometry.generation = 17;
+  state.moving_interval_geometry_.emplace("accepted-mesh",std::move(installed_geometry));
   const auto accepted_generation = state.step_install_generation_;
 
   auto interrupted = state.capture_artifact_step_install();
+  state.reset_artifact_candidate_state();
+  EXPECT_TRUE(state.moving_interval_geometry_.empty());
   state.operator_authorities_ = {{{9, 8, 7, 6}}};
   state.install_unverified_step([&](double) { ++new_steps; });
   state.rollback_artifact_step_install(std::move(interrupted));
@@ -604,6 +610,9 @@ TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
             (std::vector<std::array<std::uint64_t, 4>>{{{1, 2, 3, 4}}}));
   EXPECT_EQ(state.installed_hash_, "accepted-artifact");
   EXPECT_EQ(state.block_map_, (std::vector<int>{2}));
+  ASSERT_EQ(state.moving_interval_geometry_.size(),1u);
+  EXPECT_EQ(state.moving_interval_geometry_.at("accepted-mesh").physical_frame,"accepted-frame");
+  EXPECT_EQ(state.moving_interval_geometry_.at("accepted-mesh").generation,17u);
   EXPECT_EQ(state.block_params_.size(), 1u);
   ASSERT_TRUE(state.dt_bound_);
   EXPECT_DOUBLE_EQ(state.dt_bound_(0.4), 0.2);
@@ -2856,7 +2865,10 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
     auto ctx = runtime::program::make_program_execution_provider(&sim);
     ctx->configure_primary_clock("ale-clock");
     ctx->initialize_moving_interval_geometry("mesh", 0, "unit-interval");
-    EXPECT_THROW(sim.checkpoint_program_exchanges(), std::logic_error);
+    const auto initial_geometry_image=sim.checkpoint_program_exchanges();
+    ASSERT_GE(initial_geometry_image.size(),8u);
+    EXPECT_EQ(std::string(initial_geometry_image.begin(),initial_geometry_image.begin()+8),"POPSEX03");
+    EXPECT_NO_THROW(sim.validate_checkpoint_program_exchanges(initial_geometry_image));
     EXPECT_ANY_THROW(ctx->commit_many({{&ctx->state(0), &ctx->state(0)}}));
     const auto original = sim.get_state("gas");
     const auto original_geometry = ctx->moving_interval_geometry("mesh");
@@ -2922,6 +2934,20 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
         if (change_geometry_after_prepare == 3 && !mutable_geometry.coordinates.empty())
           mutable_geometry.coordinates.front().set_val(Real(9));
         if (change_geometry_after_prepare == 4) mutable_geometry.last_interval = "forged-interval";
+        if (change_geometry_after_prepare == 5) {
+          MultiFab<kNativeDimension> changed(mutable_geometry.measures.layout(),
+              mutable_geometry.measures.distribution(), mutable_geometry.measures.local_rank(),
+              2, mutable_geometry.measures.ghosts());
+          changed.set_val(Real(0));
+          for (std::size_t patch=0; patch<changed.local_size(); ++patch) {
+            const auto old=mutable_geometry.measures.fab(patch).view();
+            const auto replacement=changed.fab(patch).view();
+            for_each_cell(changed.box(patch),[=] POPS_HD(const Index<kNativeDimension>& cell) {
+              replacement(cell,0)=old(cell,0);
+            });
+          }
+          Kokkos::fence(); mutable_geometry.measures=std::move(changed);
+        }
       }
       ctx->commit_moving_interval(proposal);
       if (reject_after_publication)
@@ -2935,6 +2961,7 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
       const auto& actual = ctx->moving_interval_geometry("mesh");
       EXPECT_EQ(actual.generation, 0u);
       EXPECT_EQ(actual.physical_frame, "unit-interval");
+      EXPECT_EQ(actual.measures.ncomp(),1);
       EXPECT_TRUE(actual.last_interval.empty());
       EXPECT_FALSE(actual.last_receipt.has_value());
       EXPECT_TRUE(sim.program_exchange_records().empty());
@@ -2965,7 +2992,7 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
     EXPECT_ANY_THROW(sim.step(.19));
     expect_original();
     change_input_after_prepare = false;
-    for (int mutation : {1, 2, 3, 4}) {
+    for (int mutation : {1, 2, 3, 4, 5}) {
       change_geometry_after_prepare = mutation;
       EXPECT_ANY_THROW(sim.step(.19));
       expect_original();
@@ -2976,6 +3003,7 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
     const auto child_interval = ctx->moving_interval_geometry("mesh").last_interval;
     sim.commit_step_transaction();
     sim.finalize_step_transaction();
+    EXPECT_THROW(sim.checkpoint_program_exchanges(),std::logic_error);
     sim.rollback_step_transaction();
     expect_original();
     sim.begin_step_transaction();
@@ -3020,6 +3048,27 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
     }
     sim.commit_step_transaction();
     sim.finalize_step_transaction();
+    const auto saved_geometry_image=sim.checkpoint_program_exchanges();
+    EXPECT_NO_THROW(sim.validate_checkpoint_program_exchanges(saved_geometry_image));
+    auto truncated_geometry_image=saved_geometry_image;
+    if (sim.prepared_boundary_execution_lane().rank()==0) truncated_geometry_image.pop_back();
+    sim.begin_restart_transaction();
+    EXPECT_ANY_THROW(sim.restore_checkpoint_program_exchanges(truncated_geometry_image));
+    sim.rollback_restart_transaction();
+    EXPECT_EQ(sim.checkpoint_program_exchanges(),saved_geometry_image);
+    sim.begin_restart_transaction();
+    ctx->state(0).set_val(Real(1));
+    EXPECT_ANY_THROW(sim.restore_checkpoint_program_exchanges(saved_geometry_image));
+    sim.rollback_restart_transaction();
+    EXPECT_EQ(sim.checkpoint_program_exchanges(),saved_geometry_image);
+    sim.begin_restart_transaction();
+    ctx->runtime_state().moving_interval_geometry_.at("mesh")=original_geometry;
+    EXPECT_NO_THROW(sim.restore_checkpoint_program_exchanges(saved_geometry_image));
+    EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation,1u);
+    ASSERT_TRUE(ctx->moving_interval_geometry("mesh").last_receipt.has_value());
+    EXPECT_DOUBLE_EQ(ctx->moving_interval_geometry("mesh").last_receipt->point.dt,.3);
+    sim.rollback_restart_transaction();
+    EXPECT_EQ(sim.checkpoint_program_exchanges(),saved_geometry_image);
   }
 }
 

@@ -73,6 +73,7 @@ template <int Dim>
 struct MovingIntervalReceipt {
   runtime::multiblock::BoundaryEvaluationPoint point;
   std::string physical_frame, quadrature_identity;
+  Real geometry_tolerance = 0;
   MultiFab<Dim> previous_state, previous_measures, integrated_source;
   std::vector<nd::FaceField<Dim>> previous_coordinates, physical_flux, face_density;
 };

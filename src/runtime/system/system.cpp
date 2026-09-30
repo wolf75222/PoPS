@@ -8,6 +8,7 @@
 #include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/program/collective_step_rejection.hpp>
+#include <pops/runtime/program/moving_interval_checkpoint.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -274,35 +275,50 @@ Real System<Dim>::consume_program_external_trace(
 
 template <int Dim>
 std::vector<std::uint8_t> System<Dim>::checkpoint_program_exchanges() const {
-  if (!p_->program_.moving_interval_geometry_.empty())
-    throw std::logic_error("moving geometry checkpoint export requires the coupled geometry/receipt codec; "
-                           "omitting accepted moving state is forbidden");
+  if (!p_->program_.moving_interval_geometry_.empty()) {
+    if (step_transaction_depth()!=0 || p_->external_restart_transaction_)
+      throw std::logic_error("moving geometry checkpoint export requires fully accepted state");
+    return runtime::program::checkpoint_moving_intervals(
+        p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
+        [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; });
+  }
   return p_->program_.accepted_exchanges_.checkpoint();
 }
 
 template <int Dim>
 void System<Dim>::validate_checkpoint_program_exchanges(
     std::span<const std::uint8_t> bytes) const {
-  if (!p_->program_.moving_interval_geometry_.empty())
-    throw std::logic_error("moving geometry checkpoint restore requires the coupled geometry/receipt codec");
-  const auto candidate = runtime::program::AcceptedExchangeLedger::from_checkpoint(bytes);
-  if (!candidate.same_integral_declarations(p_->program_.accepted_exchanges_))
-    throw std::invalid_argument("accepted exchange checkpoint lacks exact integral-state authority");
+  (void)runtime::program::read_moving_checkpoint(
+      bytes, p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
+      [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; });
 }
 
 template <int Dim>
 void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) {
   const auto& lane = prepared_boundary_execution_lane();
-  std::optional<runtime::program::AcceptedExchangeLedger> candidate;
+  std::optional<runtime::program::MovingCheckpointCandidate<Dim>> candidate;
   std::exception_ptr error;
   try {
     if (!p_->external_restart_transaction_)
       throw std::logic_error("accepted exchange restore requires the native restart transaction");
-    if (!p_->program_.moving_interval_geometry_.empty())
-      throw std::logic_error("moving geometry checkpoint restore requires the coupled geometry/receipt codec");
-    candidate.emplace(runtime::program::AcceptedExchangeLedger::from_checkpoint(bytes));
-    if (!candidate->same_integral_declarations(p_->program_.accepted_exchanges_))
-      throw std::invalid_argument("accepted exchange checkpoint lacks exact integral-state authority");
+    candidate.emplace(runtime::program::read_moving_checkpoint(
+        bytes, p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
+        [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; }));
+    for (const auto& [block, expected] : candidate->states) {
+      const auto& restored = p_->sp.at(static_cast<std::size_t>(block)).U;
+      for (std::size_t patch=0; patch<restored.local_size(); ++patch) {
+        auto actual=restored.fab(patch).create_host_mirror(); restored.fab(patch).copy_to_host(actual);
+        auto saved=expected.fab(patch).create_host_mirror(); expected.fab(patch).copy_to_host(saved);
+        runtime::system::marshaling::for_each_host_index(restored.box(patch), [&](const Index<Dim>& index,std::size_t) {
+          for (int component=0; component<restored.ncomp(); ++component) {
+            const auto a=runtime::system::marshaling::storage_ordinal(restored.fab(patch),index,component);
+            const auto b=runtime::system::marshaling::storage_ordinal(expected.fab(patch),index,component);
+            if (actual(a)!=saved(b)) throw std::invalid_argument(
+                "moving checkpoint physical state must be restored together with its geometry/receipt");
+          }
+        });
+      }
+    }
   } catch (...) {
     error = std::current_exception();
   }
@@ -311,8 +327,11 @@ void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint
       std::rethrow_exception(error);
     throw std::runtime_error("accepted exchange restore preparation failed collectively");
   }
-  runtime::program::require_integral_values_agree_collectively(*candidate, lane);
-  p_->program_.accepted_exchanges_.swap(*candidate);
+  runtime::program::require_integral_values_agree_collectively(candidate->exchanges, lane);
+  if (!candidate->geometry.empty())
+    runtime::program::require_moving_checkpoint_agrees_collectively(*candidate, lane);
+  p_->program_.accepted_exchanges_.swap(candidate->exchanges);
+  p_->program_.moving_interval_geometry_.swap(candidate->geometry);
 }
 
 template <int Dim>

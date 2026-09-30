@@ -138,6 +138,8 @@
           throw std::invalid_argument("moving geometry belongs to a different physical state");
         mf_arith_detail::require_same_layout(input, integrated_source, "moving source");
         mf_arith_detail::require_same_layout(input, accepted.measures, "moving measure", false);
+        if (accepted.measures.ncomp()!=1)
+          throw std::invalid_argument("moving accepted measure requires exactly one component");
         for (const auto* values : {&proposed_coordinates, &swept_volumes,
                                    &integrated_physical_flux, &face_density})
           if (values->size() != input.local_size())
@@ -168,6 +170,7 @@
         receipt.point = evaluation.point_;
         receipt.physical_frame = evaluation.physical_frame_;
         receipt.quadrature_identity = evaluation.quadrature_;
+        receipt.geometry_tolerance = geometry_tolerance;
         receipt.previous_state = evaluation.initial_state_;
         receipt.previous_measures = accepted.measures;
         receipt.previous_coordinates = accepted.coordinates;
@@ -441,7 +444,7 @@
       mf_arith_detail::require_same_layout(*state_target, proposal.initial_state_, "moving SSA input");
       const auto& receipt = proposal.geometry_.last_receipt.value();
       mf_arith_detail::require_same_layout(geometry_target->measures, receipt.previous_measures,
-                                          "moving SSA geometry input", false);
+                                          "moving SSA geometry input");
       if (geometry_target->coordinates.size() != receipt.previous_coordinates.size())
         throw std::invalid_argument("moving SSA geometry input changed its coordinate ownership");
       for (std::size_t patch = 0; patch < geometry_target->coordinates.size(); ++patch)

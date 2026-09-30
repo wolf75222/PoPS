@@ -335,6 +335,7 @@ sdk-root pops/runtime/program/program_context.hpp
 sdk-support pops/runtime/program/program_context_moving_interval.inc
 sdk-support pops/runtime/program/program_context_moving_projection.inc
 sdk-support pops/runtime/program/moving_interval_geometry.hpp
+sdk-support pops/runtime/program/moving_interval_checkpoint.hpp
 sdk-root pops/runtime/program/prepared_principal_flux.hpp
 sdk-support pops/runtime/program/prepared_resource_cache.hpp
 sdk-support pops/runtime/program/prepared_resource_lifetime.hpp
