@@ -82,6 +82,8 @@ sys.path.insert(0, "python")
 import pytest
 raise SystemExit(pytest.main(["-q",
  "tests/python/unit/codegen/test_m19_product_support_contracts.py",
+ "tests/python/unit/codegen/test_m19_product_mpi_publication.py",
+ "tests/python/unit/codegen/test_mpi_compile_once.py",
  "tests/python/unit/codegen/test_generic_physical_map_contracts.py",
  "tests/python/unit/codegen/test_physical_support_mapping.py",
  "tests/python/unit/runtime/test_physical_mapping_rejection.py",
@@ -103,7 +105,33 @@ mpiexec -n 2 env -u PYTHONPATH POPS_KEEP_GENERATED=1 sh -c 'python -m pytest -q 
 The ROOT runner must authenticate its actual launcher rank variable and distinct
 rank XML paths. The C++ owner runs `PhysicalSupportTransfer.*` and the existing
 MPI integration target `test_mpi_system_layout_transfer` in the rebuilt tree.
-Local source reception: **38 PASS**, fourteen native cases deselected; Ruff and
+Local source reception after the MPI fixture correction: **55 PASS**, fourteen native cases deselected; Ruff and
 diff checks pass. No C++ compilation/native/JIT/install occurred here. GPU, complete kinetic PDE,
 velocity-boundary budgets, field compatibility/gauge and continuum refinement
 remain unreceived.
+
+## MPI fixture publication correction
+
+The first fixture gel `357e2c2` incorrectly used rank-local `tmp_path` for both
+provider resolution/compilation and checkpoints. The real composite checkpoint
+validator correctly refuses different targets across ranks. No production fix or
+native tolerance change is needed.
+
+The corrected fixture selects the real Dim2 module and communicator before
+resolution. `collective_directory` publishes rank0's exact base path. Rank0 alone
+emits provider sources/manifests; peers load the published source package and
+authenticate the exact physical map and its common lowered source bytes without
+rewriting files. `compile_resolved_plan_once` publishes rank0's isolated cache
+and complete artifact identity; peers perform verified cache loading. The typed
+`artifact_execution_context` authenticates the actual communicator before bind.
+The receipt directory is published collectively. `_checkpoint_target` requires
+exact common canonical paths on all ranks before even reading state or calling
+checkpoint; an escaping phase or divergent path refuses collectively.
+
+`test_m19_product_mpi_publication.py` exercises the true source package publication
+and read-only peer resolution, true preparation/compile-once helper with only
+communication/compiler substituted, root/peer rank-local caches, restored peer
+cache environment, exact paths on three ranks including an empty peer, and
+pre-native refusal of divergence/escape. It does not execute MPI or authenticate
+a fake test artifact as a native package. Source/host results and native pending
+remain separate.

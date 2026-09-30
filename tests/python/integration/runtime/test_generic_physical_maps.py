@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def resolve_generic_maps(directory, *, reverse=False, nx=7, nv=4,
-                         components=("first", "second"), weights=None):
+                         components=("first", "second"), weights=None,
+                         provider_factory=native_physical_mapping):
     if any(type(n) is not int or n <= 0 for n in (nx, nv)):
         raise ValueError("fixture cell counts must be positive integers")
     components = tuple(components)
@@ -94,7 +95,7 @@ def resolve_generic_maps(directory, *, reverse=False, nx=7, nv=4,
             operation=LayoutMappingOperation(physical_map.operation_abi), synchronization=synchronization,
             physical_map=physical_map)
         requirements.append(requirement)
-    providers = tuple(native_physical_mapping(row, directory) for row in requirements)
+    providers = tuple(provider_factory(row, directory) for row in requirements)
     layout = builder.resolve(**subjects.to_dict(), providers=providers)
     resolved = pops.resolve(validated, layout=layout,
         layout_providers={layouts["population"]: phase_grid, layouts["integral"]: physical_grid,
