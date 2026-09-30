@@ -276,3 +276,28 @@ TEST(CompositeGeneralField, OriginalApplyOnlyFiniteMatrixDoesNotClaimLinearSpdSo
   auto rejected = provider->execute_collectively({Real(1e-10), Real(1e-12), 100}, lane);
   EXPECT_EQ(rejected.consume(SolveConsumption::kFailRun).status, SolveStatus::kInvalidEvaluation);
 }
+
+TEST(CompositeGeneralField, OriginalAmrResidualRefusesNoncanonicalStageFractionsBeforePreparation) {
+  auto lane = ExecutionLane::duplicate_world_collectively("original-amr-stage-fractions");
+  auto provider = original_field_provider(lane, 16, {0, 1, 2});
+  auto capture = original_tower(*provider);
+  fill_constant(capture, {1, 2, 3});
+  PreparedResourceCache cache;
+  auto authority = original_authority(provider.get(), cache.begin_attempt(lane));
+  const std::array<const Solver::hierarchy_type*, 1> inputs{&capture};
+  auto prepared =
+      OriginalResidual::prepare(provider, authority, inputs, original_controls(), Real(1e-5), lane);
+  for (auto fraction : {std::array<std::int64_t, 2>{0, 0}, {2, 1}, {2, 4}, {-1, 1}}) {
+    ASSERT_NO_THROW(prepared->require_authority(authority, lane));
+    auto forged = authority;
+    if (lane.rank() == 0)
+      for (auto& point : forged.points) {
+        point.stage_fraction.numerator = fraction[0];
+        point.stage_fraction.denominator = fraction[1];
+      }
+    EXPECT_THROW(
+        OriginalResidual::prepare(provider, forged, inputs, original_controls(), Real(1e-5), lane),
+        std::exception);
+    EXPECT_NO_THROW(prepared->require_authority(authority, lane));
+  }
+}

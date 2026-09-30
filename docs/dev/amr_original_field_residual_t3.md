@@ -40,6 +40,8 @@ The invocation authority contains owner, parent and per-level attempt leases,
 topology/materialization generation, original-equation identity, ordered capture
 identities/widths and complete per-level evaluation points. The current v1
 invocation requires synchronized physical time, duration and stage fractions.
+Stage fractions are revalidated as canonical exact rationals within `[0,1]`,
+including when their public numerator/denominator members were mutated.
 Preparation and candidate access compare these exact authorities collectively.
 Coefficients have a revocable preparation generation: another preparation
 invalidates an existing snapshot before any entry changes, even if it then fails.

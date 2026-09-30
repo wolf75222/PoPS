@@ -249,6 +249,12 @@ class PreparedAmrFieldResidual final {
     std::vector<Real> measures;
     for (int level = 0; level < levels; ++level) {
       const auto& p = authority_.points[level];
+      if (p.stage_fraction.denominator <= 0 || p.stage_fraction.numerator < 0 ||
+          p.stage_fraction.numerator > p.stage_fraction.denominator ||
+          ::pops::amr::Rational(p.stage_fraction.numerator, p.stage_fraction.denominator) !=
+              p.stage_fraction)
+        throw std::invalid_argument(
+            "original field v1 requires a canonical stage fraction in [0,1]");
       if (p.level != level || p.clock.empty() || p.tick < 0 || p.substep < 0 || p.stage < 0 ||
           !std::isfinite(p.dt) || p.dt <= 0 || !std::isfinite(p.physical_time) ||
           p.graph_identity.empty() || p.rate_identity.empty() || p.application_identity.empty())
