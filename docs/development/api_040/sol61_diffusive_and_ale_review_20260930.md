@@ -77,3 +77,30 @@ The ALE probe accepts an optional replacement commit argument and checks whether
 the same injected local failure reaches a collective error vote. It compiles one
 small host translation unit; it does not load a native extension. Extracted
 snapshots, XML results and executable remain untracked evidence, not product code.
+
+## Corrective reception and temporal publication boundary
+
+`b7dcaa6a33166f425ee0bfae39f3b9e3cbc353ef` resolves both collective findings:
+the exact publication v2 contains boxes/owners/rank-space/domain/periodicity/lane;
+local view/launch/reduction/fence exceptions converge before the invalid-value
+vote. Replaying the same extracted-phase injection confirms **one collective
+error vote and zero numeric votes** after the injected launch failure. The same
+numeric seam passes on `ed8b4e09358234053d7d47bbf21088d525002cec`.
+These are source/host control-flow receptions; actual MPI execution stays open.
+
+The latter commit calls the existing generic prepared physical-recovery validator
+on the candidate before ledger append/swaps and refuses static EB masks. Its
+placement addresses the bypass in 88c755d; physical rejection execution is
+independently received by the frontier reviewer/parent, not by this numeric probe.
+
+The next temporal resource carrier must authenticate interval authority rather
+than relabel raw arrays with the current point. `boundary_evaluation_point(0)`
+includes stage/child phase, but `current_dt_` is the outer step duration.
+Swept-interval amount algebra consumes an endpoint-to-endpoint interval. Bind
+explicit start/end phases and actual interval duration/quadrature, accepted
+geometry generation, physical state/layout/frame and attempt lifetime to an
+owning proposal. Reject stale resources before numeric/ledger/state publication.
+Until partial-interval rules exist, reject nonzero stage/partial child phase
+instead of applying a full-interval swept update at an intermediate point. A
+point stamp created at consumption cannot establish the preparation time of
+physical flux, face reconstruction or source quadrature.

@@ -19,6 +19,9 @@ source = subprocess.check_output([
 ], cwd=ROOT, text=True)
 start = source.index("      Real invalid = 0;")
 end = source.index("      stage_exchange_batch", start)
+physical_guard = source.find("      // Preserve the physical block", start, end)
+if physical_guard != -1:
+    end = physical_guard  # This probe qualifies only the numeric collective seam.
 body = source[start:end]
 has_local_guard = re.search(r"\bcatch\b", body) is not None
 host = r'''
