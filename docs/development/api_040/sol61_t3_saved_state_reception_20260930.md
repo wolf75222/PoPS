@@ -4,9 +4,27 @@ Date: 30 September 2026. GPT-6.1 Sol. Review worktree
 `PoPS-sol61-t3-saved-state-oracle`, base `45cb04ea53745f24b5df51cd60454657d59d78fc`.
 No production, installed environment, SDK or author checkout is modified.
 
+**Received against external owner pins.** Root independently recalculated 70
+files and correlated 2210 source-manifest entries against Git archives of the
+two historical commits. The independent worker then ran the frozen oracle with
+the owner pins SHA supplied by Root, and obtained `status: received` for all six
+actual saved datasets. The resulting JSON is byte-identical to Root's separate
+execution. No installed PoPS code or new native solver execution is used by the
+offline verifier.
+
+External owner file:
+`outputs/native-original-field-sdk7b-root-owner-pins-20260930.json`, workspace
+relative, SHA
+`a5496e2c2d8313918b17fe0602d580118023b113a8af67f3558e95ab2745c07c`.
+Frozen actual reception JSON:
+`sol61_t3_saved_state_received_20260930.json`, adjacent to this report, SHA
+`8af5d25dd84a6278b8cfca07601e4cd9549fbc0e0ace973ace2358970e8450d1`.
+Executing oracle SHA:
+`46bbb326c5b98b3d2376a93034331d0101d67bc16ce5ad0534b6c1dc2f0353df`.
+
 ## Inputs and authority
 
-The proposed inventory is deliberately **unsealed**. It is not owner authority
+The proposed inventory remains deliberately **unsealed**. It is not owner authority
 and cannot produce a positive authenticated reception through `verify`.
 Root must independently recalculate/correlate its file pins, change authority to
 `root-reviewed`, and supply the resulting pins SHA externally. The oracle
@@ -39,8 +57,8 @@ and physical fixture SHA
 `54fc68f192616aa1a93db9c0d695e2f51f61a283226c5c8ccbf2aa0784efe346`.
 The source manifest file digest is
 `498eb240f2b9f016b5f75dbfd71c896a481f30c5e7cc255f79505706eb284844`.
-These are discovered receipts awaiting the separate owner pin, not a seal
-manufactured by this report.
+These discovered identities were received through the separate external owner
+pin above. This agent did not manufacture the authority or seal its own inventory.
 
 Every rank JUnit has eight passed tests: five T3 and three T5. Only T3 is received
 here. Three successful T3 cases write actual global observations on rank zero;
@@ -88,7 +106,7 @@ from those discrete equations. Captured fields are not replaced by seeds.
 
 ## Numerical inspection and counter-probes
 
-Before owner pinning, independent numerical inspection of the six actual NPZs
+Independent numerical verification of the six externally pinned actual NPZs
 finds maximum state error `4.218847493575595e-15` and maximum original residual
 `5.467848396278896e-15`. Maximum parameter and forcing reconstruction differences
 are `1.1102230246251565e-16` and `1.6653345369377348e-16`. The original fixture's
@@ -119,9 +137,22 @@ rtk proxy env -u PYTHONPATH \
   tests/review/test_sol61_t3_saved_state_oracle.py
 ```
 
-After Root provides owner pins, run `sol61_t3_saved_state_oracle.py verify
---pins PATH --pins-sha256 EXTERNAL_SHA --output REPORT.json`. Positive
-authenticated reception remains pending that operation at this freeze.
+The independent worker executed:
+
+```sh
+rtk proxy env -u PYTHONPATH \
+  /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python \
+  tests/review/sol61_t3_saved_state_oracle.py verify \
+  --pins /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-original-field-sdk7b-root-owner-pins-20260930.json \
+  --pins-sha256 a5496e2c2d8313918b17fe0602d580118023b113a8af67f3558e95ab2745c07c \
+  --output outputs/sol61-t3-saved-state-independent/received-owner-pinned.json
+```
+
+Result: `received`, six datasets. Exact JSON and byte comparison against
+Root's `outputs/native-original-field-sdk7b-root-independent-reception-20260930.json`
+passes. The oracle, scientific criteria and tests remain byte-identical to
+preparation commit `507982d`; only this reception report and frozen numerical
+receipt are added by the final report update.
 
 ## Scope
 
