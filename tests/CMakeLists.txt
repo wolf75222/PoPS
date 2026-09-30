@@ -809,6 +809,7 @@ set(_program_runtime_review
   "cpp/integration/runtime/ale_carrier_independent_review.inc"
   "cpp/integration/runtime/moving_interval_projection_tests.inc"
   "cpp/integration/runtime/moving_interval_codec_independent_review.inc"
+  "cpp/integration/runtime/moving_relative_quantity_independent_review.inc"
   "cpp/integration/runtime/program_dot_all_contract.inc"
   "cpp/integration/runtime/program_dot_all_precision_independent.inc"
   "cpp/integration/runtime/integral_candidate_capture_tests.inc"
