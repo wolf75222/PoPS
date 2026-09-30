@@ -25,6 +25,7 @@ def _sdk_root():
 HOST = r'''#include <pops/runtime/program/accepted_exchange.hpp>
 #include <array>
 #include <iostream>
+#include <optional>
 #include <type_traits>
 namespace pops {
 using Real=double;
@@ -35,6 +36,10 @@ struct Box {
   Index extent() const { return {hi[0]-lo[0]+1,hi[1]-lo[1]+1}; }
   std::int64_t numPts() const { auto e=extent(); return e[0]*e[1]; }
   bool operator==(const Box&) const = default;
+};
+template<int D> struct Geometry {
+  double hy;
+  double spacing(int axis) const { return axis?hy:.5; }
 };
 template<class T,int D> struct FieldView {
   const std::vector<double>* data=nullptr;
@@ -102,10 +107,16 @@ struct Context {
     return use_coverage?&coverage:nullptr;
   }
   pops::Lane prepared_execution_lane() const { return {rank,ranks}; }
-  struct Geometry { double hy; double spacing(int axis) const { return axis?hy:.5; } };
+  using Geometry=pops::Geometry<2>;
   Geometry geometry() const { return {hy}; }
   bool is_external_trace_face(int axis,int side,pops::Index cell) const {
     return axis==0 && side==1 && cell[0]==field.fields[0].bounds.hi[0];
+  }
+  auto prepare_external_trace_face_predicate() const {
+    const int upper=field.fields.empty()?1:field.fields[0].bounds.hi[0];
+    return [upper](int axis,int side,pops::Index cell) {
+      return axis==0 && side==1 && cell[0]==upper;
+    };
   }
   template<class Body> void stage_exchange_batch(Body body) {
     auto candidate=records;

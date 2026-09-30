@@ -1,4 +1,4 @@
-"""Independent host reception of 1f777538; no native field/JIT/MPI execution.
+"""Independent host reception of 61a3cb3 plus 9471bf8; no native/JIT/MPI execution.
 
 Reuse only the existing thin field/face adapter. Execute the actual transport
 emission and actual PreparedDiffusion method with separate adversarial assertions.
@@ -24,12 +24,30 @@ def _scaffold():
         "inline int votes=0;\n"
         "inline long all_reduce_max(long value,const Lane&) { ++votes; return value; }")
     scaffold = scaffold.replace("int rank=0, ranks=1;",
-                                "int rank=0, ranks=1; int batches=0, completed=0; bool fail_active=false;")
+                                "int rank=0, ranks=1; int batches=0, completed=0; bool fail_active=false;\n"
+                                "mutable int geometry_calls=0,predicate_calls=0;\n"
+                                "bool in_producer=false,fail_geometry=false,fail_predicate=false;")
+    scaffold = scaffold.replace("Geometry geometry() const { return {hy}; }",
+                                "Geometry geometry() const {\n"
+                                "  if(in_producer) throw std::runtime_error(\"collective geometry inside producer\");\n"
+                                "  ++geometry_calls;\n"
+                                "  if(fail_geometry) throw std::runtime_error(\"injected geometry preparation\");\n"
+                                "  return {hy}; }")
+    scaffold = scaffold.replace("auto prepare_external_trace_face_predicate() const {",
+                                "auto prepare_external_trace_face_predicate() const {\n"
+                                "  if(in_producer) throw std::runtime_error(\"topology inside producer\");\n"
+                                "  ++predicate_calls;\n"
+                                "  if(fail_predicate) throw std::runtime_error(\"injected topology preparation\");")
+    scaffold = scaffold.replace("bool is_external_trace_face(int axis,int side,pops::Index cell) const {",
+                                "bool is_external_trace_face(int axis,int side,pops::Index cell) const {\n"
+                                "  if(in_producer) throw std::runtime_error(\"facade trace callback inside producer\");")
     scaffold = scaffold.replace("return use_embedded?&embedded:nullptr;",
                                 'if(fail_active) throw std::runtime_error("injected active preparation");\n'
                                 "    return use_embedded?&embedded:nullptr;")
-    scaffold = scaffold.replace("auto candidate=records;", "++batches; auto candidate=records;")
-    scaffold = scaffold.replace("records.swap(candidate);", "records.swap(candidate); ++completed;")
+    scaffold = scaffold.replace("auto candidate=records;",
+                                "++batches; auto candidate=records; in_producer=true;")
+    scaffold = scaffold.replace("records.swap(candidate);",
+                                "in_producer=false; records.swap(candidate); ++completed;")
     return scaffold
 
 
@@ -46,9 +64,12 @@ std::pair<int,double> selected(const Context& ctx,int component) {
 }
 void run(Context& ctx) {
   pops::votes=0; const int batches=ctx.batches, completed=ctx.completed;
+  const int predicates=ctx.predicate_calls, geometries=ctx.geometry_calls;
   emit(ctx,.01);
   check(pops::votes==2,"owner/nonowner missed a mask vote");
   check(ctx.batches==batches+1 && ctx.completed==completed+1,"empty producer missed batch tail");
+  check(ctx.predicate_calls==predicates+1,"nonowner/empty missed topology snapshot");
+  check(ctx.geometry_calls==geometries+GEOMETRY_CALLS,"nonowner/empty missed geometry snapshot");
 }
 void refuse(Context& ctx,int votes) {
   const auto prior=ctx.records.size(); const int batches=ctx.batches;
@@ -85,6 +106,8 @@ int main() {
   bad_eb.use_embedded=true;bad_eb.embedded.fields[0].bounds.lo[0]=1;refuse(bad_eb,2);
   Context lookup(2,4);lookup.rank=1;lookup.ranks=2;lookup.field.replicated=true;
   lookup.fail_active=true;refuse(lookup,1);
+  Context topology(2,4);topology.rank=1;topology.ranks=2;topology.field.replicated=true;
+  topology.fail_predicate=true;refuse(topology,1);
   Context empty_bad(2,4,true);empty_bad.rank=6;empty_bad.ranks=7;
   empty_bad.coverage.fields=distributed.coverage.fields;refuse(empty_bad,2);
   // No-coverage Uniform and fully covered AMR retain their independent meaning.
@@ -100,12 +123,23 @@ int main() {
 '''
 
 
-def _source(kind):
+def _source(kind, revision=None):
     scaffold = _scaffold()
     if kind == "transport":
-        body = "\n".join(emit_transport_exchanges("faces", "op", "occ", "evaluation", "dt"))
-        return scaffold + "void emit(Context& ctx,double dt) {const auto& faces=ctx.faces;\n" + body + "\n}\n" + MAIN.replace("SIGN", "-1")
-    header = (ROOT / "include/pops/numerics/diffusion/prepared_diffusion.hpp").read_text()
+        emitter = emit_transport_exchanges
+        if revision is not None:
+            path = "python/pops/codegen/program_emit_transport_exchanges.py"
+            source = subprocess.run(["git", "show", revision + ":" + path], cwd=ROOT,
+                                    capture_output=True, text=True, check=True).stdout
+            namespace = {}
+            exec(compile(source, path, "exec"), namespace)
+            emitter = namespace["emit_transport_exchanges"]
+        body = "\n".join(emitter("faces", "op", "occ", "evaluation", "dt"))
+        return scaffold + "void emit(Context& ctx,double dt) {const auto& faces=ctx.faces;\n" + body + "\n}\n" + MAIN.replace("SIGN", "-1").replace("GEOMETRY_CALLS", "1")
+    path = "include/pops/numerics/diffusion/prepared_diffusion.hpp"
+    header = (ROOT / path).read_text() if revision is None else subprocess.run(
+        ["git", "show", revision + ":" + path], cwd=ROOT,
+        capture_output=True, text=True, check=True).stdout
     start = header.index("  template <class Context>\n  void stage_accepted_exchanges(")
     end = header.index("\n  const auto& faces()", start)
     body = header[start:end].replace("Index<Dim>", "pops::Index")
@@ -131,7 +165,7 @@ void emit(Context& ctx,double dt) {
   producer.physical_[1].kind=DiffusiveBoundaryKind::prescribed;
   producer.stage_accepted_exchanges(ctx,0,"op","occ","evaluation",dt,true);
 }
-''' + MAIN.replace("SIGN", "1")
+''' + MAIN.replace("SIGN", "1").replace("GEOMETRY_CALLS", "0")
 
 
 @pytest.mark.parametrize("kind", ["transport", "diffusion"])
@@ -146,6 +180,25 @@ def test_actual_producer_preserves_nonowner_votes_and_refusals(tmp_path, kind):
     result = subprocess.run([str(binary)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "independent replicated exchange host PASS\n"
+
+
+@pytest.mark.parametrize("kind", ["transport", "diffusion"])
+def test_old_collective_getters_are_rejected_by_the_same_phase_guard(tmp_path, kind):
+    """A positive owner baseline actually visits faces; old producer getters must trip."""
+    compiler = shutil.which("clang++") or shutil.which("c++")
+    assert compiler, "phase guard reception requires C++20; no masked skip"
+    source = _source(kind, "61a3cb3fd175de8ee5a7bcfe6f5b1a007c2351bd^")
+    source = source.replace("int main() {", "int reception_main() {")
+    source += '\nint main(){try{return reception_main();}catch(const std::exception& e){std::cout<<e.what();return 42;}}\n'
+    cpp, binary = tmp_path / "old.cpp", tmp_path / "old"
+    cpp.write_text(source)
+    built = subprocess.run([compiler, "-std=c++20", "-O1", "-I", str(ROOT / "include"),
+                            str(cpp), "-o", str(binary)], capture_output=True, text=True)
+    assert built.returncode == 0, built.stderr
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    assert result.returncode == 42
+    assert result.stdout == ("collective geometry inside producer" if kind == "transport"
+                             else "facade trace callback inside producer")
 
 
 def test_actual_batch_collectives_and_other_producer_contracts():

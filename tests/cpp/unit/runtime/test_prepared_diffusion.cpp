@@ -27,6 +27,15 @@ struct DiffusionContext {
     return !topology.is_periodic(Face<2>{axis, boundary}) &&
            cell[axis] == (side == 0 ? geometry_.domain().lo[axis] : geometry_.domain().hi[axis]);
   }
+  auto prepare_external_trace_face_predicate() const {
+    const auto domain = geometry_.domain();
+    const auto snapshot_topology = topology;
+    return [domain, snapshot_topology](int axis, int side, const Index<2>& cell) {
+      const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+      return !snapshot_topology.is_periodic(Face<2>{axis, boundary}) &&
+             cell[axis] == (side == 0 ? domain.lo[axis] : domain.hi[axis]);
+    };
+  }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
     auto records = prepare_exchange_batch(
@@ -343,6 +352,15 @@ struct FittedContext {
     const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
     return !topology.is_periodic(Face<1>{axis, boundary}) &&
            cell[axis] == (side == 0 ? geometry_.domain().lo[axis] : geometry_.domain().hi[axis]);
+  }
+  auto prepare_external_trace_face_predicate() const {
+    const auto domain = geometry_.domain();
+    const auto snapshot_topology = topology;
+    return [domain, snapshot_topology](int axis, int side, const Index<1>& cell) {
+      const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+      return !snapshot_topology.is_periodic(Face<1>{axis, boundary}) &&
+             cell[axis] == (side == 0 ? domain.lo[axis] : domain.hi[axis]);
+    };
   }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
