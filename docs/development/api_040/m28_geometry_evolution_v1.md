@@ -101,3 +101,14 @@ is added in this tranche, and no ALE checkpoint/restart or persisted scientific
 receipt is qualified. Public requests remain refused until common Program
 lowering, saved moving geometry and restart can authenticate this carrier.
 The SDK manifest includes both the primitive and carrier/include fragment.
+# Collective publication review
+
+The publication contract authenticates every global box, its broadcast owner,
+the rank-space, prepared lane, physical domain and periodic topology before
+the endpoint broadcast schedule begins. Local numeric preparation (including
+device launches and the fence) catches failures and reaches a collective error
+vote before the following invalid-value reduction. An exception on one rank
+therefore cannot skip that reduction while its peers enter it.
+
+This fixes the source defects found in independent review of `88c755d`.
+Source syntax validation is separate from native MPI execution evidence.

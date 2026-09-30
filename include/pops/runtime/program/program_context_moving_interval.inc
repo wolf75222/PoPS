@@ -141,11 +141,34 @@
     collectively_rethrow_exception(error, lane, "moving interval preparation failed collectively");
 
     ExactContractBuilder publication;
-    publication.text("pops.moving-interval-publication.v1").text(identity).text(interval)
+    try {
+    const auto& input = state(program_block);
+    publication.text("pops.moving-interval-publication.v2").text(identity).text(interval)
         .scalar(std::int32_t(program_block)).scalar(geometry_tolerance)
-        .scalar(std::int32_t(state(program_block).ncomp()))
-        .scalar(static_cast<std::uint64_t>(state(program_block).layout().size()))
+        .scalar(std::int32_t(input.ncomp()))
+        .scalar(static_cast<std::uint64_t>(input.layout().size()))
         .scalar(candidate->generation);
+    publication.text(lane.identity()).scalar(std::int32_t(lane.size()))
+        .scalar(std::int32_t(input.distribution().replicated()));
+    for (int axis = 0; axis < Dim; ++axis)
+      publication.scalar(std::int32_t(input.rank_space().origin()[axis]))
+          .scalar(std::int32_t(input.rank_space().extent()[axis]))
+          .scalar(std::int32_t(geometry().domain().lo[axis]))
+          .scalar(std::int32_t(geometry().domain().hi[axis]))
+          .scalar(std::int32_t(scalar_boundary_topology_().is_periodic(
+              Face<Dim>{axis, BoundarySide::lower})));
+    for (std::size_t global = 0; global < input.layout().size(); ++global) {
+      for (int axis = 0; axis < Dim; ++axis)
+        publication.scalar(std::int32_t(input.layout()[global].lo[axis]))
+            .scalar(std::int32_t(input.layout()[global].hi[axis]));
+      const auto owner = input.distribution().replicated() ? std::size_t{0} :
+          input.rank_space().linear_rank(input.distribution().owner(global));
+      if (owner >= static_cast<std::size_t>(lane.size()))
+        throw std::invalid_argument("moving interval owner is outside the prepared execution lane");
+      publication.scalar(static_cast<std::uint64_t>(owner));
+    }
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "moving publication contract failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{"moving-publication", std::move(publication).release()}}, lane))
       throw std::invalid_argument("moving interval point/state/tolerance/generation differs across ranks");
@@ -204,6 +227,7 @@
         throw std::invalid_argument("moving shared face or fixed-domain boundary is inconsistent");
 
       Real invalid = 0;
+      try {
       for (std::size_t patch = 0; patch < input.local_size(); ++patch) {
         const auto old = accepted.coordinates[patch].template field<0>().view();
         const auto pos = proposed_coordinates[patch].template field<0>().view();
@@ -246,6 +270,9 @@
         });
         invalid = std::max(invalid, status);
       }
+      Kokkos::fence();
+      } catch (...) { error = std::current_exception(); }
+      collectively_rethrow_exception(error, lane, "moving numeric preparation failed collectively");
       if (all_reduce_max(static_cast<double>(invalid), lane) != 0)
         throw StepAttemptRejected(SolveStatus::kInvalidEvaluation, "moving-GCL",
                                    "nonfinite/inverted cell or endpoint/sweep/GCL mismatch");
