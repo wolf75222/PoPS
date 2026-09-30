@@ -171,14 +171,18 @@ def test_native_dot_all_invalid_bound_input_does_not_publish(
     after = state_snapshots(runtime, world, ("fluid", "query_only"))
     with collective_check(world):
         assert all(failures), "a rank accepted an overflowing dt-bound contraction"
-        # Native std::overflow_error maps to OverflowError in serial; an MPI
-        # collective rejection may wrap it in RuntimeError on every participant.
-        assert all(
-            (failure[0] == "OverflowError"
-             and failure[1] == "Program dot_all has nonfinite active values or local overflow")
-            or (failure[2] and failure[1] == "Program dot-all reduction failed collectively")
-            for failure in failures
-        ), failures
+        # Admit the exact native serial diagnostic or the full distributed
+        # step-attempt wrapper, including every rank's dot_all failure.
+        participants = 1 if world is None else int(world.size)
+        if participants == 1:
+            expected_failure = ("OverflowError",
+                "Program dot_all has nonfinite active values or local overflow", False)
+        else:
+            details = "; ".join("rank %d RuntimeError: Program dot-all reduction failed collectively"
+                                % rank for rank in range(participants))
+            expected_failure = ("RuntimeError",
+                "collective step attempt failed during solve: " + details, True)
+        assert failures == (expected_failure,) * participants, failures
         assert runtime.time() == 0. and runtime.macro_step() == 0
         assert runtime.consumer_cursors.to_data() == cursors
         for current, prior in zip(after, before, strict=True):

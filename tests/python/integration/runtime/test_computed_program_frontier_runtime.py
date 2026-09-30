@@ -14,6 +14,8 @@ from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, StateStorage
 from pops.projection import ConservativeCellAverage
 from pops.time import ComputedDt, Program, RejectAttempt
+from tests.python.support.collective_checks import collective_call
+from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
 
 CELLS = 8
@@ -96,9 +98,11 @@ def test_native_scalar_frontier_rotation_restart_and_retry(
     assert receipt["requested_duration"] == (.5 if retry else 1.).hex()
     assert float.fromhex(receipt["duration"]) == actual.time()
     assert receipt["reached"] == actual.time().hex()
-    checkpoint = actual.checkpoint(str(tmp_path / "computed_rotation"))
+    world = context.communicator.handle
+    directory = collective_directory(world, tmp_path)
+    checkpoint = collective_call(world, lambda: actual.checkpoint(str(directory / "computed_rotation")))
     restored = bind()
-    restored.restart(checkpoint)
+    collective_call(world, lambda: restored.restart(checkpoint))
     second, second_duration = reference(expected, .5 if retry else 1.)
     end = duration + second_duration
     for runtime in (actual, restored):
