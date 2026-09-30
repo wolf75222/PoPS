@@ -112,6 +112,8 @@ TEST(CompositeGeneralField, OriginalAmrNonlinearResidualTwoResolutionsAndPermuta
   auto lane = ExecutionLane::duplicate_world_collectively("original-amr-field-witness");
   for (int cells : {16, 32})
     for (auto permutation : {std::array<int, 3>{0, 1, 2}, std::array<int, 3>{2, 0, 1}}) {
+      SCOPED_TRACE(::testing::Message() << "cells=" << cells << ":permutation="
+                                       << permutation[0] << permutation[1] << permutation[2]);
       auto provider = original_field_provider(lane, cells, permutation);
       auto exact = original_tower(*provider), forcing = original_tower(*provider),
            defect = original_tower(*provider);
