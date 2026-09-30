@@ -698,7 +698,17 @@ class ComputedDtController(StepController[ComputedDt]):
         try:
             if not math.isfinite(t_end) or not t_end > now:
                 raise RuntimeError("ComputedDt requires a finite future run frontier")
-            contract = (self.strategy.to_data(), now.hex(), step, float(t_end).hex())
+            temporal = getattr(engine, "_temporal_restart_state", None)
+            prior = None
+            if temporal is not None:
+                from pops.runtime._temporal_restart import (
+                    _validate_controller_state, _validate_controller_events,
+                )
+                _validate_controller_state(temporal.controller_state)
+                _validate_controller_events([], strategy=temporal.strategy,
+                    controller=temporal.controller_state, time_hex=now.hex(), macro_step=step)
+                prior = temporal.controller_state.get("program_frontier")
+            contract = (self.strategy.to_data(), now.hex(), step, float(t_end).hex(), prior)
         except BaseException as error:
             local_error = error
         world = _attempt_world(engine, preparing=True)

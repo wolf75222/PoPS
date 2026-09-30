@@ -34,6 +34,9 @@ The version 1 interval rule is `no_spatial_exchanges`. Uniform cadence 1/1
 Programs can return a Scalar frontier; spatial flux/diffusive/principal/coupled
 interval outputs, persistent transfers, AMR, nested clocks, held scheduler caches,
 post-synchronization and cross-layout exchanges are refused during preparation.
+The gate traverses authenticated lazy branches and solver/loop regions, including
+their input and result references; an interval operation hidden in a region has
+the same refusal as a top-level operation.
 This is an explicit capability refusal, not invented exchange rescaling. The
 reached-duration effect also breaks same-invocation field reuse. Existing earlier
 history stores retain their state and entry identity, but their pending outgoing
@@ -55,6 +58,8 @@ cannot omit that receipt. ExternalTimeGrid version 2 validation also binds its
 receipt index/start to the preceding declared grid point and checks last-dt;
 forged index, previous interval, last-dt and missing receipt are refused live and
 on restart before another native step.
+ComputedDt authenticates its previous receipt on live continuation before native
+mutation and includes that receipt in the collective preparation identity.
 
 ## Evidence and reception obligations
 
@@ -64,6 +69,8 @@ emission, DCE/CSE retention, generic broadcast expressions, ComputedDt restart a
 synthetic MPI preflight comparisons. Ruff and git diff --check pass. These tests
 select the installed Dim2 extension, but import Python sources from this checkout;
 they do not authenticate a rebuilt extension or establish a PDE trajectory.
+The recursive-region and live-receipt correction has a separate 57-test passing
+selection (both frontier unit suites and the temporal package architecture suite).
 
 Integration target: `tests/python/integration/runtime/test_computed_program_frontier_runtime.py`.
 It uses public compile/resolve/bind/run on the native relaxed rotation, a NumPy
