@@ -1,0 +1,360 @@
+{
+  "schema": "sol61.amr-original.first-jacobian-source-math@1",
+  "source_commit": "9fb7e8fb64c3e3de289d9c139ba310e9e47e43a6",
+  "source_files": [
+    {
+      "path": "tests/cpp/unit/elliptic/test_composite_general_field.cpp",
+      "sha256": "ae7a68ee5c7f1feb70f2cb20577066c6abd0e659ea53eb071986dea9a901eda1"
+    },
+    {
+      "path": "tests/cpp/unit/elliptic/amr_original_field_residual.inc",
+      "sha256": "f6d5371d55b11bcbe02fc38f29736a1ca8b5aa61d9c3fb6055b3eae13b8a2b25"
+    },
+    {
+      "path": "include/pops/numerics/elliptic/mg/composite_fac_nlevel.hpp",
+      "sha256": "f58b3a7babbf8a95d267d6b3d22749d53de2f7d6fa9f8fc520fd6e8644a2e5c4"
+    },
+    {
+      "path": "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp",
+      "sha256": "7b90f912bc5f372d987c54dd2920e646e12144085c00515e116e95f6ab90ca3c"
+    },
+    {
+      "path": "include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp",
+      "sha256": "0c5faa494b9e0d95398772df5003e3e87d3a4d03f1cd4d826a365dca930c0a2f"
+    },
+    {
+      "path": "include/pops/runtime/program/prepared_amr_field_residual.hpp",
+      "sha256": "81423c7a9f90ca20859c6b0121f9624a7beee176b7841101b5204b5edd8f1df2"
+    },
+    {
+      "path": "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp",
+      "sha256": "3d2657d97048c65621ec5159485354758fdad6970b21451dac80e5f8b89a699f"
+    }
+  ],
+  "cases": [
+    {
+      "cells": 16,
+      "permutation": [
+        0,
+        1,
+        2
+      ],
+      "dofs": 72,
+      "initial_norm": 8.729170410480751,
+      "scalar_constant_error": 0.0,
+      "conservation_error": 0.0,
+      "weighted_asymmetry": 32.71238297648155,
+      "controls": {
+        "restart": 80,
+        "linear_max_iterations": 240,
+        "linear_tolerance": 1e-05
+      },
+      "variants": [
+        {
+          "converged": true,
+          "columns": 47,
+          "stop": 8.729170410480753e-05,
+          "actual": 1.5192282809956114e-05,
+          "passes": 1,
+          "spatial_right_diagonal": false,
+          "cycles": [
+            {
+              "columns": 47,
+              "projected": 1.5192282903964469e-05,
+              "actual": 1.5192282809956114e-05
+            }
+          ]
+        },
+        {
+          "converged": true,
+          "columns": 47,
+          "stop": 8.729170410480753e-05,
+          "actual": 1.5180702180828159e-05,
+          "passes": 2,
+          "spatial_right_diagonal": false,
+          "cycles": [
+            {
+              "columns": 47,
+              "projected": 1.518070189297421e-05,
+              "actual": 1.5180702180828159e-05
+            }
+          ]
+        },
+        {
+          "converged": true,
+          "columns": 41,
+          "stop": 8.729170410480753e-05,
+          "actual": 3.4431289409541716e-09,
+          "passes": 2,
+          "spatial_right_diagonal": true,
+          "cycles": [
+            {
+              "columns": 41,
+              "projected": 3.4430148865847356e-09,
+              "actual": 3.4431289409541716e-09
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "cells": 16,
+      "permutation": [
+        2,
+        0,
+        1
+      ],
+      "dofs": 72,
+      "initial_norm": 8.729170410480748,
+      "scalar_constant_error": 0.0,
+      "conservation_error": 0.0,
+      "weighted_asymmetry": 32.71238297648155,
+      "controls": {
+        "restart": 80,
+        "linear_max_iterations": 240,
+        "linear_tolerance": 1e-05
+      },
+      "variants": [
+        {
+          "converged": true,
+          "columns": 47,
+          "stop": 8.729170410480749e-05,
+          "actual": 6.093768952962926e-06,
+          "passes": 1,
+          "spatial_right_diagonal": false,
+          "cycles": [
+            {
+              "columns": 47,
+              "projected": 6.093768819855906e-06,
+              "actual": 6.093768952962926e-06
+            }
+          ]
+        },
+        {
+          "converged": true,
+          "columns": 47,
+          "stop": 8.729170410480749e-05,
+          "actual": 6.097589555258756e-06,
+          "passes": 2,
+          "spatial_right_diagonal": false,
+          "cycles": [
+            {
+              "columns": 47,
+              "projected": 6.0975896531157745e-06,
+              "actual": 6.097589555258756e-06
+            }
+          ]
+        },
+        {
+          "converged": true,
+          "columns": 41,
+          "stop": 8.729170410480749e-05,
+          "actual": 4.379573733251168e-09,
+          "passes": 2,
+          "spatial_right_diagonal": true,
+          "cycles": [
+            {
+              "columns": 41,
+              "projected": 4.379618562078066e-09,
+              "actual": 4.379573733251168e-09
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "cells": 32,
+      "permutation": [
+        0,
+        1,
+        2
+      ],
+      "dofs": 144,
+      "initial_norm": 8.752282870145205,
+      "scalar_constant_error": 0.0,
+      "conservation_error": 0.0,
+      "weighted_asymmetry": 65.4247659529631,
+      "controls": {
+        "restart": 80,
+        "linear_max_iterations": 240,
+        "linear_tolerance": 1e-05
+      },
+      "variants": [
+        {
+          "converged": false,
+          "columns": 240,
+          "stop": 8.752282870145206e-05,
+          "actual": 0.00025587208249827333,
+          "passes": 1,
+          "spatial_right_diagonal": false,
+          "cycles": [
+            {
+              "columns": 80,
+              "projected": 0.07320151115592295,
+              "actual": 0.07320151115528713
+            },
+            {
+              "columns": 160,
+              "projected": 0.0025003998715016048,
+              "actual": 0.002500399871779957
+            },
+            {
+              "columns": 240,
+              "projected": 0.0002558720825655356,
+              "actual": 0.00025587208249827333
+            }
+          ]
+        },
+        {
+          "converged": false,
+          "columns": 240,
+          "stop": 8.752282870145206e-05,
+          "actual": 0.0002558759281297014,
+          "passes": 2,
+          "spatial_right_diagonal": false,
+          "cycles": [
+            {
+              "columns": 80,
+              "projected": 0.07320149165923126,
+              "actual": 0.07320149165895
+            },
+            {
+              "columns": 160,
+              "projected": 0.0025004037201954406,
+              "actual": 0.0025004037200323922
+            },
+            {
+              "columns": 240,
+              "projected": 0.0002558759280700399,
+              "actual": 0.0002558759281297014
+            }
+          ]
+        },
+        {
+          "converged": true,
+          "columns": 233,
+          "stop": 8.752282870145206e-05,
+          "actual": 8.420509264552406e-05,
+          "passes": 2,
+          "spatial_right_diagonal": true,
+          "cycles": [
+            {
+              "columns": 80,
+              "projected": 0.024932930979876377,
+              "actual": 0.024932930979436885
+            },
+            {
+              "columns": 160,
+              "projected": 0.0004055173615233093,
+              "actual": 0.00040551736125627445
+            },
+            {
+              "columns": 233,
+              "projected": 8.420509266769686e-05,
+              "actual": 8.420509264552406e-05
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "cells": 32,
+      "permutation": [
+        2,
+        0,
+        1
+      ],
+      "dofs": 144,
+      "initial_norm": 8.752282870145281,
+      "scalar_constant_error": 0.0,
+      "conservation_error": 0.0,
+      "weighted_asymmetry": 65.4247659529631,
+      "controls": {
+        "restart": 80,
+        "linear_max_iterations": 240,
+        "linear_tolerance": 1e-05
+      },
+      "variants": [
+        {
+          "converged": false,
+          "columns": 240,
+          "stop": 8.752282870145282e-05,
+          "actual": 0.00024998221853485947,
+          "passes": 1,
+          "spatial_right_diagonal": false,
+          "cycles": [
+            {
+              "columns": 80,
+              "projected": 0.07273309345989183,
+              "actual": 0.07273309345956247
+            },
+            {
+              "columns": 160,
+              "projected": 0.0024719125277675447,
+              "actual": 0.0024719125280771195
+            },
+            {
+              "columns": 240,
+              "projected": 0.0002499822184352589,
+              "actual": 0.00024998221853485947
+            }
+          ]
+        },
+        {
+          "converged": false,
+          "columns": 240,
+          "stop": 8.752282870145282e-05,
+          "actual": 0.00024997295609660835,
+          "passes": 2,
+          "spatial_right_diagonal": false,
+          "cycles": [
+            {
+              "columns": 80,
+              "projected": 0.07273265422510664,
+              "actual": 0.07273265422487044
+            },
+            {
+              "columns": 160,
+              "projected": 0.0024718187843232897,
+              "actual": 0.002471818784580781
+            },
+            {
+              "columns": 240,
+              "projected": 0.0002499729560934381,
+              "actual": 0.00024997295609660835
+            }
+          ]
+        },
+        {
+          "converged": true,
+          "columns": 233,
+          "stop": 8.752282870145282e-05,
+          "actual": 8.436329743356437e-05,
+          "passes": 2,
+          "spatial_right_diagonal": true,
+          "cycles": [
+            {
+              "columns": 80,
+              "projected": 0.024932931015118356,
+              "actual": 0.024932931015029112
+            },
+            {
+              "columns": 160,
+              "projected": 0.00040551763891097565,
+              "actual": 0.00040551763888466917
+            },
+            {
+              "columns": 233,
+              "projected": 8.436329745757572e-05,
+              "actual": 8.436329743356437e-05
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "native_execution_here": false,
+  "native_states_consumed": false,
+  "native_reproduction_claimed": false,
+  "scope": "actual frozen 1D two-level request first Jacobian only, not an AMR runtime"
+}
