@@ -247,6 +247,7 @@ def _validate_program_schedule(value: Any) -> dict[str, Any]:
 def _validate_controller_state(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) not in (
         {"last_accepted_dt"}, {"last_accepted_dt", "fixed_dt_grid"},
+        {"last_accepted_dt", "external_frontier"},
     ):
         raise ValueError("temporal controller state has incomplete keys")
     last_dt = value["last_accepted_dt"]
@@ -279,6 +280,26 @@ def _validate_controller_state(value: Any) -> dict[str, Any]:
             (grid["steps"] == 0) != (grid["origin"] == grid["time"])
         ) or float.fromhex(grid["origin"]) > float.fromhex(grid["time"]):
             raise ValueError("FixedDt grid origin and accepted cursor are inconsistent")
+    if "external_frontier" in value:
+        row = value["external_frontier"]
+        if type(row) is not dict or set(row) != {
+            "schema_version", "start", "requested", "reached", "duration", "index",
+        } or type(row["schema_version"]) is not int or row["schema_version"] != 2 \
+                or type(row["index"]) is not int or row["index"] < 1:
+            raise ValueError("ExternalTimeGrid computed frontier has an invalid version or keys")
+        coordinates = {}
+        for name in ("start", "requested", "reached", "duration"):
+            try:
+                number = float.fromhex(row[name])
+            except (TypeError, ValueError):
+                raise ValueError("computed frontier coordinates must be hexadecimal floats") from None
+            if not math.isfinite(number) or number.hex() != row[name]:
+                raise ValueError("computed frontier coordinates must be canonical finite floats")
+            coordinates[name] = number
+        if coordinates["duration"] != coordinates["requested"] - coordinates["start"] \
+                or coordinates["start"] + coordinates["duration"] != coordinates["reached"] \
+                or coordinates["reached"] <= coordinates["start"]:
+            raise ValueError("computed frontier duration and reached coordinate disagree")
     return _json_copy(value, where="temporal controller state")
 
 
@@ -374,6 +395,23 @@ def _validate_controller_events(
     grid = controller.get("fixed_dt_grid")
     if grid is not None:
         _validate_fixed_grid_clock(grid, descriptor, time_hex, macro_step)
+    frontier = controller.get("external_frontier")
+    if frontier is not None:
+        if descriptor["kind"] != "external_time_grid" or descriptor.get("frontier") != "computed":
+            raise ValueError("computed frontier requires its versioned ExternalTimeGrid policy")
+        from pops.time._step.strategy import ExternalTimeGrid
+        grid_values = ExternalTimeGrid.from_data(descriptor).restore_runtime_controls(strategy["controls"])[descriptor["grid_id"]]
+        if frontier["reached"] != time_hex or frontier["index"] >= len(grid_values):
+            raise ValueError("computed frontier differs from accepted checkpoint clock or grid")
+        requested = float.fromhex(frontier["requested"])
+        if float(grid_values[frontier["index"]]) != requested:
+            raise ValueError("computed requested frontier differs from declared grid point")
+        lower = upper = requested
+        for _ in range(descriptor["endpoint_ulps"]):
+            lower = math.nextafter(lower, -math.inf)
+            upper = math.nextafter(upper, math.inf)
+        if not lower <= float.fromhex(time_hex) <= upper:
+            raise ValueError("computed reached frontier violates declared endpoint_ulps")
     if descriptor["kind"] != "error_controlled_dt":
         if events:
             raise ValueError(
@@ -589,6 +627,7 @@ class TemporalRestartState:
         if not self._restored_pending:
             if candidate != self.strategy:
                 self.controller_state.pop("fixed_dt_grid", None)
+                self.controller_state.pop("external_frontier", None)
             self.strategy = candidate
             if (candidate["strategy"]["kind"] == "error_controlled_dt"
                     and step == 0
@@ -660,7 +699,7 @@ class TemporalRestartState:
 
     def accept(self, *, before_time: Any, before_step: Any,
                time: Any, macro_step: Any, consumed_event: Any = None,
-               fixed_dt_grid: Any = None) -> None:
+               fixed_dt_grid: Any = None, external_frontier: Any = None) -> None:
         before, old_step = _clock(before_time, before_step)
         now, step = _clock(time, macro_step)
         if step != old_step + 1 or float.fromhex(now) <= float.fromhex(before):
@@ -669,6 +708,7 @@ class TemporalRestartState:
         controller = _validate_controller_state({
             "last_accepted_dt": (float.fromhex(now) - float.fromhex(before)).hex(),
             **({"fixed_dt_grid": fixed_dt_grid} if fixed_dt_grid is not None else {}),
+            **({"external_frontier": external_frontier} if external_frontier is not None else {}),
         })
         if fixed_dt_grid is not None:
             if self.strategy is None or self.strategy["strategy"]["kind"] != "fixed_dt":

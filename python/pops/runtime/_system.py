@@ -165,7 +165,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
             max_steps=max_steps, output_dir=output_dir)
         step_target = native_step_target(self)
         steps = 0
-        while self.time() < t_end and steps < max_steps:
+        while prepared_run.pending(step_target, t_end=t_end) and steps < max_steps:
             prepared_run.run_step(step_target, t_end=float(t_end))
             steps += 1
         return steps

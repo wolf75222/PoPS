@@ -132,3 +132,49 @@ def test_preflight_compares_every_exact_interval_authority(monkeypatch, field):
     with pytest.raises(RuntimeError, match="preparation differs between ranks"):
         _prepared((0., .1)).run_step(native, t_end=.1)
     assert native.calls == []
+
+
+@pytest.mark.parametrize("start,target", ((-.1, .2), (-.3, .4)))
+def test_explicit_computed_frontier_retains_requested_and_reached_after_restart(start, target):
+    from pops.runtime._temporal_restart import TemporalRestartState
+
+    policy = ExternalTimeGrid("grid", frontier="computed", endpoint_ulps=1)
+    assert ExternalTimeGrid.from_data(policy.to_data()) == policy
+    engine = _Engine(policy)
+    temporal = TemporalRestartState(time_hex=start.hex())
+    engine._temporal_restart_state = temporal
+    native = _Native()
+    native.t = start
+    prepared = prepare_program_run(engine, {"grid": (start, target, .6)})
+    prepared.begin(temporal, time=start, macro_step=0)
+    prepared.run_step(native, t_end=target)
+    assert native.time() == float(np.float64(start) + (np.float64(target) - np.float64(start)))
+    assert native.time() != target
+    receipt = temporal.controller_state["external_frontier"]
+    assert receipt["requested"] == target.hex()
+    assert receipt["reached"] == native.time().hex()
+    assert not prepared.pending(native, t_end=target)
+    restored = TemporalRestartState.from_json(temporal.checkpoint_json(time=native.time(), macro_step=1),
+                                              time=native.time(), macro_step=1)
+    engine._temporal_restart_state = restored
+    engine._step_controller = None
+    prepared.begin(restored, time=native.time(), macro_step=1)
+    prepared.run_step(native, t_end=.6)
+    assert native.time() == .6 and native.macro_step() == 2
+
+
+def test_explicit_computed_frontier_does_not_merge_distinct_requested_grid_points():
+    policy = ExternalTimeGrid("grid", frontier="computed", endpoint_ulps=1)
+    engine = _Engine(policy)
+    native = _Native()
+    prepared = prepare_program_run(engine, {"grid": (0., math.nextafter(.1, math.inf))})
+    with pytest.raises(RuntimeError, match="final time is not a declared grid point"):
+        prepared.run_step(native, t_end=.1)
+    assert native.calls == []
+
+
+@pytest.mark.parametrize("kwargs", ({"frontier": "tolerant"}, {"endpoint_ulps": 1},
+                                    {"frontier": "computed", "endpoint_ulps": True}))
+def test_frontier_policy_refuses_implicit_or_invalid_tolerances(kwargs):
+    with pytest.raises(ValueError):
+        ExternalTimeGrid("grid", **kwargs)

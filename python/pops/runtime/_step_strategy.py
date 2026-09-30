@@ -286,7 +286,7 @@ def _record_failure(engine: Any, error: BaseException, attempts: int) -> None:
 
 def _native_attempt(
     engine: Any, native: Any, advance: Any, *, queued_event: Any = None,
-    fixed_dt_grid: Any = None,
+    fixed_dt_grid: Any = None, external_frontier: Any = None,
 ) -> Any:
     temporal = getattr(engine, "_temporal_restart_state", None)
     before_time, before_step = native.time(), native.macro_step()
@@ -320,6 +320,7 @@ def _native_attempt(
             time=native.time(), macro_step=native.macro_step(),
             consumed_event=queued_event,
             **({"fixed_dt_grid": fixed_dt_grid} if fixed_dt_grid is not None else {}),
+            **({"external_frontier": external_frontier} if external_frontier is not None else {}),
         )
     return result
 
@@ -698,10 +699,17 @@ class ExternalTimeGridController(StepController[ExternalTimeGrid]):
         try:
             now = float(native.time())
             step = int(native.macro_step())
-            index = bisect.bisect_left(self.grid, now)
+            temporal = getattr(engine, "_temporal_restart_state", None)
+            prior = None if temporal is None else temporal.controller_state.get("external_frontier")
+            entry = now
+            if self.strategy.frontier == "computed" and prior is not None:
+                if prior["reached"] != now.hex():
+                    raise RuntimeError("ExternalTimeGrid computed frontier differs from native clock")
+                entry = float.fromhex(prior["requested"])
+            index = bisect.bisect_left(self.grid, entry)
             # These are authored binary64 points, not approximate samples of another clock.
             # A tolerance here can skip a distinct nearby point or cross the run frontier.
-            if index == len(self.grid) or self.grid[index] != now:
+            if index == len(self.grid) or self.grid[index] != entry:
                 raise RuntimeError("ExternalTimeGrid current time is not a declared grid point")
             if index + 1 >= len(self.grid):
                 raise RuntimeError("ExternalTimeGrid is exhausted")
@@ -709,10 +717,21 @@ class ExternalTimeGridController(StepController[ExternalTimeGrid]):
             if next_time > t_end:
                 raise RuntimeError("ExternalTimeGrid final time is not a declared grid point")
             dt = next_time - now
-            if not math.isfinite(dt) or not dt > 0.0 or now + dt != next_time:
+            reached = now + dt
+            if not math.isfinite(dt) or not dt > 0.0 or not math.isfinite(reached) or reached <= now:
                 raise RuntimeError("ExternalTimeGrid has no representable native interval to its next point")
+            lower = upper = next_time
+            for _ in range(self.strategy.endpoint_ulps):
+                lower = math.nextafter(lower, -math.inf)
+                upper = math.nextafter(upper, math.inf)
+            if reached < lower or reached > upper:
+                raise RuntimeError("ExternalTimeGrid has no representable native interval to its next point")
+            receipt = {"schema_version": 2, "start": now.hex(), "requested": next_time.hex(),
+                       "reached": reached.hex(), "duration": dt.hex(), "index": index + 1}
             contract = (self.controls, now.hex(), step, index, next_time.hex(), dt.hex(),
                         float(t_end).hex())
+            if self.strategy.frontier == "computed":
+                contract += (self.strategy.to_data(), reached.hex())
         except BaseException as error:
             local_error = error
         # Preparation runs before RuntimeInstance opens its attempt envelope. Use the
@@ -736,13 +755,14 @@ class ExternalTimeGridController(StepController[ExternalTimeGrid]):
             raise local_error
         def advance() -> None:
             native.step(dt)
-            if float(native.time()) != next_time or int(native.macro_step()) != step + 1:
+            if float(native.time()) != reached or int(native.macro_step()) != step + 1:
                 raise RuntimeError("ExternalTimeGrid reached clock differs from its declared next point")
 
         def attempt() -> None:
             # Check inside the collective attempt, before temporal acceptance. The enclosing
             # RuntimeInstance transaction restores every rank on a wrong native landing.
-            _native_attempt(engine, native, advance)
+            _native_attempt(engine, native, advance, external_frontier=(
+                receipt if self.strategy.frontier == "computed" else None))
 
         return _PreparedStepAttempts(
             engine=engine,
@@ -881,6 +901,15 @@ class PreparedProgramRun:
             "strategy": self.control_payload,
             "program_schedule": json.loads(self._schedule_json),
         }
+
+    def pending(self, native: Any, *, t_end: float) -> bool:
+        """Compare the requested grid coordinate without relabelling the native clock."""
+        temporal = getattr(self.engine, "_temporal_restart_state", None)
+        if type(self.strategy) is ExternalTimeGrid and self.strategy.frontier == "computed":
+            receipt = None if temporal is None else temporal.controller_state.get("external_frontier")
+            if receipt is not None and receipt["reached"] == float(native.time()).hex():
+                return float.fromhex(receipt["requested"]) < t_end
+        return native.time() < t_end
 
     def begin(self, temporal: Any, *, time: Any, macro_step: Any) -> None:
         """Validate and bind restart state before any accepted mutation can occur."""

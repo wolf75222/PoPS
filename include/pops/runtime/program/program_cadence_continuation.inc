@@ -111,7 +111,7 @@ std::string advance_cadence_region(double& physical_time_cursor, int& macro_step
         throw std::logic_error(runtime +
                                " Program resume requires the same dt and a consumed map port");
       ExactContractBuilder contract;
-      contract.text("pops.program-cadence.entry.v1")
+      contract.text("pops.program-cadence.entry.v2")
           .scalar(dt)
           .scalar(substeps_)
           .scalar(stride_)
@@ -123,6 +123,7 @@ std::string advance_cadence_region(double& physical_time_cursor, int& macro_step
           .scalar(frame.cadence.window_start)
           .scalar(frame.cadence.window_end)
           .scalar(frame.cadence.numerical_dt)
+          .scalar(frame.cadence.effective_dt)
           .scalar(frame.cadence.window_steps);
       entry_contract = std::move(contract).release();
     });

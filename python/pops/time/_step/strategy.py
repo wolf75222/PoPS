@@ -286,21 +286,38 @@ class ExternalTimeGrid(StepStrategy):
     """Follow the strictly increasing grid supplied under ``grid_id`` at run time."""
 
     grid_id: str
+    frontier: str = "exact"
+    endpoint_ulps: int = 0
     kind: ClassVar[str] = "external_time_grid"
 
     def __post_init__(self) -> None:
         if not isinstance(self.grid_id, str) or not self.grid_id:
             raise ValueError("ExternalTimeGrid.grid_id must be a non-empty string")
+        if self.frontier not in ("exact", "computed"):
+            raise ValueError("ExternalTimeGrid.frontier must be exact or computed")
+        if type(self.endpoint_ulps) is not int or not 0 <= self.endpoint_ulps <= 1024:
+            raise ValueError("ExternalTimeGrid.endpoint_ulps must be an integer in [0, 1024]")
+        if self.frontier == "exact" and self.endpoint_ulps != 0:
+            raise ValueError("ExternalTimeGrid exact frontier requires endpoint_ulps=0")
 
     def to_data(self) -> dict[str, Any]:
+        if self.frontier == "computed":
+            return {"kind": self.kind, "grid_id": self.grid_id, "schema_version": 2,
+                    "frontier": self.frontier, "endpoint_ulps": self.endpoint_ulps}
         return {"kind": self.kind, "grid_id": self.grid_id}
 
     @classmethod
     def from_data(cls, payload: Mapping[str, Any]) -> ExternalTimeGrid:
-        if not isinstance(payload, Mapping) or set(payload) != {"kind", "grid_id"} \
-                or payload.get("kind") != cls.kind:
+        if not isinstance(payload, Mapping) or payload.get("kind") != cls.kind:
             raise ValueError("ExternalTimeGrid strategy manifest has invalid keys")
-        return cls(payload["grid_id"])
+        if set(payload) == {"kind", "grid_id"}:
+            return cls(payload["grid_id"])
+        if set(payload) != {"kind", "grid_id", "schema_version", "frontier", "endpoint_ulps"} \
+                or type(payload["schema_version"]) is not int or payload["schema_version"] != 2 \
+                or payload["frontier"] != "computed":
+            raise ValueError("ExternalTimeGrid strategy manifest has invalid keys")
+        return cls(payload["grid_id"], frontier=payload["frontier"],
+                   endpoint_ulps=payload["endpoint_ulps"])
 
     def initial_runtime_controls(self) -> Mapping[str, Any] | None:
         """The declared grid identity does not supply its runtime coordinates."""

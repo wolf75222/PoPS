@@ -1689,7 +1689,7 @@ class RuntimeInstance:
             if callable(begin_post_commit):
                 begin_post_commit(manifest.run_identity)
             self._fire_consumers(at_start=True)
-            while native.time() < t_end and steps < max_steps:
+            while prepared_run.pending(native, t_end=t_end) and steps < max_steps:
                 deadline = next_consumer_deadline(self._consumer_graph, self._moments())
                 run_end = float(t_end)
                 _validate_external_grid_deadline(prepared_run, deadline, run_end)
@@ -1709,11 +1709,11 @@ class RuntimeInstance:
                     prepared_run,
                     t_end=step_end,
                     deadline=deadline if deadline_is_active else None,
-                    at_end=lambda: not (native.time() < t_end),
+                    at_end=lambda: not prepared_run.pending(native, t_end=t_end),
                 )
                 rejected_steps += int(step_report.attempts) - 1
                 steps += 1
-            if native.time() < t_end:
+            if prepared_run.pending(native, t_end=t_end):
                 raise RuntimeError(
                     "max_steps exhausted before t_end: "
                     f"accepted {steps} step(s), reached t={native.time()!r}, "
