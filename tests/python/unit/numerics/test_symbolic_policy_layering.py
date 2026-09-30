@@ -10,6 +10,17 @@ import pytest
 ROOT = Path(__file__).resolve().parents[4]
 
 
+def _finite_program_fixture():
+    from pops import Case, Model
+    from pops.frames import Cartesian2D
+    from pops.time import Program
+    model = Model("finite_expr", frame=Cartesian2D())
+    state = model.state("U", components=("rho", "m"))
+    block = Case("finite_case").block("fluid", model)
+    program = Program("finite_program")
+    return program, program.state(block[state])
+
+
 @pytest.mark.parametrize("path", (
     "linalg/finite.py", "numerics/reconstruction/user.py",
     "numerics/reconstruction/joint.py", "numerics/riemann/user.py",
@@ -75,7 +86,6 @@ def test_separate_mixed_expr_arithmetic_keeps_one_joint_application_and_old_prog
     from pops._ir.expr import Const
     from pops._ir.finite_linear import FiniteApplication, FiniteProjection
     from pops.time.expressions import encode_expressions
-    from tests.python.unit.time.test_program_expressions import fixture
     support = FiniteSupport("ordered", ("rho", "m"))
     vector = FiniteLinearMap(support, support, ((1, 2), (3, 4))).apply(support.bind((5, 6)))
     expressions = (Const(1) + vector[0], Const(2) + vector[1])
@@ -84,9 +94,9 @@ def test_separate_mixed_expr_arithmetic_keeps_one_joint_application_and_old_prog
     assert len(nodes) == 9
     assert sum(node[0] == "finite_linear_v1" for node in nodes) == 1
 
-    _, _, actual, state = fixture()
+    actual, state = _finite_program_fixture()
     actual.value("mixed", (state.n[0] + vector[0], state.n[1] + vector[1]))
-    _, _, legacy, previous = fixture()
+    legacy, previous = _finite_program_fixture()
     # The exact previous compiler DAG, authored directly in its owning IR layer.
     application = FiniteApplication("apply", support.contract, support.contract,
                                     ((1, 2), (3, 4)), (Const(5), Const(6)))
@@ -124,6 +134,25 @@ def test_compiler_lowering_cache_does_not_own_math_declarations_or_expressions()
     del expression
     gc.collect()
     assert expression_ref() is None
+
+
+def test_vector_scalar_arithmetic_preserves_distinct_literal_nodes_and_old_program_hash():
+    from pops.linalg import FiniteLinearMap, FiniteSupport
+    from pops._ir.expr import Const
+    from pops._ir.finite_linear import FiniteApplication, FiniteProjection
+    from pops.time.expressions import ProgramExpression
+    support = FiniteSupport("ordered", ("rho", "m"))
+    actual, state = _finite_program_fixture()
+    vector = FiniteLinearMap(support, support, ((1, 2), (3, 4))).apply(support.bind(state.n))
+    (vector + vector * Fraction(2, 3)).materialize(actual, "scaled", template=state.n)
+    legacy, previous = _finite_program_fixture()
+    application = FiniteApplication("apply", support.contract, support.contract,
+                                    ((1, 2), (3, 4)), (previous.n[0], previous.n[1]))
+    left, right = FiniteProjection(application, 0), FiniteProjection(application, 1)
+    legacy._pointwise_expression("scaled", ProgramExpression(
+        (left + left * Const(Fraction(2, 3)), right + right * Const(Fraction(2, 3))), previous.n),
+        finite_support=support.contract)
+    assert actual._ir_hash() == legacy._ir_hash()
 
 
 def test_registered_exact_literals_and_mutable_hook_values_are_captured_once():

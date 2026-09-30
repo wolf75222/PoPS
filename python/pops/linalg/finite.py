@@ -145,7 +145,15 @@ class FiniteVector:
     def __neg__(self): return self.support.bind(-x for x in self)
     def __mul__(self, scalar):
         scalar = _retain_scalar(scalar)
-        return self.support.bind(x*scalar for x in self)
+        # The original scalar DAG wrapped a supplied literal independently for
+        # each output component. Capture its immutable payload once, while
+        # preserving those distinct declaration identities; symbolic operands
+        # retain their original shared identity.
+        def component_scalar():
+            if isinstance(scalar, _ScalarPlan) and scalar.operation in {"number", "literal"}:
+                return _ScalarPlan(scalar.operation, scalar.arguments)
+            return scalar
+        return self.support.bind(x*component_scalar() for x in self)
     def __rmul__(self, scalar): return self*scalar
 
 

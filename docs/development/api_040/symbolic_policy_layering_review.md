@@ -51,6 +51,12 @@ mixed public Program hash and encoded nodes to the former explicit IR DAG,
 verify shared literal operands, and verify both declarations and lowered
 expressions are reclaimed. The initial affected selection passes 45 source tests;
 the complete prior affected selection plus these counterexamples passes 199.
+The second independent parity check caught a separate distinction: literal
+scalar multiplication historically wraps one constant per output component.
+The algebra now captures the supplied literal payload once but retains those
+distinct per-component declarations, while sharing genuinely symbolic operands.
+An exact `vec + vec*Fraction(2,3)` materialization counterexample matches the
+previous explicit IR Program hash. The targeted finite selection passes 16 tests.
 
 The test process selected installed Dim2 for loader compatibility and imported
 Python sources from this checkout using explicit `PYTHONPATH=$PWD/python` after
