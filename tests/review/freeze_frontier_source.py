@@ -11,11 +11,16 @@ import tarfile
 parser = argparse.ArgumentParser()
 parser.add_argument("--checkout", type=Path, required=True)
 parser.add_argument("--revision", required=True)
+parser.add_argument(
+    "--tree", action="store_true", help="archive an explicitly named merge-tree object"
+)
 parser.add_argument("--output", type=Path, required=True)
 args = parser.parse_args()
 checkout = args.checkout.resolve()
 revision = subprocess.check_output(
-    ["git", "rev-parse", args.revision + "^{commit}"], cwd=checkout, text=True
+    ["git", "rev-parse", args.revision + ("^{tree}" if args.tree else "^{commit}")],
+    cwd=checkout,
+    text=True,
 ).strip()
 output = args.output.resolve()
 assert not output.exists(), "use a new snapshot directory"
@@ -45,6 +50,7 @@ files = {
 material = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
 manifest = {
     "base_commit": revision,
+    "source_object_kind": "tree" if args.tree else "commit",
     "source_checkout": str(checkout),
     "files": files,
     "source_tree_sha256": hashlib.sha256(material).hexdigest(),

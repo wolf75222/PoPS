@@ -1,0 +1,38 @@
+{
+  "source_object": "7e3361ffcbb2674b9f46d8df3aa1ff5d9fc00eb8",
+  "source_tree_sha256": "7489ade1ea244d5b40f57d56c1c1d1f754f95dcf4fa9a9fd900f2f5c31c859ec",
+  "fixture_sha256": "955c53e60a09068d7076b14a8d24522428c89887f0c33fb48935ee124599a567",
+  "scope": "source and public lowering only",
+  "diffusion": [
+    {
+      "kind": "uniform",
+      "version": 6,
+      "ir_hash": "6f3bb3b447bb550fc4d822eab3ede7bcc9adfce92a4a3f3ed75cd039122d361b",
+      "semantic_sha256": "20ffddde47b54983a9e1068f3f947fdad2171fc57c3a06344587d17aec73d110",
+      "cpp_sha256": "6b29d1b9c86882f94dd519b8d573c4b0d42da8341c8b25a18f27ab3bd9147136",
+      "trace_lines": [
+        "ctx.consume_external_trace(\"pops.integral.v1/pops.semantic.v3:sha256:a8f870f8253c7420ba2b5e9a87f77d683d8f3c84eb644801f569176366ea0acc/right\", pops::runtime::program::AcceptedExchangeLedger::TraceSelection{\"pops.diffusive-operation.v1:sha256:eee580bb9bf99865dfefe783a5c41f704162eb85b0aa55fad1fab949e59adc22\",\"pops.diffusive-operation.v1:sha256:eee580bb9bf99865dfefe783a5c41f704162eb85b0aa55fad1fab949e59adc22/occurrence:0\",0,1,0,\"stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='diffusive_integral_forward_euler'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:1\"}, pops::Real(0x1.0000000000000p+0));",
+        "ctx.consume_external_trace(\"pops.integral.v1/pops.semantic.v3:sha256:a8f870f8253c7420ba2b5e9a87f77d683d8f3c84eb644801f569176366ea0acc/left\", pops::runtime::program::AcceptedExchangeLedger::TraceSelection{\"pops.diffusive-operation.v1:sha256:eee580bb9bf99865dfefe783a5c41f704162eb85b0aa55fad1fab949e59adc22\",\"pops.diffusive-operation.v1:sha256:eee580bb9bf99865dfefe783a5c41f704162eb85b0aa55fad1fab949e59adc22/occurrence:0\",0,0,0,\"stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='diffusive_integral_forward_euler'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:1\"}, pops::Real(0x1.0000000000000p+0));"
+      ]
+    },
+    {
+      "kind": "amr2",
+      "version": 6,
+      "ir_hash": "6ded69369c3fb1f8bcb95d622d935d02007bc20e0409cea39130f8e938102cf5",
+      "semantic_sha256": "ae83d2b29ed086fb319a20b8d410e67137913e7501a4174357e9111fc3fffd7a",
+      "cpp_sha256": "e1bf40056f1b1df3235e1acd12c52f5829625ee36f31eefb535be878d71a8361",
+      "trace_lines": [
+        "ctx.consume_external_trace(\"pops.integral.v1/pops.semantic.v3:sha256:515b61ebc00d6f7d46615e9c0d41732ea20c2f6f56b7652d09499330308c6bf3/right\", pops::runtime::program::AcceptedExchangeLedger::TraceSelection{\"pops.diffusive-operation.v1:sha256:5acd636243a112b95878c64331e3141bc79d2826ac66786f982f8d99eaeb2128\",\"pops.diffusive-operation.v1:sha256:5acd636243a112b95878c64331e3141bc79d2826ac66786f982f8d99eaeb2128/occurrence:0\",0,1,0,\"stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='diffusive_integral_forward_euler'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:1\"}, pops::Real(0x1.0000000000000p+0));",
+        "ctx.consume_external_trace(\"pops.integral.v1/pops.semantic.v3:sha256:515b61ebc00d6f7d46615e9c0d41732ea20c2f6f56b7652d09499330308c6bf3/left\", pops::runtime::program::AcceptedExchangeLedger::TraceSelection{\"pops.diffusive-operation.v1:sha256:5acd636243a112b95878c64331e3141bc79d2826ac66786f982f8d99eaeb2128\",\"pops.diffusive-operation.v1:sha256:5acd636243a112b95878c64331e3141bc79d2826ac66786f982f8d99eaeb2128/occurrence:0\",0,0,0,\"stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='diffusive_integral_forward_euler'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:1\"}, pops::Real(0x1.0000000000000p+0));"
+      ]
+    }
+  ],
+  "computed_diffusion": "refused before emission: spatial interval remapping unavailable in v1",
+  "scoped_diffusion": {
+    "refused": true,
+    "phase": "emission",
+    "diagnostic": "integral transfer requires an accepted, exact conservative face occurrence",
+    "provisional_version": 5,
+    "branch_result_authoring_refusal": "accepted trace requires this Program's conservative RHS value"
+  }
+}
