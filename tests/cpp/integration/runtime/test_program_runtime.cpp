@@ -3024,6 +3024,7 @@ TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforeP
   const auto before = sim.get_state("gas");
   bool stale = true;
   bool inadmissible = false;
+  bool physical_source_evaluated = false;
   ctx->install([&](double dt) {
     ctx->begin_step(dt);
     auto evaluation = ctx->evaluate_moving_interval("mesh", 0, "unit-interval", "endpoint-swept@1",
@@ -3051,6 +3052,7 @@ TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforeP
         sw(face) = use_stale ? shift/Real(2) : shift;
       });
       if (inadmissible) {
+        physical_source_evaluated = true;
         const auto initial_state = ctx->state(0).fab(patch).view();
         const auto volume = accepted.measures.fab(patch).view();
         const auto amount = source.fab(patch).view();
@@ -3073,7 +3075,15 @@ TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforeP
   EXPECT_TRUE(sim.program_exchange_records().empty());
   stale = false;
   inadmissible = true;
-  EXPECT_THROW(sim.step(.25), runtime::program::StepAttemptRejected);
+  try {
+    sim.step(.25);
+    FAIL() << "The negative-density proposal must fail physical recovery";
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    EXPECT_NE(message.find("System Program terminal state publication"), std::string::npos);
+    EXPECT_NE(message.find("variable recovery rejected the candidate"), std::string::npos);
+  }
+  EXPECT_TRUE(physical_source_evaluated);
   EXPECT_EQ(sim.get_state("gas"), before);
   EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 0u);
   EXPECT_TRUE(sim.program_exchange_records().empty());
@@ -3152,8 +3162,12 @@ TEST(ProgramRuntime, MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceEx
   sim.set_program_block_map({0});
   sim.begin_step_transaction(); sim.step(duration);
   const auto result = sim.get_state("gas");
-  if (!result.empty())
-    for (int cell = 0; cell < n; ++cell) EXPECT_NEAR(result[cell], 2.3+growth*duration, 2e-12);
+  std::size_t local_cells = 0;
+  for (std::size_t patch = 0; patch < ctx->state(0).local_size(); ++patch)
+    local_cells += static_cast<std::size_t>(ctx->state(0).box(patch).length(0));
+  ASSERT_EQ(result.size(), local_cells * kGasComponents);
+  for (std::size_t cell = 0; cell < local_cells; ++cell)
+    EXPECT_NEAR(result[cell], 2.3+growth*duration, 2e-12);
   const auto& accepted_geometry = ctx->moving_interval_geometry("mesh");
   ASSERT_TRUE(accepted_geometry.last_receipt.has_value());
   const auto& receipt = *accepted_geometry.last_receipt;
@@ -3202,6 +3216,8 @@ TEST(ProgramRuntime, MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceEx
         const auto face0 = cell+(cells+1)*c, face1 = face0+1;
         const Real q0 = previous(previous_offset)*v0(cell);
         const Real q1 = current(current_offset)*v1(cell);
+        if (component == 0)
+          EXPECT_NEAR(current(current_offset), Real(2.3)+growth*duration, 2e-12);
         const Real relative0 = flux(face0)-trace(face0)*sweeps(cell);
         const Real relative1 = flux(face1)-trace(face1)*sweeps(cell+1);
         const Real balance = (q1-q0)+(relative1-relative0)-source(source_offset);
