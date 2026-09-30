@@ -8,7 +8,7 @@ from typing import Any
 _UNSLICEABLE_OPS = frozenset({
     "solve_coupled_implicit", "solve_fields_from_blocks",
     "field_solve_from_blocks", "while", "branch", "range", "subcycle",
-    "solve_local_nonlinear", "solve_spatial_nonlinear",
+    "solve_local_nonlinear", "solve_spatial_nonlinear", "solve_spatial_field",
 })
 
 

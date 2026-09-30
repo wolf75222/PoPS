@@ -39,6 +39,13 @@ def validate_field_observation(value: Any) -> tuple[int, int, Any]:
         raise ValueError("field observation does not select its declared solved unknown")
     from pops.codegen.program_field_plan import _nodes, _reachable
 
+    if solve.op == "solve_spatial_field":
+        from ._program_nonlinear_problem import validate_nonlinear_field_request
+        validate_nonlinear_field_request(value.prog, solve)
+        if solve.attrs["field_problem_identity"] != identity.token:
+            raise ValueError("field observation belongs to a different original residual")
+        return width, selected, solve
+
     native_sources = tuple(node for node in _reachable(solve, _nodes(value.prog))
                            if node.op in ("field_problem_load", "field_problem_apply"))
     if not native_sources or any(node.attrs.get("field_problem_identity") != identity.token

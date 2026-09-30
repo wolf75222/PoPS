@@ -92,7 +92,7 @@ class _ProgramConstants:
     _STATE_BARRIER_OPS = frozenset({
         "project", "fill_boundary", "store_history", "input_fields",
         "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit",
-        "solve_implicit_source", "solve_spatial_nonlinear",
+        "solve_implicit_source", "solve_spatial_nonlinear", "solve_spatial_field",
     })
 
     _OPTIMIZE_PASSES = (
@@ -105,7 +105,7 @@ class _ProgramConstants:
         "principal_rate",
         "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "local_transform", "affine_moment_update", "linear_combine", "pointwise_expression",
         "linear_source", "solve_local_linear",
-        "solve_local_nonlinear", "solve_coupled_implicit", "solve_implicit_source", "solve_spatial_nonlinear",
+        "solve_local_nonlinear", "solve_coupled_implicit", "solve_implicit_source", "solve_spatial_nonlinear", "solve_spatial_field",
         "cell_compare", "where", "coupled_rate",
     })
 
@@ -118,7 +118,7 @@ class _ProgramConstants:
     })
     _HEAVY_KERNEL_OPS = frozenset({
         "solve_fields", "solve_fields_from_blocks", "solve_linear", "solve_coupled_implicit",
-        "solve_implicit_source", "solve_spatial_nonlinear",
+        "solve_implicit_source", "solve_spatial_nonlinear", "solve_spatial_field",
     })
 
     # GPU heuristic thresholds (Spec 3 s28 detectors, ADC-465). A warning report, never a hard error:

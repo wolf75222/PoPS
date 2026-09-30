@@ -57,6 +57,9 @@ def validate_solve_request_node(program: Any, token: Any) -> None:
     request = token.attrs.get("solve_request")
     if request is None:
         return
+    if token.op == "solve_spatial_field":
+        from pops.fields._program_nonlinear_problem import validate_nonlinear_field_request
+        return validate_nonlinear_field_request(program, token)
     if token.op == "solve_spatial_nonlinear":
         from pops.time._program.spatial_solve import validate_spatial_request
 
@@ -117,6 +120,11 @@ def build_solve_request(program: Any, request: Any, prepared: Any, *, name: Any)
     if any(unknown.interval is not None for unknown in request.unknowns):
         raise SolveRequestError("unsupported_interval_unknown", "point-native adapters cannot realize interval unknowns")
     from pops.time.implicit_stage import ImplicitStage
+    from pops.time.solve_problem import _SpatialFieldResidual
+
+    if type(request.problem) is _SpatialFieldResidual:
+        from pops.fields._program_nonlinear_problem import build_nonlinear_field_request
+        return build_nonlinear_field_request(program, request, prepared, name=name)
 
     if type(request.problem) is ImplicitStage:
         from pops.time._program.spatial_solve import build_spatial_request

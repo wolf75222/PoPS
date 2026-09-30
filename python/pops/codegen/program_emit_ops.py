@@ -1351,6 +1351,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         raise NotImplementedError(
             "emit_cpp_program: op '%s' (value '%s') is only lowerable inside a matrix_free_operator "
             "apply sub-block" % (v.op, v.name))
+    elif v.op == "solve_spatial_field":
+        from pops.codegen.program_emit_nonlinear_field import emit_nonlinear_field
+        emit_nonlinear_field(program, v, var, lines, prelude, target=target, block_indices=block_idx)
     elif v.op == "solve_spatial_nonlinear":
         from pops.codegen.program_emit_spatial_solve import emit_spatial_solve
 

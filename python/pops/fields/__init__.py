@@ -42,7 +42,8 @@ from .operator import (
     FieldProviderPack,
     SourceDensity,
 )
-from .methods import CellCenteredGeneralCoupled, CellCenteredSecondOrder, PreparedFieldMethod
+from .methods import (CellCenteredGeneralCoupled, CellCenteredNonlinearCoupled,
+                      CellCenteredSecondOrder, PreparedFieldMethod)
 from .lowering import (
     PreparedFieldLoweringBinding,
     PreparedFieldLoweringEvidence,
@@ -112,6 +113,7 @@ __all__ = [
     "CompositeHierarchySolve",
     "CellCenteredSecondOrder",
     "CellCenteredGeneralCoupled",
+    "CellCenteredNonlinearCoupled",
     "PreparedFieldMethod",
     "PreparedFieldLoweringBinding",
     "PreparedFieldLoweringEvidence",

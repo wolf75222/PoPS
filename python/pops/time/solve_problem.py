@@ -9,6 +9,20 @@ from typing import Any
 from pops.identity.scalar import exact_numeric_scalar
 
 
+@dataclass(frozen=True, slots=True)
+class _SpatialFieldResidual:
+    """Frozen physical field tuple and its exact co-located equation captures."""
+
+    field: Any
+    prototype: Any
+    coefficients: Any
+    captures: tuple[Any, ...]
+    local_expressions: tuple[Any, ...]
+    finite_difference_step: Any
+    physical_boundary: str
+    source_contract: Any
+
+
 def _frozen_product(value: Any, *, where: str) -> Any:
     if isinstance(value, Mapping):
         return MappingProxyType(dict(value))

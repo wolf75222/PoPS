@@ -43,7 +43,7 @@ def decode_field_literal(data: Any) -> ScalarLiteral:
     return literal
 
 
-def encode_field_expression(expression: Any, states: Any) -> tuple:
+def encode_field_expression(expression: Any, states: Any, *, unknowns: tuple = ()) -> tuple:
     """Encode only explicit qualified component reads and bounded scalar arithmetic."""
     from pops._ir.expr import Abs, Add, Const, Div, Mul, Neg, Pow, Sqrt, Sub, _wrap
     from pops._ir.handle_expr import ValueExpr
@@ -60,6 +60,8 @@ def encode_field_expression(expression: Any, states: Any) -> tuple:
         if type(value) in (QuantityRef, ValueExpr):
             if not value.handle.is_resolved:
                 raise ValueError("field expression must resolve its scientific input handles")
+            if type(value) is ValueExpr and value.handle in unknowns:
+                return ("unknown", unknowns.index(value.handle), value.handle.canonical_identity())
             matches = [(index, handle, components) for index, (handle, components) in enumerate(rows)
                        if handle == value.handle]
             if len(matches) != 1:
@@ -83,7 +85,8 @@ def encode_field_expression(expression: Any, states: Any) -> tuple:
     return encode(expression)
 
 
-def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...]) -> tuple[str, tuple[Any, ...]]:
+def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...],
+                         unknowns: tuple = (), unknown_view: str = "candidate") -> tuple[str, tuple[Any, ...]]:
     """Re-authenticate the closed AST and return native code plus its actual declaration reads."""
     rows = field_input_contract(states)
     if len(views) != len(rows):
@@ -97,6 +100,12 @@ def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...]
         op = node[0]
         if op == "literal" and len(node) == 2:
             return "static_cast<pops::Real>(%s)" % decode_field_literal(node[1]).to_cpp()
+        if op == "unknown" and len(node) == 3:
+            component, identity = node[1:]
+            if type(component) is not int or not 0 <= component < len(unknowns) or \
+                    canonical_bytes(_json_ready(identity)) != canonical_bytes(unknowns[component].canonical_identity()):
+                raise ValueError("field residual unknown identity changed after encoding")
+            return "%s(index, %d)" % (unknown_view, component)
         if op == "input" and len(node) == 4:
             index, component, data = node[1:]
             if type(index) is not int or index < 0 or index >= len(rows):

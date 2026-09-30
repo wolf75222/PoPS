@@ -49,6 +49,7 @@ _MODEL_OPS = (
 
 _ALLOWED_OPS = frozenset(
     {
+        "solve_spatial_field",
         "state",
         "geometry_state",
         "reynolds_update",
@@ -414,8 +415,10 @@ def _block_inverse_include(program: Any) -> str:
     condensed-implicit op (ADC-637): only a Program using condensed_* emits pops::detail::block_inverse.
     (block_inverse.hpp itself includes dense_eig.hpp, already pulled in by the template.)"""
     result = _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
-    if any(v.op == "solve_spatial_nonlinear" for v in program._values):
+    if any(v.op in ("solve_spatial_nonlinear", "solve_spatial_field") for v in program._values):
         result += "#include <pops/runtime/program/prepared_spatial_residual.hpp>\n"
+    if any(v.op == "solve_spatial_field" for v in program._values):
+        result += "#include <pops/numerics/elliptic/nd/general_field_operator.hpp>\n"
     if any(v.op == "affine_moment_update" for v in program._values):
         result += "#include <pops/numerics/moments/affine_velocity.hpp>\n"
     from .program_lowerability import all_ops

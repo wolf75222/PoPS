@@ -95,4 +95,29 @@ class CellCenteredGeneralCoupled(CellCenteredSecondOrder):
                 "coefficient_admissibility": "finite_general"}
 
 
-__all__ = ["CellCenteredSecondOrder", "CellCenteredGeneralCoupled", "PreparedFieldMethod"]
+class CellCenteredNonlinearCoupled(CellCenteredGeneralCoupled):
+    """Original mixed residual with explicitly selected central finite differences.
+
+    The first realization admits constant diffusion and local nonlinear reactions,
+    on a Uniform Cartesian layout. Unknowns remain one coupled spatial product.
+    """
+
+    def __init__(self, *, finite_difference_step: Any) -> None:
+        import math
+        from pops.identity.scalar import exact_numeric_scalar
+
+        step = exact_numeric_scalar(finite_difference_step, where="field residual FD step")
+        if not math.isfinite(float(step)) or step <= 0:
+            raise ValueError("field residual FD step must be positive and finite")
+        self.finite_difference_step = step
+
+    def options(self) -> dict[str, Any]:
+        from pops.identity.scalar import scalar_data
+
+        return {**super().options(), "contract": "pops.spatial-field-residual@1",
+                "derivative": {"route": "finite_difference", "scheme": "central_full_residual",
+                               "step": scalar_data(self.finite_difference_step)}}
+
+
+__all__ = ["CellCenteredSecondOrder", "CellCenteredGeneralCoupled",
+           "CellCenteredNonlinearCoupled", "PreparedFieldMethod"]

@@ -37,7 +37,7 @@ def _physical_metadata(node: Any) -> Mapping:
 def _solve_nodes(program: Any, handle: Any) -> tuple[Any, ...]:
     expected = _canonical(handle.canonical_identity())
     return tuple(node for node in _nodes(program)
-                 if node.op == "solve_linear"
+                 if node.op in ("solve_linear", "solve_spatial_field")
                  and _canonical(_physical_metadata(node).get("field_handle")) == expected)
 
 
@@ -151,6 +151,27 @@ class ResolvedProgramFieldPlan:
             metadata = _physical_metadata(solve)
             if _canonical(metadata.get("field_problem")) != expected_problem:
                 raise ValueError("Program field solve changed its registered physical equations")
+            if solve.op == "solve_spatial_field":
+                from pops.fields._program_nonlinear_problem import (
+                    compile_equations, validate_nonlinear_field_request,
+                )
+                from pops.fields.methods import CellCenteredNonlinearCoupled
+                from pops.fields._program_problem import _physical_boundary
+                from pops.identity.scalar import scalar_data
+                validate_nonlinear_field_request(program, solve)
+                if self.target != "system" or type(self.discretization.method) is not CellCenteredNonlinearCoupled:
+                    raise ValueError("original mixed residual requires its explicit Uniform nonlinear method")
+                captures = solve.inputs[2:2 + solve.attrs["capture_count"]]
+                diffusion, local = compile_equations(self.operator, captures)
+                if _canonical(local) != _canonical(solve.attrs["local_expressions"]) or \
+                        _canonical(diffusion) != _canonical(solve.inputs[1].attrs["expressions"]) or \
+                        _canonical(solve.attrs["finite_difference_step"]) != _canonical(scalar_data(self.discretization.method.finite_difference_step)) or \
+                        solve.attrs["physical_boundary"] != _physical_boundary(self.operator):
+                    raise ValueError("native residual changed its registered equations/method/boundaries")
+                from pops.time.references import canonical_handle
+                if {_canonical(canonical_handle(value.state_ref).canonical_identity()) for value in captures} != expected_dependencies:
+                    raise ValueError("native residual captures differ from the physical dependencies")
+                continue
             reachable = _reachable(solve, all_nodes)
             operations = tuple(node for node in reachable if node.op in (
                 "field_problem_load", "field_problem_coefficients", "field_problem_apply"))
@@ -182,7 +203,7 @@ def capture_program_field_plans(problem: Any, detach: Any, *, target: str,
             continue
         handle = problem.resolve(problem._field_registry.handle(name))
         solves = _solve_nodes(program, handle)
-        targets = tuple("program:solve_linear:%d" % node.id for node in solves)
+        targets = tuple("program:%s:%d" % (node.op, node.id) for node in solves)
         if not targets:
             raise ValueError("generic field %r requires an explicit Program solve" % name)
         storage = FieldStorageBinding(registration.operator.unknowns, layout_plan.layout_for(handle))

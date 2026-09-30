@@ -121,6 +121,10 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
     problem = registration.operator
     if type(problem) is not FieldProblem or isinstance(problem, FieldOperator):
         raise TypeError("general field binding requires FieldProblem; scalar provider adapters retain their existing field solve route")
+    from .methods import CellCenteredNonlinearCoupled
+    if type(registration.discretization.method) is CellCenteredNonlinearCoupled:
+        from ._program_nonlinear_problem import bind_nonlinear_field_problem
+        return bind_nonlinear_field_problem(program, field, registration, values=values, at=at, solver=solver)
     method = registration.discretization.method
     if type(method) not in (CellCenteredSecondOrder, CellCenteredGeneralCoupled):
         raise FieldProblemError("field.native.method", "general field native realization requires a cell-centred second-order method")

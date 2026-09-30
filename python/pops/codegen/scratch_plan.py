@@ -429,20 +429,22 @@ def _persistent_solver_buffers(program: Any) -> list:
         if value.op == "matrix_free_operator"
     }
     for v in values:
-        if v.op == "solve_spatial_nonlinear":
+        if v.op in ("solve_spatial_nonlinear", "solve_spatial_field"):
             from pops.time._program.spatial_solve import spatial_newton_options
 
             restart = spatial_newton_options(v.attrs["newton_controls"])["restart"]
             persistent.append({
                 "kind": "prepared_spatial_residual",
                 "name": v.name,
-                "buffers": restart + 13,
+                "buffers": restart + 13 + (2 + v.attrs["capture_count"] if v.op == "solve_spatial_field" else 0),
                 "exact": False,
                 "per_materialized_level": True,
                 "note": (
                     "four FD/candidate fields + seven Newton fields + restart+1 GMRES basis "
                     "fields + one full-halo trial field; lower bound excludes the selected "
-                    "diffusion face/boundary workspace and residual-operation scratch"),
+                    "diffusion face/boundary workspace and residual-operation scratch"
+                    + ("; includes one finite-status field, one independent solved output and exact frozen captures"
+                       if v.op == "solve_spatial_field" else "")),
             })
         elif v.op == "matrix_free_operator":
             operator_bundle = _operator_bundle_footprint(v)

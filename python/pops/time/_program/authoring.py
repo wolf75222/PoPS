@@ -683,6 +683,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         "solve_local_linear",
         "solve_local_nonlinear",
         "solve_spatial_nonlinear",
+        "solve_spatial_field",
         "solve_coupled_implicit",
         "solve_linear",
         "condensed_coeffs",
