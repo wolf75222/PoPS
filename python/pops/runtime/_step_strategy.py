@@ -743,7 +743,10 @@ class ComputedDtController(StepController[ComputedDt]):
             for _ in range(self.strategy.endpoint_ulps):
                 upper = math.nextafter(upper, math.inf)
             if reached > upper:
-                raise RuntimeError("ComputedDt reached endpoint crosses the declared run frontier")
+                raise RuntimeError("ComputedDt reached endpoint crosses the declared run frontier: "
+                    f"start={now.hex()} requested_duration={requested_dt.hex()} "
+                    f"effective_duration={duration.hex()} reached={reached.hex()} "
+                    f"run_limit={float(t_end).hex()} allowed_upper={upper.hex()}")
             receipt.update(schema_version=1, start=now.hex(), requested_duration=requested_dt.hex(), rejections=rejected,
                            duration=duration.hex(), reached=reached.hex(), limit=float(t_end).hex())
 
