@@ -117,7 +117,8 @@ def _emit_local_transform_kernel(
 
 
 def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, block_idx: Any = 0,
-                        *, provider_plans: Any, consumer_qid: str, plan_exprs: Any = None) -> list:
+                        *, provider_plans: Any, consumer_qid: str, plan_exprs: Any = None,
+                        evaluation=None, variables=None) -> list:
     """Lower ``source`` (a named ``m.source_term``): outA(i,j,c) = S_c(U, prims, aux, params) per cell.
 
     @p block_idx (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads when a source
@@ -131,11 +132,16 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
             "emit_cpp_program: source '%s' is not declared on the model (m.source_term); declared: %s"
             % (name, sorted(impl._source_terms)))
     exprs = list(expand_evaluation_boundaries(impl._source_terms[name], impl.prim_defs))
+    from pops.model.global_quantity import global_references
+    if global_references(tuple(impl.prim_defs.values())):
+        exprs = list(expand_primitive_recipes(exprs, impl.prim_defs))
     provider_binding = _provider_binding(
         impl, exprs if plan_exprs is None else plan_exprs, provider_plans, consumer_qid)
+    from .program_global_sources import bind_source_globals
+    exprs, global_prelude = bind_source_globals(exprs, evaluation, variables)
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     helpers = getattr(provider_plans, "source_kernel_helpers", None)
-    if helpers is not None:
+    if helpers is not None and not global_prelude:
         shared_call = helpers.call(
             impl, exprs, binding=provider_binding, state_var=state_var,
             out_var=out_var, block_index=block_idx)
@@ -148,7 +154,7 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
                                                  with_prim=True, provider_binding=provider_binding)]
     body += ["    outA(index, %d) = %s;" % (c, _checked_inline_expr(e)) for c, e in enumerate(exprs)]
     body += _kernel_close()
-    return body
+    return global_prelude + body
 
 
 def _component_sources(

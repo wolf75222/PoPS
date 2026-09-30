@@ -31,7 +31,7 @@ class _ProgramCall(_ProgramBase):
     """Private typed operator-call lowering used by callable operator handles."""
 
     def _call(self, operator: Any, *args: Any, name: Any = None, schedule: Any = None,
-              _sampling: Any = None) -> Any:
+              _sampling: Any = None, _global_inputs: Any = None) -> Any:
         """Resolve, type-check and lower one exact operator handle."""
         from pops.model import OperatorHandle
         if not isinstance(operator, OperatorHandle):
@@ -50,7 +50,18 @@ class _ProgramCall(_ProgramBase):
         self._validate_scheduled_reads(args, consumer="operator %r" % op.name)
         if schedule is not None:
             self._validate_schedule(op, schedule, args)
-        if _sampling is not None:
+        if _global_inputs is not None:
+            from pops._ir.balance import source_balance_supported
+            view = op.lowering.get("physical_balance")
+            if source_balance_supported(view):
+                from .source_rate import lower_source_rate
+                result = lower_source_rate(self, op, args, name, global_inputs=_global_inputs)
+            elif op.kind == "local_source":
+                result = self._lower_local_source(op, operator, operator_name, args, name,
+                                                  global_inputs=_global_inputs)
+            else:
+                raise NotImplementedError("physical global inputs currently require a source-only Equation consumer; FieldProblem/flux providers need their own binding contract")
+        elif _sampling is not None:
             from .principal import lower_principal_rate
             if schedule is not None:
                 raise ValueError("principal grouped evaluation requires a common unscheduled stage")
@@ -183,16 +194,21 @@ class _ProgramCall(_ProgramBase):
         return handler(self, op, operator_handle, operator_name, args, name)
 
     def _lower_local_source(self, op: Any, _operator_handle: Any, operator_name: Any,
-                            args: Any, name: Any) -> Any:
+                            args: Any, name: Any, *, global_inputs: Any = None) -> Any:
+        from .global_sources import source_global_inputs
+        bindings, captures = source_global_inputs(self, op, args[0], global_inputs)
         fields = args[1] if len(args) > 1 else None
         source_name = op.lowering.get("source", operator_name)
         if source_name == "default":
+            if bindings:
+                raise NotImplementedError("physical global default-source native provider is not implemented; declare a named physical source")
             # The default source lives in m._source, not as a named source_term; reach it
             # through the source-only RHS path (byte-identical to flux=False,
             # sources=["default"]), since ctx.source(name) only resolves named source_terms.
             return self._rhs_primitive(name=name, state=args[0], fields=fields, flux=False,
                                        sources=["default"])
-        return self._source(source_name, state=args[0], fields=fields)
+        return self._source(source_name, state=args[0], fields=fields,
+                            global_bindings=bindings, global_captures=captures)
 
     def _lower_rate(self, op: Any, _operator_handle: Any, operator_name: Any,
                     args: Any, name: Any) -> Any:

@@ -25,6 +25,8 @@ from .provider_pack import ProviderPack
 
 
 SCHEMA_VERSION = 10
+GLOBAL_QUANTITIES_SCHEMA_VERSION = 11
+SUPPORTED_SCHEMA_VERSIONS = (SCHEMA_VERSION, GLOBAL_QUANTITIES_SCHEMA_VERSION)
 
 _WAVE_SPEED_PROVIDERS = frozenset({"explicit_pair", "jacobian", "pressure_derived"})
 
@@ -198,6 +200,7 @@ class ModuleManifest:
         "abi_requirements",
         "params_utilization",
         "expressions",
+        "global_quantities",
     )
 
     def __init__(
@@ -220,6 +223,7 @@ class ModuleManifest:
         abi_requirements: Any,
         params_utilization: Any = None,
         expressions: Any = None,
+        global_quantities: Any = None,
     ) -> None:
         if not isinstance(operators, OperatorRegistryManifest):
             raise TypeError("ModuleManifest operators must be an OperatorRegistryManifest")
@@ -256,7 +260,24 @@ class ModuleManifest:
                 "ModuleManifest wave_speed_provider %r must be None or one of %s"
                 % (wave_speed_provider, ", ".join(sorted(_WAVE_SPEED_PROVIDERS)))
             )
-        object.__setattr__(self, "schema_version", SCHEMA_VERSION)
+        globals_ = {} if global_quantities is None else global_quantities
+        if not isinstance(globals_, Mapping):
+            raise TypeError("ModuleManifest global_quantities must be a mapping")
+        from pops._ir.quantity import PhysicalDimension
+        from .handles import Handle
+        for key, declaration in globals_.items():
+            require_manifest_name(key)
+            row = require_exact_keys(declaration, {"version", "scope", "units", "handle"},
+                                     where="global quantity")
+            handle = Handle.from_canonical_identity(row["handle"])
+            if (row["version"] != 1 or isinstance(row["version"], bool)
+                    or row["scope"] != "global" or handle.owner_path != owner
+                    or handle.is_instance or handle.kind != "global_quantity" or handle.local_id != key):
+                raise ValueError("ModuleManifest global quantity declaration authority changed")
+            if PhysicalDimension.from_data(row["units"]).to_data() != row["units"]:
+                raise ValueError("ModuleManifest global quantity units must be canonical")
+        object.__setattr__(self, "global_quantities", _freeze_json(globals_, where="global quantities"))
+        object.__setattr__(self, "schema_version", GLOBAL_QUANTITIES_SCHEMA_VERSION if globals_ else SCHEMA_VERSION)
         object.__setattr__(self, "name", name)
         object.__setattr__(
             self, "owner_path", _freeze_json(owner.to_data(), where="module owner_path")
@@ -318,10 +339,11 @@ class ModuleManifest:
             abi_requirements=requirements,
             params_utilization=_thaw_json(self.params_utilization),
             expressions=_thaw_json(self.expressions),
+            global_quantities=_thaw_json(self.global_quantities),
         )
 
     def to_dict(self) -> Any:
-        return {
+        result = {
             "schema_version": self.schema_version,
             "name": self.name,
             "owner_path": _thaw_json(self.owner_path),
@@ -342,6 +364,9 @@ class ModuleManifest:
             "abi_requirements": _thaw_json(self.abi_requirements),
             "expressions": _thaw_json(self.expressions),
         }
+        if self.global_quantities:
+            result["global_quantities"] = _thaw_json(self.global_quantities)
+        return result
 
     @classmethod
     def from_dict(cls, data: Any) -> ModuleManifest:
@@ -366,14 +391,16 @@ class ModuleManifest:
             "abi_requirements",
             "expressions",
         }
+        if isinstance(data, Mapping) and data.get("schema_version") == GLOBAL_QUANTITIES_SCHEMA_VERSION:
+            expected.add("global_quantities")
         row = require_exact_keys(data, expected, where="ModuleManifest")
         version = row["schema_version"]
         if isinstance(version, bool) or not isinstance(version, int):
             raise TypeError("ModuleManifest schema_version must be an integer")
-        if version != SCHEMA_VERSION:
+        if version not in SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError(
-                "unsupported ModuleManifest schema_version %r (expected %d)"
-                % (version, SCHEMA_VERSION)
+                "unsupported ModuleManifest schema_version %r (expected one of %s)"
+                % (version, SUPPORTED_SCHEMA_VERSIONS)
             )
         owner = canonical_owner(row["owner_path"], where="ModuleManifest owner_path")
         operators = OperatorRegistryManifest.from_dict(
@@ -397,6 +424,7 @@ class ModuleManifest:
             abi_requirements=row["abi_requirements"],
             params_utilization=row["params_utilization"],
             expressions=row["expressions"],
+            global_quantities=row.get("global_quantities"),
         )
         if result.to_dict() != dict(row):
             raise ValueError("ModuleManifest is not in canonical form")

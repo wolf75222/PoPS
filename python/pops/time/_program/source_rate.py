@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-def lower_source_rate(program, operator, arguments, name):
+def lower_source_rate(program, operator, arguments, name, *, global_inputs=None):
     from pops.model.handles import OperatorHandle
     from pops.time.values import _Coeff
     from .value_validation import rate_space_for
@@ -12,6 +12,17 @@ def lower_source_rate(program, operator, arguments, name):
     view = operator.lowering.get("physical_balance")
     if not source_balance_supported(view):
         return None
+    if global_inputs is not None:
+        from types import SimpleNamespace
+        from .global_sources import source_global_inputs
+        bodies = []
+        for occurrence in view.occurrences:
+            payload = occurrence.payload
+            registry = program._operator_registries[payload.owner_path]
+            registered = (payload.registered_operator_name if isinstance(payload, OperatorHandle)
+                          else registry.target_for_handle(payload.local_id))
+            bodies.append(registry.get(registered).body)
+        source_global_inputs(program, SimpleNamespace(body=tuple(bodies)), arguments[0], global_inputs)
     values, coefficients = [], []
     for occurrence in view.occurrences:
         handle = occurrence.payload
@@ -28,7 +39,16 @@ def lower_source_rate(program, operator, arguments, name):
             if len(matches) != 1:
                 raise ValueError("source rate requires one exact input for every source space")
             inputs.append(matches[0])
-        values.append(program._call(handle, *inputs))
+        selected_globals = global_inputs
+        if global_inputs is not None:
+            from pops.model.global_quantity import global_references
+            from .global_sources import physical_source_roots
+            registry = program._operator_registries[handle.owner_path]
+            roots = physical_source_roots(registry.get(handle.registered_operator_name).body, inputs[0])
+            reads = {ref.handle for ref in global_references(roots)}
+            selected_globals = {port:capture for port,capture in global_inputs.items()
+                                if port.declaration_ref in reads}
+        values.append(program._call(handle, *inputs, _global_inputs=selected_globals))
         coefficients.append(_Coeff({0: occurrence.coefficient}).to_polynomial())
     if not values:
         # An empty selected balance is the zero rate in its original state space.

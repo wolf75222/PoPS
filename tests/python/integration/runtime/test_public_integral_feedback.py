@@ -48,10 +48,11 @@ def _receipt_check(ledgers,quantity,q,delivered):
 
 
 @pytest.mark.parametrize("cells",(8,16))
+@pytest.mark.parametrize("physical_global",(False,True))
 def test_public_feedback_original_source_real_exterior_and_byte_exact_restart(
-        isolated_native_cache,native_cxx,kokkos_root,tmp_path,record_property,cells):
+        isolated_native_cache,native_cxx,kokkos_root,tmp_path,record_property,cells,physical_global):
     world = _world()
-    case,layout,quantity,initial = _case(cells)
+    case,layout,quantity,initial = _case(cells,physical_global=physical_global)
     artifact = _compile(world,case,layout)
     directory = collective_directory(world,tmp_path)
     runtime = _bind(world,artifact,initial)
@@ -94,12 +95,14 @@ def test_public_feedback_original_source_real_exterior_and_byte_exact_restart(
     record_property("dim",2)
     record_property("rank",0 if world is None else int(world.rank))
     record_property("size",1 if world is None else int(world.size))
+    record_property("physical_global_source",physical_global)
 
 
+@pytest.mark.parametrize("physical_global",(False,True))
 def test_feedback_rejected_transport_preserves_capture_integral_and_safe_retry(
-        isolated_native_cache,native_cxx,kokkos_root,tmp_path):
+        isolated_native_cache,native_cxx,kokkos_root,tmp_path,physical_global):
     world = _world()
-    case,layout,quantity,initial = _case(8,proposed_dt=.5)
+    case,layout,quantity,initial = _case(8,proposed_dt=.5,physical_global=physical_global)
     artifact = _compile(world,case,layout)
     directory = collective_directory(world,tmp_path)
     runtime = _bind(world,artifact,initial)

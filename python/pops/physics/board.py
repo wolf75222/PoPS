@@ -65,7 +65,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
     _physics_mutators = frozenset({
         "state", "species", "primitive", "primitive_state", "scalar", "aux", "field",
-        "vector", "flux", "source", "local_linear_operator", "field_operator",
+        "vector", "flux", "source", "global_quantity", "local_linear_operator", "field_operator",
         "operator", "riemann", "invariant", "rate", "select_balance",
         "finite_volume_rate", "coupled_rate", "interaction",
         "field_provider", "local_transform", "projection", "wave_speeds", "wave_speeds_from_jacobian",
@@ -1008,6 +1008,20 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         """Install dense-Jacobian Roe with a typed Harten/NoEntropyFix policy."""
         self._dsl.roe_from_jacobian(entropy_fix=entropy_fix)
         self._invalidate_authoring_views()
+
+    def global_quantity(self, name, *, units):
+        """Declare a global physical source input before choosing the time method."""
+        from pops.model.global_quantity import GlobalQuantityHandle
+        self._guard_mutable("declare a global quantity")
+        registry = (self._multi_module._global_quantities if self._multi_module is not None
+                    else self._dsl._physical_global_quantities)
+        if name in registry:
+            raise ValueError("global quantity %r is already declared" % name)
+        handle = GlobalQuantityHandle(name, owner=self.owner_path, units=units)
+        registry[name] = handle
+        self._module_cache = None
+        self._dsl._module_cache = None
+        return handle
 
     def source(self, name: Any, on: Any = None, value: Any = None, *, fields: Any = None) -> Any:
         """Declare a named local source term; returns a :class:`SourceHandle`."""

@@ -1155,6 +1155,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx,
             provider_plans=provider_plans,
             consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+            evaluation=v, variables=var,
         )
     elif v.op == "apply":
         state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first

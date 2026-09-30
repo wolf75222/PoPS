@@ -15,14 +15,23 @@ from pops.time import FixedDt
 
 
 def build_feedback(*, gamma=.3, initial=.7, units=PhysicalDimension(), cells=8,
-                   periodic=True, proposed_dt=.01, selected_axis=0, initial_condition=False):
+                   periodic=True, proposed_dt=.01, selected_axis=0, initial_condition=False,
+                   physical_global=False, components=("mass",)):
     frame = Rectangle("feedback", lower=(0.,0.), upper=(1.,1.)).frame(Cartesian2D())
     model = pops.Model("feedback_physics", frame=frame)
-    state = model.state("density", components=("mass",))
+    state = model.state("density", components=components)
     x,y = frame.axes
     flux = model.flux("transport", frame=frame, state=state,
-        components={x:(state[0],),y:(0*state[0],)}, waves={x:(1.,),y:(0.,)})
-    reaction = model.source("reaction", on=state, value=(-gamma*state[0],))
+        components={x:tuple(state[c] for c in range(len(components))),
+                    y:tuple(0*state[c] for c in range(len(components)))},
+        waves={x:tuple(1. for _ in components),y:tuple(0. for _ in components)})
+    if physical_global:
+        circuit = model.global_quantity("circuit_quantity", units=units)
+        reaction = model.source("reaction", on=state,
+            value=tuple(-gamma*circuit*state[c] for c in range(len(components))))
+    else:
+        reaction = model.source("reaction", on=state,
+            value=tuple(-gamma*state[c] for c in range(len(components))))
     balance = model.rate("balance", equation=ddt(state)==-div(flux)+reaction)
     reaction_rate = balance.select(reaction)
     transport = balance.select(flux)
@@ -46,9 +55,11 @@ def build_feedback(*, gamma=.3, initial=.7, units=PhysicalDimension(), cells=8,
     temporal = program.state(block[state])
     quantity = program.integral_state("q",initial=initial,units=units)
     q = program.integral_value(quantity,at=temporal.n.point,scope="candidate")
-    source = reaction_rate(temporal.n)
+    source = (program.evaluate_source(reaction_rate,temporal.n,
+        global_inputs={block[circuit]:q}) if physical_global else reaction_rate(temporal.n))
     reacted = program.value("reaction_candidate",
-        (temporal.n[0]+program.dt*q*source[0],),at=temporal.n.point)
+        tuple(temporal.n[c]+program.dt*(source[c] if physical_global else q*source[c])
+              for c in range(len(components))),at=temporal.n.point)
     rate = transport(reacted)
     accepted = program.value("accepted",reacted+program.dt*rate,at=temporal.next.point)
     program.commit(temporal.next, accepted)

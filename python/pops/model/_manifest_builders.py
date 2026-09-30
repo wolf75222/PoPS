@@ -230,6 +230,9 @@ def build_module_manifest(module: Any) -> ModuleManifest:
         abi_requirements={"route_registry_signature": routes["signature"], "abi_key": None},
         params_utilization=_params_utilization(params),
         expressions=expressions,
+        global_quantities={name: {**handle.declaration_data(),
+            "handle": index.authenticate(handle)._resolved(canonical_owner).canonical_identity()}
+            for name, handle in sorted(module._global_quantities.items())},
     )
 
 

@@ -61,6 +61,13 @@ def rebind_state_symbols(value: Any, state: Any, spaces: Any, *, module: Any = N
     memo: dict[int, Any] = {}
 
     def _clone(item: Any) -> Any:
+        from pops.model.global_quantity import GlobalQuantityRef
+        if isinstance(item, GlobalQuantityRef):
+            if module is None:
+                raise TypeError("physical global source requires its Module authority")
+            registered = module._global_quantities.get(item.handle.local_id)
+            if (registered is None or registered != item.handle or registered.units != item.units):
+                raise ValueError("physical global quantity declaration owner/units are not authenticated")
         from pops._ir.application import ApplicationProjection
         if isinstance(item, ApplicationProjection):
             if item.application.effects:

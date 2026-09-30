@@ -145,6 +145,10 @@ def module_content_hash(module: Any) -> str:
             )
         ],
     }
+    if module._global_quantities:
+        payload["global_quantities_v1"] = {
+            name: handle.declaration_data() for name, handle in sorted(module._global_quantities.items())
+        }
     canonical = json.dumps(
         canonical_hash_data(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

@@ -46,6 +46,7 @@ class Module(ModuleFreezable):
         self._state_handles = {}
         self._field_handles = {}
         self._aux_handles = {}
+        self._global_quantities = {}
         self._param_registry = ParamRegistry(owner=self.owner_path, mutation_guard=self._guard_mutable)
         self._registry = OperatorRegistry(
             owner=self.owner_path, mutation_guard=self._guard_mutable)
@@ -739,6 +740,16 @@ class Module(ModuleFreezable):
         """Return the registry-issued handle of a declared auxiliary field."""
         return self._descriptor_handle(aux, self._aux, self._aux_handles, "aux field")
 
+    def global_quantity(self, name, *, units):
+        """Declare a scalar physical input; Program supplies its scoped value."""
+        self._guard_mutable("declare a global quantity")
+        from .global_quantity import GlobalQuantityHandle
+        if name in self._global_quantities:
+            raise ValueError("global quantity %r is already declared" % name)
+        handle = GlobalQuantityHandle(name, owner=self.owner_path, units=units)
+        self._global_quantities[name] = handle
+        return handle
+
     def declaration_index(self) -> DeclarationIndex:
         """Read-only union of the Module's authoritative family registries."""
         candidates = [
@@ -746,6 +757,7 @@ class Module(ModuleFreezable):
             *self._field_handles.values(),
             *self._param_registry.handles(),
             *self._aux_handles.values(),
+            *self._global_quantities.values(),
             *self._operator_bindings,
             *self._registry.declaration_index().records(),
         ]
