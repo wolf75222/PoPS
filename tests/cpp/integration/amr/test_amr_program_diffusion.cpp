@@ -505,7 +505,10 @@ TEST(test_amr_program_diffusion, PreparedCacheHandlesRankLocalMissAndInvalidGhos
   // must not enter a context getter while rank zero enters the cache's disposition reduction.
   EXPECT_THROW((void)acquire(invalid), std::exception);
   auto& retry = acquire(state);
-  EXPECT_THROW(retry.explicit_frequency(), std::logic_error);
+  // A failed replacement preserves the existing resource and its evaluated image.
+  // Reusing its storage still requires reevaluating the law before new publication.
+  EXPECT_EQ(&retry, &rebuilt);
+  EXPECT_EQ(retry.explicit_frequency(), pops::Real(2) * first_frequency);
   evaluate(retry, pops::Real(0.05));
   EXPECT_EQ(retry.explicit_frequency(), first_frequency);
 }
