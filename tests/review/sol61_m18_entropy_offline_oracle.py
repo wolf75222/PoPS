@@ -210,6 +210,26 @@ def ownership(rows, ranks):
     return "distributed" if np.all(all_counts[0].sum(axis=0)==1) else "replicated"
 
 
+EMPTY_EXCHANGE_READER = "sol61.m18-empty-exchange-reader@2"
+EMPTY_EXCHANGE_IMAGES = (b"POPSEX01" + bytes(8), b"POPSEX02" + bytes(24))
+
+
+def empty_exchange_images(raw, offsets, ranks):
+    """Admit only exact zero-count native01/02 images at every rank boundary."""
+    require(type(ranks) is int and ranks > 0
+            and raw.dtype == np.dtype("uint8") and raw.ndim == 1
+            and offsets.dtype == np.dtype("int64") and offsets.ndim == 1
+            and len(offsets) == ranks + 1, "rank exchange offsets mismatch")
+    bounds = list(map(int, offsets))
+    require(bounds[0] == 0 and bounds[-1] == len(raw)
+            and all(0 <= a < b <= len(raw) for a, b in zip(bounds[:-1], bounds[1:], strict=True)),
+            "M18 has a spatial exchange or invalid empty ledger")
+    images = [raw[a:b].tobytes() for a, b in zip(bounds[:-1], bounds[1:], strict=True)]
+    require(all(image in EMPTY_EXCHANGE_IMAGES for image in images),
+            "M18 contains fabricated physical exchanges")
+    return images
+
+
 def snapshot(base,pins,phase):
     rows=pins["phases"][phase]
     require(set(rows)=={"state","receipt","checkpoint"},"incomplete phase file pins")
@@ -288,14 +308,7 @@ def snapshot(base,pins,phase):
             and protocol.identity_token(manifest["restart_identity"],"restart")==str(checkpoint["pops_restart_identity"].item()),
             "checkpoint envelope digest mismatch")
     raw,offsets=checkpoint["program_exchange_state"],checkpoint["program_exchange_offsets"]
-    require(raw.dtype==np.dtype("uint8") and raw.ndim==1 and offsets.ndim==1 and offsets.dtype.kind in "iu"
-            and len(offsets)==pins["ranks"]+1,"rank exchange offsets mismatch")
-    bounds=list(map(int,offsets))
-    require(bounds[0]==0 and bounds[-1]==len(raw) and all(b-a==32 for a,b in zip(bounds[:-1],bounds[1:],strict=True)),
-            "M18 has a spatial exchange or invalid empty ledger")
-    images=[raw[a:b].tobytes() for a,b in zip(bounds[:-1],bounds[1:],strict=True)]
-    require(all(image in (b"POPSEX01"+bytes(24),b"POPSEX02"+bytes(24)) for image in images),
-            "M18 contains fabricated physical exchanges")
+    images=empty_exchange_images(raw,offsets,pins["ranks"])
     return dict(state=state,receipt=receipt,images=images,ownership=mode)
 
 
@@ -395,7 +408,8 @@ def receive(path,external_sha):
     require(all(row["ownership"]==initial["ownership"] and row["receipt"]["geometry"]==initial["receipt"]["geometry"]
                 and row["receipt"]["local_boxes_by_rank"]==initial["receipt"]["local_boxes_by_rank"] for row in snapshots.values()),
             "support/geometry changed")
-    return dict(schema="sol61.m18-offline-reception@1",status="received",owner_sha256=external_sha,
+    return dict(schema="sol61.m18-offline-reception@2",exchange_reader_contract=EMPTY_EXCHANGE_READER,
+                status="received",owner_sha256=external_sha,
                 source_commit=pins["source_commit"],native_sha256=pins["native_sha256"],abi_key=pins["abi_key"],
                 artifact_identity=pins["artifact_identity"],dimension=2,ranks=pins["ranks"],ownership=initial["ownership"],
                 phases=list(PHASES),metrics=metrics,outside_refusals=2,readonly_target_bitexact=True,
@@ -406,7 +420,9 @@ def receive(path,external_sha):
 
 
 def contract():
-    return dict(schema="sol61.m18-offline-contract@1",status="pending_external_native_receipts",
+    return dict(schema="sol61.m18-offline-contract@2",exchange_reader_contract=EMPTY_EXCHANGE_READER,
+                empty_exchange_image_lengths={"POPSEX01":16,"POPSEX02":32},
+                status="pending_external_native_receipts",
                 owner_schema="sol61.m18-owner-pins@1",external_owner_sha256_required=True,
                 sources=["fixture","example","snapshot"],provenance="provenance.json",
                 phases={phase:["state","receipt","checkpoint"] for phase in PHASES},
