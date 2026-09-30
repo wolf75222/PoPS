@@ -2915,6 +2915,8 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
       if (reject_after_publication)
         throw runtime::program::StepAttemptRejected(SolveStatus::kIterationLimit, "ale-post-publication");
     });
+    // install resets artifact-owned mappings; bind this explicit map afterwards.
+    sim.set_program_block_map({0});
     const auto expect_original = [&] {
       EXPECT_EQ(sim.get_state("gas"), original);
       EXPECT_EQ(sim.time(), 0.);
@@ -3062,6 +3064,7 @@ TEST(ProgramRuntime, MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforeP
     });
     ctx->advance_moving_intervals(evaluation, Real(1e-13));
   });
+  sim.set_program_block_map({0});
   sim.begin_step_transaction();
   EXPECT_THROW(sim.step(.2), runtime::program::StepAttemptRejected);
   EXPECT_EQ(sim.get_state("gas"), before);
@@ -3146,6 +3149,7 @@ TEST(ProgramRuntime, MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceEx
     });
     ctx->advance_moving_intervals(evaluation, Real(1e-13));
   });
+  sim.set_program_block_map({0});
   sim.begin_step_transaction(); sim.step(duration);
   const auto result = sim.get_state("gas");
   if (!result.empty())
