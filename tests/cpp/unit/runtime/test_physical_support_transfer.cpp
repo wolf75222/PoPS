@@ -283,4 +283,100 @@ TEST(PhysicalSupportTransfer, FailureStatusDistinguishesInputAndNumericalFailure
   EXPECT_DOUBLE_EQ(destination[0], 3);
 }
 
+// The finite 4x3 witness is one member of this generic product family. Every component
+// occupies its own spatial product; none of the velocity cells is a packed component.
+TEST(PhysicalSupportTransfer, ProductReduceThenLiftVariesFibresAndComponentWidths) {
+  ensure_kokkos();
+  for (const auto shape : {std::array<std::size_t, 3>{4, 3, 3}, {2, 5, 1}, {7, 3, 5}}) {
+    const auto nx = shape[0], nv = shape[1], width = shape[2];
+    std::vector<double> source(nx * nv * width), moment(nx * width, kCanary);
+    std::vector<double> lifted(source.size(), kCanary), weights(nv);
+    double zeroth = 0, first = 0;
+    for (std::size_t j = 0; j < nv; ++j) {
+      weights[j] = (j % 2 ? -1.0 : 1.0) * static_cast<double>(j + 1);
+      zeroth += weights[j];
+      first += weights[j] * static_cast<double>(j);
+    }
+    for (std::size_t c = 0; c < width; ++c)
+      for (std::size_t x = 0; x < nx; ++x)
+        for (std::size_t j = 0; j < nv; ++j)
+          source[c * nx * nv + x * nv + j] =
+              (c + 1) * (x + 1) + static_cast<double>((c + 2) * j) +
+              (c % 2 ? -1.0 : 1.0) * static_cast<double>(x * j);
+    PhysicalSupportTransfer reduction{};
+    reduction.dimension = 2;
+    reduction.operation = POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+    reduction.source_active[0] = reduction.source_active[1] = reduction.target_active[0] = 1;
+    reduction.source_to_target[1] = 0;
+    reduction.reduction_cells[0] = nv;
+    reduction.weights = weights.data();
+    reduction.weight_count = nv;
+    auto request = request_for(reduction,
+        field_view<PopsConstFieldViewV1>(source.data(), 2, {nv, nx, 1},
+                                       {1, static_cast<std::ptrdiff_t>(nv), 1}, width, nx * nv),
+        field_view<PopsFieldViewV1>(moment.data(), 2, {nx, 1, 1}, {1, 1, 1}, width, nx));
+    PopsComponentStatusV1 status{};
+    ASSERT_EQ(apply_physical_support_transfer(reduction, &request, &status), 0);
+    PhysicalSupportTransfer extension{};
+    extension.dimension = 2;
+    extension.operation = POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1;
+    extension.source_active[0] = extension.target_active[0] = extension.target_active[1] = 1;
+    extension.source_to_target[0] = 1;
+    request = request_for(extension,
+        field_view<PopsConstFieldViewV1>(moment.data(), 2, {nx, 1, 1}, {1, 1, 1}, width, nx),
+        field_view<PopsFieldViewV1>(lifted.data(), 2, {nv, nx, 1},
+                                  {1, static_cast<std::ptrdiff_t>(nv), 1}, width, nx * nv));
+    ASSERT_EQ(apply_physical_support_transfer(extension, &request, &status), 0);
+    for (std::size_t c = 0; c < width; ++c)
+      for (std::size_t x = 0; x < nx; ++x) {
+        const double exact = (c + 1) * (x + 1) * zeroth +
+            ((c + 2) + (c % 2 ? -1.0 : 1.0) * x) * first;
+        EXPECT_DOUBLE_EQ(moment[c * nx + x], exact);
+        for (std::size_t j = 0; j < nv; ++j)
+          EXPECT_DOUBLE_EQ(lifted[c * nx * nv + x * nv + j], exact);
+      }
+    // Repeated lifting and integration scales by the authored sum of weights;
+    // an inverse closure or hidden normalization would fail this identity.
+    request = request_for(reduction,
+        field_view<PopsConstFieldViewV1>(lifted.data(), 2, {nv, nx, 1},
+                                       {1, static_cast<std::ptrdiff_t>(nv), 1}, width, nx * nv),
+        field_view<PopsFieldViewV1>(moment.data(), 2, {nx, 1, 1}, {1, 1, 1}, width, nx));
+    ASSERT_EQ(apply_physical_support_transfer(reduction, &request, &status), 0);
+    for (std::size_t c = 0; c < width; ++c)
+      for (std::size_t x = 0; x < nx; ++x)
+        EXPECT_DOUBLE_EQ(moment[c * nx + x], lifted[c * nx * nv + x * nv] * zeroth);
+  }
+}
+
+TEST(PhysicalSupportTransfer, ActiveNonfiniteCellIsNotHiddenByZeroMomentWeight) {
+  ensure_kokkos();
+  const double weights[] = {0, 2};
+  std::array<double, 2> source{0, 3};
+  std::array<double, 1> destination{kCanary};
+  PhysicalSupportTransfer reduction{};
+  reduction.dimension = 1;
+  reduction.operation = POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
+  reduction.source_active[0] = 1;
+  reduction.reduction_cells[0] = 2;
+  reduction.weights = weights;
+  reduction.weight_count = 2;
+  auto request = request_for(reduction,
+      field_view<PopsConstFieldViewV1>(source.data(), 1, {2, 1, 1}, {1, 1, 1}, 1, 2),
+      field_view<PopsFieldViewV1>(destination.data(), 1, {1, 1, 1}, {1, 1, 1}, 1, 1));
+  PopsComponentStatusV1 status{};
+  for (const double invalid : {std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::infinity(),
+                               -std::numeric_limits<double>::infinity()}) {
+    source[0] = invalid;
+    EXPECT_EQ(apply_physical_support_transfer(reduction, &request, &status), 4);
+    EXPECT_EQ(status.action, POPS_COMPONENT_ABORT_RUN_V1);
+    // Numerical failure is a scratch-candidate status; publication belongs to the
+    // prepared System transaction, not this raw-view kernel seam.
+    source[0] = 5;
+    ASSERT_EQ(apply_physical_support_transfer(reduction, &request, &status), 0);
+    EXPECT_DOUBLE_EQ(destination[0], 6);
+    EXPECT_EQ(status.action, POPS_COMPONENT_CONTINUE_V1);
+  }
+}
+
 }  // namespace

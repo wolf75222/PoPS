@@ -442,11 +442,11 @@
       "reference_profile": "extension",
       "reference_limit": "Réduction partielle et relèvement entre supports absents du profil exécuté.",
       "reference_evidence": [],
-      "production_candidate_symbols": "python/pops/moments/projection.py;python/pops/fields/poisson.py",
+      "production_candidate_symbols": "python/pops/_ir/quantity.py:PhysicalSupport;python/pops/mesh/physical_mapping.py:PhysicalSupportMap;python/pops/time/_program/physical_maps.py:Program.map;include/pops/runtime/dynamic/physical_support_transfer.hpp;src/runtime/system/system_layout_transfer.cpp;src/runtime/amr/amr_layout_transfer.cpp",
       "production_status": "not_executed_for_this_mapping",
-      "qualification": "candidate symbols only; complete native case not established",
-      "assessment_kind": "prior_mapping_retained_without_new_requalification",
-      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+      "qualification": "Generic product-support reduction/extension source realization exists; finite public 4x3 chain and installed native reception pending. Complete Vlasov-Poisson/BGK is not qualified.",
+      "assessment_kind": "source_mechanism_identified_native_reception_pending",
+      "remaining_gap": "Receive product-map states, clocks, ownership and restart with matching native artifacts, then implement/receive free transport and explicitly declared field/collision/boundary equations. Complete BGK and Landau damping remain separate scientific obligations."
     },
     {
       "id": "M20",
