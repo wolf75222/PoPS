@@ -2975,6 +2975,7 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
       }
     };
     sim.begin_step_transaction();
+    EXPECT_THROW(sim.checkpoint_program_exchanges(true),std::logic_error);
     sim.begin_nested_step_transaction();
     EXPECT_THROW(sim.step(.1), runtime::program::StepAttemptRejected);
     expect_original();
@@ -3001,12 +3002,16 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
     change_geometry_after_prepare = 0;
     sim.step(.2);
     EXPECT_EQ(ctx->moving_interval_geometry("mesh").generation, 1u);
+    EXPECT_THROW(sim.checkpoint_program_exchanges(true),std::logic_error);
     const auto child_interval = ctx->moving_interval_geometry("mesh").last_interval;
     sim.commit_step_transaction();
     sim.finalize_step_transaction();
     EXPECT_THROW(sim.checkpoint_program_exchanges(),std::logic_error);
+    const auto parent_staged_geometry_image=sim.checkpoint_program_exchanges(true);
     sim.rollback_step_transaction();
     expect_original();
+    EXPECT_EQ(sim.checkpoint_program_exchanges(),initial_geometry_image);
+    EXPECT_NE(sim.checkpoint_program_exchanges(),parent_staged_geometry_image);
     sim.begin_step_transaction();
     sim.step(.3);
     const auto& actual = ctx->moving_interval_geometry("mesh");
@@ -3060,6 +3065,7 @@ TEST(ProgramRuntime, MovingIntervalsPublishRealGeometryStateAndLedgerThenParentR
     auto truncated_geometry_image=saved_geometry_image;
     if (sim.prepared_boundary_execution_lane().rank()==0) truncated_geometry_image.pop_back();
     sim.begin_restart_transaction();
+    EXPECT_THROW(sim.checkpoint_program_exchanges(true),std::logic_error);
     EXPECT_ANY_THROW(sim.restore_checkpoint_program_exchanges(truncated_geometry_image));
     sim.rollback_restart_transaction();
     EXPECT_EQ(sim.checkpoint_program_exchanges(),saved_geometry_image);

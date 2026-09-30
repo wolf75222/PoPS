@@ -279,6 +279,10 @@ std::vector<std::uint8_t> System<Dim>::checkpoint_program_exchanges(bool provisi
     if ((step_transaction_depth()!=0 && !(provisional_capture && step_transaction_depth()==1)) ||
         p_->external_restart_transaction_)
       throw std::logic_error("moving geometry checkpoint export requires fully accepted state");
+    if (step_transaction_depth()==1)
+      for (const auto& [identity,geometry]:p_->program_.moving_interval_geometry_)
+        if (!geometry.last_receipt)
+          throw std::logic_error("moving candidate checkpoint requires a terminal interval receipt");
     const auto bytes = runtime::program::checkpoint_moving_intervals(
         p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
         [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; });
