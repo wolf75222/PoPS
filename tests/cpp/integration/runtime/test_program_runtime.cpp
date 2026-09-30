@@ -128,6 +128,9 @@ struct DiffusiveGasModel : GasModel {
 
 template <int Dim>
 SystemConfig<Dim> unit_domain_config(int cells_per_axis) {
+  // SystemConfig snapshots the rank space in its defaults. This helper must
+  // also work when its test runs first in an MPI-filtered binary.
+  comm_init();
   SystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis) {
     config.shape[axis] = cells_per_axis;
