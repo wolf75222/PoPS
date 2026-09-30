@@ -3325,3 +3325,5 @@ TEST(ProgramRuntime, MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceEx
 }
 
 #include "ale_carrier_independent_review.inc"
+
+#include "program_dot_all_contract.inc"
