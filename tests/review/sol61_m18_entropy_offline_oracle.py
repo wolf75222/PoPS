@@ -23,6 +23,10 @@ protocol = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = protocol
 _spec.loader.exec_module(protocol)
 require, digest, strict_json, cbor = protocol.require, protocol.digest, protocol.strict_json, protocol.cbor
+_equation_spec = importlib.util.spec_from_file_location(
+    "m18_original_equation_guard", Path(__file__).with_name("sol61_m18_original_equation_guard.py"))
+equation_guard = importlib.util.module_from_spec(_equation_spec)
+_equation_spec.loader.exec_module(equation_guard)
 DT, RESIDUAL_TOL = .01, 2.e-11
 NODES = np.array([-1., -.5, 0., .5, 1.])
 WEIGHTS = np.array([.1, .2, .4, .2, .1])
@@ -83,6 +87,7 @@ def compiled_contract(ir,expected_hash):
     commit=ir["commits"][0]
     require(commit["block"]["local_id"]=="dual" and commit["state"]["local_id"]=="multipliers",
             "compiled readonly target was committed")
+    equation_guard.verify(ir)
 
 
 def cone(target):

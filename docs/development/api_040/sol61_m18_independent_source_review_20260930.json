@@ -1,0 +1,105 @@
+{
+  "schema": "sol61.m18-independent-source-review@1",
+  "candidate_commit": "279e0cd9a696c6fccabafa949d3fa592ee9caa42",
+  "review_base": "99d651c182d24aba5aaaf431c5e667f810ad5bb5",
+  "countermodels": [
+    {
+      "countermodel": "zero_roots",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: five-velocity moment residual differs"
+    },
+    {
+      "countermodel": "swapped_moments",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: five-velocity moment residual differs"
+    },
+    {
+      "countermodel": "weight",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: five-velocity moment residual differs"
+    },
+    {
+      "countermodel": "exponent_basis",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: five-velocity moment residual differs"
+    },
+    {
+      "countermodel": "target_component",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: five-velocity moment residual differs"
+    },
+    {
+      "countermodel": "capture_in_exponent",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: nonlinear/captured exponential exponent"
+    },
+    {
+      "countermodel": "unknown_component",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: five-velocity moment residual differs"
+    },
+    {
+      "countermodel": "foreign_operator",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: unexpected scalar op log"
+    },
+    {
+      "countermodel": "reversed_inputs",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: seed/capture state route"
+    },
+    {
+      "countermodel": "future_capture",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: capture/seed timepoint"
+    },
+    {
+      "countermodel": "foreign_clock",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: capture/seed clock owner"
+    },
+    {
+      "countermodel": "bool_capture_step",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: capture/seed timepoint"
+    },
+    {
+      "countermodel": "publication_bypass",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: publication bypass/foreign output"
+    },
+    {
+      "countermodel": "refusal_bypass",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: refusal consumer"
+    },
+    {
+      "countermodel": "duplicate_node_id",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: duplicate/invalid node id"
+    },
+    {
+      "countermodel": "hidden_operation",
+      "original_279_contract": "accepted",
+      "corrected_contract": "refused",
+      "reason": "M18 original equation: hidden operations in the witness"
+    }
+  ],
+  "native_execution": false,
+  "authentic_saved_states_received": false
+}
