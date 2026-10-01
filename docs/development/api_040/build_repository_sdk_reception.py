@@ -43,7 +43,11 @@ def old_installation(package, expected, copy_receipt):
         path = (prefix / item["relative_path"]).resolve()
         if not path.is_relative_to(prefix) or digest(path) != item["sha256"]:
             raise RuntimeError("preserved native/Python/header artifact differs from pinned receipt")
-    actual = {name: digest(package / name) for name in expected}
+    actual = {
+        name: digest(package / (name.removeprefix("python/pops/")
+                               if name.startswith("python/pops/") else name))
+        for name in expected
+    }
     if actual != expected:
         raise RuntimeError("preserved SDK2e4 Python/header installation differs from closed receipt")
     actual.update({str(path.relative_to(package)): digest(path)
