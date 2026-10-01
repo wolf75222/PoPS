@@ -1,0 +1,97 @@
+{
+  "author_actual_header_assertions_per_real": 61,
+  "bootstrap": "env -u PYTHONPATH; explicit sys.path insertion of this checkout/python",
+  "changed_production_source_git_blobs": {
+    "include/pops/runtime/amr_system.hpp": "0ba8e28d2acf786618b89a239e71523b1ddf67f934c065299a413c91a804abfb",
+    "include/pops/runtime/program/amr_program_context.hpp": "19578fa9cad58efa9cb36c3859ea93129913062ecc397eb9059bb6eded098c52",
+    "include/pops/runtime/program/amr_program_context_history_checkpoint_public.inc": "1c474c97a773775289b736f1d66ded956cbd2791ac727189e54c9467eda2fd1e",
+    "include/pops/runtime/program/amr_program_context_spatial_interaction.inc": "ca23e5b348a2bb8bde50e25cd0f58764057660dd7bf4284d9abe069b7cae0e28",
+    "include/pops/runtime/program/program_context.hpp": "f15bd5b64398c66f1bee73da44e2a3c76f73074116cdd48b53dce3e09e75696d",
+    "include/pops/runtime/program/spatial_direct_interaction.hpp": "7d35a892fe3b62a574c7616dcbfd65b42cea9f7f19dee7081c36da20030b0e89",
+    "include/pops/runtime/system.hpp": "63f4a5446fbc7fd38301132da06591176acd2133dddb29f0d53a1abff05c649b",
+    "include/pops_headers.manifest": "850bbd777441e34cdefe36719b4ca706f69f14ef2fe726f95290fb46b80286a5",
+    "python/pops/codegen/program_codegen.py": "07e5eef3b6c5a591b34925c47e8474e242931d65f6c4c2dd0e8bcbaf7c1d5b63",
+    "python/pops/codegen/program_emit_control.py": "11d1dc31a1eb6867c3f30021869f19f2d1d801b4cb28566d71f136b77975d219",
+    "python/pops/codegen/program_emit_ops.py": "9702e2f4b51d8b3e1794bfb3e1d823bd45a7dad1d4546e510f037fe2bfcb2086",
+    "python/pops/codegen/program_emit_spatial_interaction.py": "aeb9d5011a593d37f8780c8f67bb80e49a5aec67b594ef8e8e40db44d23d389e",
+    "python/pops/fields/__init__.py": "2b8a68ecd1b5ed1dc783920bd4fc386d834f1c6d12e8410af12530eab46fe09a",
+    "python/pops/fields/spatial_interaction.py": "2c8be97c378f2fc98ebc489c38efcd93a89d4f1e19491aafff0a5ca8a953f445",
+    "python/pops/runtime/_checkpoint_resource_budget.py": "c988bae2339822234a3b45e84c15b5a90446af6cd5523455708123adc26e3f45",
+    "python/pops/time/_program/api.py": "5c23a11dbae5ed3c41fb6575d4faa07c9e19774c5c85d0435e35fb88cb7fa837",
+    "python/pops/time/_program/contract.py": "ae1a966625cb635e3cd007b77521b9a5be657cdc934bddd66e45557bf154f03f",
+    "python/pops/time/_program/freeze.py": "87a14c02ca359dc8a216895f6837a810ed365ead78450a7d28050d3e15477819",
+    "python/pops/time/_program/global_history_storage.py": "dc7edaefe52c65ee2c77a56ba19a8d1132ef57afb6f80b014db0e8f7945da6b2",
+    "python/pops/time/_program/history.py": "5b65d3e3e1b7cddea08448cba68aeadddde8a9cf6b3706c0fec439b25eefcec0",
+    "python/pops/time/_program/rebuild.py": "767c3fd418027e71818e5adae770384bc4c4d5513ad02efd5afef8a746dc1115",
+    "python/pops/time/_program/serialization.py": "f58b1a8edae1604d6b1d4650d07507217c58f5ed9aeb86ecea592fbc03456edb",
+    "python/pops/time/_program/spatial_interaction.py": "2ad9aa25f920c835533e52c4f3c4329fe83600444a1dacd29395f31217806f48",
+    "src/runtime/amr/amr_system.cpp": "9de1caa34c9fb7523c7241a4d8cfb6e5a34ba3de556b7c6a213ae0640e16c2d1",
+    "src/runtime/system/system_embedded_boundary.cpp": "a57e98a0d421882619716b4a06726790a961cb1984baa3f7b96aef90dff846b3"
+  },
+  "conditional_ir": [
+    16,
+    17
+  ],
+  "contracts": [
+    "pops.program.global-field-history-storage@1",
+    "pops.spatial-interaction@1"
+  ],
+  "counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 91
+  },
+  "distributed_reception": false,
+  "elapsed_seconds": 112.993,
+  "float32_actual_header_regression": {
+    "bytes": 1440,
+    "path": "/Users/romaindespoulain/dev/tmp/spatial-direct-ir17-reception-13a/float32-regression-receipt.json",
+    "sha256": "1a28e48169543214484b1089829675160bfbc0c46b293c6ac85bb18740885572"
+  },
+  "full_M26_PDE_reception": false,
+  "gpu_reception": false,
+  "independent_consumer_assertions_per_real": 27,
+  "independent_source_reviews": {
+    "history": {
+      "final_commit": "a8a98d961332bb6bb95852af1025d64938dd8ea0",
+      "tests": 44
+    },
+    "spatial": {
+      "final_commit": "2f900ed3b5856e185c7e1130c9fc3c50842e7ef4",
+      "tests": 24
+    }
+  },
+  "integration_tree_equal_commit": "b2c365cde11720a619585e64e492b7084f61488a",
+  "interpreter": "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+  "junit": {
+    "bytes": 15118,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/source-ir16-ir17-integrated-native-a1d4.xml",
+    "sha256": "3f1febd6ca831a58c9c001c058fba3ab5476f6fd0bec24628dd64813e2a34b9e"
+  },
+  "log": {
+    "bytes": 297,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/source-ir16-ir17-integrated-native-a1d4.log",
+    "sha256": "c3f59494fb2af18b5cf012fa4af80028fde2a4c230e40a31a2a9e62ab6d1e76a"
+  },
+  "native_dso_reception": false,
+  "open_followup": [
+    "selected retained history sample while front store is pending",
+    "typed ColdCopyCurrent physical source authority separate from storage owner",
+    "actual new SDK builds and installed Serial/MPI witnesses"
+  ],
+  "review_counts_overlap": true,
+  "schema": "root.api040.integrated-source-reception@1",
+  "scientific_reception": false,
+  "scope": "SOURCE_ONLY-plus-actual-header-host",
+  "selection": [
+    "tests/review/test_sol61_spatial_interaction.py",
+    "tests/review/test_sol61_history_storage_owner_received.py"
+  ],
+  "source_commit": "a1d4a27d353a7d5edbe150a747ea4e25b45a7709",
+  "source_only_main_replay": {
+    "reason": "filesystem/import stall; no test result; own process stopped before equal-tree replay",
+    "termination": 143
+  },
+  "source_package": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/python/pops/__init__.py"
+}
