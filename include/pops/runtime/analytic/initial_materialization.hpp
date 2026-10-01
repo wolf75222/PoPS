@@ -122,13 +122,18 @@ struct AnalyticCellAverage {
                  : std::numeric_limits<Real>::quiet_NaN();
     }
     constexpr int sample_count = 1 << (2 * Dim);  // 4^Dim tensor quadrature points.
-    constexpr Real normalization = Real(1) / static_cast<Real>(1 << Dim);
     const RealVector<Dim> center = geometry.cell_center(index);
     // A validated literal has an exact cell average. Summing rounded quadrature weights
     // would perturb even an unchanged conserved component during initialization/reprojection.
     if (program.instruction_count == 1 && program.instructions[0].op == AnalyticOp::Constant)
       return program.eval(center);
-    Real integral = Real(0);
+    // Affine form enforces partition of unity in floating arithmetic too: any
+    // expression with identical sampled values has zero correction, independent
+    // of rounded tensor weights. Normalizing their actual sum retains the same
+    // Gauss rule without perturbing its constant mode.
+    Real reference = Real(0);
+    Real correction = Real(0);
+    Real total_weight = Real(0);
     for (int sample = 0; sample < sample_count; ++sample) {
       int encoded = sample;
       Real weight = Real(1);
@@ -139,9 +144,16 @@ struct AnalyticCellAverage {
         weight *= gauss_weight(quadrature_index);
         point[axis] += Real(0.5) * geometry.spacing(axis) * gauss_node(quadrature_index);
       }
-      integral += weight * program.eval(point);
+      const Real value = program.eval(point);
+      if (sample == 0)
+        reference = value;
+      else
+        correction += weight * (value - reference);
+      total_weight += weight;
     }
-    return normalization * integral;
+    // Preserve the exact reference bit pattern, including signed zero, when
+    // the quadrature correction vanishes. This is not a tolerance or rounding.
+    return correction == Real(0) ? reference : reference + correction / total_weight;
   }
 };
 

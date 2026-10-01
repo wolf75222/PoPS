@@ -394,6 +394,53 @@ TEST(AnalyticExpression, ProgramViewRunsInsideRankedKokkosKernelsInOneTwoAndThre
   check_program_view_kernel<3>();
 }
 
+namespace {
+template <int Dim>
+void check_expression_constant_and_polynomial_averages() {
+  const auto box = pops::Box<Dim>::from_extents(uniform_extent<Dim>(8));
+  const auto geometry = unit_geometry(box);
+  const auto c = [](Real value) { return AnalyticNode::constant(value); };
+  const auto x = AnalyticNode::x();
+  const std::array constants{Real(.1), Real(-.7), Real(1), Real(3.25),
+                            std::numeric_limits<Real>::min(), Real(1e20)};
+  for (Real value : constants) {
+    // Equivalent public expressions in opposite operand orders, not literals.
+    for (bool reverse : {false, true}) {
+      const auto zero = binary(AnalyticOp::Mul, c(0), unary(AnalyticOp::Cos, x));
+      const auto expression = reverse ? binary(AnalyticOp::Add, zero, c(value))
+                                      : binary(AnalyticOp::Add, c(value), zero);
+      const auto program = compile_analytic_expression(expression);
+      EXPECT_GT(program.view().instruction_count, 1);
+      const pops::analytic::detail::AnalyticCellAverage<Dim> average{program.view(), geometry};
+      for_each_host_index(box, [&](const pops::Index<Dim>& index) {
+        EXPECT_EQ(average(index), value);  // exact; arbitrary constants, no ULP guard.
+      });
+    }
+  }
+  // An independent antiderivative oracle for degree-six: the 4-point rule is
+  // exact through degree seven. Reordering addition must preserve that accuracy.
+  for (bool reverse : {false, true}) {
+    const auto power = binary(AnalyticOp::Pow, x, c(6));
+    const auto expression = reverse ? binary(AnalyticOp::Add, power, c(.3))
+                                    : binary(AnalyticOp::Add, c(.3), power);
+    const auto program = compile_analytic_expression(expression);
+    const pops::analytic::detail::AnalyticCellAverage<Dim> average{program.view(), geometry};
+    for_each_host_index(box, [&](const pops::Index<Dim>& index) {
+      const Real lo = geometry.face_coordinate(0, index[0]);
+      const Real hi = geometry.face_coordinate(0, index[0] + 1);
+      const Real expected = Real(.3) + (std::pow(hi, 7) - std::pow(lo, 7)) / (7 * (hi - lo));
+      EXPECT_NEAR(average(index), expected, Real(2e-14));
+    });
+  }
+}
+}  // namespace
+
+TEST(AnalyticExpression, ExpressionCellAveragesPreserveConstantsAndPolynomialMomentsOnHost) {
+  check_expression_constant_and_polynomial_averages<1>();
+  check_expression_constant_and_polynomial_averages<2>();
+  check_expression_constant_and_polynomial_averages<3>();
+}
+
 TEST(AnalyticExpression, InitialMaterializersAreRankGenericAndCompleteBeforeProgramsExpire) {
   check_initial_materializers<1>();
   check_initial_materializers<2>();
