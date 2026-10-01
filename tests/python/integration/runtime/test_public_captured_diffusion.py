@@ -156,10 +156,14 @@ def _run_public_diffusion_mms(
 
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     accepted = capture(world, runtime, cells, width, step=1)
-    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/"accepted"))
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/"accepted-checkpoint"))
+    checkpoint_hashes = {"accepted": collective_call(world, lambda:
+        hashlib.sha256(bounded_bytes(checkpoint)).hexdigest())}
     collective_call(world, lambda: pops.run(runtime, t_end=2*DT, max_steps=1, console=False))
     continuous = capture(world, runtime, cells, width, step=2, first_solution=accepted[0]["solution"])
-    continuous_checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/"continuous"))
+    continuous_checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/"continuous-checkpoint"))
+    checkpoint_hashes["continuous"] = collective_call(world, lambda:
+        hashlib.sha256(bounded_bytes(continuous_checkpoint)).hexdigest())
     restored_context = collective_call(world, lambda: artifact_execution_context(artifact))
     restored = collective_call(world, lambda: pops.bind(artifact,
         initial_state={key: value.copy() for key, value in initial.items()}, resources={"execution_context": restored_context}))
@@ -169,7 +173,11 @@ def _run_public_diffusion_mms(
         same_images(reloaded, accepted)
     collective_call(world, lambda: pops.run(restored, t_end=2*DT, max_steps=1, console=False))
     replay = capture(world, restored, cells, width, step=2, first_solution=reloaded[0]["solution"])
-    replay_checkpoint = collective_call(world, lambda: restored.checkpoint(directory/"replay"))
+    replay_checkpoint = collective_call(world, lambda: restored.checkpoint(directory/"replay-checkpoint"))
+    checkpoint_hashes["replay"] = collective_call(world, lambda:
+        hashlib.sha256(bounded_bytes(replay_checkpoint)).hexdigest())
+    checkpoint_files = (("accepted", checkpoint), ("continuous", continuous_checkpoint),
+                        ("replay", replay_checkpoint))
     with collective_check(world):
         same_images(replay, continuous)
         assert accepted[1][-1] == (DT, 1) and continuous[1][-1] == (2*DT, 2)
@@ -186,7 +194,7 @@ def _run_public_diffusion_mms(
             # Preserve exact compiler-owned source and every actual linked DSO.
             components = [("block-"+row.name, row.model) for row in artifact.blocks]
             components += [("program-"+row.layout_id, row.program) for row in artifact.layout_programs]
-            binaries, sources = [], []
+            binaries, sources, program_irs = [], [], []
             for component_index, (name, component) in enumerate(components):
                 binary = Path(component.so_path)
                 binaries.append({"component": name, "path": str(binary),
@@ -196,17 +204,29 @@ def _run_public_diffusion_mms(
                     assert component._generated_cpp is not None, "compiler source must be retained, never re-emitted"
                     path = Path(component.dump_cpp(directory/("program-%d.cpp" % component_index)))
                     sources.append({"component": name, "path": str(path),
-                                    "sha256": hashlib.sha256(bounded_bytes(path)).hexdigest()})
+                                     "sha256": hashlib.sha256(bounded_bytes(path)).hexdigest()})
+                    # Export the same compiled handle's carried Program. Do not rebuild an IR
+                    # from the fixture builder or infer it from the retained translation unit.
+                    ir_path = Path(component.dump_ir(directory/("program-%d.ir.json" % component_index)))
+                    program_irs.append({"component": name, "path": str(ir_path),
+                                        "sha256": hashlib.sha256(bounded_bytes(ir_path)).hexdigest(),
+                                        "program_hash": component.program_hash})
             checkpoints = {phase: {"path": str(path), "sha256": hashlib.sha256(bounded_bytes(path)).hexdigest()}
-                           for phase, path in (("accepted", checkpoint), ("continuous", continuous_checkpoint),
-                                               ("replay", replay_checkpoint))}
+                           for phase, path in checkpoint_files}
+            assert all(row["sha256"] == checkpoint_hashes[phase]
+                       for phase, row in checkpoints.items()), "native checkpoint was overwritten"
+            checkpoint_paths = {Path(row["path"]).resolve() for row in checkpoints.values()}
+            observation_paths = {Path(row["npz"]).resolve() for row in phases.values()}
+            observation_paths.add((directory/"initial.npz").resolve())
+            assert checkpoint_paths.isdisjoint(observation_paths)
             receipt = {"kind": "actual-native-captured-D-original-MMS",
-                "fixture_schema": "pops.captured-diffusion-native-fixture@2", "artifact": artifact.artifact_identity.token,
+                "fixture_schema": "pops.captured-diffusion-native-fixture@3", "artifact": artifact.artifact_identity.token,
                 "dimension": 2, "rank": world.rank, "size": world.size, "cells": cells, "width": width,
                 "order": order, "face_policy": "pops.field.face-mean.arithmetic@1", "newton": CONTROLS,
                 "fd_step": FD_STEP, "solution_tolerance": SOLUTION_TOL, "residual_tolerance": RESIDUAL_TOL,
                 "native": {"path": str(native.__file__), "sha256": hashlib.sha256(bounded_bytes(native.__file__)).hexdigest()},
                 "platform": artifact.platform_manifest.to_data(), "binaries": binaries, "sources": sources,
+                "program_irs": program_irs,
                 "initial_npz": str(directory/"initial.npz"),
                 "initial_sha256": hashlib.sha256(bounded_bytes(directory/"initial.npz")).hexdigest(),
                 "phases": phases, "checkpoints": checkpoints,
@@ -215,7 +235,7 @@ def _run_public_diffusion_mms(
                 from tests.python.support.captured_diffusion_mms import CANDIDATE_BETA
                 receipt.update(
                     kind="actual-native-candidate-D-original-MMS",
-                    fixture_schema="pops.candidate-diffusion-native-fixture@1",
+                    fixture_schema="pops.candidate-diffusion-native-fixture@2",
                     coefficient_evaluation=token.inputs[1].attrs["coefficient_evaluation"],
                     linear_residual_verification=token.attrs["source_contract"]["linear_residual_verification"],
                     candidate_beta=CANDIDATE_BETA,
