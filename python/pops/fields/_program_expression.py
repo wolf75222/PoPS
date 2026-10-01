@@ -48,6 +48,7 @@ def encode_field_expression(expression: Any, states: Any, *, unknowns: tuple = (
     from pops._ir.expr import Abs, Add, Const, Div, Mul, Neg, Pow, Sqrt, Sub, _wrap
     from pops._ir.handle_expr import ValueExpr
     from pops._ir.quantity import QuantityRef
+    from pops.time.evolved_field_stage import TemporalTau
 
     rows = field_input_contract(states)
     binary = {Add: "add", Sub: "sub", Mul: "mul", Div: "div", Pow: "pow"}
@@ -55,6 +56,10 @@ def encode_field_expression(expression: Any, states: Any, *, unknowns: tuple = (
 
     def encode(value: Any) -> tuple:
         value = _wrap(value)
+        if type(value) is TemporalTau:
+            if states:
+                value.require_program(states[0].prog)
+            return ("temporal_tau", value.to_data())
         if type(value) is Const:
             return ("literal", decode_field_literal(value.literal.to_data()).to_data())
         if type(value) in (QuantityRef, ValueExpr):
@@ -86,7 +91,8 @@ def encode_field_expression(expression: Any, states: Any, *, unknowns: tuple = (
 
 
 def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...],
-                         unknowns: tuple = (), unknown_view: str = "candidate") -> tuple[str, tuple[Any, ...]]:
+                         unknowns: tuple = (), unknown_view: str = "candidate",
+                         duration_name: str | None = None) -> tuple[str, tuple[Any, ...]]:
     """Re-authenticate the closed AST and return native code plus its actual declaration reads."""
     rows = field_input_contract(states)
     if len(views) != len(rows):
@@ -98,6 +104,12 @@ def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...]
         if not isinstance(node, (tuple, list)) or not node or not isinstance(node[0], str):
             raise TypeError("field expression requires a closed scalar AST")
         op = node[0]
+        if op == "temporal_tau" and len(node) == 2:
+            from ._evolved_stage_contract import validate_tau_data
+            data = validate_tau_data(node[1])
+            if duration_name is None:
+                raise ValueError("original field duration has no issued frame authority")
+            return "(%s * static_cast<pops::Real>(%s))" % (duration_name, decode_field_literal(data["factor"]).to_cpp())
         if op == "literal" and len(node) == 2:
             return "static_cast<pops::Real>(%s)" % decode_field_literal(node[1]).to_cpp()
         if op == "unknown" and len(node) == 3:
@@ -137,7 +149,7 @@ def field_expression_dependencies(expressions: Any, states: Any, *, unknowns: An
     views = tuple("input%d" % index for index in range(len(rows)))
     read_ids = set()
     for expression in expressions:
-        _, reads = field_expression_cpp(expression, states, views=views, unknowns=unknowns)
+        _, reads = field_expression_cpp(expression, states, views=views, unknowns=unknowns, duration_name="issued_frame_duration")
         read_ids.update(handle.qualified_id for handle in reads)
     return tuple(handle.canonical_identity() for handle, _ in rows if handle.qualified_id in read_ids)
 

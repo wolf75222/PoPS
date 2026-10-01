@@ -86,6 +86,7 @@ _ALLOWED_OPS = frozenset(
         "field_problem_apply",
         "field_component",
         "field_state_cell_mean",
+        "field_evolved_state",
         "field_gradient",
         "field_publication",
         "vector_field",

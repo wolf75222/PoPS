@@ -1237,6 +1237,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.codegen.program_emit_field_problem import emit_field_problem_value
 
         emit_field_problem_value(v, var, lines, prelude, target=target)
+    elif v.op == "field_evolved_state":
+        from pops.codegen.program_emit_evolved_field import emit_evolved_state
+        emit_evolved_state(v, var, lines, prelude, target=target, block_indices=block_idx)
     elif v.op == "field_state_cell_mean":
         from pops.fields._observation_contract import validate_field_state_cell_mean
 

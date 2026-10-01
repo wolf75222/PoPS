@@ -291,6 +291,8 @@ class _ProgramSerialization(_ProgramBase):
                     11 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@3" else
                     10 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@2" else
                     9 if node.op == "solve_spatial_field" and "right_preconditioner" in node.attrs else 8)
+            if node.op == "field_evolved_state" or (node.op == "solve_spatial_field" and "temporal_tau" in node.attrs.get("source_contract", {})):
+                result["version"] = max(result["version"], 12)
             elif node.op == "reduce" and node.attrs.get("kind") == "dot_all":
                 result["version"] = max(result["version"], 7)
             for key in ("cond_block", "body_block", "true_block", "false_block",

@@ -86,6 +86,8 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
             raise ValueError("deferred candidate coefficient requires its exact consuming residual")
         unknowns = tuple(Handle.from_canonical_identity(_json_ready(item))
                          for item in solve.attrs["source_contract"]["unknown_components"])
+    from pops.fields._evolved_stage_contract import emit_issued_duration
+    duration = emit_issued_duration(value.attrs.get("temporal_tau"), value.prog, value.point, "program_field_%d_issued_dt" % value.id, lines)
     expressions = []
     if component:
         from pops.fields._observation_contract import validate_field_observation
@@ -101,7 +103,7 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         reads = {}
         for expression in encoded:
             code, dependencies = field_expression_cpp(
-                expression, sources, views=tuple("input%d" % i for i in range(len(sources))), unknowns=unknowns)
+                expression, sources, views=tuple("input%d" % i for i in range(len(sources))), unknowns=unknowns, duration_name=duration)
             expressions.append(code)
             for handle in dependencies:
                 reads[handle.qualified_id] = handle.canonical_identity()

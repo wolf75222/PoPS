@@ -296,6 +296,11 @@ class FieldSolution:
             validate_field_state_cell_mean(projected)
             return projected
 
+    def evolved_state(self, *, target: Any) -> ProgramValue:
+        """Publish the accumulation sealed into this exact original stage problem."""
+        from ._evolved_stage_contract import build_evolved_state
+        return build_evolved_state(self, target=target)
+
     def gradient(self, unknown: Handle, *, dimension: int) -> ProgramValue:
         if type(dimension) is not int or dimension not in (1, 2, 3):
             raise TypeError("field gradient requires an explicit physical dimension")

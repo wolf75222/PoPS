@@ -62,6 +62,7 @@ from pops.time.solve_problem import (  # noqa: F401
 from pops.time.solve_request import (  # noqa: F401
     DerivativeStrategy, SolveRequest, SolveRequestError, SolveUnknown,
 )
+from pops.time.evolved_field_stage import EvolvedOriginalFieldStage, TemporalTau  # noqa: F401
 from pops.time.implicit_stage import ImplicitStage  # noqa: F401
 from pops.time.implicit_diffusion import ImplicitDiffusionStage  # noqa: F401
 from pops.time._step.transaction import (  # noqa: F401
@@ -89,7 +90,7 @@ from pops.time.stencil import StencilAccess  # noqa: F401
 __all__ = ["Program", "ProgramValue", "MovingFieldProjection", "StageStateSet", "StencilAccess", "ResidualSolution",
            "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
            "DerivativeStrategy", "SolveRequest", "SolveRequestError", "SolveUnknown",
-           "ImplicitStage", "ImplicitDiffusionStage",
+           "ImplicitStage", "ImplicitDiffusionStage", "EvolvedOriginalFieldStage", "TemporalTau",
            "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
            "SOLVE_STATUSES", "Schedule",
            "StepStrategy", "FixedDt", "ComputedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",

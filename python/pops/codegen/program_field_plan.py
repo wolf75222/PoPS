@@ -176,6 +176,16 @@ class ResolvedProgramFieldPlan:
                         _canonical(solve.attrs["finite_difference_step"]) != _canonical(scalar_data(self.discretization.method.finite_difference_step)) or \
                         solve.attrs["physical_boundary"] != _physical_boundary(self.operator):
                     raise ValueError("native residual changed its registered equations/method/boundaries")
+                from pops.fields._evolved_stage_contract import stage_projection, compile_accumulation
+                projection = stage_projection(self.operator, program, solve.point, authoring=False)
+                source = solve.attrs["source_contract"]
+                if projection is not None:
+                    if _canonical(source.get("evolved_stage")) != _canonical(projection.to_data()) or \
+                            _canonical(source.get("temporal_tau")) != _canonical(projection.tau.to_data()) or \
+                            _canonical(source.get("accumulation")) != _canonical(compile_accumulation(projection, captures, self.operator.unknowns)):
+                        raise ValueError("original evolved accumulation changed its registered declaration")
+                elif any(key in source for key in ("temporal_tau", "evolved_stage", "accumulation")):
+                    raise ValueError("original field solve invents an undeclared evolved accumulation")
                 from pops.time.references import canonical_handle
                 if {_canonical(canonical_handle(value.state_ref).canonical_identity()) for value in captures} != expected_dependencies:
                     raise ValueError("native residual captures differ from the physical dependencies")

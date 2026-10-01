@@ -221,6 +221,11 @@ class Program(
             bind_program_block(self, block, where="IR op %r" % op)
         return super()._new(vtype, op, inputs, attrs, name, block, **metadata)
 
+    def temporal_tau(self, coefficient: Any = None, *, at: Any) -> Any:
+        """Bind an exact dt multiple to this Program's issued native frame."""
+        from pops.time.evolved_field_stage import TemporalTau
+        return TemporalTau(self, self.dt if coefficient is None else coefficient, at=at)
+
     def capture_source_locations(self, enabled: Any = True) -> Any:
         """Enable (or disable) recording each IR node's authoring source location (ADC-530).
 

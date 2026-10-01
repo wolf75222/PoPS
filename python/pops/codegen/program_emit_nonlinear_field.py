@@ -24,10 +24,17 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
     if target != "system" or prelude is None:
         raise NotImplementedError("pops.spatial-field-residual@1 requires a Uniform Cartesian native body")
     width, stem = value.attrs["ncomp"], "field_residual_%d" % value.id
+    from pops.fields._evolved_stage_contract import emit_issued_duration
+    if value.attrs["source_contract"].get("temporal_tau") is not None:
+        from pops.codegen.program_emit_solve import _solve_stage_fraction
+        stage = _solve_stage_fraction(value)
+        lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+    duration = emit_issued_duration(value.attrs["source_contract"].get("temporal_tau"), program, value.point, stem + "_issued_dt", lines)
     prototype, coefficients = (variables[part.id] for part in value.inputs[:2])
     coefficient_pointer = variables[("field_pointer", value.inputs[1].id)]
     captures = value.inputs[2:2 + value.attrs["capture_count"]]
     per_candidate = value.attrs.get("coefficient_evaluation") is not None
+    guarded = per_candidate or duration is not None
     allocation_start = len(prelude)
     if per_candidate:
         coefficient_pointer = stem + "_candidate_coefficients"
@@ -46,7 +53,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
         ("_workspace", "_trial", "_status", "_output", "_boundary", "_coefficient_boundary"))
     prelude += [
         "auto %s = std::make_shared<pops::runtime::program::PreparedSpatialResidual<pops::kNativeDimension>>(%s, %s, %s%s);"
-        % (workspace, prototype, controls, scalar_cpp(spatial_scalar(value.attrs["finite_difference_step"])), ", true, &ctx.prepared_execution_lane(), true" if per_candidate else ""),
+        % (workspace, prototype, controls, scalar_cpp(spatial_scalar(value.attrs["finite_difference_step"])), (", true, &ctx.prepared_execution_lane(), " + ("true" if per_candidate else "false")) if guarded else ""),
         "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(%d, 1));" % (trial, width),
         "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(1, 0));" % status,
         "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(%d, 0));" % (output, width),
@@ -68,7 +75,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
         lines.append("%s_layout_invalid |= ((%s).layout() != %s->layout() || (%s).distribution() != %s->distribution() || "
                      "(%s).local_rank() != %s->local_rank() || (%s).local_size() != %s->local_size() || (%s).ncomp() != %d) ? 1L : 0L;"
                      % (stem, source, name, source, name, source, name, source, name, source, ncomp))
-    if per_candidate:
+    if guarded:
         from pops.codegen.program_emit_field_problem import guard_candidate_allocations
         prelude[allocation_start:] = guard_candidate_allocations(prelude[allocation_start:])
     seed = "nullptr" if value.attrs["seed_index"] is None else "&(%s)" % variables[value.inputs[-1].id]
@@ -79,18 +86,18 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
                      % (stem, source, prototype, source, prototype, source, prototype, source, prototype, source, width))
     lines += ["if (pops::all_reduce_max(%s_layout_invalid, ctx.prepared_execution_lane()) != 0)" % stem,
               '  throw std::invalid_argument("field residual inputs require exact co-located layout/distribution/width");']
-    if per_candidate:
+    if guarded:
         lines += ["std::exception_ptr %s_capture_error;" % stem, "try {"]
     for capture, name in zip(captures, frozen, strict=True):
         lines.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (name, variables[capture.id]))
-    if per_candidate:
+    if guarded:
         lines += ["} catch (...) { %s_capture_error = std::current_exception(); }" % stem,
                   "try { Kokkos::fence(); } catch (...) { if (!%s_capture_error) %s_capture_error = std::current_exception(); }" % (stem, stem),
                   'pops::collectively_rethrow_exception(%s_capture_error, ctx.prepared_execution_lane(), "candidate coefficient frozen captures");' % stem]
     if not per_candidate:
         lines.append("pops::elliptic::nd::prepare_general_field_coefficients<pops::kNativeDimension, %d, %d, false>(*%s, *%s);"
                      % (width, width * width, coefficient_pointer, coefficient_boundary))
-    if per_candidate:
+    if guarded:
         lines += ["const auto* %s_lane = &ctx.prepared_execution_lane();" % stem,
                   "pops::runtime::program::PreparedResourceAttempt %s_attempt;" % stem,
                   "pops::runtime::multiblock::BoundaryEvaluationPoint %s_point;" % stem,
@@ -101,11 +108,26 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
     arithmetic_argument = ", true" if value.attrs.get("coefficient_face_policy") is not None else ""
     if per_candidate:
         arithmetic_argument += ", true"
+    elif duration is not None:
+        # Keep the existing face formula while draining local phases on this opt-in route.
+        arithmetic_argument = ", %s, true" % ("true" if arithmetic_argument or width > 1 else "false")
     callback = stem + "_evaluate"
     lines += ["auto %s = [&](const pops::MultiFab<pops::kNativeDimension>& q, pops::MultiFab<pops::kNativeDimension>& result, int evaluation) {" % callback,
               "  (void)evaluation;"]
+    if duration is not None:
+        lines += ["  std::exception_ptr temporal_error;", "  try {",
+                  "    if (&ctx.prepared_execution_lane() != %s_lane || !%s_attempt.visible() || !%s_attempt.same_attempt(ctx.resource_attempt()) || %s_point != ctx.boundary_evaluation_point(%d) || ctx.step_dt() != %s)" % (stem, stem, stem, stem, value.id, duration),
+                  '      throw std::logic_error("original stage frame/point/attempt authority changed");',
+                  "  } catch (...) { temporal_error = std::current_exception(); }",
+                  '  pops::collectively_rethrow_exception(temporal_error, *%s_lane, "original stage frame authority");' % stem]
     if not per_candidate:
-        lines.append("  pops::PureFieldAlgebra::copy(*%s, q);" % trial)
+        if duration is None:
+            lines.append("  pops::PureFieldAlgebra::copy(*%s, q);" % trial)
+        else:
+            lines += ["  std::exception_ptr trial_error;",
+                      "  try { pops::PureFieldAlgebra::copy(*%s, q); } catch (...) { trial_error = std::current_exception(); }" % trial,
+                      "  try { Kokkos::fence(); } catch (...) { if (!trial_error) trial_error = std::current_exception(); }",
+                      '  pops::collectively_rethrow_exception(trial_error, *%s_lane, "original stage trial preparation");' % stem]
     if per_candidate:
         lines += ["  std::exception_ptr coefficient_error;", "  try {",
                   "    if (&ctx.prepared_execution_lane() != %s_lane || !%s_attempt.visible() || !%s_attempt.same_attempt(ctx.resource_attempt()) || %s_point != ctx.boundary_evaluation_point(%d))" % (stem, stem, stem, stem, value.id),
@@ -121,7 +143,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
                   "        [=] POPS_HD(const pops::CellIndex<pops::kNativeDimension>& index) {", "          bool finite = true;"]
         for component, expression in enumerate(value.attrs["source_contract"]["diffusion"]):
             code, _ = field_expression_cpp(expression, captures,
-                views=tuple("capture%d" % i for i in range(len(frozen))), unknowns=unknowns)
+                views=tuple("capture%d" % i for i in range(len(frozen))), unknowns=unknowns, duration_name=duration)
             lines += ["          const pops::Real value_%d = %s;" % (component, code),
                       "          finite = finite && std::isfinite(value_%d);" % component,
                       "          coefficient(index, %d) = value_%d;" % (component, component)]
@@ -139,7 +161,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
               "  for (std::size_t patch = 0; patch < result.local_size(); ++patch) {",
               "    auto output = result.fab(patch).view();", "    const auto candidate = %s->fab(patch).view();" % trial,
               "    auto status = %s->fab(patch).view();" % status]
-    if per_candidate:
+    if guarded:
         # The apply primitive has already voted; protect the following local body too.
         offset = next(index for index in range(len(lines)-1, -1, -1)
                       if lines[index] == "  for (std::size_t patch = 0; patch < result.local_size(); ++patch) {")
@@ -149,7 +171,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
     lines += ["    pops::for_each_cell(result.box(patch), [=] POPS_HD(const pops::CellIndex<pops::kNativeDimension>& index) {",
               "      bool finite = true;"]
     for component, expression in enumerate(value.attrs["local_expressions"]):
-        code, _ = field_expression_cpp(expression, captures, views=tuple("capture%d" % i for i in range(len(frozen))), unknowns=unknowns)
+        code, _ = field_expression_cpp(expression, captures, views=tuple("capture%d" % i for i in range(len(frozen))), unknowns=unknowns, duration_name=duration)
         lines += ["      const pops::Real component_%d = output(index, %d) + %s;" % (component, component, code),
                   "      finite = finite && std::isfinite(candidate(index, %d)) && std::isfinite(component_%d);" % (component, component),
                   "      output(index, %d) = component_%d;" % (component, component)]
@@ -157,7 +179,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
               "  if (pops::all_reduce_max(pops::reduce_sum_local(*%s), ctx.prepared_execution_lane()) > 0)" % status,
               '    throw pops::runtime::program::StepAttemptRejected(pops::SolveStatus::kInvalidEvaluation, "original_field_residual", "nonfinite_original_field_residual");',
               "};"]
-    if per_candidate:
+    if guarded:
         offset = next(index for index in range(len(lines)-1, -1, -1)
                       if lines[index].startswith("  if (pops::all_reduce_max(pops::reduce_sum_local"))
         # The reduction belongs to the local phase as well; its value is then voted.
@@ -183,7 +205,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
               "  %s.mark_failed(failure.status(), %s, failure.what());" % (report, action), "}",
               "%s.evaluations = %s->residual_evaluations() + %s_original_rechecks;" % (report, workspace, stem),
               "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane(std::move(%s), ctx.prepared_execution_lane());" % (outcome, report)]
-    if per_candidate:
+    if guarded:
         solve_offset = next(index for index in range(len(lines)-1, -1, -1)
                             if "%s->solve(" % workspace in lines[index])
         lines[solve_offset] = lines[solve_offset].replace("ctx.prepared_execution_lane()", "*%s_lane" % stem)

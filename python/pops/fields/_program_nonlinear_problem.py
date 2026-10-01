@@ -83,7 +83,7 @@ def compile_equations(problem: Any, states: tuple, *, per_candidate: bool = Fals
     field_expression_dependencies(encoded_diffusion, states, unknowns=problem.unknowns if per_candidate else ())
     for expression in local:
         field_expression_cpp(expression, states, views=tuple("capture%d" % i for i in range(len(states))),
-                             unknowns=problem.unknowns)
+                             unknowns=problem.unknowns, duration_name="issued_frame_duration")
     return encoded_diffusion, tuple(local)
 
 
@@ -123,7 +123,16 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
         raise FieldProblemError("field.nonlinear.layout", "v1 requires an exact State capture witnessing the physical Cartesian layout")
     method_data = numerical.method.options()
     candidate_policy = method_data.get("coefficient_evaluation")
+    from ._evolved_stage_contract import stage_projection, validate_encoded_tau
+    projection = stage_projection(problem, program, at)
+    temporal_tau = None if projection is None else projection.tau.to_data()
+    if projection is not None:
+        for previous in projection.previous:
+            witnesses = [value for value in captures if _identity(value.state_ref) == _identity(previous.handle)]
+            if len(witnesses) != 1 or witnesses[0].point != TimePoint(program.clock, 0):
+                raise FieldProblemError("field.evolution.previous", "original evolution requires the exact accepted previous frame endpoint")
     diffusion, local = compile_equations(problem, captures, per_candidate=candidate_policy is not None)
+    validate_encoded_tau((*diffusion, *local), temporal_tau)
     width = len(problem.unknowns)
     coefficient_dependencies = field_expression_dependencies(diffusion, captures, unknowns=problem.unknowns if candidate_policy else ())
     contract = method_data["contract"]
@@ -146,6 +155,8 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
         coefficient_attrs.update(coefficient_evaluation=candidate_policy,
             storage_role="deferred_candidate_coefficient",
             unknown_components=tuple(row.canonical_identity() for row in problem.unknowns))
+    if temporal_tau is not None:
+        coefficient_attrs["temporal_tau"] = temporal_tau
     coefficients = program._new("scalar_field", "field_problem_coefficients",
         captures if coefficient_dependencies else (), coefficient_attrs, problem.name + "_diffusion",
         None, point=at, inherit_state_ref=False)
@@ -161,6 +172,11 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
     if candidate_policy is not None:
         source_data["coefficient_evaluation"] = candidate_policy
         source_data["linear_residual_verification"] = method_data["linear_residual_verification"]
+    if projection is not None:
+        source_data["evolved_stage"] = projection.to_data()
+        source_data["temporal_tau"] = temporal_tau
+        from ._evolved_stage_contract import compile_accumulation
+        source_data["accumulation"] = compile_accumulation(projection, captures, problem.unknowns)
     source = freeze_containers(source_data)
     residual = _SpatialFieldResidual(field, prototype, coefficients, captures, local,
                                      numerical.method.finite_difference_step, boundary, source)
@@ -274,6 +290,16 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
 
     actual = _json_ready(token.attrs["solve_request"])
     source = token.attrs["source_contract"]
+    from ._evolved_stage_contract import validate_tau_data, validate_encoded_tau
+    temporal_tau = source.get("temporal_tau")
+    if temporal_tau is not None:
+        validate_tau_data(temporal_tau, program=program, point=token.point)
+        stage = source.get("evolved_stage")
+        if stage is None or not same_stage_tau(stage, temporal_tau, source):
+            raise SolveRequestError("equation_identity_drift", "original stage accumulation/duration authority changed")
+    if token.inputs[1].attrs.get("temporal_tau") != temporal_tau:
+        raise SolveRequestError("equation_identity_drift", "original coefficient duration changed")
+    validate_encoded_tau((*source["diffusion"], *source["local_expressions"]), temporal_tau)
     face_policy = source.get("coefficient_face_policy")
     candidate_policy = source.get("coefficient_evaluation")
     if candidate_policy is not None and (type(candidate_policy) is not str or candidate_policy != PER_CANDIDATE or face_policy != ARITHMETIC_FACES):
@@ -337,7 +363,7 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
             raise SolveRequestError("unsupported_lowering", "deferred candidate coefficient is a body descriptor, not a material field value")
     unknown_handles = tuple(Handle.from_canonical_identity(_json_ready(item)) for item in source["unknown_components"])
     for expression in token.attrs["local_expressions"]:
-        field_expression_cpp(expression, captures, views=tuple("capture%d" % i for i in range(len(captures))), unknowns=unknown_handles)
+        field_expression_cpp(expression, captures, views=tuple("capture%d" % i for i in range(len(captures))), unknowns=unknown_handles, duration_name="issued_frame_duration" if temporal_tau is not None else None)
     unknowns = actual["unknowns"]
     if len(unknowns) != 1:
         raise SolveRequestError("invalid_unknown", "field solve must retain its full ordered unknown product")
@@ -351,3 +377,10 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
         raise SolveRequestError("unsupported_realization", "identity realization must retain legacy omission")
     if token.attrs["solver_identity"] != spatial_solver_identity(controls, token.attrs.get("right_preconditioner")).token:
         raise SolveRequestError("solver_identity_drift", "field Newton controls changed")
+
+
+def same_stage_tau(stage: Any, tau: Any, source: Any) -> bool:
+    data = _json_ready(stage)
+    return (data.get("schema_version") == 1 and data.get("tau") == _json_ready(tau)
+            and data.get("unknowns") == _json_ready(source["unknown_components"])
+            and data in _json_ready(source["field_problem"])["outputs"])
