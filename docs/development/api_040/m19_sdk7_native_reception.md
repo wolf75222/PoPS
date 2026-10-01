@@ -14,3 +14,5 @@ env -u PYTHONPATH POPS_REQUIRE_NATIVE_TESTS=1 POPS_KEEP_GENERATED=1 FI_PROVIDER=
 ```
 
 A new build receives its own SDK/native/source receipts; these commands do not grant it historical SDK7 acceptance. Historical ROOT live and countermodel recipes are preserved in /Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001. The new archived-backing reader uses owner-pins/approval@2 and independently checks all backing bytes while leaving recorded origin paths unchanged. ROOT archive approval is a separate action. Raw states and DSOs remain outside Git.
+
+ROOT also received the explicit archived backings with owner-pins/approval@2: Serial145 and MPI2 146 selected origin leaves, all original paths and digests unchanged. Both readers use no ENV fallback and execute no new native simulation. The linked JSON retains both external seals, backing SHA256 and scientific report. Extra unselected bytes in an archive do not count as selected origins; the approved origin mapping is closed. This does not establish a CPP-to-DSO compilation graph.

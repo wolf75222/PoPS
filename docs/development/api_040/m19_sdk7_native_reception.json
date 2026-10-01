@@ -1,9 +1,65 @@
 {
   "archived_origins": {
-    "archive_reader": "sol61.m19-owner-pins@2 requires a separately ROOT-approved backing; portable ROOT reception pending",
+    "archive_reader": "sol61.m19-owner-pins@2; both explicit archived backings received under two external ROOT seals",
     "mpi2": {
       "path": "/Users/romaindespoulain/dev/tmp/sol61-m19-mpi2-offline-pending-20261001/actual-origins-snapshot.zip",
       "sha256": "ce8010b4b5c11c4d6e7a3d6fac4bd31309726d0917bd6653eedf1d053d1adc83"
+    },
+    "portable_root_receptions": {
+      "mpi2": {
+        "approval": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/root-approval.json",
+          "sha256": "d2cfffc2bedb9a485fb2782e16892a660fc29bffe04833210019b9993effd313"
+        },
+        "backing_archive": {
+          "path": "/Users/romaindespoulain/dev/tmp/sol61-m19-mpi2-offline-pending-20261001/actual-origins-snapshot.zip",
+          "sha256": "ce8010b4b5c11c4d6e7a3d6fac4bd31309726d0917bd6653eedf1d053d1adc83"
+        },
+        "closed_selected_origin_leaves": 146,
+        "cpp_dso_graph_qualified": false,
+        "environment_fallback": false,
+        "new_native_execution": false,
+        "original_paths_and_digests_unchanged": true,
+        "owner_pins": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/owner-pins.json",
+          "sha256": "c54c994a8f49d60bcb9032fa7cb057b5559785c582d4a60679760c9a01ec0149"
+        },
+        "report": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/scientific-reception.json",
+          "sha256": "fac28a94dae20a49f7368e1a0ac0a0bd792328b3866fe9975ac852580eb9c8bc"
+        },
+        "root_reception": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/root-reception.json",
+          "sha256": "59eeb9fde98e033d5183964ae58c8b0b431be6b01e795e2b222d6e36a7882346"
+        }
+      },
+      "serial": {
+        "approval": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/root-approval.json",
+          "sha256": "50e4d61434a1ec6d86ef3a3c1d5b8cc2031a9b1502785f124783fe78c606650e"
+        },
+        "backing_archive": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/actual-selected-origin-bytes.zip",
+          "sha256": "5351eda423752711d9556586732f340df7f02a490ecfa9778e489c43dd91ae44"
+        },
+        "closed_selected_origin_leaves": 145,
+        "cpp_dso_graph_qualified": false,
+        "environment_fallback": false,
+        "new_native_execution": false,
+        "original_paths_and_digests_unchanged": true,
+        "owner_pins": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/owner-pins.json",
+          "sha256": "635fcbd576dec7e0fc5b1cb3e1cfac01ba05e8048f302442d18bb9e939f8a8cb"
+        },
+        "report": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/scientific-reception.json",
+          "sha256": "d650e50e2f13e2b9c10fdc30542f54eb53a8a4e309cd2a867803bd84c2ecb93e"
+        },
+        "root_reception": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/root-reception.json",
+          "sha256": "a1db2dcee7c2b3d3ec7557994ea9e679ee287c901e79a1cebfb516dcf14bd11f"
+        }
+      }
     },
     "serial": {
       "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk7-archive/backing-files.json",
@@ -147,8 +203,7 @@
       "limitations": [
         "CPP-to-DSO build linkage not stored; filenames never used as link proof",
         "original ResolvedSimulationPlan payload absent; actual CompiledPlanRecord is ROOT-owner-attested",
-        "source b310 Python rebuild and bfae C++ build are distinct",
-        "snapshot backing map pending versioned reader admission and external ROOT approval"
+        "source b310 Python rebuild and bfae C++ build are distinct"
       ],
       "max_original_error": 2.842170943040401e-14,
       "native_binary_reused": true,

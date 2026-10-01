@@ -1443,7 +1443,7 @@
         ],
         "evidence": {
           "path": "docs/development/api_040/m19_sdk7_native_reception.json",
-          "sha256": "f417d0ab40b30dcf567ef3e0efa34d90d3ceab1502584786c1625754156276ba"
+          "sha256": "4306f2ef6d264d8000ee19c7e5289b6b2ab765c256b102c37b92d54eefb4de3a"
         },
         "native_passes": {
           "serial": 6,
@@ -1483,7 +1483,63 @@
           "System-generated CPP absent; retained Program CPP does not prove CPP-to-System-DSO compile graph",
           "Original resolved-plan payload absent; actual artifact aggregate recomputed, CompiledPlanRecord ROOT-attested",
           "Later source/header changes do not inherit SDK7 qualification; a rebuilt package needs a fresh campaign"
-        ]
+        ],
+        "archived_root_receptions": {
+          "serial": {
+            "root_reception": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/root-reception.json",
+              "sha256": "a1db2dcee7c2b3d3ec7557994ea9e679ee287c901e79a1cebfb516dcf14bd11f"
+            },
+            "closed_selected_origin_leaves": 145,
+            "owner_pins": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/owner-pins.json",
+              "sha256": "635fcbd576dec7e0fc5b1cb3e1cfac01ba05e8048f302442d18bb9e939f8a8cb"
+            },
+            "approval": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/root-approval.json",
+              "sha256": "50e4d61434a1ec6d86ef3a3c1d5b8cc2031a9b1502785f124783fe78c606650e"
+            },
+            "backing_archive": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/actual-selected-origin-bytes.zip",
+              "sha256": "5351eda423752711d9556586732f340df7f02a490ecfa9778e489c43dd91ae44"
+            },
+            "report": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/scientific-reception.json",
+              "sha256": "d650e50e2f13e2b9c10fdc30542f54eb53a8a4e309cd2a867803bd84c2ecb93e"
+            },
+            "original_paths_and_digests_unchanged": true,
+            "environment_fallback": false,
+            "new_native_execution": false,
+            "cpp_dso_graph_qualified": false
+          },
+          "mpi2": {
+            "root_reception": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/root-reception.json",
+              "sha256": "59eeb9fde98e033d5183964ae58c8b0b431be6b01e795e2b222d6e36a7882346"
+            },
+            "closed_selected_origin_leaves": 146,
+            "owner_pins": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/owner-pins.json",
+              "sha256": "c54c994a8f49d60bcb9032fa7cb057b5559785c582d4a60679760c9a01ec0149"
+            },
+            "approval": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/root-approval.json",
+              "sha256": "d2cfffc2bedb9a485fb2782e16892a660fc29bffe04833210019b9993effd313"
+            },
+            "backing_archive": {
+              "path": "/Users/romaindespoulain/dev/tmp/sol61-m19-mpi2-offline-pending-20261001/actual-origins-snapshot.zip",
+              "sha256": "ce8010b4b5c11c4d6e7a3d6fac4bd31309726d0917bd6653eedf1d053d1adc83"
+            },
+            "report": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/scientific-reception.json",
+              "sha256": "fac28a94dae20a49f7368e1a0ac0a0bd792328b3866fe9975ac852580eb9c8bc"
+            },
+            "original_paths_and_digests_unchanged": true,
+            "environment_fallback": false,
+            "new_native_execution": false,
+            "cpp_dso_graph_qualified": false
+          }
+        }
       },
       "candidate_diffusion_v3_ir11": {
         "status": "source_received_native_pending",
