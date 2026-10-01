@@ -105,3 +105,83 @@ The budget precedes source-density payload transport and snapshot/target
 allocation, not every collective: the constant-size geometry/mask/measure
 metadata census and owner counts occur first. Native cache/control/string
 allocations and RSS remain outside the documented workspace bound.
+
+
+## Installed fixture archive @1 (native reception pending)
+
+`test_public_spatial_interaction.py` defines six installed-package cases per
+rank. Three scientific witnesses are `scalar-cutcell`,
+`signed-vector-permuted`, and `partial-amr-cutcell`; the width-three input keeps
+all three channels and selects output components `(2, 0)`. Three distinct
+controls are `budget`, `pole`, and `nonfinite`. They must refuse on every rank,
+retain the exact state, auxiliary accepted image, geometry, history and clock,
+and save the actual converged error diagnostics. Controls have no fabricated
+interaction output. No Serial, MPI, cut-cell or partial-AMR native receipt is
+claimed by this source fixture commit.
+
+The declared finite kernel is `1 + x[0]*y[1] - 2*y[0]`, including self pairs,
+with CellMidpoint and actual Native `kappa * cell_volume`. The source equation
+is zero physical flux and `rho_t = -0.2*rho`, using ForwardEuler and exact
+`dt=0.01`. All input channels vary along both directions. Cartesian physical
+bounds are `(0.3, -0.4)` to `(2.3, 2.6)`, base cells `(8, 6)`. Embedded-boundary
+Disc geometry uses the actual prepared active/kappa output APIs; no all-one
+measure is substituted. AMR uses actual two-level refinement by two and must
+pass a genuine covered AND uncovered active coarse-cell guard before the
+first attempt. This layout is pending Native admission and is not a received
+partial mesh. The singular-kernel control declares `1/(x[0]-y[0])`; its finite
+self-pair guard must fail. The nonfinite control keeps a finite IC but sets
+one actual cell to `rho=3` and declares source `rho/(3-rho)`, forming a typed
+issued candidate. Actual piece ownership determines the resident ranks;
+there is no assertion that a particular rank owns that cell.
+
+The collective root-written directory contains five observation NPZs
+`initial`, `accepted`, `continuous`, `reloaded`, `replay`, five distinct
+checkpoint paths with hashes captured immediately, compiler-retained Program
+CPP and same-component `dump_ir` JSON, and `receipt.json` under
+`pops.spatial-interaction-native-fixture@1`. Each refusal directory instead
+contains `initial`/`rejected` NPZ and two distinct checkpoints. Every checkpoint
+is rehashed after all observations and must remain disjoint from observation
+paths. Actual Program/System binaries and their exact `.pops-artifact.json`
+sidecars are pinned by path/hash; the fixture records its own two source
+files. ROOT must additionally seal installed SDK/source/Native identities,
+complete JUnit and these leaves with externally supplied pins and approval.
+The fixture does not mint those approvals or recompose an aggregate payload.
+
+NPZ stores `time`, `step`, `topology_epoch`, and all rank/level accepted
+auxiliary byte images. Per-level keys preserve `coverage`, `valid_cells`,
+`cell_volumes`, `boxes`, Native `cell_shape`, physical `origin` and `spacing`.
+Per-rank compact `rho`, `active`, `kappa` pieces retain exact arrays, bounds,
+global box index, reported owner, resident rank and replicated flag in
+`piece_manifest_json`. NumPy spatial axes are `(y,x)`, box bounds are half-open.
+Geometry coverage true means COVERED, whereas the Native direct consumer's
+coverage one means owned; the independent quotient must explicitly distinguish
+them. Coordinates are derived from bound Cartesian origin/spacing and native
+indices, not claimed to be separately observed node coordinates. Actual
+fractional kappa and coarse/fine boxes must be read independently.
+
+After a completed step, NPZ also stores every physical slot of the rho keeper,
+`I_accepted`, and `I_history`, their Native names, full POPSHID1 sample bytes,
+ring depths, fill counts, initialized flags and slot dt values. Slot-one
+aliases `rho_retained`, `I_accepted`, `I_history` are convenience copies of
+these actual buffers. The initial phase is SOURCE_SNAPSHOT_ONLY, without an
+invented initial I. Accepted/reloaded I consume initial rho and cold seed;
+continuous I consumes accepted rho and the retained lag-one rho from BEFORE
+step two; replay I consumes the corresponding reloaded checkpoint. Receipt
+`consumption_anchors` seals these associations. Post-step-two lag-one has
+rotated and is never renamed as the source consumed by step two. Independent
+reception must compare the pre-consumption checkpoint's actual history/sample
+codec with the NPZ, or report its association gap explicitly.
+
+Source validation command (no Native selection, no JIT):
+
+```sh
+rtk proxy env -u PYTHONPATH -u POPS_NATIVE_DIM PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python -B -m pytest -q tests/review/test_sol61_spatial_interaction_native_fixture.py
+```
+
+ROOT alone runs the integration file with installed rebuilt Dim2, the new
+`pops-api040-ir17` environment, isolated cache, collective compilation and
+complete JUnit for all six cases, first Serial then MPI2. The math witness is
+the spatial sum over real active unique-owner rows; linear source decay is
+only a separate consistency check. This fixture closes neither M26's PDE,
+diffusion, energy gradient nor its unspecified flux, and supplies no GPU,
+Native Float32 or MPI result until genuine campaigns and external seals exist.
