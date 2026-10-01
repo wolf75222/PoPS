@@ -341,6 +341,15 @@ class _ProgramSerialization(_ProgramBase):
         for value in readonly_dt_bound_nodes(self):
             if value.op == "state" and value.block not in order:
                 order[value.block] = len(order)
+        # An IR16 global observation can declare a storage-only TimeState
+        # without reading its physical State.n. Route its originally issued
+        # owner without creating SSA data or a synthetic physical commit.
+        from pops.time._program.global_history_storage import validate_issuances
+        validate_issuances(self)
+        for name in sorted(getattr(self, "_global_field_history_issuance", {})):
+            owner = self._history_blocks[name]
+            if owner not in order:
+                order[owner] = len(order)
         return order
 
 
