@@ -230,5 +230,16 @@ class SolveRequest:
                             name: Any = None) -> Any:
         return program._build_solve_request(self, prepared_solver=prepared_solver, name=name)
 
+    def seed_product(self, *, program: Any, expressions: Any, space: Any, name: str) -> SolveRequest:
+        """Compute an original-field seed in its declared physical FieldSpace.
+
+        Expressions execute in the native pointwise kernel. Their State inputs
+        provide allocation/layout only; the result retains the supplied physical
+        components, units and representation, independently of conserved Q.
+        """
+        from pops.fields._program_nonlinear_problem import build_field_seed_product
+
+        return build_field_seed_product(self, program, expressions=expressions, space=space, name=name)
+
 
 __all__ = ["DerivativeStrategy", "SolveRequest", "SolveRequestError", "SolveUnknown"]

@@ -18,7 +18,8 @@ class _ProgramExpressions:
         return self._pointwise_expression(name, expression, at=at, finite_support=support)
 
     @atomic_authoring
-    def _pointwise_expression(self, name, expression, *, at=None, finite_support=None):
+    def _pointwise_expression(self, name, expression, *, at=None, finite_support=None,
+                              field_product_space=None, field_product_authority=None):
         if isinstance(expression, ProgramExpression):
             expressions = expression.components
             template = expression.template
@@ -38,9 +39,17 @@ class _ProgramExpressions:
         require_owned(self, template, "pointwise expression template")
         if template.vtype != "state":
             raise TypeError("pointwise materialization currently requires a typed State template")
-        if len(expressions) != len(component_names(template)):
+        if len(expressions) != len(component_names(template)) and field_product_space is None:
             raise ValueError("pointwise output component count must match its StateSpace")
         attrs = {"expressions": encoded, "expression_nodes": nodes}
+        if field_product_space is not None:
+            from pops.model.spaces import FieldSpace
+            if type(field_product_space) is not FieldSpace or field_product_authority is None or finite_support is not None:
+                raise TypeError("field seed product requires an explicit FieldSpace and original authority")
+            if len(expressions) != len(field_product_space.components):
+                raise ValueError("field seed product width differs from its physical FieldSpace")
+            attrs.update(field_product_seed=field_product_authority,
+                         ncomp=len(expressions), field_product_template_index=next(i for i, row in enumerate(inputs) if row is template))
         globals_ = tuple(value for value in inputs if value.op == "integral_candidate")
         if globals_:
             if all(value is not template for value in inputs):
@@ -75,7 +84,9 @@ class _ProgramExpressions:
         context = None
         for value in inputs:
             context = merge_field_provenance(context, value.field_context)
-        return self._new("state", "pointwise_expression", inputs,
+        return self._new("scalar_field" if field_product_space is not None else "state", "pointwise_expression", inputs,
                          attrs, name, template.block,
-                         space=template.space, point=template.point if at is None else at,
-                         field_context=context, state_ref=template.state_ref)
+                         space=template.space if field_product_space is None else field_product_space,
+                         point=template.point if at is None else at,
+                         field_context=context, state_ref=template.state_ref if field_product_space is None else None,
+                         inherit_state_ref=field_product_space is None)

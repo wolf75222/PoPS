@@ -30,6 +30,16 @@ def expression_cpp(node, inputs):
 def pointwise_output_template(value):
     """One authenticated output authority for allocation, mask and cell evaluation."""
     from pops.time.expressions import component_names
+    if value.vtype != "state" and "field_product_seed" not in value.attrs:
+        raise ValueError("typed pointwise output lost its field product authority")
+    if "field_product_seed" in value.attrs:
+        index = value.attrs.get("field_product_template_index")
+        from pops.model.spaces import FieldSpace
+        if type(index) is not int or not 0 <= index < len(value.inputs) or value.inputs[index].vtype != "state" or \
+                value.block != value.inputs[index].block or value.state_ref is not None or type(value.space) is not FieldSpace or \
+                type(value.attrs.get("ncomp")) is not int or value.attrs["ncomp"] != len(value.space.components):
+            raise ValueError("typed field seed allocation authority changed")
+        return value.inputs[index]
     if "global_template_index" in value.attrs:
         index = value.attrs["global_template_index"]
         if (type(index) is not int or not 0 <= index < len(value.inputs)
@@ -154,7 +164,8 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
     temporaries, rendered, invalid = checked_pointwise_rows(value, rows)
     body.append("    if (expression_has_mask_ && !(expression_mask_(index, 0) >= pops::Real(0.5))) {")
     for c in range(len(rendered)):
-        body.append("      outA(index, %d) = %sA(index, %d);" % (c, template_name, c))
+        body.append("      outA(index, %d) = pops::Real(0);" % c if "field_product_seed" in value.attrs else
+                    "      outA(index, %d) = %sA(index, %d);" % (c, template_name, c))
     body.extend(["      expression_status_(index, 0) = pops::Real(0);", "      return;", "    }"])
     body.extend("    " + line for line in temporaries)
     body.append("    expression_status_(index, 0) = (%s) ? pops::Real(1) : pops::Real(0);" % invalid)

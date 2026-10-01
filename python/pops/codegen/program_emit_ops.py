@@ -1563,13 +1563,35 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                                       (stage.numerator,stage.denominator))
         template_var = var[pointwise_output_template(v).id]
         var[v.id] = "u%d" % v.id
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                     % (var[v.id], v.id, template_var))
+        if "field_product_seed" in v.attrs:
+            lines += ["pops::MultiFab<pops::kNativeDimension>* seed_output_%d = nullptr;" % v.id,
+                      "pops::MultiFab<pops::kNativeDimension>* seed_status_%d = nullptr;" % v.id,
+                      "std::exception_ptr seed_allocation_error_%d;" % v.id,
+                      "const auto* seed_lane_%d = &ctx.prepared_execution_lane();" % v.id,
+                      "try { seed_output_%d = &ctx.scalar_scratch(%d, 0, %s, %d, 0);" % (v.id, v.id, template_var, v.attrs["ncomp"]),
+                      "  seed_status_%d = &ctx.scalar_scratch(%d, 1, %s, 1, 0); }" % (v.id, v.id, template_var),
+                      "catch (...) { seed_allocation_error_%d = std::current_exception(); }" % v.id,
+                      "try { Kokkos::fence(); } catch (...) { if (!seed_allocation_error_%d) seed_allocation_error_%d = std::current_exception(); }" % (v.id, v.id),
+                      'pops::collectively_rethrow_exception(seed_allocation_error_%d, *seed_lane_%d, "typed field seed allocation");' % (v.id, v.id),
+                      "pops::MultiFab<pops::kNativeDimension>& %s = *seed_output_%d;" % (var[v.id], v.id)]
+        else:
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                         % (var[v.id], v.id, template_var))
         output_setup_end = len(lines)
         status = "expression_status_%d" % v.id
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
-                     % (status, v.id, template_var))
-        lines += emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
+        if "field_product_seed" in v.attrs:
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *seed_status_%d;" % (status, v.id))
+            kernel = emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
+            lines += ["const pops::MultiFab<pops::kNativeDimension>* expression_active_%d = nullptr;" % v.id,
+                      "std::exception_ptr seed_kernel_error_%d;" % v.id, "try {"]
+            lines += [kernel[0].replace("const auto* ", "", 1), *kernel[1:]]
+            lines += ["} catch (...) { seed_kernel_error_%d = std::current_exception(); }" % v.id,
+                      "try { Kokkos::fence(); } catch (...) { if (!seed_kernel_error_%d) seed_kernel_error_%d = std::current_exception(); }" % (v.id, v.id),
+                      'pops::collectively_rethrow_exception(seed_kernel_error_%d, *seed_lane_%d, "typed field seed evaluation");' % (v.id, v.id)]
+        else:
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
+                         % (status, v.id, template_var))
+            lines += emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
         reduction = "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
         lines.append("if (ctx.%s(%d, %s, expression_active_%d, ctx.prepared_execution_lane()) != pops::Real(0)) {"
                      % (reduction, bidx, status, v.id))

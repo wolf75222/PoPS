@@ -313,6 +313,8 @@ class _ProgramSerialization(_ProgramBase):
                 from pops.fields._evolved_stage_contract import issued_previous
                 issued_previous(stage)
                 result["version"] = max(result["version"], 21)
+            if node.op == "pointwise_expression" and "field_product_seed" in node.attrs:
+                result["version"] = max(result["version"], 21)
             if node.op == "field_evolved_state" and node.attrs.get("projection_contract") == "pops.evolved-original-field-stage@2":
                 result["version"] = max(result["version"], 15)
             if node.op == "store_history" and "global_field_storage" in node.attrs:

@@ -23,6 +23,62 @@ CAPTURED_DIFFUSION_CONTRACT = "pops.spatial-field-residual@2"
 CANDIDATE_DIFFUSION_CONTRACT = "pops.spatial-field-residual@3"
 PER_CANDIDATE = "pops.field.coefficients.per-candidate@1"
 ARITHMETIC_FACES = "pops.field.face-mean.arithmetic@1"
+SEED_PRODUCT = "pops.original-field.typed-product-seed@1"
+
+
+def build_field_seed_product(request: Any, program: Any, *, expressions: Any, space: Any, name: str) -> SolveRequest:
+    from dataclasses import replace
+    from pops.model.spaces import FieldSpace
+    from pops.time._authoring import authoring_transaction
+    from pops.time._program.value_validation import require_top_level
+
+    residual = request.problem
+    if type(residual) is not _SpatialFieldResidual or len(request.unknowns) != 1:
+        raise SolveRequestError("unsupported_lowering", "seed_product currently requires one original field unknown product")
+    for value in (residual.prototype, residual.coefficients, *residual.captures):
+        require_top_level(program, value, "original field seed product request")
+    unknowns = residual.source_contract["unknown_components"]
+    names = tuple(row["local_id"] for row in unknowns)
+    if type(space) is not FieldSpace or space.components != names or space.centering != "cell" or \
+            space.sampling != "cell_value" or any(unit is None for unit in space.units):
+        raise SolveRequestError("unknown_type_mismatch", "seed product requires exact ordered physical components, cell values and explicit units")
+    if type(expressions) is not tuple or len(expressions) != len(names):
+        raise SolveRequestError("unknown_type_mismatch", "seed product expressions differ from the complete unknown tuple")
+    point = residual.prototype.point
+    authority = {"contract": SEED_PRODUCT, "problem_identity": residual.source_contract["field_problem_identity"],
+                 "unknown_components": unknowns, "space": space.to_data(), "point": point.to_data(),
+                 "program_owner": program.owner_path.canonical().to_data(), "layout_scope_only": True}
+    with authoring_transaction(program):
+        seed = program._pointwise_expression(name, expressions, at=point,
+                    field_product_space=space, field_product_authority=authority)
+        validate_field_seed_product(program, seed, residual.source_contract, point)
+        return replace(request, seeds={request.unknowns[0].name: seed})
+
+
+def validate_field_seed_product(program: Any, seed: Any, source: Any, point: Any) -> None:
+    from pops.model.spaces import FieldSpace
+    from pops.codegen.program_emit_expressions import pointwise_output_template
+
+    metadata = seed.attrs.get("field_product_seed")
+    if metadata is None:
+        raise SolveRequestError("unknown_type_mismatch", "typed field seed lost its original product authority")
+    if program._issued_values.get(id(seed)) is not seed or program._canonical_value(seed) is not seed:
+        raise SolveRequestError("unknown_type_mismatch", "typed field seed is not the current Program-issued product")
+    if type(seed.space) is not FieldSpace or seed.vtype != "scalar_field" or seed.state_ref is not None or seed.point != point:
+        raise SolveRequestError("unknown_type_mismatch", "typed field seed changed its physical space or exact point")
+    expected = {"contract": SEED_PRODUCT, "problem_identity": source["field_problem_identity"],
+                "unknown_components": source["unknown_components"], "space": seed.space.to_data(),
+                "point": point.to_data(), "program_owner": program.owner_path.canonical().to_data(), "layout_scope_only": True}
+    if canonical_bytes(_json_ready(metadata)) != canonical_bytes(_json_ready(expected)) or \
+            seed.space.components != tuple(row["local_id"] for row in source["unknown_components"]) or \
+            any(unit is None for unit in seed.space.units) or seed.space.sampling != "cell_value":
+        raise SolveRequestError("unknown_type_mismatch", "typed field seed changed its original problem, components, units or issuer")
+    template = pointwise_output_template(seed)
+    for attribute in ("frame", "clock", "support", "layout", "centering"):
+        if getattr(seed.space, attribute) != getattr(template.space, attribute):
+            raise SolveRequestError("unknown_type_mismatch", "typed field seed changed its physical co-location: " + attribute)
+    if any(value.point != point for value in seed.inputs if value.vtype != "scalar"):
+        raise SolveRequestError("unknown_type_mismatch", "typed field seed reads a stale physical point")
 
 
 def _product_width(value: Any) -> int | None:
@@ -238,6 +294,8 @@ def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict
     if "coefficient_evaluation" in token.attrs:
         realization["coefficient_evaluation"] = token.attrs["coefficient_evaluation"]
         realization["linear_residual_verification"] = token.attrs["linear_residual_verification"]
+    if "seed_product_contract" in token.attrs:
+        realization["seed_product_contract"] = token.attrs["seed_product_contract"]
     if realization:
         result["schema_version"] = 2
         result["realization"] = realization
@@ -267,6 +325,10 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
         require_top_level(program, value, "field residual binding")
     if seed is not None and _product_width(seed) != residual.prototype.attrs["ncomp"]:
         raise SolveRequestError("unknown_type_mismatch", "field product seed width/type differs")
+    if seed is not None and seed.op == "pointwise_expression" and seed.vtype == "scalar_field" and "field_product_seed" not in seed.attrs:
+        raise SolveRequestError("unknown_type_mismatch", "typed field seed lost its original product authority")
+    if seed is not None and "field_product_seed" in seed.attrs:
+        validate_field_seed_product(program, seed, residual.source_contract, residual.prototype.point)
     face_policy = residual.source_contract.get("coefficient_face_policy")
     candidate_policy = residual.source_contract.get("coefficient_evaluation")
     contract = "pops.spatial-field-residual@4" if "interactions" in residual.source_contract else CANDIDATE_DIFFUSION_CONTRACT if candidate_policy else CAPTURED_DIFFUSION_CONTRACT if face_policy is not None else CONTRACT
@@ -279,6 +341,8 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
              "newton_controls": prepared.controls.to_data(), "solver_identity": prepared.identity.token}
     if face_policy is not None:
         attrs["coefficient_face_policy"] = face_policy
+    if seed is not None and "field_product_seed" in seed.attrs:
+        attrs["seed_product_contract"] = SEED_PRODUCT
     if candidate_policy is not None:
         attrs["coefficient_evaluation"] = candidate_policy
         attrs["linear_residual_verification"] = residual.source_contract["linear_residual_verification"]
@@ -342,6 +406,15 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
             or (seed_index is not None and (type(seed_index) is not int or seed_index != 2 + count)):
         raise SolveRequestError("equation_identity_drift", "field capture/seed input slots changed")
     captures = token.inputs[2:2 + count]
+    seed = None if seed_index is None else token.inputs[-1]
+    product_seed = seed is not None and "field_product_seed" in seed.attrs
+    if seed is not None and seed.op == "pointwise_expression" and seed.vtype == "scalar_field" and not product_seed:
+        raise SolveRequestError("equation_identity_drift", "typed field seed lost its original product authority")
+    if token.attrs.get("seed_product_contract") != (SEED_PRODUCT if product_seed else None) or \
+            (not product_seed and "seed_product_contract" in token.attrs):
+        raise SolveRequestError("equation_identity_drift", "typed field product seed changed its exact contract")
+    if product_seed:
+        validate_field_seed_product(program, seed, source, token.point)
     if source.get("evolved_stage", {}).get("schema_version") in (2, 3):
         from ._evolved_stage_contract import validate_additive_capture_reads
 
