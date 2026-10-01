@@ -1,6 +1,7 @@
 """Independent additive Stage source/math review of 2289; no native execution or author helper."""
 from fractions import Fraction
 import copy
+import re
 
 import pops
 import pytest
@@ -170,7 +171,7 @@ def test_resolved_public_consumer_uses_issued_frame_authority_and_same_Q():
     resolved = pops.resolve(pops.validate(case), layout=layout)
     code = emit_cpp_program(resolved.time, model=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
     assert resolved.time._serialize()["version"] == 14
-    assert "ctx.step_dt()" in code and "same_attempt(ctx.resource_attempt())" in code
+    assert re.search(r"ctx\.boundary_evaluation_point\([0-9]+\)\.dt", code) and "same_attempt(ctx.resource_attempt())" in code
     assert "original stage frame/point/attempt authority changed" in code
     assert "nonfinite_original_accumulation" in code
     assert "evolved_candidate.ncomp() != 3" in code
@@ -303,7 +304,7 @@ def test_autonomous_rate_zero_candidate_no_division_fiction(spatial, literal):
     resolved = pops.resolve(pops.validate(case), layout=layout)
     assert resolved.time._serialize()["version"] == 14
     code = emit_cpp_program(resolved.time, model=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
-    assert "ctx.step_dt()" in code and "original_field_residual_recheck_failed" in code
+    assert re.search(r"ctx\.boundary_evaluation_point\([0-9]+\)\.dt", code) and "original_field_residual_recheck_failed" in code
 
 
 @pytest.mark.parametrize("spatial", (None, 0))
@@ -337,7 +338,7 @@ def test_resealed_additive_body_does_not_authenticate_itself(attack):
         pops.resolve(pops.validate(case), layout=layout)
 
 
-def partitioned_witness(*, omit=False, duplicate=False):
+def partitioned_witness(*, omit=False, duplicate=False, captured_Q=False):
     frame = CartesianDomain("partition-domain", lower=(0,0), upper=(1,1)).frame(Cartesian2D())
     support = PhysicalSupport((("x","partition-domain"),("y","partition-domain")))
     m0, m1 = pops.Model("first",frame=frame), pops.Model("second",frame=frame)
@@ -350,7 +351,8 @@ def partitioned_witness(*, omit=False, duplicate=False):
     T,U,V = fields = tuple(Handle(n,kind="field",owner=OwnerPath.model("partition-physics")) for n in ("T","U","V"))
     previous = (q0[0],q1[1],q1[0]) if not duplicate else (q0[0],q1[1],q1[1])
     stage = EvolvedOriginalFieldStage("partitioned-original",unknowns=(V,T,U),evolved_unknowns=fields,
-        accumulation=(Reaction(T,1+ValueExpr(T)**2),Reaction(U,2),Reaction(V,1)+Reaction(T,Const(Fraction(1,5)))),
+        accumulation=(Reaction(T,(1+ValueExpr(T)**2+q1[0]) if captured_Q else 1+ValueExpr(T)**2),Reaction(U,2),
+                      Reaction(V,1)+Reaction(T,(Const(Fraction(1,5))+q0[0]) if captured_Q else Const(Fraction(1,5)))),
         spatial_rhs=tuple(EvolvedOriginalFieldRate(None,i+1) for i in range(3)),previous=previous,
         tau=p.temporal_tau(Fraction(2,3)*p.dt,at=u0.next.point),
         boundaries=tuple(FieldBoundary(t,bcs.BoundaryCondition(bcs.AllPhysicalBoundaries(),bcs.Periodic())) for t in fields))
@@ -393,7 +395,7 @@ def test_two_actual_State_carriers_select_exact_Q_components():
     assert plan.time._serialize()["version"] == 15
     cpp = emit_cpp_program(plan.time,model=ProgramModelGraph.from_resolved_blocks(plan.blocks))
     assert cpp.count("nonfinite_original_accumulation") == 2
-    assert "ctx.step_dt()" in cpp
+    assert re.search(r"ctx\.boundary_evaluation_point\([0-9]+\)\.dt", cpp)
 
 
 @pytest.mark.parametrize("attack",("omit","duplicate","indices","bool","expression"))
@@ -440,7 +442,7 @@ def test_genuine_future_computed_source_keeps_accepted_input_read():
     resolved = pops.resolve(pops.validate(case),layout=layout)
     cpp = emit_cpp_program(resolved.time,model=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
     assert resolved.time._serialize()["version"] == 14
-    assert "ctx.step_dt()" in cpp
+    assert re.search(r"ctx\.boundary_evaluation_point\([0-9]+\)\.dt", cpp)
 
 
 def test_mutated_rate_unknown_body_is_refused_on_identity_emission():
