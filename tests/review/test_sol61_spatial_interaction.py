@@ -186,12 +186,13 @@ def test_true_public_case_resolve_and_program_emission(tmp_path, target):
     assert compiled.returncode == 0, compiled.stdout + compiled.stderr
 
 
-def test_actual_header_syntax_and_host_quadrature(tmp_path):
+@pytest.mark.parametrize("real_type", ("float", "double"))
+def test_actual_header_syntax_and_host_quadrature(tmp_path, real_type):
     prefix = Path(sys.prefix)
     source = ROOT / "tests/review/spatial_direct_interaction_host.cpp"
     binary = tmp_path / "direct_interaction"
     flags = ["/usr/bin/clang++", "-std=c++20", "-O0", "-fno-fast-math",
-             "-DPOPS_HAS_KOKKOS", "-DPOPS_NATIVE_DIM=2", "-I" + str(ROOT / "include"),
+             "-DPOPS_HAS_KOKKOS", "-DPOPS_NATIVE_DIM=2", "-DPOPS_REAL_TYPE=" + real_type, "-I" + str(ROOT / "include"),
              "-I" + str(prefix / "include"), "-Xpreprocessor", "-fopenmp",
              "-I/opt/homebrew/opt/libomp/include", str(source), "-L" + str(prefix / "lib"),
              "-lkokkoscore", "-lomp", "-Wl,-rpath," + str(prefix / "lib"), "-o", str(binary)]
@@ -200,7 +201,7 @@ def test_actual_header_syntax_and_host_quadrature(tmp_path):
     env = dict(os.environ, OMP_NUM_THREADS="2")
     result = subprocess.run([str(binary)], capture_output=True, text=True, env=env, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "spatial direct host assertions=59" in result.stdout
+    assert "spatial direct host assertions=61" in result.stdout
 
 
 @pytest.mark.parametrize("mutation", ("version", "kernel_axis", "kernel_opaque", "measure", "quadrature", "realization", "duplicate_component", "bool_width", "budget_upper", "scope"))
@@ -375,3 +376,56 @@ def test_equal_excluded_measure_does_not_authenticate_replica_geometry_masks():
     assert owner_check < geometry_check < consumer
     assert "for (const Field* mask : {level.active, level.coverage, level.kappa})" in header[owner_check:geometry_check]
     assert "interaction_cell_value<Dim>(mask->fab_global(global).view(), cell, 0)" in header
+
+
+@pytest.mark.parametrize("honest", (False, True))
+def test_branch_candidate_regions_are_part_of_source_authority_closure(honest):
+    from pops.time.points import TimePoint
+    program, source, reference = build()
+    future = TimePoint(source.clock, 1)
+    leaf = source if honest else program._replace_value(source, point=future)
+    candidate = program.branch(program.requested_dt() > 0,
+        lambda P: P.value("true", 2 * leaf, at=future),
+        lambda P: P.value("false", 3 * leaf, at=future))
+    def interaction():
+        return program.spatial_interaction(candidate, SpatialInteractionKernel(2, lambda x, y: 1),
+            output_space=reference.space, measure=CellVolumeMeasure(), quadrature=CellMidpoint(),
+            realization=DirectSpatialInteraction(4096), components=(2, 0))
+    if not honest:
+        with pytest.raises(ValueError, match="State.n cannot be relabelled"):
+            interaction()
+    else:
+        result = interaction()
+        interaction_contract(result)
+        assert program._serialize()["version"] == 17
+
+
+@pytest.mark.parametrize("powers", ((["length", True, 1],), (["length", 0, 1],),
+    (["length", 2, 2],), (["length", 1, -1],), (["length", 1.0, 1],)))
+@pytest.mark.parametrize("where", ("kernel", "measure"))
+def test_units_are_exact_canonical_physical_authorities(powers, where):
+    from pops.time.canonical_data import _json_ready
+    program, _, value = build()
+    attrs = _json_ready(value.attrs)
+    corrupt = {"kind": "physical_dimension", "powers": list(powers)}
+    if where == "kernel":
+        attrs["kernel"]["units"] = corrupt
+    else:
+        attrs["measure"]["coordinate_units"] = [corrupt, None]
+    changed = program._replace_value(value, attrs=attrs)
+    with pytest.raises((TypeError, ValueError)):
+        interaction_contract(changed)
+    with pytest.raises((TypeError, ValueError)):
+        program._serialize()
+
+
+def test_declared_measure_coordinate_units_cannot_normalize_unknown_axes():
+    from pops.time.canonical_data import _json_ready
+    program, _, value = build()
+    attrs = _json_ready(value.attrs)
+    attrs["measure"]["coordinate_units"] = [None, None]
+    changed = program._replace_value(value, attrs=attrs)
+    with pytest.raises(ValueError, match="coordinate units cannot be unknown"):
+        interaction_contract(changed)
+    with pytest.raises(ValueError, match="coordinate units cannot be unknown"):
+        program._serialize()

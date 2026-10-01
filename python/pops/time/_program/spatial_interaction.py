@@ -6,11 +6,23 @@ from pops.model.spaces import FieldSpace
 from pops._ir.quantity import PhysicalDimension
 
 
-def _dimension(data):
+def _dimension(data, *, allow_unknown=True):
     if data is None:
+        if not allow_unknown:
+            raise ValueError("declared spatial measure coordinate units cannot be unknown")
         return None
     from pops.time.canonical_data import _json_ready
-    return PhysicalDimension.from_data(_json_ready(data))
+    image = _json_ready(data)
+    if type(image) is not dict or set(image) != {"kind", "powers"} or image["kind"] != "physical_dimension" or type(image["powers"]) is not list:
+        raise ValueError("invalid spatial interaction physical dimension image")
+    for power in image["powers"]:
+        if (type(power) is not list or len(power) != 3 or type(power[0]) is not str
+                or type(power[1]) is not int or type(power[2]) is not int):
+            raise ValueError("spatial interaction dimension powers require exact integer rationals")
+    dimension = PhysicalDimension.from_data(image)
+    if dimension.to_data() != image:
+        raise ValueError("spatial interaction dimension image is not canonical")
+    return dimension
 
 
 def _units(source, output, components, kernel_units, coordinate_units, dimension):
@@ -59,6 +71,7 @@ def _source_point(source):
         if canonical is not node:
             pending.append(canonical)
         pending.extend(node.inputs)
+        pending.extend(node.prog._subblock_value_refs(node))
 
 
 def interaction_contract(value):
@@ -106,7 +119,7 @@ def interaction_contract(value):
             or type(attrs["ncomp"]) is not int or attrs["ncomp"] != len(components)):
         raise ValueError("spatial interaction source/owner/point/components changed")
     _spaces(source, value.space, components)
-    _units(source, value.space, components, _dimension(kernel["units"]), tuple(_dimension(unit) for unit in measure["coordinate_units"]), dimension)
+    _units(source, value.space, components, _dimension(kernel["units"]), tuple(_dimension(unit, allow_unknown=False) for unit in measure["coordinate_units"]), dimension)
     return source, dimension, cpp, int(raw, 16), components
 
 

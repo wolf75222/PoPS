@@ -13,6 +13,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <type_traits>
 
 namespace pops::runtime::program {
 
@@ -36,25 +37,29 @@ void interaction_phase(const ExecutionLane& lane, Function&& function) {
   }
 }
 
-/// One physical contributor; transport exact binary64 words (including -0).
+using InteractionRealWord = std::conditional_t<sizeof(Real) == sizeof(std::uint32_t), std::uint32_t, std::uint64_t>;
+static_assert(sizeof(InteractionRealWord) == sizeof(Real));
+inline constexpr unsigned interaction_real_bits = std::numeric_limits<InteractionRealWord>::digits;
+
+/// One physical contributor; transport exact native Real words (including -0).
 /// No floating SUM normalization or dynamic rank buffer is introduced.
 inline Real interaction_owner_value(Real value, bool owner, const ExecutionLane& lane) {
-  const auto bits = owner ? std::bit_cast<std::uint64_t>(value) : std::uint64_t{0};
-  std::uint64_t received = 0;
-  for (unsigned shift = 0; shift < 64; shift += 16)
-    received |= static_cast<std::uint64_t>(all_reduce_sum(static_cast<long>((bits >> shift) & 0xffffU), lane)) << shift;
+  const auto bits = owner ? std::bit_cast<InteractionRealWord>(value) : InteractionRealWord{0};
+  InteractionRealWord received = 0;
+  for (unsigned shift = 0; shift < interaction_real_bits; shift += 16)
+    received |= static_cast<InteractionRealWord>(all_reduce_sum(static_cast<long>((bits >> shift) & 0xffffU), lane)) << shift;
   return std::bit_cast<Real>(received);
 }
 
-/// Read a binary64 cell without a floating reduction's +0 normalization.
+/// Read a native Real cell without a floating reduction's +0 normalization.
 template <int Dim, class View>
 Real interaction_cell_value(View values, const Index<Dim>& cell, int component) {
-  std::uint64_t bits = 0;
-  for (unsigned shift = 0; shift < 64; shift += 16) {
+  InteractionRealWord bits = 0;
+  for (unsigned shift = 0; shift < interaction_real_bits; shift += 16) {
     const Real word = for_each_cell_reduce_sum(Box<Dim>(cell, cell), [=] POPS_HD(const Index<Dim>& index) {
-      return static_cast<Real>((std::bit_cast<std::uint64_t>(values(index, component)) >> shift) & 0xffffU);
+      return static_cast<Real>((std::bit_cast<InteractionRealWord>(values(index, component)) >> shift) & 0xffffU);
     });
-    bits |= static_cast<std::uint64_t>(word) << shift;
+    bits |= static_cast<InteractionRealWord>(word) << shift;
   }
   return std::bit_cast<Real>(bits);
 }
@@ -206,7 +211,7 @@ MultiFab<Dim, MemorySpace> direct_spatial_interaction(
               });
               const Real owner_mask = interaction_owner_value(local_mask, owner, lane);
               interaction_phase(lane, [&] {
-                if (std::bit_cast<std::uint64_t>(local_mask) != std::bit_cast<std::uint64_t>(owner_mask))
+                if (std::bit_cast<InteractionRealWord>(local_mask) != std::bit_cast<InteractionRealWord>(owner_mask))
                   throw std::invalid_argument("direct interaction replicated geometry masks differ");
               });
             }
@@ -216,7 +221,7 @@ MultiFab<Dim, MemorySpace> direct_spatial_interaction(
           interaction_phase(lane, [&] {
             if (!std::isfinite(measure) || measure < 0)
               throw std::invalid_argument("direct interaction physical cell has invalid measure");
-            if (field.distribution().replicated() && std::bit_cast<std::uint64_t>(local_measure) != std::bit_cast<std::uint64_t>(measure))
+            if (field.distribution().replicated() && std::bit_cast<InteractionRealWord>(local_measure) != std::bit_cast<InteractionRealWord>(measure))
               throw std::invalid_argument("direct interaction replicated physical measures differ");
           });
           if (measure > 0) consumer(level, global, cell, owner, measure);
@@ -271,7 +276,7 @@ MultiFab<Dim, MemorySpace> direct_spatial_interaction(
       value = interaction_owner_value(value, owner, lane);
       interaction_phase(lane, [&] {
         if (!std::isfinite(value)) throw std::overflow_error("direct interaction source transport overflow");
-        if (level.field->distribution().replicated() && std::bit_cast<std::uint64_t>(local_value) != std::bit_cast<std::uint64_t>(value))
+        if (level.field->distribution().replicated() && std::bit_cast<InteractionRealWord>(local_value) != std::bit_cast<InteractionRealWord>(value))
           throw std::invalid_argument("direct interaction replicated source values differ");
         host(row, Dim + 1 + selected) = value;
       });

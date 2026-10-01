@@ -184,7 +184,11 @@ int main() {
   assert(overflow); ++assertions;
   auto view = rho.fab(0).view();
   view(Index<D>{0, 2}, 1) = -Real(0);
-  assert(std::bit_cast<std::uint64_t>(interaction_cell_value<D>(view, Index<D>{0, 2}, 1)) == (std::uint64_t{1} << 63)); ++assertions;
+  assert(std::bit_cast<InteractionRealWord>(interaction_cell_value<D>(view, Index<D>{0, 2}, 1)) == (InteractionRealWord{1} << (interaction_real_bits - 1))); ++assertions;
+  const auto negative_zero_word = InteractionRealWord{1} << (interaction_real_bits - 1);
+  assert(std::bit_cast<InteractionRealWord>(interaction_owner_value(-Real(0), true, lane)) == negative_zero_word); ++assertions;
+  const Real finite_max = std::numeric_limits<Real>::max();
+  assert(std::bit_cast<InteractionRealWord>(interaction_owner_value(finite_max, true, lane)) == std::bit_cast<InteractionRealWord>(finite_max)); ++assertions;
   auto mask = kappa.fab(0).view();
   mask(Index<D>{0, 2}, 0) = Real(1.1);
   refused = false;
