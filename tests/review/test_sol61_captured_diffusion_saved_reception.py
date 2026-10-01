@@ -129,9 +129,10 @@ def test_source_consumer_capture_clock_and_replay_attacks(attack, message):
 
 
 def synthetic_point(step, name="q0"):
-    return b"POPSHID1"+struct.pack("<Q", len(name))+name.encode()+struct.pack("<qQ", -1, 1)+struct.pack(
-        "<QQQQ", 2, int.from_bytes(struct.pack("<d", (step-1)*r.DT), "little"),
-        int.from_bytes(struct.pack("<d", r.DT), "little"), 1)
+    header = b"POPSHID1"+struct.pack("<Q", len(name))+name.encode()+struct.pack("<qQ", -1, 2)
+    return header+b"".join(struct.pack("<QQQQ", 2,
+        int.from_bytes(struct.pack("<d", start), "little"),
+        int.from_bytes(struct.pack("<d", r.DT), "little"), 1) for start in (0., (step-1)*r.DT))
 
 
 @pytest.mark.parametrize("step", (1, 2))
@@ -156,7 +157,7 @@ def fake_token(domain):
     return dict(domain=domain, schema_version=1, algorithm="sha256", hexdigest="a"*64)
 
 
-def synthetic_checkpoint(saved):
+def synthetic_checkpoint(saved, first_accepted):
     width = saved["solution"].shape[0]
     time, step = float(saved["time"]), int(saved["step"])
     geometry = dict(schema_version=1, dimension=2, shape=[16, 16], lower=[0..hex()]*2, upper=[1..hex()]*2,
@@ -175,9 +176,11 @@ def synthetic_checkpoint(saved):
         out["ncomp_"+block], out["names_"+block] = np.array(len(names)), np.array(names)
     for i in range(width):
         name = f"q{i}"
-        for prefix, value in (("history_depth_", 1), ("history_ncomp_", 1), ("history_init_", True), ("history_fill_count_", 1),
-                              ("history_stored_slots_", [0]), ("history_slot_dt_", [r.DT]), ("history_", saved["solution"][i:i+1])):
-            out[prefix+name+("_0" if prefix == "history_" else "")] = np.array(value)
+        for prefix, value in (("history_depth_", 2), ("history_ncomp_", 1), ("history_init_", True), ("history_fill_count_", min(step, 2)),
+                              ("history_stored_slots_", [0, 1]), ("history_slot_dt_", [r.DT, r.DT])):
+            out[prefix+name] = np.array(value)
+        out["history_"+name+"_0"] = first_accepted["solution"][i:i+1].copy()
+        out["history_"+name+"_1"] = saved["solution"][i:i+1].copy()
         out["history_sample_identity_"+name] = np.frombuffer(synthetic_point(step, name), dtype=np.uint8).copy()
     return out
 
@@ -201,15 +204,15 @@ def reseal_checkpoint(arrays):
 def test_checkpoint_protocol_synthetic_baseline(width):
     _, states = independent_initial(width)
     for phase in ("accepted", "continuous", "replay"):
-        raw = reseal_checkpoint(synthetic_checkpoint(states[phase]))
-        r.checkpoint(raw, phase, states[phase], "pops.artifact.v1:sha256:"+"a"*64, "synthetic-ABI-only")
+        raw = reseal_checkpoint(synthetic_checkpoint(states[phase], states["accepted"]))
+        r.checkpoint(raw, phase, states[phase], "pops.artifact.v1:sha256:"+"a"*64, "synthetic-ABI-only", first_accepted=states["accepted"])
 
 
 @pytest.mark.parametrize("attack,message", [("axis", "coordinate/axis"), ("periodic", "coordinate/axis"),
     ("state", "checkpoint state"), ("historypoint", "stale captured"), ("cursor", "cursor point"), ("duration", "boundary/window")])
 def test_fully_resealed_checkpoint_scientific_guards(attack, message):
     _, states = independent_initial(3)
-    out = synthetic_checkpoint(states["continuous"])
+    out = synthetic_checkpoint(states["continuous"], states["accepted"])
     if attack in ("axis", "periodic"):
         geometry = json.loads(str(out["pops_spatial_contract"]))
         if attack == "axis":
@@ -232,7 +235,7 @@ def test_fully_resealed_checkpoint_scientific_guards(attack, message):
         out["temporal_restart_state"] = np.array(json.dumps(temporal))
     raw = reseal_checkpoint(out)
     with pytest.raises(ValueError, match=message):
-        r.checkpoint(raw, "continuous", states["continuous"], "pops.artifact.v1:sha256:"+"a"*64, "synthetic-ABI-only")
+        r.checkpoint(raw, "continuous", states["continuous"], "pops.artifact.v1:sha256:"+"a"*64, "synthetic-ABI-only", first_accepted=states["accepted"])
 
 
 def junit_image(rank=0, size=2):
@@ -388,7 +391,7 @@ def synthetic_owner(tmp_path, original_source_bytes):
         path = tmp_path/("synthetic-"+role+".bin")
         path.write_bytes(original_source_bytes if role == "physical_helper" else b"synthetic origin bytes")
         paths[role] = r.leaf(path)
-    return dict(schema="sol61.captured-d-execution-owner@1", source_commit="0"*40, native_build_source_commit=None,
+    return dict(schema="sol61.captured-d-execution-owner@2", source_commit="0"*40, native_build_source_commit=None,
                 abi_key="synthetic-ABI-only", **{role: paths[role] for role in ("python_package", "sdk", "native")},
                 sources={role: paths[role] for role in ("fixture", "physical_helper")}, cpp_dso_links=None)
 
@@ -418,7 +421,7 @@ def test_missing_or_mutated_owner_never_inferred(tmp_path, original_source_bytes
 @pytest.mark.parametrize("attack", ("geometry_bool", "ncomp_bool", "history_bool"))
 def test_resealed_typed_metadata_aliases(attack):
     _, states = independent_initial(1)
-    out = synthetic_checkpoint(states["accepted"])
+    out = synthetic_checkpoint(states["accepted"], states["accepted"])
     if attack == "geometry_bool":
         geom = json.loads(str(out["pops_spatial_contract"]))
         geom["periodicity"] = [1, 1]
@@ -429,4 +432,68 @@ def test_resealed_typed_metadata_aliases(attack):
     else:
         out["history_ncomp_q0"] = np.array(True)
     with pytest.raises(ValueError, match="geometry|integer clock"):
-        r.checkpoint(reseal_checkpoint(out), "accepted", states["accepted"], "pops.artifact.v1:sha256:"+"a"*64, "synthetic-ABI-only")
+        r.checkpoint(reseal_checkpoint(out), "accepted", states["accepted"], "pops.artifact.v1:sha256:"+"a"*64, "synthetic-ABI-only", first_accepted=states["accepted"])
+
+
+@pytest.mark.parametrize("phase", ("accepted", "continuous", "reloaded", "replay"))
+def test_physical_history_rotation_distinct_stores(phase):
+    # Protocol only: distinct arbitrary q values expose swaps hidden by a
+    # stationary MMS. These are never passed to the scientific qualification.
+    _, states = independent_initial(3)
+    states["accepted"]["solution"] += .125
+    states["reloaded"]["solution"] = states["accepted"]["solution"].copy()
+    states["continuous"]["solution"] -= .25
+    states["replay"]["solution"] = states["continuous"]["solution"].copy()
+    arrays = synthetic_checkpoint(states[phase], states["accepted"])
+    r.checkpoint(reseal_checkpoint(arrays), phase, states[phase],
+        "pops.artifact.v1:sha256:"+"a"*64, "synthetic-ABI-only", first_accepted=states["accepted"])
+
+
+@pytest.mark.parametrize("attack", ("max_lag_as_size", "fill_cold", "fill_high", "missing_slot", "slot_swap",
+    "slot0_current", "slot1_prior", "window_swap", "slot0_start", "slot1_start", "ordinal_macrostep", "duration", "kind"))
+def test_resealed_two_slot_history_guards(attack):
+    _, states = independent_initial(1)
+    states["accepted"]["solution"] += .125
+    out = synthetic_checkpoint(states["continuous"], states["accepted"])
+    if attack == "max_lag_as_size":
+        out["history_depth_q0"] = np.array(1)
+    elif attack in ("fill_cold", "fill_high"):
+        out["history_fill_count_q0"] = np.array(1 if attack == "fill_cold" else 3)
+    elif attack == "missing_slot":
+        out["history_stored_slots_q0"] = np.array([1], dtype=np.int64)
+        del out["history_q0_0"]
+    elif attack == "slot_swap":
+        out["history_q0_0"], out["history_q0_1"] = out["history_q0_1"], out["history_q0_0"]
+    elif attack == "slot0_current":
+        out["history_q0_0"] = out["history_q0_1"].copy()
+    elif attack == "slot1_prior":
+        out["history_q0_1"] = out["history_q0_0"].copy()
+    elif attack == "duration":
+        out["history_slot_dt_q0"][0] = .02
+    else:
+        raw = bytearray(out["history_sample_identity_q0"].tobytes())
+        offset = len(raw)-64
+        if attack == "window_swap":
+            raw[offset:offset+32], raw[offset+32:] = raw[offset+32:], raw[offset:offset+32]
+        else:
+            slot, word, value = {"slot0_start": (0, 1, .01), "slot1_start": (1, 1, 0.),
+                "ordinal_macrostep": (1, 3, 2), "kind": (0, 0, 1)}[attack]
+            encoded = struct.pack("<d", value) if word == 1 else struct.pack("<Q", value)
+            raw[offset+slot*32+word*8:offset+slot*32+(word+1)*8] = encoded
+        out["history_sample_identity_q0"] = np.frombuffer(raw, dtype=np.uint8).copy()
+    with pytest.raises(ValueError, match="history|publication point"):
+        r.checkpoint(reseal_checkpoint(out), "continuous", states["continuous"],
+            "pops.artifact.v1:sha256:"+"a"*64, "synthetic-ABI-only", first_accepted=states["accepted"])
+
+
+def test_old_reception_scope_not_implicitly_upcast():
+    assert r.QUALIFICATION == "saved-states-original-residual@2"
+    _, states = independent_initial(1)
+    old = synthetic_checkpoint(states["accepted"], states["accepted"])
+    old["history_depth_q0"] = np.array(1)
+    old["history_stored_slots_q0"] = np.array([0], dtype=np.int64)
+    old["history_slot_dt_q0"] = np.array([r.DT])
+    del old["history_q0_1"]
+    with pytest.raises(ValueError, match="history initialization/storage"):
+        r.checkpoint(reseal_checkpoint(old), "accepted", states["accepted"],
+            "pops.artifact.v1:sha256:"+"a"*64, "synthetic-ABI-only", first_accepted=states["accepted"])

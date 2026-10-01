@@ -17,7 +17,7 @@ product oracle. No PoPS import or author forcing/original_action import occurs.
 
 ## Physical contract and limits
 
-The explicit reception qualification is `saved-states-original-residual@1`.
+The explicit reception qualification is `saved-states-original-residual@2`.
 The scalar witness has order `[0]`; the three-component witness `[2,0,1]`.
 Both are Uniform Dim2, N16 on [0,1]², periodic in both physical axes. The receiver
 checks the declaration's literal matrices, original cubic/reaction/diffusion
@@ -58,12 +58,34 @@ constant q or a uniform replacement of captured D.
 Checkpoint envelopes, all typed-array hashes and restart identities are
 independently recomputed. Static spatial contracts assert dimensions, unit-square
 bounds, shape, periodic axes and no refinement; their identities are checked.
-Uniform state schemas keep physical component names/order. Native history data
-must match the saved q, with depth/fill/initialized/slot0, outgoing duration .01,
-and exact binary64 publication start/interval from POPSHID1. Publication ordinal
-1 follows from the single declared store in each new window, as implemented by
-next_history_sample (program_runtime_state.hpp). Temporal boundary
-clock, last accepted dt and each persisted accepted cursor are checked.
+Uniform state schemas keep physical component names/order. Version 2 requires
+`fixture_schema="pops.captured-diffusion-native-fixture@2"` in the exact receipt
+schema. The authoring `store_history(depth=1)` declares maximum lag, hence TWO
+physical slots, not one. Each checkpoint must persist both slots [0,1], both
+outgoing durations .01 and both POPSHID1 samples. Fill count is 1 after step1
+(accepted/reloaded) and 2 after step2 (continuous/replay); initialized is true.
+
+The actual store/rotation order is authoritative: `HistoryManager::prepare_sample_store`
+initializes both samples on the first store and subsequently overwrites sample0;
+`ProgramContext::store_history_` similarly initializes both fields, then overwrites
+field0. Generated control commits, then rotates fields/durations/samples once.
+Thus accepted physical slot1 contains the latest q; after step2 slot0 contains q
+from the first accepted phase. After step1 both slots contain the same initial
+publication. `System::history_global(name,slot)` gathers the physical slot with
+no remapping. This is an accepted-boundary rule, not a general semantic claim
+about every in-flight history read.
+
+Both slot fields are checked in BYTES against their corresponding saved phase:
+slot0 against first accepted q, slot1 against the current saved q. Both publication
+starts after step1 are canonical +0; after step2 they are (+0,.01) in physical
+slot order. Interval is .01 and kind Publication is 2 for each slot. Publication
+ordinal is 1 in EACH new window, not macrostep ordinal 2: the one declared store
+has no previous sample with the same start/interval. POPSHID1 name, Uniform
+level=-1, physical depth=2 and exact length are required. Exact binary64 images
+are compared, with no epsilon, clock relabel or acceptance of observed metadata.
+Temporal boundary clock, last accepted dt and each persisted accepted cursor
+are checked.
+
 Accepted/reloaded and continuous/replay saved arrays must match in BYTES.
 Continuous/replay checkpoint payloads, including the temporal restart image,
 are byte-identical, except the two checkpoint envelope members which can carry
@@ -81,15 +103,15 @@ arbitrary-D solvability, full physical-model or CPP→DSO qualification.
 
 ## Two external seals and exact inventory
 
-`assemble` writes only a pending `sol61.captured-d-owner-pins@1` template. It is
+`assemble` writes only a pending `sol61.captured-d-owner-pins@2` template. It is
 idempotent for identical bytes, refuses an existing different template, and
 NEVER writes approval. ROOT separately supplies an approval file and two
 SHA256 hashes out of band. The approval exact object is:
 
 ```json
-{"schema":"sol61.captured-d-root-approval@1","approved_by":"ROOT",
+{"schema":"sol61.captured-d-root-approval@2","approved_by":"ROOT",
  "pins_sha256":"EXTERNAL_64_LOWERCASE_HEX",
- "qualification":"saved-states-original-residual@1"}
+ "qualification":"saved-states-original-residual@2"}
 ```
 
 The owner-pins exact keys are schema, qualification, archive_root, file_roots,
@@ -113,7 +135,7 @@ The NPZ/JSON/source budget is 64 MiB; authentic extension/compiled-DSO hashes us
 a separate 1 GiB bounded-read budget. These are offline reader budgets, not
 production ABI or model restrictions.
 
-ROOT supplies `sol61.captured-d-execution-owner@1` with exact keys:
+ROOT supplies `sol61.captured-d-execution-owner@2` with exact keys:
 
 ```
 schema
@@ -191,3 +213,36 @@ positives.
 Native qualification is pending genuine ROOT-selected files, owner metadata,
 clean JUnit and the two external seals. This source/host reception is not CI or
 native MPI/GPU validation.
+
+
+## Version 2 correction and historical evidence
+
+The parent e5457b235a0eb82253660916a1c9cdd011be79dc supplied 62 synthetic
+source/protocol checks only, never a native qualification. It incorrectly
+interpreted max lag 1 as physical depth 1 and checked only one history slot.
+ROOT's genuine two native runs solved and ran successfully, then failed the
+fixture's incorrect depth assertion. Those failures remain evidence; version 2
+neither upgrades their receipts nor substitutes synthetic arrays for saved states.
+Owner metadata, pending pins and external approval schema suffixes are now @2,
+as is the qualification. Old @1 seals/receipts are refused, not normalized.
+
+The correction changes only offline protocol/history validation and its tests.
+The original D/R, forcing/material recipes, arithmetic face policy, source
+consumer, Newton controls and physical tolerances are unchanged. New synthetic
+protocol cases use distinct q1/q2 to expose wrong physical order despite the
+stationary MMS, plus fully resealed metadata/value/window/ordinal/fill/slot
+attacks. Synthetic baseline checkpoints are test inputs, not native evidence.
+
+Read-only authority reviewed from ROOT's bfae73f3 source:
+`python/pops/time/_program/history.py:208–211`,
+`include/pops/runtime/program/program_runtime_state.hpp:183–207,238–264,299–339`,
+`include/pops/runtime/program/program_context.hpp:2184–2250`,
+`python/pops/codegen/program_emit_control.py:506–525`,
+`src/runtime/system/system_io.cpp:195–212`, and
+`python/pops/runtime/_system_io_history.py:378–402`.
+Native version-2 reception remains pending genuine files and both external ROOT
+seals; neither native execution nor a physical positive archive is produced here.
+
+Version-2 local receipt: 80 synthetic source/protocol tests PASS (18.11s),
+Ruff PASS, `git diff --check` PASS and standalone CLI `--help` PASS.
+No installed PoPS import, native build/run, JIT or environment mutation.

@@ -42,7 +42,7 @@ CASES = {"scalar1": (1, [0]), "coupled3-201": (3, [2, 0, 1])}
 DT, TOL = .01, 3e-8
 CONTROLS = dict(tolerance=1e-10, max_iterations=20, linear_tolerance=1e-8,
                 linear_max_iterations=240, restart=60, armijo=1e-4, minimum_step=1/1024)
-QUALIFICATION = "saved-states-original-residual@1"
+QUALIFICATION = "saved-states-original-residual@2"
 MAX_BINARY_BYTES = 1024*1024*1024  # offline DSO hashing budget, not a runtime limit
 
 
@@ -203,15 +203,20 @@ def declared_source(raw):
 
 
 def history_point(raw, name, step):
-    header = b"POPSHID1"+struct.pack("<Q", len(name))+name.encode()+struct.pack("<qQ", -1, 1)
-    need(raw.startswith(header) and len(raw) == len(header)+32, "history identity header differs")
-    kind, start, interval, ordinal = struct.unpack("<QQQQ", raw[len(header):])
-    need(kind == 2 and start == int.from_bytes(struct.pack("<d", (step-1)*DT), "little")
-         and interval == int.from_bytes(struct.pack("<d", DT), "little") and ordinal == 1,
-         "stale captured/history publication point")
+    need(type(step) is int and step in (1, 2), "foreign history phase step")
+    # MAX_LAG=1 => two physical slots. End-of-step rotation leaves the
+    # previous store in slot 0 and the latest accepted store in slot 1.
+    header = b"POPSHID1"+struct.pack("<Q", len(name))+name.encode()+struct.pack("<qQ", -1, 2)
+    need(raw.startswith(header) and len(raw) == len(header)+64, "history identity header differs")
+    starts = (0., (step-1)*DT)
+    for slot, start_time in enumerate(starts):
+        kind, start, interval, ordinal = struct.unpack_from("<QQQQ", raw, len(header)+32*slot)
+        need(kind == 2 and start == int.from_bytes(struct.pack("<d", start_time), "little")
+             and interval == int.from_bytes(struct.pack("<d", DT), "little") and ordinal == 1,
+             "stale captured/history publication point slot %d" % slot)
 
 
-def checkpoint(raw, phase, saved, artifact, abi):
+def checkpoint(raw, phase, saved, artifact, abi, *, first_accepted):
     arrays, manifest = wire.envelope(raw, "accepted", abi, artifact=artifact)
     need(manifest["runtime_kind"] == "uniform", "foreign checkpoint runtime")
     time, step = CLOCKS[phase]
@@ -231,7 +236,10 @@ def checkpoint(raw, phase, saved, artifact, abi):
          "native layout identity absent")
     need(geometry["identity"] == "pops.checkpoint-spatial-layout.v1:sha256:"+wire.identity_hash("checkpoint-spatial-layout", {k: v for k, v in geometry.items() if k != "identity"}),
          "spatial identity differs")
+    need(protocol.scalar(first_accepted["time"], "real").hex() == .01.hex()
+         and protocol.scalar(first_accepted["step"], "int") == 1, "first accepted history anchor differs")
     width = saved["solution"].shape[0]
+    need(first_accepted["solution"].shape == saved["solution"].shape, "first accepted history geometry differs")
     need(list(arrays["blocks"]) == ["response", "forcing", "material"], "checkpoint block order differs")
     for block, names in (("response", [f"u{i}" for i in range(width)]),
                          ("forcing", [f"f{i}" for i in range(width)]), ("material", ["alpha"])):
@@ -242,17 +250,19 @@ def checkpoint(raw, phase, saved, artifact, abi):
     need(list(arrays["history_names"]) == [f"q{i}" for i in range(width)], "history registry differs")
     for i in range(width):
         name = f"q{i}"
-        need(protocol.scalar(arrays["history_depth_"+name], "int") == 1 and protocol.scalar(arrays["history_ncomp_"+name], "int") == 1
-             and arrays["history_init_"+name].item() is True and protocol.scalar(arrays["history_fill_count_"+name], "int") == 1
+        need(protocol.scalar(arrays["history_depth_"+name], "int") == 2 and protocol.scalar(arrays["history_ncomp_"+name], "int") == 1
+             and arrays["history_init_"+name].item() is True and protocol.scalar(arrays["history_fill_count_"+name], "int") == min(step, 2)
              and arrays["history_stored_slots_"+name].dtype == np.dtype("int64")
-             and list(arrays["history_stored_slots_"+name]) == [0], "history initialization/storage differs")
-        same(arrays["history_slot_dt_"+name], np.array([DT]), "history outgoing duration")
+             and list(arrays["history_stored_slots_"+name]) == [0, 1], "history initialization/storage differs")
+        same(arrays["history_slot_dt_"+name], np.array([DT, DT]), "history outgoing duration")
         sample = arrays["history_sample_identity_"+name]
         need(sample.dtype == np.dtype("uint8") and sample.ndim == 1, "history point storage differs")
         history_point(sample.tobytes(), name, step)
-        value = arrays["history_"+name+"_0"]
-        need(value.dtype == np.dtype("float64") and value.size == 16**2, "history field geometry differs")
-        same(value.reshape(16, 16), saved["solution"][i], "observed history solution")
+        expected = (first_accepted["solution"][i], saved["solution"][i])
+        for slot in (0, 1):
+            value = arrays["history_"+name+"_%d" % slot]
+            need(value.dtype == np.dtype("float64") and value.size == 16**2, "history field geometry differs")
+            same(value.reshape(16, 16), expected[slot], "observed history solution slot %d" % slot)
     need({"program_exchange_state", "program_exchange_offsets", "temporal_restart_state", "auxiliary_checkpoint"} <= set(arrays),
          "exact continuation images absent")
     temporal = strict_json(str(arrays["temporal_restart_state"].item()))
@@ -332,7 +342,7 @@ def case_inventory(directory):
 
 def origins(value, roots):
     exact(value, ("schema", "source_commit", "native_build_source_commit", "abi_key", "python_package", "sdk", "native", "sources", "cpp_dso_links"), "owner")
-    need(value["schema"] == "sol61.captured-d-execution-owner@1", "owner schema differs")
+    need(value["schema"] == "sol61.captured-d-execution-owner@2", "owner schema differs")
     for key in ("source_commit", "native_build_source_commit"):
         need((value[key] is None and key == "native_build_source_commit") or
              (type(value[key]) is str and re.fullmatch("[0-9a-f]{40}", value[key]) is not None), "owner commit differs")
@@ -362,7 +372,7 @@ def assemble(root, directories, junits, owner, roots):
     junit_pins = [leaf(p) for p in junits]
     for rank, row in enumerate(junit_pins):
         junit(pinned(row, roots)[1], rank, len(junits), cases)
-    return dict(schema="sol61.captured-d-owner-pins@1", qualification=QUALIFICATION, archive_root=str(root), file_roots=roots,
+    return dict(schema="sol61.captured-d-owner-pins@2", qualification=QUALIFICATION, archive_root=str(root), file_roots=roots,
                 mode="serial" if len(junits) == 1 else "mpi2", ranks=len(junits), owner=owner, junit=junit_pins, cases=cases)
 
 
@@ -371,10 +381,10 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
     need(digest(raw) == pins_sha and digest(approved) == approval_sha, "external seal differs")
     approval = strict_json(approved)
     exact(approval, ("schema", "approved_by", "pins_sha256", "qualification"), "approval")
-    need(approval == dict(schema="sol61.captured-d-root-approval@1", approved_by="ROOT", pins_sha256=pins_sha, qualification=QUALIFICATION), "ROOT approval scope differs")
+    need(approval == dict(schema="sol61.captured-d-root-approval@2", approved_by="ROOT", pins_sha256=pins_sha, qualification=QUALIFICATION), "ROOT approval scope differs")
     pins = strict_json(raw)
     exact(pins, ("schema", "qualification", "archive_root", "file_roots", "mode", "ranks", "owner", "junit", "cases"), "pins")
-    need(pins["schema"] == "sol61.captured-d-owner-pins@1" and pins["qualification"] == QUALIFICATION
+    need(pins["schema"] == "sol61.captured-d-owner-pins@2" and pins["qualification"] == QUALIFICATION
          and type(pins["ranks"]) is int and pins["ranks"] in (1, 2)
          and pins["mode"] == ("serial" if pins["ranks"] == 1 else "mpi2"), "owner scope differs")
     roots = pins["file_roots"]
@@ -389,10 +399,11 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         need(Path(case["directory"]).is_relative_to(wire.canonical(pins["archive_root"])), "case outside archive root")
         need(case_inventory(case["directory"]) == case, "sealed case inventory differs")
         receipt = strict_json(pinned(case["receipt"], roots)[1])
-        exact(receipt, ("kind", "artifact", "dimension", "rank", "size", "cells", "width", "order", "face_policy", "newton", "fd_step",
+        exact(receipt, ("kind", "fixture_schema", "artifact", "dimension", "rank", "size", "cells", "width", "order", "face_policy", "newton", "fd_step",
                         "solution_tolerance", "residual_tolerance", "native", "platform", "binaries", "sources", "initial_npz", "initial_sha256",
                         "phases", "checkpoints", "exact_restart_and_replay"), "receipt")
         width, order = CASES[key]
+        need(receipt["fixture_schema"] == "pops.captured-diffusion-native-fixture@2", "fixture history semantics version differs")
         need(receipt["kind"] == "actual-native-captured-D-original-MMS" and receipt["dimension"] == 2 and receipt["cells"] == 16
              and receipt["width"] == width and receipt["order"] == order and receipt["rank"] == 0 and receipt["size"] == pins["ranks"], "receipt case differs")
         need(all(type(receipt[k]) is int for k in ("dimension", "cells", "width", "rank", "size")), "receipt exact integer types differ")
@@ -419,9 +430,9 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         initial = protocol.archive(pinned(case["initial"], roots)[1])
         states = {phase: protocol.archive(pinned(row, roots)[1]) for phase, row in case["phases"].items()}
         reports[key] = science(initial, states, width)
-        images = {phase: checkpoint(pinned(row, roots)[1], phase, states[phase], receipt["artifact"], pins["owner"]["abi_key"])
+        images = {phase: checkpoint(pinned(row, roots)[1], phase, states[phase], receipt["artifact"], pins["owner"]["abi_key"], first_accepted=states["accepted"])
                   for phase, row in case["checkpoints"].items()}
-        checkpoint(pinned(case["checkpoints"]["accepted"], roots)[1], "reloaded", states["reloaded"], receipt["artifact"], pins["owner"]["abi_key"])
+        checkpoint(pinned(case["checkpoints"]["accepted"], roots)[1], "reloaded", states["reloaded"], receipt["artifact"], pins["owner"]["abi_key"], first_accepted=states["accepted"])
         skip = {"pops_checkpoint_manifest", "pops_restart_identity"}
         need(set(images["continuous"]) == set(images["replay"]), "replay checkpoint inventory differs")
         for name in set(images["continuous"])-skip:
