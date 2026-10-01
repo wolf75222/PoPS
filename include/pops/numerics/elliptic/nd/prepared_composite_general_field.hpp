@@ -278,6 +278,9 @@ class PreparedCompositeGeneralField final
     } catch (...) {
       failure = 1;
     }
+    if (apply_only_) {
+      try { Kokkos::fence(); } catch (...) { failure = 1; }
+    }
     if (all_reduce_max(failure, lane) != 0)
       throw std::runtime_error("composite field tuple allocation failed collectively");
     for (int entry = 0; entry < options_.coefficients; ++entry) {

@@ -594,6 +594,9 @@ class CompositeFacPoisson {
     } catch (...) {
       local_error = std::current_exception();
     }
+    if (guard_local_setup) {
+      try { Kokkos::fence(); } catch (...) { if (!local_error) local_error = std::current_exception(); }
+    }
     if (all_reduce_max(local_error ? 1L : 0L, *lane_) != 0) {
       if (lane_->size() == 1 && local_error)
         std::rethrow_exception(local_error);
