@@ -1593,6 +1593,38 @@
           "FullResidualBasisLU and EvolvedStage are separate pending extensions",
           "No whole M06/M13/M22/M26/M27 qualification from source checks"
         ]
+      },
+      "sdk2e4_build_cpp_and_native_attempts": {
+        "status": "scoped_build_cpp_received_and_python_native_defects_open",
+        "evidence": {
+          "path": "docs/development/api_040/sdk2e4_native_reception_snapshot.json",
+          "sha256": "f861c155aa2858a3309f48f172c2b1da031d9db22700da57f4715ebe232d2c0b"
+        },
+        "migration_complete": false,
+        "historical_baseline_requalified": false,
+        "sdk_signature": "2e4d69fd3574933f4b83cf014ad2d0159902fea6197d74623bee4b4ee6cf1675",
+        "native_dimensions_built": [
+          1,
+          2,
+          3
+        ],
+        "cpp": {
+          "selected": 240,
+          "passed": 235,
+          "failed": 0,
+          "serial_mpi_only_skips": 5
+        },
+        "installed_api_source_host_unit": {
+          "passed": 451,
+          "failed": 0
+        },
+        "serial_native_python": {
+          "diffusion_passed": 4,
+          "amr_diagnostics_passed": 2,
+          "uniform_diagnostics_fixture_failed": 2,
+          "stage_generated_compile_failed": 8
+        },
+        "scientific_saved_state_owner_seals_pending": true
       }
     },
     "limits": [
