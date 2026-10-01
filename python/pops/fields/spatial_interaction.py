@@ -6,6 +6,7 @@ import math
 
 from pops._ir import expr as ast
 from pops._ir.quantity import PhysicalDimension
+from pops.identity.scalar import scalar_literal
 
 
 def _tree(value, dimension):
@@ -141,4 +142,5 @@ class FieldInteractionQuadrature:
         return {"contract": "pops.original-field-interaction-realization@1",
                 "measure": self.measure.to_data(), "quadrature": "pops.cell-midpoint@1",
                 "method": "pops.direct-spatial-interaction@1",
-                "max_workspace_bytes": self.method.max_workspace_bytes}
+                "max_workspace_bytes": (self.method.max_workspace_bytes if self.method.max_workspace_bytes < 2**63
+                                        else scalar_literal(self.method.max_workspace_bytes).to_data())}

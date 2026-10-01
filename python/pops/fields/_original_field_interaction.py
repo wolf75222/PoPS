@@ -8,6 +8,30 @@ from pops.time._program.serialization import _json_ready
 CONTRACT = "pops.spatial-field-residual@4"
 
 
+def interaction_budget(realization):
+    """Decode the exact uint64 resource without extending identity CBOR integers."""
+    budget = realization["max_workspace_bytes"]
+    if isinstance(budget, Mapping):
+        from ._program_expression import decode_field_literal
+        literal = decode_field_literal(budget)
+        if literal.kind != "integer" or literal.unit is not None or literal.target is not None:
+            raise ValueError("original interaction budget requires a plain exact integer")
+        budget = literal.to_python()
+        if budget < 2**63:
+            raise ValueError("original interaction budget literal is not its canonical image")
+    if type(budget) is not int or not 0 < budget < 2**64:
+        raise ValueError("original interaction budget requires an exact positive uint64")
+    return budget
+
+
+def interaction_identity_data(data):
+    if data is None:
+        return None
+    result = _json_ready(data)
+    interaction_budget(result["realization"])
+    return result
+
+
 def _primitive_terms(data):
     node = data.get("field_expression") if isinstance(data, Mapping) else None
     if node is None:
@@ -23,9 +47,7 @@ def _validate_realization(data):
     data = _json_ready(data)
     if set(data) != {"contract", "measure", "quadrature", "method", "max_workspace_bytes"} or data["contract"] != "pops.original-field-interaction-realization@1" or data["quadrature"] != "pops.cell-midpoint@1" or data["method"] != "pops.direct-spatial-interaction@1":
         raise ValueError("invalid original interaction realization")
-    budget = data["max_workspace_bytes"]
-    if type(budget) is not int or not 0 < budget < 2**64:
-        raise ValueError("original interaction budget requires a positive exact uint64")
+    interaction_budget(data)
     measure = data["measure"]
     if set(measure) != {"contract", "coordinate_units"} or measure["contract"] != "pops.cell-volume-eb@1":
         raise ValueError("invalid original interaction measure")

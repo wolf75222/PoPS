@@ -136,3 +136,16 @@ rtk proxy /usr/bin/clang++ -std=c++20 -arch arm64 -fsyntax-only \
 Generated CPPs, logs and source-archive comparisons are preserved untracked in
 `outputs/original-field-nonlocal/`; they are source/syntax evidence, not native
 outputs or scientific saved-state seals.
+
+## uint64 identity correction
+
+The public DirectSpatialInteraction budget remains an exact positive uint64.
+Below 2**63 its numerical descriptor and existing identities stay byte-identical.
+Above that threshold the **new FieldInteractionQuadrature descriptor** uses the
+existing scalar-v1 integer image `{kind: integer, value: decimal_string}`. The
+reader requires its canonical plain/unannotated integer image and exact uint64
+bounds; it reconstructs the original integer for the native ULL argument. This
+avoids changing global identity CBOR, adding a signed resource ceiling or
+silently rounding the public budget. Actual public solve, Case validation,
+resolution and emission pass at 2**63-1, 2**63 and 2**64-1: 7 source tests PASS.
+No native allocation or execution is performed by those source tests.

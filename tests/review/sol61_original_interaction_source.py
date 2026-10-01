@@ -18,7 +18,7 @@ from pops.solvers import Newton
 from pops.time import FailRun, FixedDt
 
 
-def build(order=(0, 1), *, interaction=True, candidate=False):
+def build(order=(0, 1), *, interaction=True, candidate=False, budget=32*1024*1024):
     frame = CartesianDomain("physical-box", lower=(.3, -.4), upper=(2.3, 2.6)).frame(Cartesian2D())
     model = pops.Model("loads", frame=frame)
     load = model.state("forcing", components=("f", "g"))
@@ -33,7 +33,7 @@ def build(order=(0, 1), *, interaction=True, candidate=False):
     problem = FieldProblem("mixed original", unknowns=tuple(unknowns[i] for i in order),
         equations=tuple(equations[i] for i in order), boundaries=tuple(FieldBoundary(unknowns[i],
         bcs.BoundaryCondition(bcs.AllPhysicalBoundaries(), bcs.Periodic())) for i in order))
-    quadrature = FieldInteractionQuadrature(CellVolumeMeasure(), CellMidpoint(), DirectSpatialInteraction(32*1024*1024)) if interaction else None
+    quadrature = FieldInteractionQuadrature(CellVolumeMeasure(), CellMidpoint(), DirectSpatialInteraction(budget)) if interaction else None
     method = CellCenteredNonlinearCoupled(finite_difference_step=1e-7,
         face_policy="Arithmetic@1" if candidate else None,
         coefficient_evaluation="PerCandidate@1" if candidate else None, interaction=quadrature)
@@ -118,6 +118,18 @@ class OriginalInteractionSource(unittest.TestCase):
                 DirectSpatialInteraction(budget)
         with self.assertRaises(ValueError):
             SpatialInteractionKernel(2, lambda x, y: pops.math.Var("z", "foreign"))
+
+    def test_exact_uint64_budget_through_public_request_and_emission(self):
+        from pops.fields._original_field_interaction import interaction_identity_data, interaction_budget
+        from pops.identity import canonical_bytes
+        for budget in (2**63-1, 2**63, 2**64-1):
+            args = build(budget=budget)
+            data = args[4].problem.source_contract["interactions"]
+            projected = interaction_identity_data(data)
+            canonical_bytes(projected)
+            self.assertEqual(interaction_budget(data["realization"]), budget)
+            code = emit(args)
+            self.assertIn(str(budget)+"ULL", code)
 
     def test_actual_request_revalidates_realization(self):
         # Actual request revalidation, with its registered physical FieldProblem.

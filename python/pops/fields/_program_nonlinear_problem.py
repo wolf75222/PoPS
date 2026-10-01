@@ -214,7 +214,8 @@ def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict
         equation["diffusion_body"] = _json_ready(token.attrs["source_contract"]["diffusion"])
         equation["coefficient_evaluation"] = token.attrs["coefficient_evaluation"]
     if "interactions" in token.attrs["source_contract"]:
-        equation["interactions"] = _json_ready(token.attrs["source_contract"]["interactions"])
+        from ._original_field_interaction import interaction_identity_data
+        equation["interactions"] = interaction_identity_data(token.attrs["source_contract"]["interactions"])
     equation_id = make_identity("solve-equation", equation).token
     problem = {"equation": equation_id, "physical_problem": physical, "unknowns": [unknown.to_data()],
                "residual_interpretation": "original_field_equations", "error_interpretation": "spatial_residual_l2"}

@@ -5,7 +5,7 @@ from pops.identity import make_identity
 from pops.identity.scalar import scalar_cpp
 from pops.fields._program_expression import decode_field_literal
 from pops.fields.spatial_interaction import kernel_cpp
-from pops.time._program.serialization import _json_ready
+from pops.fields._original_field_interaction import interaction_identity_data, interaction_budget
 
 
 def interaction_terms(value):
@@ -29,12 +29,12 @@ def emit_producer(value, stem, terms, owner, lines, *, amr):
     if not terms:
         return
     data = value.attrs["source_contract"]["interactions"]
-    budget = data["realization"]["max_workspace_bytes"]
+    budget = interaction_budget(data["realization"])
     if amr:
         lines.append("auto %s_interaction_producer = [&](const auto& q, std::uint64_t evaluation) {" % stem)
     for i, term in enumerate(terms):
         kernel = kernel_cpp(term["kernel"]["tree"], term["kernel"]["dimension"])
-        identity = make_identity("original-field-interaction", _json_ready(data)).token + ":term:" + str(i)
+        identity = make_identity("original-field-interaction", interaction_identity_data(data)).token + ":term:" + str(i)
         call = ('ctx.original_candidate_interaction(%d, %d, %s_core, %s_authority, q, std::array<int, 1>{%d}, %dULL, %s, evaluation, '
                 if amr else 'ctx.spatial_interaction(%d, q, std::array<int, 1>{%d}, %dULL, %s, %s, false, ')
         args = ((value.id, owner, stem, stem, term["column"], budget, json.dumps(identity)) if amr else
