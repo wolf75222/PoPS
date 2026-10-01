@@ -363,6 +363,7 @@ void prepare_closed_original_interaction(std::int64_t result_id, std::int64_t so
   const auto& candidate = source->candidate();
   std::shared_ptr<ClosedInteractionTower> result;
   std::vector<InteractionLevelView<Dim, MemorySpace>> levels;
+  std::vector<const field_type*> output_prototypes;
   std::size_t retained = 0;
   closed_interaction_phase_([&] {
     if (source->provider->accepted_original_candidate_generation(&candidate, lane) !=
@@ -374,13 +375,28 @@ void prepare_closed_original_interaction(std::int64_t result_id, std::int64_t so
     result->identity = identity;
     retained = interaction_add(interaction_add(source->retained_bytes,
         interaction_add(sizeof(ClosedInteractionTower), identity.size())), interaction_product(candidate.size(),
-        sizeof(field_type) + sizeof(InteractionLevelView<Dim, MemorySpace>)));
-    // Reserve bytes for the deep source and the entire output, including ghosts
-    // in the source image. Direct quadrature separately accounts its workspace.
-    for (const auto& field : candidate) {
+        sizeof(field_type) + sizeof(InteractionLevelView<Dim, MemorySpace>) + sizeof(field_type*)));
+    // The source and allocation State have separate physical identities. The
+    // output inherits only its owner's ranked topology and ghost storage; keep
+    // that grown storage in the retained budget for every level of the tower.
+    output_prototypes.reserve(candidate.size());
+    for (std::size_t level = 0; level < candidate.size(); ++level) {
+      const auto& field = candidate.at(level);
+      const auto& storage = facade_->prepared_amr_block_state(result->storage_owner, level);
+      if (field.layout() != storage.layout() || field.distribution() != storage.distribution() ||
+          field.local_rank() != storage.local_rank())
+        throw std::invalid_argument("closed interaction storage changes original source geometry/ownership");
+      const auto ghosts = storage.ghosts();
+      for (int axis = 0; axis < Dim; ++axis)
+        if (ghosts[axis] < 0)
+          throw std::invalid_argument("closed interaction output owner has negative ghosts");
+      output_prototypes.push_back(&storage);
       for (std::size_t patch = 0; patch < field.local_size(); ++patch) {
+        auto allocated_box = storage.box(patch);
+        for (int axis = 0; axis < Dim; ++axis)
+          allocated_box = allocated_box.grow(axis, ghosts[axis]);
         retained = interaction_add(retained, interaction_product(
-            interaction_product(field.box(patch).numPts(), components.size()), sizeof(Real)));
+            interaction_product(allocated_box.numPts(), components.size()), sizeof(Real)));
       }
       retained = interaction_add(retained, interaction_product(field.layout().size(),
           2 * sizeof(Box<Dim>) + sizeof(Index<Dim>) + sizeof(std::size_t)));
@@ -394,9 +410,9 @@ void prepare_closed_original_interaction(std::int64_t result_id, std::int64_t so
     Kokkos::fence();
   });
   for (int level = 0; level < nlev(); ++level) {
-    const auto& storage = facade_->prepared_amr_block_state(result->storage_owner, level);
     closed_interaction_phase_([&] {
       const auto& field = source->image.at(level);
+      const auto& storage = *output_prototypes.at(level);
       if (field.layout() != storage.layout() || field.distribution() != storage.distribution() ||
           field.local_rank() != storage.local_rank())
         throw std::invalid_argument("closed interaction storage changes original source geometry/ownership");
@@ -427,7 +443,7 @@ void prepare_closed_original_interaction(std::int64_t result_id, std::int64_t so
   // Each direct invocation authenticates its own full layout/point contract.
   for (std::size_t level = 0; level < levels.size(); ++level) {
     auto output = direct_spatial_interaction<Dim, MemorySpace>(levels, level, components,
-        max_bytes - reserved, identity, lane, kernel);
+        max_bytes - reserved, identity, lane, kernel, output_prototypes.at(level));
     closed_interaction_phase_([&] { result->output.push_back(std::move(output)); });
   }
   (void)source->candidate();
