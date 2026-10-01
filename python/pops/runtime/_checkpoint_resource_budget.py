@@ -444,16 +444,27 @@ _DIAGNOSTIC_CAPACITY_CONTRACT = "pops.program-diagnostics.checkpoint-capacity@1"
 def _compiled_diagnostic_inventory(artifact):
     """Inventory literal names only after compiler-retained source evidence verifies."""
     artifact.verify()
-    source = getattr(artifact.program, "_generated_cpp", None)
-    if source is None:
+    # A multi-layout artifact deliberately has no scalar Program. Its registered
+    # executable slices are still compiler-retained and covered by verify() above.
+    # Their union is a finite upper bound for each child owner; a missing/dynamic
+    # slice stays unknown, rather than being silently replaced by an empty table.
+    program = artifact.program
+    components = ((program,) if program is not None else
+                  tuple(row.program for row in getattr(artifact, "layout_programs", ())))
+    if not components:
         return None
-    if type(source) is not str:
-        raise TypeError("retained Program source must be exact compiler text")
-    calls = tuple(re.finditer(r"\brecord_scalar\s*\(", source))
-    literals = tuple(re.finditer(r'\brecord_scalar\s*\(\s*("(?:\\.|[^"\\])*")', source))
-    if len(calls) != len(literals):
-        return None
-    names = {json.loads(match.group(1)) for match in literals}
+    names = set()
+    for component in components:
+        source = getattr(component, "_generated_cpp", None)
+        if source is None:
+            return None
+        if type(source) is not str:
+            raise TypeError("retained Program source must be exact compiler text")
+        calls = tuple(re.finditer(r"\brecord_scalar\s*\(", source))
+        literals = tuple(re.finditer(r'\brecord_scalar\s*\(\s*("(?:\\.|[^"\\])*")', source))
+        if len(calls) != len(literals):
+            return None
+        names.update(json.loads(match.group(1)) for match in literals)
     names.add("pops.frontier.duration")
     return tuple(sorted(names))
 
