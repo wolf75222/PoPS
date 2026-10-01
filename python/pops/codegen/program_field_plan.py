@@ -167,6 +167,10 @@ class ResolvedProgramFieldPlan:
                 captures = solve.inputs[2:2 + solve.attrs["capture_count"]]
                 method_data = self.discretization.method.options()
                 diffusion, local = compile_equations(self.operator, captures, per_candidate=method_data.get("coefficient_evaluation") is not None)
+                from pops.fields._original_field_interaction import compile_interactions
+                interactions = compile_interactions(self.operator, method_data.get("interaction_realization"))
+                if _canonical(interactions) != _canonical(solve.attrs["source_contract"].get("interactions")):
+                    raise ValueError("original residual changed its registered interaction physics/realization")
                 if solve.attrs["contract"] != method_data["contract"] or \
                         solve.attrs.get("coefficient_face_policy") != method_data.get("coefficient_face_policy") or \
                         solve.attrs.get("coefficient_evaluation") != method_data.get("coefficient_evaluation") or \

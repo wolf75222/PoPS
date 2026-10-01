@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .spatial_interaction import (SpatialInteractionKernel, CellVolumeMeasure,
-                                  CellMidpoint, DirectSpatialInteraction)
+                                  CellMidpoint, DirectSpatialInteraction, FieldInteractionQuadrature)
 
 from .context import (
     Accepted,
@@ -111,6 +111,8 @@ from .catalog import fields as catalog
 
 
 __all__ = [
+    "SpatialInteractionKernel", "CellVolumeMeasure", "CellMidpoint",
+    "DirectSpatialInteraction", "FieldInteractionQuadrature",
     "Accepted",
     "AnisotropicPoissonOperator",
     "CompositeHierarchySolve",

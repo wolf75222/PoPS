@@ -93,6 +93,7 @@ class SpatialInteractionKernel:
 @dataclass(frozen=True)
 class CellVolumeMeasure:
     """Physical Cartesian cell volume times the prepared EB volume fraction."""
+    __pops_ir_immutable__ = True
     coordinate_units: tuple = ()
 
     def __post_init__(self):
@@ -108,12 +109,36 @@ class CellVolumeMeasure:
 @dataclass(frozen=True)
 class CellMidpoint:
     """Piecewise constant source values; W evaluated at physical cell centers."""
+    __pops_ir_immutable__ = True
+
+    def to_data(self):
+        return {"contract": "pops.cell-midpoint@1"}
 
 
 @dataclass(frozen=True)
 class DirectSpatialInteraction:
+    __pops_ir_immutable__ = True
     max_workspace_bytes: int
 
     def __post_init__(self):
         if type(self.max_workspace_bytes) is not int or not 0 < self.max_workspace_bytes < 2**64:
             raise ValueError("direct interaction budget requires a positive exact uint64")
+
+
+@dataclass(frozen=True)
+class FieldInteractionQuadrature:
+    """Numerical realization of physical interactions inside the original F(q)."""
+    __pops_ir_immutable__ = True
+    measure: CellVolumeMeasure
+    quadrature: CellMidpoint
+    method: DirectSpatialInteraction
+
+    def to_data(self):
+        if type(self.measure) is not CellVolumeMeasure or type(self.quadrature) is not CellMidpoint or type(self.method) is not DirectSpatialInteraction:
+            raise TypeError("original field interaction requires explicit volume/midpoint/direct descriptors")
+        self.measure.__post_init__()
+        self.method.__post_init__()
+        return {"contract": "pops.original-field-interaction-realization@1",
+                "measure": self.measure.to_data(), "quadrature": "pops.cell-midpoint@1",
+                "method": "pops.direct-spatial-interaction@1",
+                "max_workspace_bytes": self.method.max_workspace_bytes}

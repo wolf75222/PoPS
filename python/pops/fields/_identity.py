@@ -8,7 +8,7 @@ from typing import Any
 
 from pops.descriptors import Descriptor
 from pops.identity import Identity, make_identity
-from pops._ir.elliptic import CoeffGradient, DivCoeffGrad, EllipticSum, Reaction
+from pops._ir.elliptic import CoeffGradient, DivCoeffGrad, EllipticSum, Reaction, SpatialInteraction
 from pops._ir.expr import Expr, Gradient, Laplacian, Partial
 from pops.math import Equation
 from pops.model import Handle
@@ -39,6 +39,7 @@ _FIELD_EXPR_PROJECTIONS: Mapping[type[Any], Callable[[Any], Any]] = MappingProxy
             "coefficient": value.coeff,
             "scale": value.scale,
         },
+        SpatialInteraction: lambda value: {"field": value.field, "kernel": value.kernel, "scale": value.scale},
         EllipticSum: lambda value: {"terms": value.terms},
     }
 )

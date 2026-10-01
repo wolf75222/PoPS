@@ -42,7 +42,7 @@ def compile_equations(problem: Any, states: tuple, *, per_candidate: bool = Fals
     from pops.math import elliptic_terms
     from pops._ir.expr import Laplacian
     from fractions import Fraction
-    from pops._ir.elliptic import DivCoeffGrad, Reaction, constant_reaction_scalar
+    from pops._ir.elliptic import DivCoeffGrad, Reaction, SpatialInteraction, constant_reaction_scalar
     from pops._ir.handle_expr import ValueExpr
 
     width = len(problem.unknowns)
@@ -62,6 +62,9 @@ def compile_equations(problem: Any, states: tuple, *, per_candidate: bool = Fals
                     captured_diffusion[slot] = value if slot not in captured_diffusion else captured_diffusion[slot] + value
                 else:
                     diffusion[slot] -= Fraction(term.scale) * Fraction(coefficient)
+            elif type(term) is SpatialInteraction:
+                # Produced collectively from the simultaneous candidate inside F(q).
+                continue
             elif type(term) is Reaction:
                 expression = expression + term.scale * term.coeff * ValueExpr(problem.unknowns[column])
             else:
@@ -135,13 +138,15 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
             witnesses = [value for value in captures if _identity(value.state_ref) == _identity(previous.handle)]
             if len(witnesses) != 1 or witnesses[0].point != TimePoint(program.clock, 0):
                 raise FieldProblemError("field.evolution.previous", "original evolution requires the exact accepted previous frame endpoint")
+    from ._original_field_interaction import compile_interactions
+    interactions = compile_interactions(problem, method_data.get("interaction_realization"))
     diffusion, local = compile_equations(problem, captures, per_candidate=candidate_policy is not None)
     validate_encoded_tau((*diffusion, *local), temporal_tau)
     width = len(problem.unknowns)
     coefficient_dependencies = field_expression_dependencies(diffusion, captures, unknowns=problem.unknowns if candidate_policy else ())
     contract = method_data["contract"]
     face_policy = method_data.get("coefficient_face_policy")
-    if coefficient_dependencies and contract not in (CAPTURED_DIFFUSION_CONTRACT, CANDIDATE_DIFFUSION_CONTRACT):
+    if coefficient_dependencies and face_policy is None:
         raise FieldProblemError("field.nonlinear.face_policy",
             "captured diffusion requires explicit CellCenteredNonlinearCoupled(face_policy=Arithmetic@1)")
     boundary = _physical_boundary(problem)
@@ -171,6 +176,8 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
         "field_problem_identity": problem.identity.token, "diffusion": diffusion, "local_expressions": local,
         "physical_boundary": boundary, "finite_difference_step": scalar_data(numerical.method.finite_difference_step),
         "captures": tuple(_equation_value(program, value) for value in captures)}
+    if interactions is not None:
+        source_data["interactions"] = interactions
     if face_policy is not None:
         source_data["coefficient_face_policy"] = face_policy
     if candidate_policy is not None:
@@ -206,6 +213,8 @@ def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict
     if "coefficient_evaluation" in token.attrs:
         equation["diffusion_body"] = _json_ready(token.attrs["source_contract"]["diffusion"])
         equation["coefficient_evaluation"] = token.attrs["coefficient_evaluation"]
+    if "interactions" in token.attrs["source_contract"]:
+        equation["interactions"] = _json_ready(token.attrs["source_contract"]["interactions"])
     equation_id = make_identity("solve-equation", equation).token
     problem = {"equation": equation_id, "physical_problem": physical, "unknowns": [unknown.to_data()],
                "residual_interpretation": "original_field_equations", "error_interpretation": "spatial_residual_l2"}
@@ -221,7 +230,7 @@ def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict
         realization["right_preconditioner"] = token.attrs["right_preconditioner"]
     if "right_preconditioner_resources" in token.attrs:
         realization["right_preconditioner_resources"] = _json_ready(token.attrs["right_preconditioner_resources"])
-    if token.attrs["contract"] in (CAPTURED_DIFFUSION_CONTRACT, CANDIDATE_DIFFUSION_CONTRACT):
+    if token.attrs.get("coefficient_face_policy") is not None:
         realization["coefficient_face_policy"] = token.attrs["coefficient_face_policy"]
     if "coefficient_evaluation" in token.attrs:
         realization["coefficient_evaluation"] = token.attrs["coefficient_evaluation"]
@@ -257,7 +266,7 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
         raise SolveRequestError("unknown_type_mismatch", "field product seed width/type differs")
     face_policy = residual.source_contract.get("coefficient_face_policy")
     candidate_policy = residual.source_contract.get("coefficient_evaluation")
-    contract = CANDIDATE_DIFFUSION_CONTRACT if candidate_policy else CAPTURED_DIFFUSION_CONTRACT if face_policy is not None else CONTRACT
+    contract = "pops.spatial-field-residual@4" if "interactions" in residual.source_contract else CANDIDATE_DIFFUSION_CONTRACT if candidate_policy else CAPTURED_DIFFUSION_CONTRACT if face_policy is not None else CONTRACT
     attrs = {"contract": contract, "problem_kind": "original_field_equations", "ncomp": residual.prototype.attrs["ncomp"],
              "field": residual.field, "field_problem_identity": residual.source_contract["field_problem_identity"],
              "source_contract": residual.source_contract,
@@ -318,7 +327,10 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
     criterion = "pops.field.linear.true-correction-residual@1" if candidate_policy else None
     if source.get("linear_residual_verification") != criterion or token.attrs.get("linear_residual_verification") != criterion:
         raise SolveRequestError("unsupported_realization", "true correction residual realization changed")
-    expected_contract = CANDIDATE_DIFFUSION_CONTRACT if candidate_policy else CAPTURED_DIFFUSION_CONTRACT if face_policy is not None else CONTRACT
+    from ._original_field_interaction import validate_interactions
+    if "interactions" in source:
+        validate_interactions(source["interactions"], source["field_problem"], source["unknown_components"])
+    expected_contract = "pops.spatial-field-residual@4" if "interactions" in source else CANDIDATE_DIFFUSION_CONTRACT if candidate_policy else CAPTURED_DIFFUSION_CONTRACT if face_policy is not None else CONTRACT
     if (face_policy is not None and (type(face_policy) is not str or face_policy != ARITHMETIC_FACES)) or \
             token.attrs["contract"] != expected_contract or token.attrs["problem_kind"] != "original_field_equations":
         raise SolveRequestError("equation_identity_drift", "field residual realization changed")
@@ -335,7 +347,7 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
     diffusion_dependencies = field_expression_dependencies(source["diffusion"], captures, unknowns=unknown_handles if candidate_policy else ())
     expected_coefficient_inputs = captures if diffusion_dependencies else ()
     expected_diffusion = source["diffusion"]
-    if diffusion_dependencies and expected_contract not in (CAPTURED_DIFFUSION_CONTRACT, CANDIDATE_DIFFUSION_CONTRACT):
+    if diffusion_dependencies and face_policy is None:
         raise SolveRequestError("equation_identity_drift", "captured diffusion lost its explicit arithmetic realization")
     if (token.attrs.get("coefficient_face_policy") != face_policy or
             token.inputs[1].attrs.get("coefficient_face_policy") != face_policy):

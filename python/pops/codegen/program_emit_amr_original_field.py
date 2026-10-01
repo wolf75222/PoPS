@@ -138,6 +138,12 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
     duration = emit_issued_duration(value.attrs["source_contract"].get("temporal_tau"), program, value.point, stem + "_issued_dt", lines, operation_id=value.id)
     unknowns = tuple(Handle.from_canonical_identity(_json_ready(item))
                      for item in value.attrs["source_contract"]["unknown_components"])
+    from pops.codegen.program_emit_original_interaction import declarations, emit_producer, views, expression as interaction_expression
+    interaction_rows = declarations(value, stem, lines, amr=True)
+    interaction_owner = block_indices.get(captures[0].block)
+    if interaction_rows and interaction_owner is None:
+        raise ValueError("original interaction requires an exact physical layout owner")
+    emit_producer(value, stem, interaction_rows, interaction_owner, lines, amr=True)
     callback = stem + "_body"
     lines += ["auto %s = [&](const auto& q, const auto& captured, auto& result, int evaluation) {" % callback,
               "  (void)evaluation;", "  pops::Real invalid = 0;",
@@ -145,6 +151,7 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
               "    for (std::size_t patch = 0; patch < result[level].local_size(); ++patch) {",
               "      const auto candidate = q[level].fab(patch).view();",
               "      const auto output = result[level].fab(patch).view();"]
+    views(stem, interaction_rows, lines, amr=True)
     for index in range(len(captures)):
         lines.append("      const auto capture%d = captured[%d][level].fab(patch).view();" % (index, index))
     lines += ["      invalid = std::max(invalid, pops::for_each_cell_reduce_max(result[level].box(patch),",
@@ -156,6 +163,7 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
     for component, expression in enumerate(value.attrs["local_expressions"]):
         code, _ = field_expression_cpp(expression, captures,
             views=tuple("capture%d" % i for i in range(len(captures))), unknowns=unknowns, duration_name=duration)
+        code += interaction_expression(component, interaction_rows)
         lines += ["          const pops::Real component_%d = output(index, %d) + %s;" % (component, component, code),
                   "          finite = finite && std::isfinite(candidate(index, %d)) && std::isfinite(component_%d);" % (component, component),
                   "          output(index, %d) = component_%d;" % (component, component)]
@@ -191,6 +199,10 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
     solve_call = ("  %s = %s_core->solve_candidate(%s_authority, %s, %s, %s, ctx.prepared_execution_lane());" %
                   (report, stem, stem, seed, callback, coefficient_callback)) if per_candidate else (
                   "  %s = %s_core->solve(%s_authority, %s, %s, ctx.prepared_execution_lane());" % (report, stem, stem, seed, callback))
+    if interaction_rows:
+        solve_call = ("  %s = %s_core->solve_candidate_interaction(%s_authority, %s, %s, %s, %s_interaction_producer, ctx.prepared_execution_lane());" %
+                      (report, stem, stem, seed, callback, coefficient_callback, stem)) if per_candidate else (
+                      "  %s = %s_core->solve_interaction(%s_authority, %s, %s, %s_interaction_producer, ctx.prepared_execution_lane());" % (report, stem, stem, seed, callback, stem))
     lines += ["pops::SolveReport %s;" % report, "try {", solve_call,
               "} catch (const std::exception& failure) {",
               "  %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, %s, failure.what());" % (report, action), "}",

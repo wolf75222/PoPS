@@ -15,7 +15,7 @@ __all__ = [
     "TimeDerivative", "Unknown", "OpApply", "Integral", "RateTerm", "RateExpr",
     "Accumulation", "DiscreteAccumulationEquation", "accumulation",
     # elliptic field-operator algebra (Spec 5 sec.9.2)
-    "Reaction", "CoeffGradient", "DivCoeffGrad", "EllipticSum", "elliptic_terms",
+    "SpatialInteraction", "Reaction", "CoeffGradient", "DivCoeffGrad", "EllipticSum", "elliptic_terms",
     "principal_kinds",
 ]
 
@@ -41,6 +41,7 @@ from pops._ir.handle_expr import ValueExpr  # noqa: F401
 from pops._ir.symbolic import SymbolicTruthValueError  # noqa: F401
 from pops._ir.control_expr import where, rounded  # noqa: F401
 from pops._ir.elliptic import (  # noqa: F401  (Spec 5 sec.9.2 elliptic field-operator algebra)
+    SpatialInteraction,
     Reaction,
     CoeffGradient,
     DivCoeffGrad,

@@ -513,3 +513,81 @@ Real reduce_closed_original_interaction(std::int64_t result_id, int component,
   if (minimum) return static_cast<Real>(all_reduce_min(static_cast<double>(local), lane));
   return static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
 }
+
+/// Original residual candidate producer: no State classification, Accept stamp or
+/// public scratch registry. Core calls this only after simultaneous synchronization.
+template <class Kernel>
+std::vector<field_type> original_candidate_interaction(std::int64_t solve_id, int program_block,
+    const std::shared_ptr<PreparedAmrFieldResidual<Dim>>& core, const AmrFieldResidualAuthority& current,
+    const std::vector<field_type>& candidate, std::span<const int> components,
+    std::uint64_t max_bytes, std::string_view identity, std::uint64_t evaluation, Kernel kernel) const {
+  const auto& lane = prepared_execution_lane();
+  const auto epoch = runtime_->topology_epoch();
+  const auto generation = runtime_->materialization_generation();
+  PreparedResourceAttempt attempt;
+  int owner = -1;
+  runtime::multiblock::BoundaryEvaluationPoint invocation_point;
+  std::shared_ptr<hierarchy_tensor_solver_type> provider;
+  std::vector<InteractionLevelView<Dim, MemorySpace>> levels;
+  std::vector<field_type> output;
+  std::size_t retained = 0;
+  interaction_phase(lane, [&] {
+    owner = sys_block(program_block);
+    invocation_point = boundary_evaluation_point(solve_id);
+    attempt = resource_attempt();
+    provider = hierarchy_field_resources_.at(solve_id).solver;
+    if (!core || current.owner != this || !attempt.visible() || !provider || candidate.empty() || candidate.size() != static_cast<std::size_t>(nlev()) || identity.empty() || components.empty() || max_bytes == 0)
+      throw std::invalid_argument("original interaction requires a complete issued candidate tower");
+    retained = interaction_product(candidate.size(), sizeof(field_type) + sizeof(InteractionLevelView<Dim, MemorySpace>));
+    for (std::size_t level = 0; level < candidate.size(); ++level) {
+      const auto& field = candidate[level];
+      const auto& reference = provider->solution(static_cast<int>(level));
+      if (field.layout() != reference.layout() || field.distribution() != reference.distribution() || field.local_rank() != reference.local_rank() || field.ncomp() != reference.ncomp())
+        throw std::invalid_argument("original interaction candidate has a foreign full-tower contract");
+      retained = interaction_add(retained, interaction_product(field.layout().size(), 2 * sizeof(Box<Dim>) + sizeof(Index<Dim>) + sizeof(std::size_t)));
+      retained = interaction_add(retained, interaction_product(field.local_size(), sizeof(typename field_type::fab_type) + sizeof(std::size_t)));
+      for (std::size_t patch = 0; patch < field.local_size(); ++patch)
+        retained = interaction_add(retained, interaction_product(interaction_product(field.box(patch).numPts(), components.size()), sizeof(Real)));
+    }
+    if (retained >= max_bytes) throw std::length_error("original interaction detached tower exceeds its explicit budget");
+    levels.reserve(candidate.size());
+    output.reserve(candidate.size());
+  });
+  core->require_evaluation(candidate, current, provider.get(), evaluation, lane);
+  for (int level = 0; level < nlev(); ++level) {
+    const auto geometry = facade_->prepared_amr_level_geometry(level);
+    interaction_phase(lane, [&] {
+      levels.push_back({&candidate.at(level), facade_->prepared_amr_block_level_active_mask(owner, level),
+          &facade_->prepared_amr_block_level_coverage_mask(owner, level),
+          facade_->prepared_amr_block_level_volume_fraction(owner, level), geometry});
+    });
+  }
+  // Reserve the maximum rank-local retained image before source transport.
+  std::uint64_t reserved = retained;
+  for (int rank = 0; rank < lane.size(); ++rank) {
+    std::uint64_t words = 0;
+    for (unsigned shift = 0; shift < 64; shift += 16)
+      words |= static_cast<std::uint64_t>(all_reduce_sum(lane.rank() == rank ? static_cast<long>((static_cast<std::uint64_t>(retained) >> shift) & 0xffffU) : 0L, lane)) << shift;
+    reserved = std::max(reserved, words);
+  }
+  std::string authority;
+  interaction_phase(lane, [&] {
+    if (reserved >= max_bytes) throw std::length_error("original interaction retained image exceeds its collective budget");
+    ExactContractBuilder exact;
+    exact.text("pops.original-field-interactions@1").text(identity).scalar(solve_id).scalar(program_block)
+        .scalar(epoch).scalar(generation).scalar(attempt.ordinal()).scalar(evaluation);
+    interaction_append_point(exact, invocation_point);
+    authority = std::move(exact).release();
+  });
+  for (std::size_t level = 0; level < levels.size(); ++level) {
+    auto result = direct_spatial_interaction<Dim, MemorySpace>(levels, level, components,
+        max_bytes - reserved, authority, lane, kernel);
+    interaction_phase(lane, [&] { output.push_back(std::move(result)); });
+  }
+  interaction_phase(lane, [&] {
+    if (!attempt.visible() || !attempt.same_attempt(resource_attempt()) || epoch != runtime_->topology_epoch() || generation != runtime_->materialization_generation() || hierarchy_field_resources_.at(solve_id).solver != provider || invocation_point != boundary_evaluation_point(solve_id))
+      throw std::logic_error("original interaction candidate frame/provider was revoked");
+  });
+  core->require_evaluation(candidate, current, provider.get(), evaluation, lane);
+  return output;
+}

@@ -109,6 +109,9 @@ class _ProgramSerialization(_ProgramBase):
         if value.op == "spatial_interaction":
             from .spatial_interaction import interaction_contract
             interaction_contract(value)
+        if value.op == "solve_spatial_field" and value.attrs.get("contract") == "pops.spatial-field-residual@4":
+            from pops.fields._program_nonlinear_problem import validate_nonlinear_field_request
+            validate_nonlinear_field_request(value.prog, value)
         attrs = dict(value.attrs)
         if "schedule" in attrs:
             attrs["schedule"] = _serialize_schedule(attrs["schedule"])
@@ -295,6 +298,7 @@ class _ProgramSerialization(_ProgramBase):
                 result["version"] = max(result["version"], 19 if node.attrs.get("contract") == "pops.spatial-interaction@3" else 18 if node.attrs.get("contract") == "pops.spatial-interaction@2" else 17)
             if node.op in ("solve_spatial_field", "integral_candidate"):
                 result["version"] = max(result["version"],
+                    20 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@4" else
                     13 if node.op == "solve_spatial_field" and node.attrs.get("right_preconditioner") == "pops.amr.full-residual-basis-lu@1" else
                     11 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@3" else
                     10 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@2" else

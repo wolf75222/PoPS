@@ -106,7 +106,7 @@ class CellCenteredNonlinearCoupled(CellCenteredGeneralCoupled):
     """
 
     def __init__(self, *, finite_difference_step: Any, face_policy: str | None = None,
-                 coefficient_evaluation: str | None = None) -> None:
+                 coefficient_evaluation: str | None = None, interaction: Any = None) -> None:
         import math
         from pops.identity.scalar import exact_numeric_scalar
 
@@ -119,6 +119,8 @@ class CellCenteredNonlinearCoupled(CellCenteredGeneralCoupled):
         if coefficient_evaluation is not None and face_policy != "Arithmetic@1":
             raise ValueError("PerCandidate@1 requires explicit Arithmetic@1 face policy")
         self.coefficient_evaluation = coefficient_evaluation
+        if interaction is not None:
+            self.interaction = interaction
         step = exact_numeric_scalar(finite_difference_step, where="field residual FD step")
         if not math.isfinite(float(step)) or step <= 0:
             raise ValueError("field residual FD step must be positive and finite")
@@ -141,6 +143,13 @@ class CellCenteredNonlinearCoupled(CellCenteredGeneralCoupled):
             data["contract"] = "pops.spatial-field-residual@3"
             data["coefficient_evaluation"] = "pops.field.coefficients.per-candidate@1"
             data["linear_residual_verification"] = "pops.field.linear.true-correction-residual@1"
+        if getattr(self, "interaction", None) is not None:
+            from .spatial_interaction import FieldInteractionQuadrature
+
+            if type(self.interaction) is not FieldInteractionQuadrature:
+                raise TypeError("original interaction requires FieldInteractionQuadrature")
+            data["contract"] = "pops.spatial-field-residual@4"
+            data["interaction_realization"] = self.interaction.to_data()
         return data
 
 

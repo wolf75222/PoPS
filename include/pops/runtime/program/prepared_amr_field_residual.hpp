@@ -217,7 +217,8 @@ class PreparedAmrFieldResidual final {
       });
     }
     return solve_impl_(current, seed, std::forward<LocalBody>(add_local),
-                       [](const auto&, const auto&, auto&, int) {}, lane);
+                       [](const auto&, const auto&, auto&, int) {},
+                       [](const auto&, int) {}, false, lane);
   }
   template <class LocalBody, class CoefficientBody>
   SolveReport solve_candidate(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
@@ -229,13 +230,64 @@ class PreparedAmrFieldResidual final {
         throw std::logic_error("candidate coefficient body requires explicit PerCandidate@1");
     });
     return solve_impl_(current, seed, std::forward<LocalBody>(add_local),
-                       std::forward<CoefficientBody>(coefficient_body), lane);
+                       std::forward<CoefficientBody>(coefficient_body),
+                       [](const auto&, int) {}, false, lane);
+  }
+  /// Exact lease for the producer phase of F. A same-layout accepted/foreign
+  /// tower is insufficient, and the lease is revoked before add_local or on refusal.
+  void require_evaluation(const hierarchy_type& q, const AmrFieldResidualAuthority& current,
+                          const provider_type* expected_provider, std::uint64_t evaluation,
+                          const ExecutionLane& lane) const {
+    require_authority(current, lane);
+    local_phase_(lane, [&] {
+      if (expected_provider != provider_.get() || active_evaluation_ != &q ||
+          active_evaluation_ordinal_ != evaluation)
+        throw std::logic_error("original interaction requires the exact active F candidate lease");
+      authenticate_(q);
+    });
+  }
+
+  /// Collective producer runs on the synchronized simultaneous unknown tower for
+  /// every F, including central JVP perturbations and the original recheck. Its
+  /// detached outputs may be read by add_local; it must never publish accepted state.
+  template <class LocalBody, class Producer>
+  SolveReport solve_interaction(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
+                               LocalBody&& add_local, Producer&& producer, const ExecutionLane& lane) {
+    require_authority(current, lane);
+    local_phase_(lane, [&] {
+      if (coefficient_evaluation_ != AmrFieldCoefficientEvaluation::kFrozen)
+        throw std::logic_error("interaction with candidate D requires its coefficient body");
+      if (evaluation_q_.empty()) {
+        std::vector<const field_type*> layouts;
+        for (int level = 0; level < op_->original_field_levels(); ++level)
+          layouts.push_back(&op_->original_field_layout(level));
+        evaluation_q_ = allocate_(layouts);
+      }
+    });
+    return solve_impl_(current, seed, std::forward<LocalBody>(add_local),
+                       [](const auto&, const auto&, auto&, int) {},
+                       std::forward<Producer>(producer), true, lane);
+  }
+  template <class LocalBody, class CoefficientBody, class Producer>
+  SolveReport solve_candidate_interaction(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
+      LocalBody&& add_local, CoefficientBody&& coefficient_body, Producer&& producer, const ExecutionLane& lane) {
+    require_authority(current, lane);
+    local_phase_(lane, [&] {
+      if (coefficient_evaluation_ != AmrFieldCoefficientEvaluation::kPerCandidate || !candidate_evaluation_)
+        throw std::logic_error("candidate interaction requires explicit PerCandidate@1");
+    });
+    return solve_impl_(current, seed, std::forward<LocalBody>(add_local),
+                       std::forward<CoefficientBody>(coefficient_body),
+                       std::forward<Producer>(producer), true, lane);
   }
  private:
-  template <class LocalBody, class CoefficientBody>
+  template <class LocalBody, class CoefficientBody, class Producer>
   SolveReport solve_impl_(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
                          LocalBody&& add_local, CoefficientBody&& coefficient_body,
-                         const ExecutionLane& lane) {
+                         Producer&& producer, bool synchronized_interaction, const ExecutionLane& lane) {
+    local_phase_(lane, [&] {
+      if (active_evaluation_ != nullptr) throw std::logic_error("original solve reentered an active F evaluation");
+    });
     candidate_visible_ = false;
     evaluations_ = derivatives_ = 0;
     lu_ready_ = false; lu_columns_ = lu_factorizations_ = 0;
@@ -266,8 +318,28 @@ class PreparedAmrFieldResidual final {
         require_authority(current, lane);
         candidate_evaluation_->apply_original_field_operator(evaluation_q_, result);
         physical_q = &evaluation_q_;
+      } else if (synchronized_interaction) {
+        local_phase_(lane, [&] { authenticate_(q); copy_(q, evaluation_q_); });
+        op_->synchronize_original_field_candidate(evaluation_q_);
+        op_->apply_original_field_operator(evaluation_q_, result);
+        physical_q = &evaluation_q_;
       } else {
         op_->apply_original_field_operator(q, result);
+      }
+      if (synchronized_interaction) {
+        require_authority(current, lane);
+        struct EvaluationLease {
+          const hierarchy_type*& slot;
+          ~EvaluationLease() noexcept { slot = nullptr; }
+        } lease{active_evaluation_};
+        local_phase_(lane, [&] {
+          if (evaluation_sequence_ == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("original interaction F nonce exhausted");
+          active_evaluation_ordinal_ = ++evaluation_sequence_;
+        });
+        active_evaluation_ = physical_q;
+        producer(std::as_const(*physical_q), active_evaluation_ordinal_);
+        require_authority(current, lane);
       }
       local_phase_(lane, [&] {
         add_local(*physical_q, captures_, result, evaluation);
@@ -775,6 +847,9 @@ class PreparedAmrFieldResidual final {
   std::unique_ptr<PreparedHierarchyCandidateEvaluation<Dim>> candidate_evaluation_;
   std::vector<field_type*> coefficient_fields_;
   hierarchy_type evaluation_q_;
+  const hierarchy_type* active_evaluation_ = nullptr;
+  std::uint64_t active_evaluation_ordinal_ = 0;
+  std::uint64_t evaluation_sequence_ = 0;
   std::uint64_t evaluation_generation_ = 0;
   std::unique_ptr<AmrFieldNewtonKrylovWorkspace<Dim>> newton_;
   hierarchy_type candidate_, perturbed_, plus_, minus_, recheck_, inverse_diagonal_;
