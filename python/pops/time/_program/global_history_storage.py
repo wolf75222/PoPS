@@ -88,8 +88,17 @@ class _IssuedStorage:
 
 
 def _equal_metadata(left: Any, right: Any) -> bool:
+    import json
     from pops.time._program.serialization import _json_ready
-    return _json_ready(left) == _json_ready(right)
+
+    # Container freezing may replace list/dict by tuple/MappingProxyType; _json_ready
+    # restores their one wire image. JSON tokens retain bool/int/float distinctions
+    # which Python container equality discards (True == 1 == 1.0).
+    def image(value: Any) -> str:
+        return json.dumps(_json_ready(value), sort_keys=True,
+                          separators=(",", ":"), allow_nan=False)
+
+    return image(left) == image(right)
 
 
 def prepare_issuance(program: Any, name: str, metadata: Any) -> _IssuedStorage:
