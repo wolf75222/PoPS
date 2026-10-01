@@ -3,7 +3,15 @@
 The requested migration is **in progress**. Source implementation, native
 reception, scientific witnesses and backend qualification are recorded separately.
 
-## Current reception: SDK375f Dim2 and scoped SDK e49c ALE (2026-10-01)
+## Latest installed reception: SDK375f Dim2 and scoped SDK e49c ALE (2026-10-01)
+
+Subsequent production changes are integrated through `054652d2`: explicit AMR
+right Jacobi, prepared-lane refusal, Python realization identities, per-block
+multi-layout local observations, and captured diffusion with explicit arithmetic
+faces. Coherent C++/Dim2 rebuilding is in progress. These source changes do not
+inherit the earlier SDK375f native qualification. Dim1/Dim3 must also be rebuilt
+before new native claims. The new captured-D fixtures exercise nonconstant q/D,
+including a signed nonsymmetric singular diffusion matrix closed by local reaction.
 
 Migration remains open. The current installed Dim2 native artifact was built from
 `32235b93296fe6d4337194e17d0d45569dc63a08`, with SDK signature
@@ -29,9 +37,12 @@ Git/runtime bytes. Independent saved-state/ledger mathematics passes separately.
 The external mathematical owner seals are Serial
 `8f4aeca8ad6f37d95aeeacea5a6ff14d516a9c38a8745761f9dc5e60f126b753`
 and MPI2 `d8d7dd753fb514baa7878d5758a645c246632b1ddcec91bf4a75ff6232e756a8`.
-Actual retained generated C++, DSOs and sidecars are pinned separately; independent
-source-to-compiled-artifact reception is pending. The old SDK7b Program-composition
-oracle is not silently requalified as proof of the physical connector.
+Actual retained generated C++, DSOs and sidecars are pinned separately. The distinct
+independent physical-source wrapper@2 receives both authentic inventories, original
+IRv8/executable C++ and recomposed child component identities. The aggregate
+execution association is ROOT-attested; cryptographic aggregate binding is false
+because the full aggregate payload was not retained. The old SDK7b Program-composition
+source label is not silently requalified as proof of the physical connector.
 
 AMR now assembles the original Newton correction with `-F`; MGS reorthogonalization
 and a full-correction actual JVP recheck are integrated. The original nonconstant
@@ -39,8 +50,8 @@ N32 AMR case remains a preserved native failure at the unchanged 240-column
 budget, not an accepted case. Its actual first-Jacobian independent source/math
 oracle receives the nonsymmetric coverage/reflux matrix and diagnoses insufficient
 legacy convergence. An explicit spatial-basis right Jacobi realization and its
-public Python port are frozen in worker commits, under independent review, not
-installed or qualified. It costs one zero response plus one actual spatial operator
+public Python port are integrated with independent source/host reception, not
+yet installed or qualified. It costs one zero response plus one actual spatial operator
 application per stored degree of freedom. Native Serial/MPI reception is pending.
 
 SolveOutcome contract2 adds explicit collective discard of a solved unpublished
@@ -83,9 +94,24 @@ campaign compiled and bound every case, then failed before the initial saved
 phase because the public multi-layout executor did not expose rank-owned boxes.
 The red receipt remains at
 `outputs/installed-m19-product-serial-dim2-sdk375f-codec-20261001` in the task
-workspace. A real per-block runtime observation relay is being implemented and
-counter-reviewed. Its native replay and MPI reception remain pending. Independent
+workspace. The real per-block runtime observation relay is integrated with 58
+author and 43 independent source/host checks. Its native replay and MPI reception
+remain pending. Independent
 offline reception protocol is integrated but has no positive native states yet.
+The later SDK375f public AMR batch has four preserved failures: two N16 solves
+reach saved states but refine the whole coarse domain, N32 exhausts the unchanged
+240-column GMRES budget, and the rollback fixture calls absent RuntimeInstance.step.
+Fixture@2 now uses public run, explicit SpatialBasisJacobi@1 and narrow strict-GT
+refinement bands with box size eight. A first proposed strict-LT tag was refused
+in source preflight (162 checks passed, five fixture cases failed); it was corrected
+at `b943dd66`. Genuine partial coverage and native replay remain unreceived.
+
+The distinct M04 ForwardEuler fixed-Courant control passes actual installed
+SDK375f execution at N32/N64/N128 in 116.70 seconds, with orders 0.978645834436066
+and 0.9884487638692555. Independent reception reconstructs its exact saved FV
+stencil, conserved mean and y-invariance. The original combined-bound M04 order
+failure remains open. Dated scoped metadata is in `scoped_reception_20261001.md`;
+all baseline corpus values and the original thirteen CSV columns are retained.
 Neither witness is full Vlasov–Poisson/BGK. Full M26/M27 equations, unreceived
 couplings and official OpenMPI/Kokkos4.4.01/GPU/remote CI profiles remain open.
 
