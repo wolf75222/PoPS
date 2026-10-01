@@ -15,7 +15,7 @@ from tests.python.integration.runtime.test_public_evolved_original_stage import 
 from tests.python.support.amr_snapshots import composite_active_mask
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.evolved_stage_amr import (
-    ACCEPTANCE, CONTROLS, DENSE_BYTES, DT, FD_STEP, build, check_saved, closed_data,
+    ACCEPTANCE, CONTROLS, DENSE_BYTES, DT, FD_STEP, build, check_saved, closed_data, published_history_image,
 )
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -25,6 +25,7 @@ def capture(world, runtime, width, *, histories=True):
     levels = collective_call(world, runtime.n_levels)
     rows, metadata = [], []
     native = runtime._executor
+    step = collective_call(world, runtime.macro_step) if histories else None
     names = tuple("T%d" % i for i in range(width))+(("z",) if width == 2 else ())
     for level in range(levels):
         row = {}
@@ -39,14 +40,19 @@ def capture(world, runtime, width, *, histories=True):
                 initialized = collective_call(world, lambda name=name, level=level: native.history_initialized(name, level))
                 fill = collective_call(world, lambda name=name, level=level: native.history_fill_count(name, level))
                 with collective_check(world):
-                    assert depth == 2 and initialized and fill >= 1
-                durations = []
+                    assert depth == 2 and initialized and fill == min(step, 2)
+                raw_slots, durations = [], []
                 for slot in range(depth):
                     data = collective_call(world, lambda name=name, level=level, slot=slot: native.history_global(name, level, slot))
                     duration = collective_call(world, lambda name=name, level=level, slot=slot: native.history_slot_dt(name, level, slot))
-                    row[name if slot == 0 else name+"-previous"] = np.asarray(data).copy()
-                    durations.append(float(duration).hex())
-                metadata.append((level, name, depth, initialized, fill, tuple(durations)))
+                    raw_slots.append(np.asarray(data).copy())
+                    durations.append(float(duration))
+                sample = collective_call(world, lambda name=name, level=level:
+                    bytes(native.history_sample_identity(name, level)))
+                with collective_check(world):
+                    row.update(published_history_image(name, level, raw_slots, durations, sample, step))
+                metadata.append((level, name, depth, initialized, fill,
+                    tuple(value.hex() for value in durations), sample.hex()))
         rows.append(row)
     carriers = collective_call(world, lambda: tuple(tuple(row) for row in native.checkpoint_rank_local_carrier_manifest()))
     diagnostics = collective_call(world, lambda: tuple(sorted(native.program_diagnostics().items())))
@@ -242,8 +248,10 @@ def test_public_evolved_stage_amr_checkpoint_and_composite_Q(isolated_native_cac
             assert all(row["sha256"] == seals[phase] for phase, row in checkpoints.items())
             assert {Path(row["path"]).resolve() for row in checkpoints.values()}.isdisjoint(
                 {Path(row["path"]).resolve() for phase in observations.values() for row in phase["levels"]})
-            receipt = {"fixture_schema":"pops.evolved-stage-amr-native-fixture@1", "artifact":artifact.artifact_identity.token,
+            receipt = {"fixture_schema":"pops.evolved-stage-amr-native-fixture@2", "artifact":artifact.artifact_identity.token,
                 "dimension":2, "rank":world.rank, "size":world.size, "cells":cells, "width":width,
+                "history_protocol":{"wire":"POPSHID1", "raw_slots_after_publication":True,
+                    "latest_slot":1, "previous_slot":0, "depth":2},
                 "newton":CONTROLS, "fd_step":FD_STEP, "acceptance":ACCEPTANCE, "dt":DT,
                 "realization":"FullResidualBasisLU@1", "max_dense_bytes":DENSE_BYTES,
                 "native":{"path":str(native.__file__), "sha256":hashlib.sha256(bounded_bytes(native.__file__)).hexdigest()},

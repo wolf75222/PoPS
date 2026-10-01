@@ -1,4 +1,6 @@
 """Closed homogeneous Q evolution on a genuine composite AMR tower."""
+import struct
+
 import numpy as np
 
 from tests.python.support.captured_diffusion_mms import CONTROLS, FD_STEP
@@ -6,6 +8,26 @@ from tests.python.support.evolved_stage_mms import ACCEPTANCE, DIFFUSION, accumu
 
 DT = .01
 DENSE_BYTES = 256 * 1024**2
+
+
+def published_history_image(name, level, raw_slots, durations, sample, step):
+    """Label the two raw slots after publication, authenticated by real POPSHID1 bytes.
+
+    This is the bounded two-step fixture protocol, not a numerical runtime or a
+    general history decoder. Store writes slot zero; publication rotates it to one.
+    """
+    if type(step) is not int or step not in (1, 2) or len(raw_slots) != 2:
+        raise ValueError("published history fixture requires its two-step, two-slot protocol")
+    header = b"POPSHID1"+struct.pack("<Q", len(name.encode()))+name.encode()+struct.pack("<qQ", level, 2)
+    expected = header+b"".join(struct.pack("<QQQQ", 2,
+        int.from_bytes(struct.pack("<d", start), "little"),
+        int.from_bytes(struct.pack("<d", DT), "little"), 1)
+        for start in (0., (step-1)*DT))
+    if bytes(sample) != expected or tuple(float(value).hex() for value in durations) != (DT.hex(), DT.hex()):
+        raise ValueError("published history sample differs from its exact name/level/window/slot authority")
+    return {name: np.asarray(raw_slots[1]).copy(),
+            name+"-previous": np.asarray(raw_slots[0]).copy(),
+            "history_sample_identity_"+name: np.frombuffer(bytes(sample), dtype=np.uint8).copy()}
 
 
 def closed_data(width):

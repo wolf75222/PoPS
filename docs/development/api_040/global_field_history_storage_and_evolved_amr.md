@@ -218,3 +218,40 @@ IR version; this is a strict validation fix of the existing contract.
 Fresh reruns on the final production source preserve both complete historical
 parity images exactly: Stage `4f5ef2ecd4d118b44b0a5f52bac93c3b9e932b77a1f839df30dcdbb47b455504`
 and six-profile `dc254843124ffc15378c267cde4cadcc1a50b2b86c157d52d2b42d19889687ec`.
+
+## AMR archive correction: raw slots after publication
+
+Independent offline preparation identified an inversion in the AMR fixture's
+capture labels. `AmrSystem::history_global` reads `ring.at(slot)` directly
+(`src/runtime/amr/amr_system.cpp`, history_global). The real store writes
+`staged.ring.front()`, and the accepted rotation swaps slot one with zero for a
+two-slot ring (`amr_program_context_history_checkpoint_services.inc`, store and
+rotate). Durations and POPSHID1 sample identities rotate with those same values.
+Therefore after publication raw slot one is latest, and raw slot zero is previous.
+The installed Uniform Stage fixture already uses exactly this labeling. The
+original AMR fixture labeled them in the opposite order; no production defect
+was inferred from that fixture mistake.
+
+The AMR receipt is now `pops.evolved-stage-amr-native-fixture@2`, with an explicit
+post-publication raw slot policy. Capture writes T/z from slot one and
+T/z-previous from slot zero, preserving detached copies of both. It also saves
+the genuinely queried POPSHID1 bytes as a uint8 NPZ array for every name/level
+and records their hex in phase metadata. The bounded two-step fixture verifies
+exact name, level, depth, publication kind, interval bits, start bits and ordinal
+against its declared DT and actual macro-step, plus fill_count and outgoing slot
+durations. Cold fill at step one has two identical window identities; step two
+must retain the first window in raw zero and the second in raw one. The source
+test deliberately uses distinct raw slot values, so reversing labels fails even
+when cold-fill metadata coincide. Eight metadata mutations are refused.
+
+These tests are protocol-only, with explicitly synthetic slot buffers; they are
+not native or scientific evidence. The four real AMR nodes remain unchanged,
+and ROOT runs them against the installed native implementation. The same
+originalF/Q/constraint checks now consume the correctly labeled latest T/z, and
+the exact previous-step history check remains. Physics, Newton controls, dense
+resource budget, acceptance, authentic checkpoint/replay comparisons and the
+homogeneous scientific scope remain unchanged. Historical @1 archives are not
+relabelled or overwritten.
+Verification: 21 source/protocol passes, four native cases deselected, 128.01
+seconds (`/tmp/sol61-evolved-amr-history-slot-source.xml`); Ruff and diff checks
+pass. No compilation, installed package change or numerical execution was done.
