@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
@@ -68,14 +69,15 @@ class FieldNewtonKrylovWorkspace final {
   template <class ResidualProvider, class JvpProvider, class GaugeProvider>
   SolveReport solve(field_type& iterate, ResidualProvider&& evaluate_residual,
                     JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge,
-                    const ExecutionLane& lane) {
+                    const ExecutionLane& lane, bool guard_local = false) {
     auto&& residual_provider = evaluate_residual;
     auto&& jvp_provider = apply_jvp;
     auto&& gauge_provider = apply_gauge;
-    authenticate_(iterate, "iterate");
-    gauge_provider(iterate);
+    guard_local_ = guard_local;
+    local_phase_(lane, [&] { authenticate_(iterate, "iterate"); });
+    local_phase_(lane, [&] { gauge_provider(iterate); });
     residual_provider(iterate, residual_, 0);
-    Kokkos::fence();
+    local_phase_(lane, [] { Kokkos::fence(); });
 
     SolveReport report;
     report.evaluations = 1;
@@ -98,7 +100,7 @@ class FieldNewtonKrylovWorkspace final {
     }
 
     for (int iteration = 0; iteration < options_.max_iterations; ++iteration) {
-      correction_.set_val(Real(0));
+      local_phase_(lane, [&] { correction_.set_val(Real(0)); });
       const Real linear_stop = options_.linear_tolerance * report.residual_norm;
       const LinearResult linear =
           solve_linear_(iterate, residual_, linear_stop, jvp_provider, iteration, lane);
@@ -110,7 +112,7 @@ class FieldNewtonKrylovWorkspace final {
         return report;
       }
 
-      gauge_provider(correction_);
+      local_phase_(lane, [&] { gauge_provider(correction_); });
       const Real full_step_norm = norm_(correction_, lane);
       if (!finite_(full_step_norm)) {
         report.iters = iteration;
@@ -124,16 +126,18 @@ class FieldNewtonKrylovWorkspace final {
       Real accepted_step = Real(0);
       Real accepted_norm = std::numeric_limits<Real>::infinity();
       while (step >= options_.minimum_step) {
-        lincomb(trial_, Real(1), iterate, step, correction_);
-        gauge_provider(trial_);
+        local_phase_(lane, [&] {
+          lincomb(trial_, Real(1), iterate, step, correction_);
+          gauge_provider(trial_);
+        });
         residual_provider(trial_, trial_residual_, iteration + 1);
-        Kokkos::fence();
+        local_phase_(lane, [] { Kokkos::fence(); });
         ++report.evaluations;
         const Real trial_norm = norm_(trial_residual_, lane);
         if (finite_(trial_norm) &&
             trial_norm <= (Real(1) - options_.armijo * step) * report.residual_norm) {
-          copy_(trial_, iterate);
-          copy_(trial_residual_, residual_);
+          copy_(trial_, iterate, lane);
+          copy_(trial_residual_, residual_, lane);
           accepted_norm = trial_norm;
           accepted_step = step;
           accepted = true;
@@ -172,7 +176,7 @@ class FieldNewtonKrylovWorkspace final {
   LinearResult solve_linear_(const field_type& iterate, const field_type& rhs, Real stop,
                              JvpProvider& apply_jvp, int nonlinear_iteration,
                              const ExecutionLane& lane) {
-    copy_(rhs, linear_residual_);
+    copy_(rhs, linear_residual_, lane);
     Real beta = norm_(linear_residual_, lane);
     LinearResult result;
     if (!finite_(beta))
@@ -185,8 +189,8 @@ class FieldNewtonKrylovWorkspace final {
     int completed = 0;
     while (completed < options_.linear_max_iterations) {
       const int cycle = std::min(options_.restart, options_.linear_max_iterations - completed);
-      copy_(linear_residual_, basis_[0]);
-      scale(basis_[0], Real(1) / beta);
+      copy_(linear_residual_, basis_[0], lane);
+      local_phase_(lane, [&] { scale(basis_[0], Real(1) / beta); });
       std::fill(hessenberg_.begin(), hessenberg_.end(), Real(0));
       std::fill(cosine_.begin(), cosine_.end(), Real(0));
       std::fill(sine_.begin(), sine_.end(), Real(0));
@@ -197,17 +201,18 @@ class FieldNewtonKrylovWorkspace final {
       bool cycle_converged = false;
       for (int column = 0; column < cycle; ++column) {
         apply_jvp(iterate, basis_[static_cast<std::size_t>(column)], work_, nonlinear_iteration);
-        Kokkos::fence();
+        local_phase_(lane, [] { Kokkos::fence(); });
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
-          h_(row, column) = static_cast<Real>(
-              all_reduce_sum(dot_all_local(work_, basis_[static_cast<std::size_t>(row)]), lane));
-          saxpy(work_, -h_(row, column), basis_[static_cast<std::size_t>(row)]);
+          Real product = 0;
+          local_phase_(lane, [&] { product = dot_all_local(work_, basis_[static_cast<std::size_t>(row)]); });
+          h_(row, column) = static_cast<Real>(all_reduce_sum(product, lane));
+          local_phase_(lane, [&] { saxpy(work_, -h_(row, column), basis_[static_cast<std::size_t>(row)]); });
         }
         h_(column + 1, column) = norm_(work_, lane);
         if (h_(column + 1, column) > Real(0)) {
-          copy_(work_, basis_[static_cast<std::size_t>(column + 1)]);
-          scale(basis_[static_cast<std::size_t>(column + 1)], Real(1) / h_(column + 1, column));
+          copy_(work_, basis_[static_cast<std::size_t>(column + 1)], lane);
+          local_phase_(lane, [&] { scale(basis_[static_cast<std::size_t>(column + 1)], Real(1) / h_(column + 1, column)); });
         }
 
         for (int rotation = 0; rotation < column; ++rotation) {
@@ -243,16 +248,17 @@ class FieldNewtonKrylovWorkspace final {
       }
       if (used == 0)
         return result;
-      if (!update_correction_(used))
-        return result;
+      bool updated = false;
+      local_phase_(lane, [&] { updated = update_correction_(used); });
+      if (!updated) return result;
       if (cycle_converged) {
         result.converged = true;
         return result;
       }
       apply_jvp(iterate, correction_, image_, nonlinear_iteration);
-      Kokkos::fence();
+      local_phase_(lane, [] { Kokkos::fence(); });
       ++result.evaluations;
-      lincomb(linear_residual_, Real(1), rhs, Real(-1), image_);
+      local_phase_(lane, [&] { lincomb(linear_residual_, Real(1), rhs, Real(-1), image_); });
       beta = norm_(linear_residual_, lane);
       if (!finite_(beta))
         return result;
@@ -289,12 +295,14 @@ class FieldNewtonKrylovWorkspace final {
                        static_cast<std::size_t>(row)];
   }
 
-  static void copy_(const field_type& source, field_type& destination) {
+  void copy_(const field_type& source, field_type& destination, const ExecutionLane& lane) {
+    local_phase_(lane, [&] {
     if (source.layout() != destination.layout() ||
         source.distribution() != destination.distribution() ||
         source.local_rank() != destination.local_rank() || source.ncomp() != destination.ncomp())
       throw std::invalid_argument("field Newton workspace layout differs from its vector");
     lincomb(destination, Real(1), source, Real(0), source);
+    });
   }
 
   void authenticate_(const field_type& field, const char* role) const {
@@ -304,8 +312,10 @@ class FieldNewtonKrylovWorkspace final {
                                   " differs from its prepared exact-ranked layout");
   }
 
-  static Real norm_(const field_type& field, const ExecutionLane& lane) {
-    const Real squared = static_cast<Real>(all_reduce_sum(dot_all_local(field, field), lane));
+  Real norm_(const field_type& field, const ExecutionLane& lane) {
+    Real local_squared = 0;
+    local_phase_(lane, [&] { local_squared = dot_all_local(field, field); });
+    const Real squared = static_cast<Real>(all_reduce_sum(local_squared, lane));
     if (!finite_(squared))
       return squared;
     if (squared < Real(0))
@@ -313,6 +323,16 @@ class FieldNewtonKrylovWorkspace final {
     return squared > Real(0) ? std::sqrt(squared) : Real(0);
   }
 
+  template <class Operation>
+  void local_phase_(const ExecutionLane& lane, Operation&& operation) const {
+    if (!guard_local_) { operation(); return; }
+    std::exception_ptr error;
+    try { operation(); } catch (...) { error = std::current_exception(); }
+    try { Kokkos::fence(); } catch (...) { if (!error) error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "field Newton candidate local phase");
+  }
+
+  bool guard_local_ = false;
   static bool finite_(Real value) noexcept { return std::isfinite(static_cast<double>(value)); }
 
   FieldNewtonOptions options_;

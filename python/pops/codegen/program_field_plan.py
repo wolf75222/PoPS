@@ -164,13 +164,14 @@ class ResolvedProgramFieldPlan:
                 if self.target not in ("system", "amr_system") or type(self.discretization.method) is not CellCenteredNonlinearCoupled:
                     raise ValueError("original mixed residual requires its explicit native nonlinear method")
                 captures = solve.inputs[2:2 + solve.attrs["capture_count"]]
-                diffusion, local = compile_equations(self.operator, captures)
                 method_data = self.discretization.method.options()
+                diffusion, local = compile_equations(self.operator, captures, per_candidate=method_data.get("coefficient_evaluation") is not None)
                 if solve.attrs["contract"] != method_data["contract"] or \
-                        solve.attrs.get("coefficient_face_policy") != method_data.get("coefficient_face_policy"):
+                        solve.attrs.get("coefficient_face_policy") != method_data.get("coefficient_face_policy") or \
+                        solve.attrs.get("coefficient_evaluation") != method_data.get("coefficient_evaluation"):
                     raise ValueError("original field coefficient realization differs from registered method")
                 if _canonical(local) != _canonical(solve.attrs["local_expressions"]) or \
-                        _canonical(diffusion) != _canonical(solve.inputs[1].attrs["expressions"]) or \
+                        _canonical(diffusion) != _canonical(solve.attrs["source_contract"]["diffusion"] if method_data.get("coefficient_evaluation") else solve.inputs[1].attrs["expressions"]) or \
                         _canonical(solve.attrs["finite_difference_step"]) != _canonical(scalar_data(self.discretization.method.finite_difference_step)) or \
                         solve.attrs["physical_boundary"] != _physical_boundary(self.operator):
                     raise ValueError("native residual changed its registered equations/method/boundaries")

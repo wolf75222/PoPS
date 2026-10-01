@@ -131,13 +131,13 @@ def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...]
     return result, tuple(reads[key] for key in sorted(reads))
 
 
-def field_expression_dependencies(expressions: Any, states: Any) -> tuple[Any, ...]:
+def field_expression_dependencies(expressions: Any, states: Any, *, unknowns: Any = ()) -> tuple[Any, ...]:
     """Return actual encoded reads in their exact State input order."""
     rows = field_input_contract(states)
     views = tuple("input%d" % index for index in range(len(rows)))
     read_ids = set()
     for expression in expressions:
-        _, reads = field_expression_cpp(expression, states, views=views)
+        _, reads = field_expression_cpp(expression, states, views=views, unknowns=unknowns)
         read_ids.update(handle.qualified_id for handle in reads)
     return tuple(handle.canonical_identity() for handle, _ in rows if handle.qualified_id in read_ids)
 

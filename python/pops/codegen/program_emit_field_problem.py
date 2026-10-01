@@ -36,6 +36,22 @@ def hierarchy_field_solve(value: Any) -> Any:
     return matches[0]
 
 
+def guard_candidate_allocations(rows: list[str]) -> list[str]:
+    """Local allocations only; boundary builders keep their own collective protocol."""
+    result = []
+    for row in rows:
+        if not row.startswith("auto ") or "prepare_mesh_boundary_session" in row:
+            result.append(row)
+            continue
+        name, expression = row[5:-1].split(" = ", 1)
+        result += ["decltype(%s) %s;" % (expression, name),
+                   "std::exception_ptr %s_allocation_error;" % name,
+                   "try { %s = %s; } catch (...) { %s_allocation_error = std::current_exception(); }" % (name, expression, name),
+                   "try { Kokkos::fence(); } catch (...) { if (!%s_allocation_error) %s_allocation_error = std::current_exception(); }" % (name, name),
+                   'pops::collectively_rethrow_exception(%s_allocation_error, ctx.prepared_execution_lane(), "candidate field local allocation");' % name]
+    return result
+
+
 def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: Any,
                              *, target: str) -> None:
     if target not in ("system", "amr_system") or prelude is None:
@@ -60,6 +76,16 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
             stage = _solve_stage_fraction(hierarchy_field_solve(value))
             lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     sources = tuple(value.inputs)
+    deferred = value.attrs.get("coefficient_evaluation") is not None
+    unknowns = ()
+    if deferred:
+        from pops.codegen.program_emit_amr_original_field import original_field_consumer
+        from pops.model import Handle
+        solve = original_field_consumer(value)
+        if solve is None or solve.attrs.get("coefficient_evaluation") != value.attrs["coefficient_evaluation"]:
+            raise ValueError("deferred candidate coefficient requires its exact consuming residual")
+        unknowns = tuple(Handle.from_canonical_identity(_json_ready(item))
+                         for item in solve.attrs["source_contract"]["unknown_components"])
     expressions = []
     if component:
         from pops.fields._observation_contract import validate_field_observation
@@ -75,7 +101,7 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         reads = {}
         for expression in encoded:
             code, dependencies = field_expression_cpp(
-                expression, sources, views=tuple("input%d" % i for i in range(len(sources))))
+                expression, sources, views=tuple("input%d" % i for i in range(len(sources))), unknowns=unknowns)
             expressions.append(code)
             for handle in dependencies:
                 reads[handle.qualified_id] = handle.canonical_identity()
@@ -98,10 +124,14 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
                      (token, solve.id, value.id))
         pointer = "(&%s)" % token
     else:
+        allocation_start = len(prelude)
         prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
                        "ctx.alloc_scalar_field(%d, 1));" % (token, ncomp))
-        prelude.append("auto %s_status = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                       "ctx.alloc_scalar_field(1, 0));" % token)
+        if not deferred:
+            prelude.append("auto %s_status = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                           "ctx.alloc_scalar_field(1, 0));" % token)
+        if deferred:
+            prelude[allocation_start:] = guard_candidate_allocations(prelude[allocation_start:])
         pointer = token
     var[value.id] = "(*%s)" % pointer
     var[("field_pointer", value.id)] = pointer
@@ -109,6 +139,10 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         # This token is a reference to context-owned storage, even though the ordinary
         # expression spelling uses a pointer wrapper. Continuations retain the object by reference.
         var[("continuation_reference", value.id)] = token
+    if deferred:
+        # This descriptor allocates storage only. No physical coefficient is evaluated
+        # until the native full-residual callback owns a synchronized candidate.
+        return
     if component:
         var[("field_observation", value.id)] = identity.token
     destination = "(*%s)" % pointer

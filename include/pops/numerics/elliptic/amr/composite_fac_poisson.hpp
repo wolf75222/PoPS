@@ -551,8 +551,18 @@ class CompositeFacPoisson {
 
   CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
                       Real reaction = Real(0), const ExecutionLane* prepared_lane = nullptr,
-                      bool operator_only = false)
+                      bool operator_only = false, bool guard_local_setup = false)
       : options_(options), reaction_(reaction), operator_only_(operator_only) {
+    if (guard_local_setup) {
+      if (!prepared_lane) throw std::invalid_argument("guarded FAC setup requires its prepared lane");
+      lane_ = prepared_lane;
+      std::exception_ptr error;
+      try {
+        lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
+        lane_borrow_.emplace(prepared_lane->borrow_immutably());
+      } catch (...) { error = std::current_exception(); }
+      collectively_rethrow_exception(error, *lane_, "candidate FAC local setup");
+    } else {
     lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
     if (prepared_lane != nullptr) {
       lane_ = prepared_lane;
@@ -560,6 +570,7 @@ class CompositeFacPoisson {
     } else {
       owned_lane_.emplace(ExecutionLane::duplicate_world_collectively(lane_identity_));
       lane_ = &*owned_lane_;
+    }
     }
     std::exception_ptr local_error;
     try {
@@ -781,9 +792,17 @@ class CompositeFacPoisson {
   const field_type& linear_image_level(int level) const {
     return levels_.at(static_cast<std::size_t>(level))->residual;
   }
-  void prepare_linear_coefficients(const ExecutionLane* local_phase_lane = nullptr) {
+  void prepare_linear_coefficients(const ExecutionLane* local_phase_lane = nullptr,
+                                   bool restrict_covered = false) {
     if (!operator_only_)
       throw std::logic_error("matrix-entry preparation requires operator-only resources");
+    // Explicit candidate realization only: restrict constitutive values evaluated
+    // on fine q before preparing coarse/fine coefficient ghosts and face fluxes.
+    if (restrict_covered)
+      for (std::size_t child = levels_.size(); child-- > 1;)
+        connections_[child - 1]->restrict_into(*levels_[child]->coefficient,
+                                               *levels_[child - 1]->coefficient,
+                                               local_phase_lane);
     for (auto& storage : levels_) {
       auto& level = *storage;
       // Extrapolate before peer exchange: owned same-level/periodic ghosts must win.
@@ -1698,9 +1717,13 @@ class CompositeFacPoisson {
     std::exception_ptr error;
     try {
       operation();
-      Kokkos::fence();
     } catch (...) {
       error = std::current_exception();
+    }
+    try {
+      Kokkos::fence();
+    } catch (...) {
+      if (!error) error = std::current_exception();
     }
     collectively_rethrow_exception(error, *lane, "composite FAC original field local phase");
   }

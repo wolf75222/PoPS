@@ -13,6 +13,8 @@ enum class AmrFieldRightPreconditioner {
   kSpatialBasisJacobi = 1,
 };
 
+enum class AmrFieldCoefficientEvaluation { kFrozen = 0, kPerCandidate = 1 };
+
 /// Authority for one original-field invocation. The Program connector supplies these
 /// values from its actual synchronized level envelopes, not from a level-zero proxy.
 struct AmrFieldResidualAuthority {
@@ -39,7 +41,9 @@ class PreparedAmrFieldResidual final {
   static constexpr std::string_view identity = "pops.prepared-amr-original-field-residual@1";
   static constexpr std::string_view preconditioned_identity =
       "pops.prepared-amr-original-field-residual@2";
+  static constexpr std::string_view candidate_identity = "pops.prepared-amr-original-field-residual@3";
   std::string_view invocation_identity() const noexcept {
+    if (coefficient_evaluation_ == AmrFieldCoefficientEvaluation::kPerCandidate) return candidate_identity;
     return preconditioner_ == AmrFieldRightPreconditioner::kIdentity
                ? identity : preconditioned_identity;
   }
@@ -48,13 +52,24 @@ class PreparedAmrFieldResidual final {
       std::shared_ptr<provider_type> provider, AmrFieldResidualAuthority authority,
       std::span<const hierarchy_type* const> captures, FieldNewtonOptions options,
       Real difference_step, const ExecutionLane& lane,
-      AmrFieldRightPreconditioner preconditioner = AmrFieldRightPreconditioner::kIdentity) {
+      AmrFieldRightPreconditioner preconditioner = AmrFieldRightPreconditioner::kIdentity,
+      AmrFieldCoefficientEvaluation coefficient_evaluation = AmrFieldCoefficientEvaluation::kFrozen) {
     std::shared_ptr<PreparedAmrFieldResidual> result;
-    local_phase_(lane, [&] {
+    const auto* known_operator = dynamic_cast<PreparedHierarchyFieldOperator<Dim>*>(provider.get());
+    const auto& preparation_lane = known_operator ? known_operator->original_field_execution_lane() : lane;
+    local_phase_(preparation_lane, [&] {
+      if (&preparation_lane != &lane)
+        throw std::invalid_argument("original field preparation received a foreign lane");
       if (!provider || !std::isfinite(difference_step) || !(difference_step > Real(0)))
         throw std::invalid_argument(
             "original AMR field residual requires a provider and positive FD step");
       validate_field_newton_options(options);
+      if (coefficient_evaluation != AmrFieldCoefficientEvaluation::kFrozen &&
+          coefficient_evaluation != AmrFieldCoefficientEvaluation::kPerCandidate)
+        throw std::invalid_argument("unknown coefficient evaluation realization");
+      if (coefficient_evaluation == AmrFieldCoefficientEvaluation::kPerCandidate &&
+          preconditioner != AmrFieldRightPreconditioner::kIdentity)
+        throw std::invalid_argument("SpatialBasisJacobi@1 requires a frozen linear spatial operator");
       if (preconditioner != AmrFieldRightPreconditioner::kIdentity &&
           preconditioner != AmrFieldRightPreconditioner::kSpatialBasisJacobi)
         throw std::invalid_argument("unknown original AMR field right-preconditioner realization");
@@ -62,12 +77,34 @@ class PreparedAmrFieldResidual final {
     auto& op = require_original_field_operator(*provider, lane);
     local_phase_(lane, [&] {
       result.reset(new PreparedAmrFieldResidual(std::move(provider), op, std::move(authority),
-                                                captures, options, difference_step, preconditioner));
+                                                captures, options, difference_step, preconditioner, coefficient_evaluation));
     });
+    if (coefficient_evaluation == AmrFieldCoefficientEvaluation::kPerCandidate)
+      result->coefficient_generation_ = op.original_field_preparation_generation();
     result->require_authority(result->authority_, lane);
     // Provider preparation has its own collective protocol; do not place it inside
     // a local exception wrapper that could skip an internal collective on a peer.
-    op.prepare_original_field_operator();
+    if (coefficient_evaluation == AmrFieldCoefficientEvaluation::kFrozen) {
+      op.prepare_original_field_operator();
+    } else {
+      PreparedHierarchyCandidateFieldOperator<Dim>* capability = nullptr;
+      local_phase_(lane, [&] {
+        capability = dynamic_cast<PreparedHierarchyCandidateFieldOperator<Dim>*>(result->provider_.get());
+        if (!capability) throw std::invalid_argument("provider has no per-candidate apply capability");
+      });
+      result->candidate_evaluation_ = capability->make_candidate_evaluation();
+      local_phase_(lane, [&] {
+        if (!result->candidate_evaluation_ ||
+            &result->candidate_evaluation_->original_field_execution_lane() != &lane ||
+            result->candidate_evaluation_->original_field_contract() != op.original_field_contract() ||
+            result->candidate_evaluation_->original_field_levels() != op.original_field_levels())
+          throw std::invalid_argument("candidate evaluation resource has foreign provider authority");
+        result->coefficient_fields_.reserve(result->candidate_.size());
+        for (int level = 0; level < op.original_field_levels(); ++level)
+          result->coefficient_fields_.push_back(&result->candidate_evaluation_->candidate_coefficient_field(level));
+        result->authenticate_coefficients_();
+      });
+    }
     result->coefficient_generation_ = op.original_field_preparation_generation();
     result->require_authority(result->authority_, lane);
     if (preconditioner == AmrFieldRightPreconditioner::kSpatialBasisJacobi)
@@ -89,10 +126,17 @@ class PreparedAmrFieldResidual final {
           current.capture_identities != authority_.capture_identities ||
           current.capture_components != authority_.capture_components ||
           current.points != authority_.points ||
-          (coefficient_generation_ != 0 &&
+          ((coefficient_generation_ != 0 || coefficient_evaluation_ == AmrFieldCoefficientEvaluation::kPerCandidate) &&
            op_->original_field_preparation_generation() != coefficient_generation_))
         throw std::logic_error(
             "original AMR field residual has stale owner/attempt/point/capture authority");
+      if (candidate_evaluation_) {
+        if (&candidate_evaluation_->original_field_execution_lane() != &authority_lane ||
+            candidate_evaluation_->original_field_contract() != op_->original_field_contract() ||
+            candidate_evaluation_->original_field_preparation_generation() != evaluation_generation_)
+          throw std::logic_error("candidate coefficient resource generation/lane changed");
+        authenticate_coefficients_();
+      }
       if (current.level_attempts.size() != authority_.level_attempts.size())
         throw std::logic_error("original field level-attempt count changed");
       for (std::size_t level = 0; level < authority_.level_attempts.size(); ++level)
@@ -118,6 +162,10 @@ class PreparedAmrFieldResidual final {
           .scalar(options_.minimum_step)
           .sequence(current.capture_identities,
                     [](ExactContractBuilder& out, const std::string& value) { out.text(value); });
+      if (candidate_evaluation_)
+        exact.text(PreparedHierarchyCandidateFieldOperator<Dim>::identity)
+            .text("restriction-q/evaluate-D/restriction-D/halo-D/composite-flux@1")
+            .scalar(evaluation_generation_);
       if (preconditioner_ != AmrFieldRightPreconditioner::kIdentity)
         exact.text("pops.amr.original-spatial-jacobi.basis-response@1");
       exact.sequence(current.capture_components,
@@ -150,6 +198,32 @@ class PreparedAmrFieldResidual final {
   template <class LocalBody>
   SolveReport solve(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
                     LocalBody&& add_local, const ExecutionLane& lane) {
+    if (coefficient_evaluation_ != AmrFieldCoefficientEvaluation::kFrozen) {
+      require_authority(current, lane);
+      local_phase_(op_->original_field_execution_lane(), [&] {
+        throw std::logic_error("PerCandidate@1 requires its actual coefficient body");
+      });
+    }
+    return solve_impl_(current, seed, std::forward<LocalBody>(add_local),
+                       [](const auto&, const auto&, auto&, int) {}, lane);
+  }
+  template <class LocalBody, class CoefficientBody>
+  SolveReport solve_candidate(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
+                              LocalBody&& add_local, CoefficientBody&& coefficient_body,
+                              const ExecutionLane& lane) {
+    require_authority(current, lane);
+    local_phase_(op_->original_field_execution_lane(), [&] {
+      if (coefficient_evaluation_ != AmrFieldCoefficientEvaluation::kPerCandidate || !candidate_evaluation_)
+        throw std::logic_error("candidate coefficient body requires explicit PerCandidate@1");
+    });
+    return solve_impl_(current, seed, std::forward<LocalBody>(add_local),
+                       std::forward<CoefficientBody>(coefficient_body), lane);
+  }
+ private:
+  template <class LocalBody, class CoefficientBody>
+  SolveReport solve_impl_(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
+                         LocalBody&& add_local, CoefficientBody&& coefficient_body,
+                         const ExecutionLane& lane) {
     candidate_visible_ = false;
     evaluations_ = derivatives_ = 0;
     require_authority(current, lane);
@@ -163,9 +237,27 @@ class PreparedAmrFieldResidual final {
     });
     auto evaluate = [&](const hierarchy_type& q, hierarchy_type& result, int evaluation) {
       require_authority(current, lane);
-      op_->apply_original_field_operator(q, result);
+      const hierarchy_type* physical_q = &q;
+      if (candidate_evaluation_) {
+        local_phase_(lane, [&] { authenticate_(q); copy_(q, evaluation_q_); });
+        // Order is part of @3: restrict/synchronize q first, then evaluate D on
+        // every stored cell, then restrict/synchronize D via the actual FAC provider.
+        candidate_evaluation_->synchronize_original_field_candidate(evaluation_q_);
+        local_phase_(lane, [&] {
+          authenticate_coefficients_();
+          coefficient_body(std::as_const(evaluation_q_), std::as_const(captures_), coefficient_fields_, evaluation);
+          authenticate_coefficients_();
+        });
+        candidate_evaluation_->prepare_original_field_operator();
+        evaluation_generation_ = candidate_evaluation_->original_field_preparation_generation();
+        require_authority(current, lane);
+        candidate_evaluation_->apply_original_field_operator(evaluation_q_, result);
+        physical_q = &evaluation_q_;
+      } else {
+        op_->apply_original_field_operator(q, result);
+      }
       local_phase_(lane, [&] {
-        add_local(q, captures_, result, evaluation);
+        add_local(*physical_q, captures_, result, evaluation);
         // A physical callback may replace its mutable output without throwing.
         // Reject that locally inside this vote, before Newton enters a reduction.
         authenticate_(result);
@@ -254,6 +346,7 @@ class PreparedAmrFieldResidual final {
     candidate_visible_ = report.solved_value_available();
     return report;
   }
+ public:
   const hierarchy_type& candidate(const AmrFieldResidualAuthority& current,
                                   const ExecutionLane& lane) const {
     require_authority(current, lane);
@@ -348,10 +441,10 @@ class PreparedAmrFieldResidual final {
     std::exception_ptr error;
     try {
       operation();
-      Kokkos::fence();
     } catch (...) {
       error = std::current_exception();
     }
+    try { Kokkos::fence(); } catch (...) { if (!error) error = std::current_exception(); }
     collectively_rethrow_exception(error, lane, "original AMR field local preparation/evaluation");
   }
   PreparedAmrFieldResidual(std::shared_ptr<provider_type> provider,
@@ -359,13 +452,13 @@ class PreparedAmrFieldResidual final {
                            AmrFieldResidualAuthority authority,
                            std::span<const hierarchy_type* const> captures,
                            FieldNewtonOptions options, Real step,
-                           AmrFieldRightPreconditioner preconditioner)
+                           AmrFieldRightPreconditioner preconditioner, AmrFieldCoefficientEvaluation coefficient_evaluation)
       : provider_(std::move(provider)),
         op_(&op),
         authority_(std::move(authority)),
         options_(options),
         step_(step),
-        preconditioner_(preconditioner) {
+        preconditioner_(preconditioner), coefficient_evaluation_(coefficient_evaluation) {
     const int levels = op.original_field_levels();
     if (levels < 1 || authority_.original_equation_identity.empty() ||
         authority_.capture_identities.size() != captures.size() ||
@@ -400,6 +493,8 @@ class PreparedAmrFieldResidual final {
       measures.push_back(op.original_field_cell_measure(level));
     }
     candidate_ = allocate_(layouts);
+    if (coefficient_evaluation_ == AmrFieldCoefficientEvaluation::kPerCandidate)
+      evaluation_q_ = allocate_(layouts);
     perturbed_ = allocate_(layouts);
     plus_ = allocate_(layouts);
     minus_ = allocate_(layouts);
@@ -421,6 +516,19 @@ class PreparedAmrFieldResidual final {
       }
       captures_.push_back(allocate_(capture_layouts));
       copy_(source, captures_.back());
+    }
+  }
+  void authenticate_coefficients_() const {
+    if (!candidate_evaluation_ || coefficient_fields_.size() != candidate_.size())
+      throw std::invalid_argument("candidate coefficient tower count changed");
+    for (std::size_t level = 0; level < candidate_.size(); ++level) {
+      const auto* field = coefficient_fields_[level];
+      if (!field || field != &candidate_evaluation_->candidate_coefficient_field(static_cast<int>(level)) ||
+          field->layout() != candidate_[level].layout() ||
+          field->distribution() != candidate_[level].distribution() ||
+          field->local_rank() != candidate_[level].local_rank() ||
+          static_cast<std::uint64_t>(field->ncomp()) != static_cast<std::uint64_t>(candidate_[level].ncomp()) * static_cast<std::uint64_t>(candidate_[level].ncomp()))
+        throw std::invalid_argument("candidate coefficient storage/shape authority changed");
     }
   }
   void authenticate_(const hierarchy_type& fields, bool width = true) const {
@@ -452,6 +560,11 @@ class PreparedAmrFieldResidual final {
   FieldNewtonOptions options_;
   Real step_;
   AmrFieldRightPreconditioner preconditioner_;
+  AmrFieldCoefficientEvaluation coefficient_evaluation_;
+  std::unique_ptr<PreparedHierarchyCandidateEvaluation<Dim>> candidate_evaluation_;
+  std::vector<field_type*> coefficient_fields_;
+  hierarchy_type evaluation_q_;
+  std::uint64_t evaluation_generation_ = 0;
   std::unique_ptr<AmrFieldNewtonKrylovWorkspace<Dim>> newton_;
   hierarchy_type candidate_, perturbed_, plus_, minus_, recheck_, inverse_diagonal_;
   std::vector<hierarchy_type> captures_;

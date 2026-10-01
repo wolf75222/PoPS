@@ -288,6 +288,7 @@ class _ProgramSerialization(_ProgramBase):
             seen.add(id(node))
             if node.op in ("solve_spatial_field", "integral_candidate"):
                 result["version"] = max(result["version"],
+                    11 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@3" else
                     10 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@2" else
                     9 if node.op == "solve_spatial_field" and "right_preconditioner" in node.attrs else 8)
             elif node.op == "reduce" and node.attrs.get("kind") == "dot_all":

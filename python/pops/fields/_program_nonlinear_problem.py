@@ -20,6 +20,8 @@ from ._program_expression import (encode_field_expression, field_expression_cpp,
 
 CONTRACT = "pops.spatial-field-residual@1"
 CAPTURED_DIFFUSION_CONTRACT = "pops.spatial-field-residual@2"
+CANDIDATE_DIFFUSION_CONTRACT = "pops.spatial-field-residual@3"
+PER_CANDIDATE = "pops.field.coefficients.per-candidate@1"
 ARITHMETIC_FACES = "pops.field.face-mean.arithmetic@1"
 
 
@@ -36,7 +38,7 @@ def _product_width(value: Any) -> int | None:
     return None
 
 
-def compile_equations(problem: Any, states: tuple) -> tuple[tuple, tuple]:
+def compile_equations(problem: Any, states: tuple, *, per_candidate: bool = False) -> tuple[tuple, tuple]:
     from pops.math import elliptic_terms
     from pops._ir.expr import Laplacian
     from fractions import Fraction
@@ -55,8 +57,7 @@ def compile_equations(problem: Any, states: tuple) -> tuple[tuple, tuple]:
                 coefficient = 1 if type(term) is Laplacian else constant_reaction_scalar(term.coeff)
                 slot = row * width + column
                 if coefficient is NotImplemented:
-                    # No unknown tuple is supplied below: D may read only exact
-                    # frozen State captures, never the Newton candidate.
+                    # Unknown reads are authorized only by the explicit @3 realization.
                     value = -term.scale * term.coeff
                     captured_diffusion[slot] = value if slot not in captured_diffusion else captured_diffusion[slot] + value
                 else:
@@ -73,12 +74,13 @@ def compile_equations(problem: Any, states: tuple) -> tuple[tuple, tuple]:
             encoded_diffusion.append(("literal", scalar_literal(value).to_data()))
         else:
             try:
-                encoded_diffusion.append(encode_field_expression(captured_diffusion[slot] + value, states))
+                encoded_diffusion.append(encode_field_expression(captured_diffusion[slot] + value, states,
+                    unknowns=problem.unknowns if per_candidate else ()))
             except (ValueError, TypeError, NotImplementedError) as error:
                 raise FieldProblemError("field.nonlinear.diffusion",
                     "diffusion requires exact State captures; unknown-dependent D has no full spatial nonlinear JVP realization") from error
     encoded_diffusion = tuple(encoded_diffusion)
-    field_expression_dependencies(encoded_diffusion, states)
+    field_expression_dependencies(encoded_diffusion, states, unknowns=problem.unknowns if per_candidate else ())
     for expression in local:
         field_expression_cpp(expression, states, views=tuple("capture%d" % i for i in range(len(states))),
                              unknowns=problem.unknowns)
@@ -119,13 +121,14 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
     captures = tuple(captures)
     if not captures:
         raise FieldProblemError("field.nonlinear.layout", "v1 requires an exact State capture witnessing the physical Cartesian layout")
-    diffusion, local = compile_equations(problem, captures)
-    width = len(problem.unknowns)
-    coefficient_dependencies = field_expression_dependencies(diffusion, captures)
     method_data = numerical.method.options()
+    candidate_policy = method_data.get("coefficient_evaluation")
+    diffusion, local = compile_equations(problem, captures, per_candidate=candidate_policy is not None)
+    width = len(problem.unknowns)
+    coefficient_dependencies = field_expression_dependencies(diffusion, captures, unknowns=problem.unknowns if candidate_policy else ())
     contract = method_data["contract"]
     face_policy = method_data.get("coefficient_face_policy")
-    if coefficient_dependencies and contract != CAPTURED_DIFFUSION_CONTRACT:
+    if coefficient_dependencies and contract not in (CAPTURED_DIFFUSION_CONTRACT, CANDIDATE_DIFFUSION_CONTRACT):
         raise FieldProblemError("field.nonlinear.face_policy",
             "captured diffusion requires explicit CellCenteredNonlinearCoupled(face_policy=Arithmetic@1)")
     boundary = _physical_boundary(problem)
@@ -138,6 +141,11 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
          "stencil_access": StencilAccess.pointwise()}
     if face_policy is not None:
         coefficient_attrs["coefficient_face_policy"] = face_policy
+    if candidate_policy is not None:
+        # Deferred descriptor: physical D is evaluated only inside the complete F(q).
+        coefficient_attrs.update(coefficient_evaluation=candidate_policy,
+            storage_role="deferred_candidate_coefficient",
+            unknown_components=tuple(row.canonical_identity() for row in problem.unknowns))
     coefficients = program._new("scalar_field", "field_problem_coefficients",
         captures if coefficient_dependencies else (), coefficient_attrs, problem.name + "_diffusion",
         None, point=at, inherit_state_ref=False)
@@ -150,6 +158,8 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
         "captures": tuple(_equation_value(program, value) for value in captures)}
     if face_policy is not None:
         source_data["coefficient_face_policy"] = face_policy
+    if candidate_policy is not None:
+        source_data["coefficient_evaluation"] = candidate_policy
     source = freeze_containers(source_data)
     residual = _SpatialFieldResidual(field, prototype, coefficients, captures, local,
                                      numerical.method.finite_difference_step, boundary, source)
@@ -172,6 +182,9 @@ def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict
                 "coefficients": _equation_value(program, token.inputs[1]),
                 "captures": [_equation_value(program, value) for value in captures],
                 "physical_problem": physical, "boundary": token.attrs["physical_boundary"]}
+    if "coefficient_evaluation" in token.attrs:
+        equation["diffusion_body"] = _json_ready(token.attrs["source_contract"]["diffusion"])
+        equation["coefficient_evaluation"] = token.attrs["coefficient_evaluation"]
     equation_id = make_identity("solve-equation", equation).token
     problem = {"equation": equation_id, "physical_problem": physical, "unknowns": [unknown.to_data()],
                "residual_interpretation": "original_field_equations", "error_interpretation": "spatial_residual_l2"}
@@ -185,8 +198,10 @@ def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict
     realization = {}
     if "right_preconditioner" in token.attrs:
         realization["right_preconditioner"] = token.attrs["right_preconditioner"]
-    if token.attrs["contract"] == CAPTURED_DIFFUSION_CONTRACT:
+    if token.attrs["contract"] in (CAPTURED_DIFFUSION_CONTRACT, CANDIDATE_DIFFUSION_CONTRACT):
         realization["coefficient_face_policy"] = token.attrs["coefficient_face_policy"]
+    if "coefficient_evaluation" in token.attrs:
+        realization["coefficient_evaluation"] = token.attrs["coefficient_evaluation"]
     if realization:
         result["schema_version"] = 2
         result["realization"] = realization
@@ -217,7 +232,8 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
     if seed is not None and _product_width(seed) != residual.prototype.attrs["ncomp"]:
         raise SolveRequestError("unknown_type_mismatch", "field product seed width/type differs")
     face_policy = residual.source_contract.get("coefficient_face_policy")
-    contract = CAPTURED_DIFFUSION_CONTRACT if face_policy is not None else CONTRACT
+    candidate_policy = residual.source_contract.get("coefficient_evaluation")
+    contract = CANDIDATE_DIFFUSION_CONTRACT if candidate_policy else CAPTURED_DIFFUSION_CONTRACT if face_policy is not None else CONTRACT
     attrs = {"contract": contract, "problem_kind": "original_field_equations", "ncomp": residual.prototype.attrs["ncomp"],
              "field": residual.field, "field_problem_identity": residual.source_contract["field_problem_identity"],
              "source_contract": residual.source_contract,
@@ -227,6 +243,10 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
              "newton_controls": prepared.controls.to_data(), "solver_identity": prepared.identity.token}
     if face_policy is not None:
         attrs["coefficient_face_policy"] = face_policy
+    if candidate_policy is not None:
+        attrs["coefficient_evaluation"] = candidate_policy
+        if prepared.right_preconditioner is not None:
+            raise SolveRequestError("unsupported_realization", "SpatialBasisJacobi@1 requires a frozen linear spatial operator; PerCandidate@1 needs a separately declared Jacobian preconditioner")
     prepared.__post_init__()
     if prepared.right_preconditioner is not None:
         attrs["right_preconditioner"] = prepared.right_preconditioner
@@ -252,7 +272,12 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
     actual = _json_ready(token.attrs["solve_request"])
     source = token.attrs["source_contract"]
     face_policy = source.get("coefficient_face_policy")
-    expected_contract = CAPTURED_DIFFUSION_CONTRACT if face_policy is not None else CONTRACT
+    candidate_policy = source.get("coefficient_evaluation")
+    if candidate_policy is not None and (type(candidate_policy) is not str or candidate_policy != PER_CANDIDATE or face_policy != ARITHMETIC_FACES):
+        raise SolveRequestError("equation_identity_drift", "candidate coefficient realization changed")
+    if token.attrs.get("coefficient_evaluation") != candidate_policy or (candidate_policy and token.attrs.get("right_preconditioner") is not None):
+        raise SolveRequestError("unsupported_realization", "candidate coefficient policy/preconditioner mismatch")
+    expected_contract = CANDIDATE_DIFFUSION_CONTRACT if candidate_policy else CAPTURED_DIFFUSION_CONTRACT if face_policy is not None else CONTRACT
     if (face_policy is not None and (type(face_policy) is not str or face_policy != ARITHMETIC_FACES)) or \
             token.attrs["contract"] != expected_contract or token.attrs["problem_kind"] != "original_field_equations":
         raise SolveRequestError("equation_identity_drift", "field residual realization changed")
@@ -261,9 +286,11 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
             or (seed_index is not None and (type(seed_index) is not int or seed_index != 2 + count)):
         raise SolveRequestError("equation_identity_drift", "field capture/seed input slots changed")
     captures = token.inputs[2:2 + count]
-    diffusion_dependencies = field_expression_dependencies(source["diffusion"], captures)
+    unknown_handles = tuple(Handle.from_canonical_identity(_json_ready(item)) for item in source["unknown_components"])
+    diffusion_dependencies = field_expression_dependencies(source["diffusion"], captures, unknowns=unknown_handles if candidate_policy else ())
     expected_coefficient_inputs = captures if diffusion_dependencies else ()
-    if diffusion_dependencies and expected_contract != CAPTURED_DIFFUSION_CONTRACT:
+    expected_diffusion = source["diffusion"]
+    if diffusion_dependencies and expected_contract not in (CAPTURED_DIFFUSION_CONTRACT, CANDIDATE_DIFFUSION_CONTRACT):
         raise SolveRequestError("equation_identity_drift", "captured diffusion lost its explicit arithmetic realization")
     if (token.attrs.get("coefficient_face_policy") != face_policy or
             token.inputs[1].attrs.get("coefficient_face_policy") != face_policy):
@@ -274,7 +301,7 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
         return canonical_bytes(_json_ready(lhs)) == canonical_bytes(_json_ready(rhs))
     checks = {"physical_problem": same(actual["physical_problem"], expected_physical),
               "local_expressions": same(source["local_expressions"], token.attrs["local_expressions"]),
-              "diffusion": same(source["diffusion"], token.inputs[1].attrs["expressions"]),
+              "diffusion": same(expected_diffusion, token.inputs[1].attrs["expressions"]),
               "width": type(token.attrs["ncomp"]) is int and token.attrs["ncomp"] == len(source["unknown_components"])
                        and _product_width(token.inputs[0]) == token.attrs["ncomp"]
                        and (seed_index is None or _product_width(token.inputs[-1]) == token.attrs["ncomp"]),
@@ -284,7 +311,10 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
                        and token.inputs[1].attrs["coefficient_admissibility"] == "finite_general"
                        and len(token.inputs[1].inputs) == len(expected_coefficient_inputs)
                        and all(a is b for a, b in zip(token.inputs[1].inputs, expected_coefficient_inputs, strict=True))
-                       and same(token.inputs[1].attrs["field_dependencies"], diffusion_dependencies),
+                       and same(token.inputs[1].attrs["field_dependencies"], diffusion_dependencies)
+                       and token.inputs[1].attrs.get("coefficient_evaluation") == candidate_policy
+                       and (not candidate_policy or token.inputs[1].attrs.get("storage_role") == "deferred_candidate_coefficient"
+                            and same(token.inputs[1].attrs.get("unknown_components"), source["unknown_components"])),
               "point": token.point == token.inputs[0].point == token.inputs[1].point,
               "boundary": token.attrs["physical_boundary"] == source["physical_boundary"],
               "field_identity": token.attrs["field_problem_identity"] == source["field_problem_identity"],
@@ -293,6 +323,12 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
     if not all(checks.values()):
         raise SolveRequestError("equation_identity_drift", "original field contract changed: " +
                                 ",".join(key for key, valid in checks.items() if not valid))
+    if candidate_policy:
+        from pops.codegen.program_emit_field_routes import _walk_program_nodes
+        descriptor = token.inputs[1]
+        if any(node.id != token.id and any(part.id == descriptor.id for part in node.inputs)
+               for node in _walk_program_nodes(tuple(program._values))):
+            raise SolveRequestError("unsupported_lowering", "deferred candidate coefficient is a body descriptor, not a material field value")
     unknown_handles = tuple(Handle.from_canonical_identity(_json_ready(item)) for item in source["unknown_components"])
     for expression in token.attrs["local_expressions"]:
         field_expression_cpp(expression, captures, views=tuple("capture%d" % i for i in range(len(captures))), unknowns=unknown_handles)

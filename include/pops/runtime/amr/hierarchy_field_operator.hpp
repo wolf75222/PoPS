@@ -29,6 +29,21 @@ class PreparedHierarchyFieldOperator {
   virtual Real original_field_dot(const hierarchy_type&, const hierarchy_type&) const = 0;
 };
 
+/// Optional per-candidate capability. Each resource owns coefficient, phi and image
+/// storage; it is an apply-only evaluation, never a solve/publication carrier.
+template <int Dim>
+class PreparedHierarchyCandidateEvaluation : public PreparedHierarchyFieldOperator<Dim> {
+ public:
+  virtual MultiFab<Dim>& candidate_coefficient_field(int level) = 0;
+};
+template <int Dim>
+class PreparedHierarchyCandidateFieldOperator {
+ public:
+  static constexpr std::string_view identity = "pops.hierarchy.original-field-candidate-operator@1";
+  virtual ~PreparedHierarchyCandidateFieldOperator() = default;
+  virtual std::unique_ptr<PreparedHierarchyCandidateEvaluation<Dim>> make_candidate_evaluation() const = 0;
+};
+
 template <int Dim>
 PreparedHierarchyFieldOperator<Dim>& require_original_field_operator(
     PreparedHierarchyTensorSolver<Dim>& solver, const ExecutionLane& lane) {

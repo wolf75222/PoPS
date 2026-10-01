@@ -449,6 +449,19 @@ def _persistent_solver_buffers(program: Any) -> list:
                     + ("; selected SpatialBasisJacobi@1 adds one inverse field and prepares with 1 + stored DOFs composite operator applications"
                        if selected_jacobi else "")),
             })
+            if v.attrs.get("coefficient_evaluation") is not None:
+                persistent[-1]["buffers"] += 1
+                persistent[-1]["candidate_coefficient_evaluation"] = {
+                    "identity": v.attrs["coefficient_evaluation"],
+                    "coefficient_components": v.attrs["ncomp"] ** 2,
+                    "per_residual": "evaluate D(q,captures), prepare covered restriction/halos, apply original full F",
+                    "amr_resource": "private apply-only composite FAC entries; no second GMRES basis",
+                    "storage_cost": "O(components^2 * stored cells); coarse/fine transfer workspace additional",
+                }
+                persistent[-1]["note"] += (
+                    "; PerCandidate@1 adds an owned coefficient field or synchronized q tower; "
+                    "this lower bound excludes the private AMR FAC coefficient/phi/image/transfer resources, "
+                    "which are built once per invocation and reused for every F/JVP/recheck")
         elif v.op == "matrix_free_operator":
             operator_bundle = _operator_bundle_footprint(v)
             conditional = operator_bundle["jacvec_conditional_buffers"]

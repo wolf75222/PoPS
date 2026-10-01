@@ -100,18 +100,25 @@ class CellCenteredNonlinearCoupled(CellCenteredGeneralCoupled):
 
     The legacy realization admits constant diffusion and local nonlinear reactions.
     ``face_policy="Arithmetic@1"`` explicitly selects arithmetic face means and
-    admits diffusion expressions of exact frozen State captures. Diffusion may not
-    depend on the unknown. Both routes admit Cartesian Uniform or synchronized AMR
+    admits diffusion expressions of exact frozen State captures. ``coefficient_evaluation="PerCandidate@1"`` additionally evaluates unknown-dependent
+    diffusion for every full residual, central JVP sample and publication recheck. Both routes admit Cartesian Uniform or synchronized AMR
     layouts; AMR applies one covered operator to the full coupled hierarchy.
     """
 
-    def __init__(self, *, finite_difference_step: Any, face_policy: str | None = None) -> None:
+    def __init__(self, *, finite_difference_step: Any, face_policy: str | None = None,
+                 coefficient_evaluation: str | None = None) -> None:
         import math
         from pops.identity.scalar import exact_numeric_scalar
 
         if face_policy is not None and (type(face_policy) is not str or face_policy != "Arithmetic@1"):
             raise ValueError("field residual face_policy must be None or Arithmetic@1")
         self.face_policy = face_policy
+        if coefficient_evaluation is not None and (type(coefficient_evaluation) is not str or
+                                                    coefficient_evaluation != "PerCandidate@1"):
+            raise ValueError("coefficient_evaluation must be None or PerCandidate@1")
+        if coefficient_evaluation is not None and face_policy != "Arithmetic@1":
+            raise ValueError("PerCandidate@1 requires explicit Arithmetic@1 face policy")
+        self.coefficient_evaluation = coefficient_evaluation
         step = exact_numeric_scalar(finite_difference_step, where="field residual FD step")
         if not math.isfinite(float(step)) or step <= 0:
             raise ValueError("field residual FD step must be positive and finite")
@@ -128,6 +135,11 @@ class CellCenteredNonlinearCoupled(CellCenteredGeneralCoupled):
                 raise ValueError("unknown original field face policy")
             data["contract"] = "pops.spatial-field-residual@2"
             data["coefficient_face_policy"] = "pops.field.face-mean.arithmetic@1"
+        if self.coefficient_evaluation is not None:
+            if type(self.coefficient_evaluation) is not str or self.coefficient_evaluation != "PerCandidate@1" or self.face_policy != "Arithmetic@1":
+                raise ValueError("unknown original field candidate coefficient realization")
+            data["contract"] = "pops.spatial-field-residual@3"
+            data["coefficient_evaluation"] = "pops.field.coefficients.per-candidate@1"
         return data
 
 

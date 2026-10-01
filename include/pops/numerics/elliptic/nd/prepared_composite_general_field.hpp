@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <set>
 #include <span>
@@ -221,23 +222,24 @@ amr::CompositeFacBuildRequest<Dim> fac_request(
 template <int Dim>
 class PreparedCompositeGeneralField final
     : public runtime::program::PreparedHierarchyTensorSolver<Dim>,
-      public runtime::program::PreparedHierarchyFieldOperator<Dim> {
+      public runtime::program::PreparedHierarchyCandidateEvaluation<Dim>,
+      public runtime::program::PreparedHierarchyCandidateFieldOperator<Dim> {
  public:
   using field_type = MultiFab<Dim>;
   using request_type = runtime::program::HierarchyTensorSolverBuildRequest<Dim>;
   using hierarchy_type = std::vector<field_type>;
 
   PreparedCompositeGeneralField(request_type request, std::string contract,
-                                const ExecutionLane& lane)
+                                const ExecutionLane& lane, bool apply_only = false)
       : request_(std::move(request)),
-        options_(general_composite_detail::decode<Dim>(request_.options, request_.components)),
         contract_(std::move(contract)),
-        lane_(&lane) {
-    const int n = options_.components;
+        lane_(&lane), apply_only_(apply_only) {
     std::optional<amr::CompositeFacBuildRequest<Dim>> scalar_request;
     // Allocate locally before entering any nested collective preparation.
     long failure = 0;
     try {
+      options_ = general_composite_detail::decode<Dim>(request_.options, request_.components);
+      const int n = options_.components;
       scalar_request.emplace(general_composite_detail::fac_request(request_));
       for (const auto& level : request_.levels) {
         const auto ghosts = amr::fac_detail::unit_ghosts<Dim>();
@@ -257,6 +259,7 @@ class PreparedCompositeGeneralField final
           measure *= level.geometry.spacing(axis);
         measures_.push_back(measure);
       }
+      if (!apply_only_) {
       residual_ = make_vector_();
       image_ = make_vector_();
       work_ = make_vector_();
@@ -268,6 +271,7 @@ class PreparedCompositeGeneralField final
       sine_.resize(restart);
       y_.resize(restart);
       rotated_.resize(restart + 1);
+      }
       entries_.reserve(options_.coefficients);
       rhs_views_.reserve(rhs_.size());
       solution_views_.reserve(solution_.size());
@@ -276,10 +280,28 @@ class PreparedCompositeGeneralField final
     }
     if (all_reduce_max(failure, lane) != 0)
       throw std::runtime_error("composite field tuple allocation failed collectively");
-    for (int entry = 0; entry < options_.coefficients; ++entry)
-      entries_.push_back(std::make_unique<amr::CompositeFacPoisson<Dim>>(
-          *scalar_request, CompositeFacOptions{}, Real(0), &lane, true));
-    prepare_nullspace_();
+    for (int entry = 0; entry < options_.coefficients; ++entry) {
+      if (!apply_only_) {
+        entries_.push_back(std::make_unique<amr::CompositeFacPoisson<Dim>>(
+            *scalar_request, CompositeFacOptions{}, Real(0), &lane, true));
+      } else {
+        using scalar_type = amr::CompositeFacPoisson<Dim>;
+        std::optional<amr::CompositeFacBuildRequest<Dim>> owned_request;
+        void* storage = nullptr;
+        try {
+          local_field_phase_(true, [&] {
+            owned_request.emplace(*scalar_request);
+            storage = ::operator new(sizeof(scalar_type));
+          });
+          auto* value = new (storage) scalar_type(std::move(*owned_request), CompositeFacOptions{}, Real(0), &lane, true, true);
+          entries_.emplace_back(value);  // capacity was reserved before the first vote
+        } catch (...) {
+          ::operator delete(storage);
+          throw;
+        }
+      }
+    }
+    if (!apply_only_) prepare_nullspace_();
   }
 
   std::string_view provider_identity() const noexcept override {
@@ -318,6 +340,31 @@ class PreparedCompositeGeneralField final
   std::uint64_t original_field_preparation_generation() const noexcept override {
     return original_field_generation_;
   }
+  std::unique_ptr<runtime::program::PreparedHierarchyCandidateEvaluation<Dim>>
+  make_candidate_evaluation() const override {
+    local_field_phase_(true, [&] {
+      if (!options_.modes.empty())
+        throw std::invalid_argument("candidate diffusion has no prepared constant-mode projection");
+    });
+    // Same exact request/geometry/lane, independent mutable FAC entries and coefficients.
+    // No second GMRES basis: this resource only synchronizes and applies the operator.
+    std::optional<request_type> request;
+    std::string contract;
+    void* storage = nullptr;
+    try {
+      local_field_phase_(true, [&] {
+        request.emplace(request_);
+        contract = contract_;
+        storage = ::operator new(sizeof(PreparedCompositeGeneralField));
+      });
+      auto* result = new (storage) PreparedCompositeGeneralField(std::move(*request), std::move(contract), *lane_, true);
+      return std::unique_ptr<runtime::program::PreparedHierarchyCandidateEvaluation<Dim>>(result);
+    } catch (...) {
+      ::operator delete(storage);
+      throw;
+    }
+  }
+  field_type& candidate_coefficient_field(int level) override { return coefficients_.at(level); }
   void prepare_original_field_operator() override {
     // Newton gauge/nullspace authorization needs its own realization; do not silently
     // borrow the linear solver's quotient/gauge for an authored nonlinear equation.
@@ -373,7 +420,15 @@ class PreparedCompositeGeneralField final
           copy_component_(coefficients_[level], entry,
                           entries_[entry]->linear_coefficient_level(level), 0);
       });
-      entries_[entry]->prepare_linear_coefficients(collective_local_phases ? lane_ : nullptr);
+      if (apply_only_) {
+        entries_[entry]->prepare_linear_coefficients(lane_, true);
+        local_field_phase_(true, [&] {
+          for (int level = 0; level < level_count(); ++level)
+            copy_component_(entries_[entry]->linear_coefficient_level(level), 0,
+                            coefficients_[level], entry);
+        });
+      } else
+        entries_[entry]->prepare_linear_coefficients(collective_local_phases ? lane_ : nullptr);
     }
   }
 
@@ -458,6 +513,7 @@ class PreparedCompositeGeneralField final
  protected:
   SolveReport solve(const runtime::program::HierarchyTensorSolveControls& controls,
                     const ExecutionLane& lane) override {
+    if (apply_only_) throw std::logic_error("candidate coefficient resource is apply-only");
     if (&lane != lane_)
       throw std::logic_error("composite field execution lane changed");
     SolveReport report;
@@ -739,10 +795,10 @@ class PreparedCompositeGeneralField final
     std::exception_ptr error;
     try {
       operation();
-      Kokkos::fence();
     } catch (...) {
       error = std::current_exception();
     }
+    try { Kokkos::fence(); } catch (...) { if (!error) error = std::current_exception(); }
     collectively_rethrow_exception(error, *lane_, "composite original field local phase");
   }
   void prepare_nullspace_() {
@@ -803,6 +859,7 @@ class PreparedCompositeGeneralField final
   general_composite_detail::Options options_;
   std::string contract_;
   const ExecutionLane* lane_;
+  bool apply_only_ = false;
   hierarchy_type coefficients_, validation_, rhs_, initial_, solution_, residual_, image_, work_;
   std::vector<hierarchy_type> basis_;
   std::vector<Real> measures_, hessenberg_, cosine_, sine_, rotated_, y_;

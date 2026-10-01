@@ -49,6 +49,9 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
     options = spatial_newton_options(value.attrs["newton_controls"])
     policy_argument = (", pops::runtime::program::AmrFieldRightPreconditioner::kSpatialBasisJacobi"
                        if value.attrs.get("right_preconditioner") is not None else "")
+    per_candidate = value.attrs.get("coefficient_evaluation") is not None
+    if per_candidate:
+        policy_argument = ", pops::runtime::program::AmrFieldRightPreconditioner::kIdentity, pops::runtime::program::AmrFieldCoefficientEvaluation::kPerCandidate"
     controls = "pops::FieldNewtonOptions{" + ", ".join(".%s = %s" %
         (key, str(options[key]) if type(options[key]) is int else scalar_cpp(options[key]))
         for key in ("tolerance", "max_iterations", "linear_tolerance", "linear_max_iterations",
@@ -146,12 +149,34 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
                   "          output(index, %d) = component_%d;" % (component, component)]
     lines += ["          return finite ? pops::Real(0) : pops::Real(1);", "        }));", "    }",
               "  if (invalid != 0) throw std::invalid_argument(\"nonfinite_original_field_residual\");", "};"]
+    coefficient_callback = stem + "_coefficients"
+    if per_candidate:
+        lines += ["auto %s = [&](const auto& q, const auto& captured, auto& coefficients, int evaluation) {" % coefficient_callback,
+                  "  (void)evaluation;", "  pops::Real invalid = 0;",
+                  "  for (std::size_t level = 0; level < coefficients.size(); ++level)",
+                  "    for (std::size_t patch = 0; patch < coefficients[level]->local_size(); ++patch) {",
+                  "      const auto candidate = q[level].fab(patch).view();",
+                  "      const auto output = coefficients[level]->fab(patch).view();"]
+        for index in range(len(captures)):
+            lines.append("      const auto capture%d = captured[%d][level].fab(patch).view();" % (index, index))
+        lines += ["      invalid = std::max(invalid, pops::for_each_cell_reduce_max(coefficients[level]->box(patch),",
+                  "        [=] POPS_HD(const pops::CellIndex<pops::kNativeDimension>& index) {", "          bool finite = true;"]
+        for component, expression in enumerate(value.attrs["source_contract"]["diffusion"]):
+            code, _ = field_expression_cpp(expression, captures,
+                views=tuple("capture%d" % i for i in range(len(captures))), unknowns=unknowns)
+            lines += ["          const pops::Real coefficient_%d = %s;" % (component, code),
+                      "          finite = finite && std::isfinite(coefficient_%d);" % component,
+                      "          output(index, %d) = coefficient_%d;" % (component, component)]
+        lines += ["          return finite ? pops::Real(0) : pops::Real(1);", "        }));", "    }",
+                  '  if (invalid != 0) throw std::invalid_argument("nonfinite_candidate_diffusion");', "};"]
     report, outcome = stem + "_report", stem + "_outcome"
     action_kind, _ = _consumed_solve_action(program, value)
     action = "pops::SolveAction::kRejectAttempt" if action_kind == "reject_attempt" else "pops::SolveAction::kFailRun"
     seed = "nullptr" if value.attrs["seed_index"] is None else "&%s_seed" % stem
-    lines += ["pops::SolveReport %s;" % report, "try {",
-              "  %s = %s_core->solve(%s_authority, %s, %s, ctx.prepared_execution_lane());" % (report, stem, stem, seed, callback),
+    solve_call = ("  %s = %s_core->solve_candidate(%s_authority, %s, %s, %s, ctx.prepared_execution_lane());" %
+                  (report, stem, stem, seed, callback, coefficient_callback)) if per_candidate else (
+                  "  %s = %s_core->solve(%s_authority, %s, %s, ctx.prepared_execution_lane());" % (report, stem, stem, seed, callback))
+    lines += ["pops::SolveReport %s;" % report, "try {", solve_call,
               "} catch (const std::exception& failure) {",
               "  %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, %s, failure.what());" % (report, action), "}",
               "const %s_Core::hierarchy_type* %s_candidate = nullptr;" % (stem, stem),
