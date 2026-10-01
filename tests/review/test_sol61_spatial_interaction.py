@@ -335,3 +335,27 @@ def test_scratch_registry_node_is_allocated_and_voted_before_publication():
     assert "std::is_nothrow_move_assignable_v<field_type>" in source
     assert "scratches_.insert(staged.extract(staged.begin()))" in source
     assert "scratches_.insert_or_assign" not in source
+
+
+@pytest.mark.parametrize("replace_after_candidate", (False, True))
+def test_calculated_candidate_does_not_hide_relabelled_state_n_leaves(replace_after_candidate):
+    from pops.time.points import TimePoint
+    program, source, previous = build()
+    future = TimePoint(source.clock, 1)
+    if replace_after_candidate:
+        candidate = program.value("calculated", 2 * source, at=future)
+        program._replace_value(source, point=future)
+    else:
+        bad = program._replace_value(source, point=future)
+        candidate = program.value("calculated", 2 * bad, at=future)
+    with pytest.raises(ValueError, match="State.n cannot be relabelled"):
+        program.spatial_interaction(candidate, SpatialInteractionKernel(2, lambda x, y: 1),
+            output_space=previous.space, measure=CellVolumeMeasure(), quadrature=CellMidpoint(),
+            realization=DirectSpatialInteraction(4096), components=(2, 0))
+    valid, original, reference = build()
+    computed = valid.value("calculated", 2 * original, at=TimePoint(original.clock, 1))
+    result = valid.spatial_interaction(computed, SpatialInteractionKernel(2, lambda x, y: 1),
+        output_space=reference.space, measure=CellVolumeMeasure(), quadrature=CellMidpoint(),
+        realization=DirectSpatialInteraction(4096), components=(2, 0))
+    interaction_contract(result)
+    assert valid._serialize()["version"] == 17

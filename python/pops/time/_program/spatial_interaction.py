@@ -44,8 +44,21 @@ def _spaces(source, output, components):
 
 def _source_point(source):
     from pops.time.points import TimePoint
-    if source.op == "state" and source.point != TimePoint(source.clock, 0):
-        raise ValueError("spatial interaction State.n cannot be relabelled to another point")
+    # A calculated candidate may carry a later point. Its State.n leaves must
+    # still read n; a linear combination must not hide a relabelled carrier.
+    pending = [source]
+    visited = set()
+    while pending:
+        node = pending.pop()
+        if id(node) in visited:
+            continue
+        visited.add(id(node))
+        if node.op == "state" and node.point != TimePoint(node.clock, 0):
+            raise ValueError("spatial interaction State.n cannot be relabelled to another point")
+        canonical = node.prog._canonical_value(node)
+        if canonical is not node:
+            pending.append(canonical)
+        pending.extend(node.inputs)
 
 
 def interaction_contract(value):
