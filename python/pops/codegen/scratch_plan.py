@@ -451,10 +451,11 @@ def _persistent_solver_buffers(program: Any) -> list:
                        if selected_jacobi else "")),
             })
             if selected_full_lu:
+                from pops.time.canonical_data import _json_ready
                 persistent[-1]["buffers"] += 3
                 persistent[-1]["full_residual_basis_lu"] = {
                     "identity": v.attrs["right_preconditioner"],
-                    "resources": dict(v.attrs["right_preconditioner_resources"]),
+                    "resources": _json_ready(v.attrs["right_preconditioner_resources"]),
                     "matrix_scope": "replicated_per_rank_active_owned_quotient",
                     "residual_evaluations_per_newton": "2*Nactive",
                     "dense_matrix_bytes_per_rank": "sizeof(Real)*Nactive*Nactive",
