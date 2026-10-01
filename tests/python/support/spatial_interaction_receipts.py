@@ -105,11 +105,26 @@ def build(width, *, adaptive=False, failure=None):
     return case, layout, selected, program
 
 
-def initial_values(width):
+def initial_values(width, *, failure=None):
     x, y = np.meshgrid((np.arange(CELLS[0])+.5)/CELLS[0], (np.arange(CELLS[1])+.5)/CELLS[1])
     data = np.stack((1-.15*np.cos(2*np.pi*y)+.025*np.sin(2*np.pi*x), -.4+.2*x+.1*np.sin(2*np.pi*y),
                      .2-.3*np.sin(2*np.pi*x)-y))
-    return data[:width].copy()
+    result = data[:width].copy()
+    if failure == "nonfinite":
+        # This finite value is bound to the declared BindArray initial plan;
+        # its declared source alone creates nonfinite issued candidate data.
+        result[0, CELLS[1]//2, CELLS[0]//2] = 3.
+    return result
+
+
+def bound_initial_values(initial_plan, width, *, failure=None):
+    """The resolved InitialConditionPlan is the single initialization authority."""
+    if initial_plan is None or len(initial_plan.bindings) != 1:
+        raise ValueError("spatial witness requires exactly one declared initial subject")
+    subject = initial_plan.bindings[0].subject
+    if initial_plan.canonical_subject(subject) is not subject:
+        raise ValueError("spatial initial subject is not the declared canonical Handle")
+    return {subject: np.ascontiguousarray(initial_values(width, failure=failure))}
 
 
 def digest(path):

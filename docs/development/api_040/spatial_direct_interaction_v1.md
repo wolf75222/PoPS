@@ -185,3 +185,36 @@ the spatial sum over real active unique-owner rows; linear source decay is
 only a separate consistency check. This fixture closes neither M26's PDE,
 diffusion, energy gradient nor its unspecified flux, and supplies no GPU,
 Native Float32 or MPI result until genuine campaigns and external seals exist.
+
+
+### Fixture initialization-authority correction (post e7 historical RED)
+
+ROOT's first genuine SDK9f57 Serial run of the six e7 cases compiled every
+profile but refused all six at bind (6 FAIL, zero errors/skips, 198.475 seconds).
+The fixture simultaneously declared an InitialConditionPlan/BindArray provider
+and supplied a second block-name `initial_state` authority. No successful
+nonlocal output or cut-cell/partial-AMR science follows from that campaign.
+The immutable evidence remains under
+`/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-first-dim2`.
+
+The corrected fixture binds only `initial_values={canonical_subject: values}`
+from the exact compiled InitialConditionPlan. It never provides initial_state,
+and no runtime data are mutated after bind. BindArray is explicitly the plan's
+external-value provider, whose public contract excludes embedding those arrays
+in the immutable Case. Positive scalar/vector arrays and all equations remain
+unchanged. The nonfinite profile chooses its single finite rho=3 cell through
+the helper's declared input-data profile before bind and provides those bytes
+to that same InitialConditionPlan; the declared source alone produces the
+nonfinite issued candidate. This does not relax initialization or interaction
+guards.
+
+The source admission probe obtains the real resolved initial plan for all six
+profiles, authenticates its canonical Handle, exercises production
+`_canonicalize_initial_value_mapping`, verifies exact expected bytes and finite
+shape, and refuses block-name string keys. It also inspects the fixture's
+actual bind call, requiring initial_values/resources only. No Native module,
+JIT or synthetic successful runtime was used for this admission. The archive
+schema, phase roles, CP anchors, full histories, raw masks/geometry/owners and
+all scientific guards remain @1 as documented above. ROOT must execute a fresh
+six-case campaign and Frontier independently receive its actual externally
+sealed data; the six historical failures remain distinct.

@@ -17,13 +17,15 @@ from tests.python.support.collective_checks import collective_call, collective_c
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.spatial_interaction_receipts import (
-    CELLS, DT, GAMMA, WORKSPACE, build, initial_values, capture, arrays, same, digest,
+    CELLS, DT, GAMMA, WORKSPACE, build, bound_initial_values, capture, arrays, same, digest,
 )
 
 
-def bind(world, artifact, values):
+def bind(world, artifact, width, *, failure=None):
     context = collective_call(world, lambda: artifact_execution_context(artifact))
-    return collective_call(world, lambda: pops.bind(artifact, initial_state={"density": values.copy()},
+    values = collective_call(world, lambda: bound_initial_values(
+        artifact.plan.initial_condition_plan, width, failure=failure))
+    return collective_call(world, lambda: pops.bind(artifact, initial_values=values,
                                                    resources={"execution_context": context}))
 
 
@@ -113,7 +115,7 @@ def test_public_spatial_interaction_saved_history_and_exact_replay(
     del isolated_native_cache
     world, native = world_and_native()
     artifact, selected = prepare(world, width, adaptive, None)
-    runtime = bind(world, artifact, initial_values(width))
+    runtime = bind(world, artifact, width)
     directory = collective_directory(world, tmp_path/"spatial-interaction")
     initial = capture(world, runtime, width, adaptive=adaptive, step=0)
     checkpoints = {"initial": checkpoint(world, runtime, directory, "initial")}
@@ -136,7 +138,7 @@ def test_public_spatial_interaction_saved_history_and_exact_replay(
     collective_call(world, lambda: pops.run(runtime, t_end=2*DT, max_steps=1, console=False))
     continuous = capture(world, runtime, width, adaptive=adaptive, step=2)
     checkpoints["continuous"] = checkpoint(world, runtime, directory, "continuous")
-    restored = bind(world, artifact, initial_values(width))
+    restored = bind(world, artifact, width)
     collective_call(world, lambda: restored.restart(checkpoints["accepted"]["path"]))
     reloaded = capture(world, restored, width, adaptive=adaptive, step=1)
     checkpoints["reloaded"] = checkpoint(world, restored, directory, "reloaded")
@@ -173,10 +175,7 @@ def test_public_spatial_interaction_refuses_without_publication(
     del isolated_native_cache
     world, native = world_and_native()
     artifact, selected = prepare(world, 1, False, failure)
-    values = initial_values(1)
-    if failure == "nonfinite":
-        values[0, CELLS[1]//2, CELLS[0]//2] = 3.
-    runtime = bind(world, artifact, values)
+    runtime = bind(world, artifact, 1, failure=failure)
     directory = collective_directory(world, tmp_path/("spatial-interaction-"+failure))
     initial = capture(world, runtime, 1, adaptive=False, step=0)
     checkpoints = {"initial": checkpoint(world, runtime, directory, "initial")}

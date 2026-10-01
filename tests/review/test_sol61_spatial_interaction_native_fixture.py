@@ -6,7 +6,7 @@ import numpy as np
 import pops
 import pytest
 
-from tests.python.support.spatial_interaction_receipts import build, initial_values, DT, GAMMA
+from tests.python.support.spatial_interaction_receipts import build, initial_values, bound_initial_values, DT, GAMMA
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
 
@@ -16,6 +16,25 @@ from pops.codegen.program_models import ProgramModelGraph
 def test_actual_case_resolve_and_emission(width, adaptive, failure):
     case, layout, selected, _ = build(width, adaptive=adaptive, failure=failure)
     resolved = pops.resolve(pops.validate(case), layout=layout)
+    initial_plan = resolved.initial_condition_plan
+    payload = bound_initial_values(initial_plan, width, failure=failure)
+    subject = initial_plan.bindings[0].subject
+    assert tuple(payload) == (subject,)
+    assert initial_plan.canonical_subject(subject) is subject
+    from pops.codegen._plans import _canonicalize_initial_value_mapping
+    normalized = _canonicalize_initial_value_mapping(initial_plan, payload)
+    assert normalized[subject] is payload[subject]
+    assert payload[subject].shape == (width, 6, 8) and np.isfinite(payload[subject]).all()
+    normal = initial_values(width)
+    if failure == "nonfinite":
+        assert payload[subject][0, 3, 4] == 3.
+        expected = normal.copy()
+        expected[0, 3, 4] = 3.
+        np.testing.assert_array_equal(payload[subject], expected)
+    else:
+        np.testing.assert_array_equal(payload[subject], normal)
+    with pytest.raises(TypeError, match="Handle"):
+        _canonicalize_initial_value_mapping(initial_plan, {"density":payload[subject]})
     program = resolved.time
     ir = program._serialize()
     assert ir["version"] == 18
@@ -47,3 +66,9 @@ def test_six_native_cases_collect_without_executing_them():
                    for decorator in function.decorator_list for node in ast.walk(decorator)) for function in functions)
     assert "aggregate_cryptographic_binding" in path.read_text()
     assert "SOURCE_SNAPSHOT_ONLY" in path.read_text()
+    bind = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "bind")
+    calls = [node for node in ast.walk(bind) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == "bind"]
+    assert len(calls) == 1
+    assert {keyword.arg for keyword in calls[0].keywords} == {"initial_values", "resources"}
+    assert "initial_state" not in path.read_text()
