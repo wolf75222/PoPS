@@ -41,6 +41,17 @@ initialization/depth/fill/duration, diagnostics and lifecycle. Forcing/material
 remain bit-exact throughout solve and replay. Each local assertion or file phase
 converges before another native collective.
 
+Fixture contract `pops.captured-diffusion-native-fixture@2` corrects the historical
+fixture's history interpretation. `store_history(depth=1)` declares a maximum
+lag of one and allocates two physical slots. End-of-step rotation places the
+latest accepted store in slot 1; slot 0 contains the first accepted store in this
+two-step witness. Both slots, their exact publication identities, outgoing
+durations and fill counts (1 then 2) are gathered and checked. Each publication
+has ordinal 1 within its own time window. The native checkpoint retains both
+slots; saved solution arrays come from slot 1. The historical native failure
+at the fixture's one-slot assertion remains a failed reception. No equation,
+Newton control, finite-difference step or scientific tolerance is changed.
+
 Accepted, continuous, restored and replayed arrays are saved to NPZ. Scientific
 checks reload those actual saved arrays and independently recompute the original
 residual; the accumulated source response is checked against the native observed

@@ -9,6 +9,7 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import struct
 import sys
 
 import numpy as np
@@ -17,7 +18,7 @@ import pytest
 
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.support.captured_diffusion_mms import (
-    CONTROLS, DT, FD_STEP, RESIDUAL_TOL, SOLUTION_TOL, build, initial_data, matrices, original_action,
+    CONTROLS, DT, FD_STEP, HISTORY_MAX_LAG, RESIDUAL_TOL, SOLUTION_TOL, build, initial_data, matrices, original_action,
 )
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.integral_state_receipts import collective_directory
@@ -44,7 +45,7 @@ def bounded_bytes(path):
         os.close(fd)
 
 
-def capture(world, runtime, cells, width):
+def capture(world, runtime, cells, width, *, step, first_solution=None):
     states = {}
     for name, ncomp in (("response", width), ("forcing", width), ("material", 1)):
         data = collective_call(world, lambda name=name: runtime.state_global(name))
@@ -52,17 +53,35 @@ def capture(world, runtime, cells, width):
             states[name] = np.asarray(data).reshape(ncomp, cells, cells).copy()
     fields, history = [], []
     for index in range(width):
-        data = collective_call(world, lambda index=index: runtime.history_global("q%d" % index, 0))
-        with collective_check(world):
-            fields.append(np.asarray(data).reshape(cells, cells).copy())
         name = "q%d" % index
+        slots = []
+        for slot in range(HISTORY_MAX_LAG+1):
+            data = collective_call(world, lambda name=name, slot=slot: runtime.history_global(name, slot))
+            with collective_check(world):
+                slots.append(np.asarray(data).reshape(cells, cells).copy())
         depth = collective_call(world, lambda name=name: runtime.history_depth(name))
         initialized = collective_call(world, lambda name=name: runtime._executor.history_initialized(name))
         fill = collective_call(world, lambda name=name: runtime._executor.history_fill_count(name))
-        duration = collective_call(world, lambda name=name: runtime.history_slot_dt(name, 0))
+        durations = tuple(collective_call(world, lambda name=name, slot=slot: runtime.history_slot_dt(name, slot))
+                          for slot in range(HISTORY_MAX_LAG+1))
+        sample = collective_call(world, lambda name=name: bytes(runtime._executor.history_sample_identity(name)))
         with collective_check(world):
-            assert depth == 1 and initialized and fill == 1
-            history.append((name, depth, initialized, fill, np.asarray(duration).tobytes()))
+            # depth in store_history declares the maximum lag, so its ring has
+            # two physical slots. End-of-step rotation places the latest store
+            # in slot 1 and recycles the first accepted store into slot 0.
+            assert depth == HISTORY_MAX_LAG+1 and initialized and fill == min(step, depth)
+            assert durations == (DT, DT)
+            previous = slots[1] if step == 1 else first_solution[index]
+            assert slots[0].tobytes() == previous.tobytes()
+            header = b"POPSHID1"+struct.pack("<Q", len(name))+name.encode()+struct.pack("<qQ", -1, depth)
+            expected_sample = header+b"".join(struct.pack("<QQQQ", 2,
+                int.from_bytes(struct.pack("<d", start), "little"),
+                int.from_bytes(struct.pack("<d", DT), "little"), 1)
+                for start in (0., (step-1)*DT))
+            assert sample == expected_sample
+            fields.append(slots[1])
+            history.append((name, depth, initialized, fill, np.asarray(durations).tobytes(),
+                            sample, tuple(value.tobytes() for value in slots)))
     with collective_check(world):
         states["solution"] = np.stack(fields)
     carriers = collective_call(world, lambda: tuple(tuple(row) for row in
@@ -126,20 +145,20 @@ def test_public_captured_diffusion_nonconstant_saved_and_exact_replay(
             np.testing.assert_array_equal(np.asarray(actual).reshape(initial[name].shape), initial[name])
 
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
-    accepted = capture(world, runtime, cells, width)
+    accepted = capture(world, runtime, cells, width, step=1)
     checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/"accepted"))
     collective_call(world, lambda: pops.run(runtime, t_end=2*DT, max_steps=1, console=False))
-    continuous = capture(world, runtime, cells, width)
+    continuous = capture(world, runtime, cells, width, step=2, first_solution=accepted[0]["solution"])
     continuous_checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/"continuous"))
     restored_context = collective_call(world, lambda: artifact_execution_context(artifact))
     restored = collective_call(world, lambda: pops.bind(artifact,
         initial_state={key: value.copy() for key, value in initial.items()}, resources={"execution_context": restored_context}))
     collective_call(world, lambda: restored.restart(checkpoint))
-    reloaded = capture(world, restored, cells, width)
+    reloaded = capture(world, restored, cells, width, step=1)
     with collective_check(world):
         same_images(reloaded, accepted)
     collective_call(world, lambda: pops.run(restored, t_end=2*DT, max_steps=1, console=False))
-    replay = capture(world, restored, cells, width)
+    replay = capture(world, restored, cells, width, step=2, first_solution=reloaded[0]["solution"])
     replay_checkpoint = collective_call(world, lambda: restored.checkpoint(directory/"replay"))
     with collective_check(world):
         same_images(replay, continuous)
@@ -170,7 +189,8 @@ def test_public_captured_diffusion_nonconstant_saved_and_exact_replay(
             checkpoints = {phase: {"path": str(path), "sha256": hashlib.sha256(bounded_bytes(path)).hexdigest()}
                            for phase, path in (("accepted", checkpoint), ("continuous", continuous_checkpoint),
                                                ("replay", replay_checkpoint))}
-            receipt = {"kind": "actual-native-captured-D-original-MMS", "artifact": artifact.artifact_identity.token,
+            receipt = {"kind": "actual-native-captured-D-original-MMS",
+                "fixture_schema": "pops.captured-diffusion-native-fixture@2", "artifact": artifact.artifact_identity.token,
                 "dimension": 2, "rank": world.rank, "size": world.size, "cells": cells, "width": width,
                 "order": order, "face_policy": "pops.field.face-mean.arithmetic@1", "newton": CONTROLS,
                 "fd_step": FD_STEP, "solution_tolerance": SOLUTION_TOL, "residual_tolerance": RESIDUAL_TOL,

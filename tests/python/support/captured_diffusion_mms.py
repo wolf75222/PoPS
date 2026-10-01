@@ -21,6 +21,7 @@ from pops.solvers import Newton
 from pops.time import FailRun, FixedDt
 
 DT = .01
+HISTORY_MAX_LAG = 1
 FD_STEP = 1e-6
 CONTROLS = dict(tolerance=1e-10, max_iterations=20, linear_tolerance=1e-8,
                 linear_max_iterations=240, restart=60, armijo=1e-4,
@@ -135,7 +136,7 @@ def build(cells, width, order, *, omit_material=False):
     observed = field.observe(outcome.consume(action=FailRun()))
     outputs = tuple(observed[field[unknown]] for unknown in unknowns)
     for index, output in enumerate(outputs):
-        program.store_history("q%d" % index, output, depth=1)
+        program.store_history("q%d" % index, output, depth=HISTORY_MAX_LAG)
     module = fluid.module
     carrier = blocks[0][module.field_handle(module.field_spaces()["fields"])]
     publication = observed.publish({(carrier, "observed%d" % i): output for i, output in enumerate(outputs)},
