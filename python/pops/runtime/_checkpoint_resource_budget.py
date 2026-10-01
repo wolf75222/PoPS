@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 import json
+import re
 import sys
 from typing import Any, cast
 
@@ -436,6 +437,106 @@ def _amr_field_provider_manifest_capacity(
     return tuple(slots), characters, structural_bytes
 
 
+
+_DIAGNOSTIC_CAPACITY_CONTRACT = "pops.program-diagnostics.checkpoint-capacity@1"
+
+
+def _compiled_diagnostic_inventory(artifact):
+    """Inventory literal names only after compiler-retained source evidence verifies."""
+    artifact.verify()
+    source = getattr(artifact.program, "_generated_cpp", None)
+    if source is None:
+        return None
+    if type(source) is not str:
+        raise TypeError("retained Program source must be exact compiler text")
+    calls = tuple(re.finditer(r"\brecord_scalar\s*\(", source))
+    literals = tuple(re.finditer(r'\brecord_scalar\s*\(\s*("(?:\\.|[^"\\])*")', source))
+    if len(calls) != len(literals):
+        return None
+    names = {json.loads(match.group(1)) for match in literals}
+    names.add("pops.frontier.duration")
+    return tuple(sorted(names))
+
+
+def _diagnostic_inventory_capacity(names):
+    if names is None:
+        return None
+    return _add(
+        40,
+        _sum(
+            (
+                _add(16, len(name.encode("utf-8")), where="diagnostic name capacity")
+                for name in names
+            ),
+            where="diagnostic record capacity",
+        ),
+        where="diagnostic image capacity",
+    )
+
+
+def _diagnostic_capacity_budget(base, member_names, capacity_per_rank, ranks):
+    if type(capacity_per_rank) is not int or capacity_per_rank <= 0:
+        raise TypeError("checkpoint diagnostic capacity_per_rank must be an exact positive int")
+    capacity_per_rank = _capacity(
+        capacity_per_rank, where="checkpoint diagnostic capacity_per_rank", positive=True
+    )
+    images = _mul(capacity_per_rank, ranks, where="rank-owned diagnostic checkpoint capacity")
+    offsets = _mul(
+        _add(ranks, 1, where="diagnostic rank offsets"), 8, where="diagnostic rank offset bytes"
+    )
+    aggregate = _add(
+        base.max_uncompressed_bytes,
+        _add(images, offsets, where="diagnostic serialized resources"),
+        where="checkpoint diagnostic aggregate",
+    )
+    from pops.identity import make_identity
+
+    authority = make_identity(
+        "checkpoint-resource-budget",
+        {
+            "base": base.authority,
+            "diagnostic_capacity_contract": _DIAGNOSTIC_CAPACITY_CONTRACT,
+            "capacity_per_rank": capacity_per_rank,
+            "ranks": ranks,
+            "archive_contract": "pops.program-diagnostics.archive@1",
+        },
+    ).token
+    budget = CheckpointResourceBudget(
+        base.runtime_kind,
+        base.max_members,
+        base.max_manifest_characters,
+        max(base.max_array_bytes, images, offsets),
+        aggregate,
+        _archive_byte_capacity(
+            aggregate, member_names, where="diagnostic checkpoint archive capacity"
+        ),
+        authority,
+    )
+    return budget, images
+
+
+def _require_checkpoint_diagnostic_authority(owner):
+    artifact = owner._checkpoint_program_diagnostic_artifact
+    inventory = _compiled_diagnostic_inventory(artifact)
+    if inventory != owner._checkpoint_program_diagnostic_inventory:
+        raise RuntimeError("checkpoint diagnostic retained source inventory changed")
+    base = owner._checkpoint_program_diagnostic_base_budget
+    capacity = owner._checkpoint_program_diagnostic_capacity_per_rank
+    if capacity is None:
+        expected, images = base, None
+    else:
+        expected, images = _diagnostic_capacity_budget(
+            base,
+            owner._checkpoint_program_diagnostic_member_names,
+            capacity,
+            owner._checkpoint_program_diagnostic_ranks,
+        )
+    if images != owner._checkpoint_program_diagnostic_byte_capacity:
+        raise RuntimeError("checkpoint diagnostic byte capacity changed outside configuration")
+    if expected != require_checkpoint_resource_budget(owner):
+        raise RuntimeError("checkpoint diagnostic live resource authority changed")
+
+
 def _checkpoint_member_names(
     *,
     runtime_kind: str,
@@ -462,6 +563,8 @@ def _checkpoint_member_names(
     runtime = (
         "program_exchange_state",
         "program_exchange_offsets",
+        "program_diagnostics_state",
+        "program_diagnostics_offsets",
         "continuation_transition_plan",
         "runtime_consumer_graph",
         "runtime_consumer_cursors",
@@ -732,7 +835,7 @@ def _common_budget(
     archive_bytes = _archive_byte_capacity(
         uncompressed, names, where="checkpoint archive byte budget"
     )
-    return CheckpointResourceBudget(
+    base_budget = CheckpointResourceBudget(
         runtime_kind,
         len(names),
         max_manifest_characters,
@@ -749,6 +852,23 @@ def _common_budget(
         archive_bytes,
         authority,
     )
+
+
+    inventory = _compiled_diagnostic_inventory(install_plan.artifact)
+    capacity = _diagnostic_inventory_capacity(inventory)
+    ranks = checkpoint_topology(owner).size
+    owner._checkpoint_program_diagnostic_artifact = install_plan.artifact
+    owner._checkpoint_program_diagnostic_inventory = inventory
+    owner._checkpoint_program_diagnostic_member_names = names
+    owner._checkpoint_program_diagnostic_base_budget = base_budget
+    owner._checkpoint_program_diagnostic_capacity_per_rank = capacity
+    owner._checkpoint_program_diagnostic_ranks = ranks
+    if capacity is None:
+        owner._checkpoint_program_diagnostic_byte_capacity = None
+        return base_budget
+    candidate,images = _diagnostic_capacity_budget(base_budget,names,capacity,ranks)
+    owner._checkpoint_program_diagnostic_byte_capacity = images
+    return candidate
 
 
 def install_uniform_checkpoint_resource_budget(owner: Any, install_plan: Any) -> None:
@@ -1143,3 +1263,103 @@ __all__ = [
     "install_uniform_checkpoint_resource_budget",
     "require_checkpoint_resource_budget",
 ]
+
+
+def configure_checkpoint_diagnostic_capacity(instance, capacity_per_rank):
+    """Prepare and vote a public resource choice before replacing any live authority."""
+    from pops.output._checkpoint_collective import checkpoint_topology, consensus
+    from pops.runtime._multi_layout_executor import _MultiLayoutUniformExecutor
+    from pops.runtime._checkpoint_program_diagnostics import _exact_native_image
+    from pops.identity import make_identity
+
+    topology = checkpoint_topology(instance)
+    error = None
+    candidates = ()
+    proposal = None
+    replacement = None
+    try:
+        if type(capacity_per_rank) is not int or capacity_per_rank <= 0:
+            raise TypeError("checkpoint diagnostic capacity_per_rank must be an exact positive int")
+        _mul(capacity_per_rank, topology.size, where="configured diagnostic rank capacity")
+        if instance._consumer_finalize_pending or instance._consumer_recoveries:
+            raise RuntimeError(
+                "checkpoint diagnostic capacity cannot change during consumer publication/recovery"
+            )
+        executor = instance._executor
+        if instance._checkpoint_resource_budget != require_checkpoint_resource_budget(executor):
+            raise RuntimeError("checkpoint wrapper/executor resource authority changed")
+        if type(executor) is _MultiLayoutUniformExecutor:
+            if executor._active_transfer_generation is not None:
+                raise RuntimeError(
+                    "checkpoint diagnostic capacity cannot change during a mapping attempt"
+                )
+            targets = tuple(executor._engines.items())
+        else:
+            targets = (("single", executor),)
+        prepared = []
+        for layout_id, owner in targets:
+            _require_checkpoint_diagnostic_authority(owner)
+            # This Native accepted-state gate refuses attempts, pending outcomes and restart.
+            _exact_native_image(
+                owner._s._checkpoint_program_diagnostics(), rank=topology.rank, ranks=topology.size
+            )
+            base = owner._checkpoint_program_diagnostic_base_budget
+            names = owner._checkpoint_program_diagnostic_member_names
+            ranks = owner._checkpoint_program_diagnostic_ranks
+            if type(base) is not CheckpointResourceBudget or ranks != topology.size:
+                raise RuntimeError("checkpoint diagnostic owner resource/rank authority changed")
+            old_capacity = owner._checkpoint_program_diagnostic_capacity_per_rank
+            previous = (
+                base
+                if old_capacity is None
+                else _diagnostic_capacity_budget(base, names, old_capacity, ranks)[0]
+            )
+            if previous != require_checkpoint_resource_budget(owner):
+                raise RuntimeError(
+                    "checkpoint diagnostic capacity authority changed outside configuration"
+                )
+            budget, images = _diagnostic_capacity_budget(base, names, capacity_per_rank, ranks)
+            prepared.append((layout_id, owner, budget, images))
+        candidates = tuple(prepared)
+        if type(executor) is _MultiLayoutUniformExecutor:
+            budgets = tuple(row[2] for row in candidates)
+            authority = make_identity(
+                "multi-layout-checkpoint-resource-budget",
+                {
+                    "artifact": instance._install_plan.artifact.artifact_identity.token,
+                    "bind": instance._install_plan.bind_identity.token,
+                    "layouts": [
+                        {"layout": row[0], "budget": row[2].authority} for row in candidates
+                    ],
+                    "mappings": tuple(executor._mapping_evaluations),
+                },
+            ).token
+            replacement = aggregate_checkpoint_resource_budgets(
+                budgets,
+                authority=authority,
+                install_plan=instance._install_plan,
+                layout_ids=tuple(executor._engines),
+                mapping_ids=tuple(executor._mapping_evaluations),
+            )
+        else:
+            replacement = candidates[0][2]
+        proposal = {
+            "contract": _DIAGNOSTIC_CAPACITY_CONTRACT,
+            "capacity_per_rank": capacity_per_rank,
+            "layouts": [row[0] for row in candidates],
+        }
+    except BaseException as exc:
+        error = exc
+    # Invalid values on one rank converge before proposal comparison or later collectives.
+    rows = consensus(
+        topology, "checkpoint diagnostic capacity preparation", error=error, value=proposal
+    )
+    if any(row["value"] != proposal for row in rows):
+        raise ValueError("checkpoint diagnostic capacity proposal differs across ranks")
+    # All native validation, overflow checks, allocations and aggregate construction preceded vote.
+    for _, owner, budget, images in candidates:
+        owner._checkpoint_program_diagnostic_capacity_per_rank = capacity_per_rank
+        owner._checkpoint_program_diagnostic_byte_capacity = images
+        owner._checkpoint_resource_budget = budget
+    instance._executor._checkpoint_resource_budget = replacement
+    instance._checkpoint_resource_budget = replacement

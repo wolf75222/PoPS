@@ -172,6 +172,8 @@ def _decode_contract(payload):
 
 def checkpoint_temporal_partition_kind(payload):
     """Return the exact accepted temporal-partition kind before native restart mutation."""
+    from pops.runtime._checkpoint_program_diagnostics import validate_checkpoint_program_diagnostic_arrays
+    validate_checkpoint_program_diagnostic_arrays(payload)
     contract = _decode_contract(payload)
     rows = contract["temporal_partition"]
     if (

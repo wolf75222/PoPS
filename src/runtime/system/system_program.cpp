@@ -6,6 +6,8 @@
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
+#include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
+#include <pops/parallel/collective_exception.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -1427,6 +1429,59 @@ std::map<std::string, Real> System<Dim>::program_diagnostics() const {
 }
 
 template <int Dim>
+std::vector<std::uint8_t> System<Dim>::checkpoint_program_diagnostics() const {
+  if (step_transaction_depth() != 0 || p_->external_restart_transaction_ ||
+      solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
+    throw std::logic_error("Program diagnostic checkpoint requires fully accepted native state");
+  Kokkos::fence();
+  const auto& lane = prepared_boundary_execution_lane();
+  return runtime::program::checkpoint_program_diagnostics(p_->program_.diagnostics_, lane.rank(),
+                                                          lane.size());
+}
+
+template <int Dim>
+void System<Dim>::validate_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t> bytes) const {
+  if (!bytes.empty()) {
+    const auto& lane = prepared_boundary_execution_lane();
+    (void)runtime::program::read_program_diagnostics_checkpoint(bytes, lane.rank(), lane.size());
+  }
+}
+
+template <int Dim>
+void System<Dim>::restore_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t> (*producer)(const void*), const void* context) {
+  const auto& lane = prepared_boundary_execution_lane();
+  std::map<std::string, Real> candidate;
+  std::exception_ptr error;
+  try {
+    if (!p_->external_restart_transaction_ || p_->external_step_transaction_committed_ ||
+        solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
+      throw std::logic_error(
+          "Program diagnostic restore requires an active native restart transaction");
+    if (!producer)
+      throw std::invalid_argument("Program diagnostic restore producer is null");
+    const auto bytes = producer(context);
+    if (!bytes.empty())
+      candidate =
+          runtime::program::read_program_diagnostics_checkpoint(bytes, lane.rank(), lane.size());
+  } catch (...) {
+    error = std::current_exception();
+  }
+  try {
+    Kokkos::fence();
+  } catch (...) {
+    if (!error)
+      error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane, "Program diagnostic restore preparation");
+  // No rank equality: local diagnostics and reduced diagnostics share this accepted table.
+  // Everything fallible completed before any rank publishes; outer restart retains rollback.
+  static_assert(noexcept(p_->program_.diagnostics_.swap(candidate)));
+  p_->program_.diagnostics_.swap(candidate);
+}
+
+template <int Dim>
 std::map<std::string, Real> System<Dim>::accepted_balance_terms(const std::string& route) const {
   if (!p_->external_step_transaction_ || p_->external_step_transaction_committed_)
     throw std::runtime_error(
@@ -1592,6 +1647,12 @@ template bool System<kNativeDimension>::program_balance_consumer_is_due(const st
                                                                         int) const;
 template Real System<kNativeDimension>::program_diagnostic(const std::string&) const;
 template std::map<std::string, Real> System<kNativeDimension>::program_diagnostics() const;
+template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_program_diagnostics() const;
+template void System<kNativeDimension>::validate_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t>) const;
+template void System<kNativeDimension>::restore_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t> (*)(const void*), const void*);
+
 template std::map<std::string, Real> System<kNativeDimension>::accepted_balance_terms(
     const std::string&) const;
 template std::map<std::string, Real> System<kNativeDimension>::selected_accepted_balance_terms(

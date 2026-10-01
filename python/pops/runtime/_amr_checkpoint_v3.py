@@ -41,6 +41,7 @@ class _PreparedAMRRestart:
     auxiliary_checkpoint_payload: tuple[bytes, ...]
     history_flux_snapshot_shards: tuple[bytes, ...] | None
     exchange_checkpoint: bytes
+    program_diagnostic_checkpoint: bytes
     potential_payload: tuple[Any, ...]
     field_payload: tuple[Any, ...]
     hierarchy_mode: str
@@ -531,6 +532,7 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         "checkpoint-capture-plan-v2",
         {
             "runtime_kind": "amr",
+            "program_diagnostic_archive": "pops.program-diagnostics.archive@1",
             "target": str(target),
             "clock": {"time": time.hex(), "macro_step": macro_step},
             "spatial_contract": spatial.to_data(),
@@ -742,6 +744,8 @@ def _capture_v3(owner, sim, prepared):
     capture_histories(sim, prepared.history_plan, out)
     from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
     capture_checkpoint_continuation(owner, out)
+    from pops.runtime._checkpoint_program_diagnostics import capture_checkpoint_program_diagnostics
+    capture_checkpoint_program_diagnostics(owner, out)
     identity = seal_checkpoint_payload(owner, out, runtime_kind="amr")
     return out, identity.token
 
@@ -1127,6 +1131,7 @@ def prepare_v3(
 
     _preflight_histories_v3(sim, d, current_ranks, spatial)
 
+    from pops.runtime._checkpoint_program_diagnostics import prepare_checkpoint_program_diagnostics
     from pops.runtime._checkpoint_exchanges import prepare_checkpoint_continuation
     from pops.runtime._checkpoint_history_flux_snapshots import prepare_history_flux_snapshots
     snapshot_capacity_provider = getattr(
@@ -1158,6 +1163,7 @@ def prepare_v3(
         auxiliary_checkpoint_payload=tuple(auxiliary_checkpoint_payload),
         history_flux_snapshot_shards=history_flux_snapshot_shards,
         exchange_checkpoint=prepare_checkpoint_continuation(owner, d),
+        program_diagnostic_checkpoint=prepare_checkpoint_program_diagnostics(owner, d),
         potential_payload=tuple(phi_payload),
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
         hierarchy_mode=hierarchy_mode,
@@ -1575,6 +1581,7 @@ def apply_v3(owner, sim, prepared):
             validate_transformed_state,
         )
         owner._last_restart_regrid_receipt = receipt
+    sim._restore_checkpoint_program_diagnostics(prepared.program_diagnostic_checkpoint)
     owner._temporal_restart_state = prepared.temporal_state
     owner._step_controller = None
     return report

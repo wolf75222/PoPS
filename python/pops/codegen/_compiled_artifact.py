@@ -565,6 +565,7 @@ class CompiledSimulationArtifact:
     artifact_identity: Identity = field(init=False)
     platform_manifest: Any = field(init=False)
     _component_evidence: Any = field(init=False, repr=False)
+    _retained_source_evidence: Any = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if type(self.plan) is ResolvedSimulationPlan:
@@ -675,6 +676,8 @@ class CompiledSimulationArtifact:
         object.__setattr__(self, "platform_manifest", platform)
         evidence = self._current_component_evidence()
         object.__setattr__(self, "_component_evidence", _deep_freeze(evidence))
+        object.__setattr__(self, "_retained_source_evidence",
+                           _deep_freeze(self._current_retained_source_evidence()))
         object.__setattr__(
             self, "artifact_identity", make_identity(
                 "artifact", self._payload(evidence, platform)))
@@ -840,6 +843,29 @@ class CompiledSimulationArtifact:
                 % name)
         return values[0]
 
+    def _current_retained_source_evidence(self) -> dict[str, Any]:
+        # Local provenance, deliberately outside artifact/bind content identities: includes and
+        # comments can differ by residence across ranks without changing the installed Program.
+        # Capture once at compilation; verify never remints from a modified loader at bind.
+        rows = [("block:" + block.name, block.model) for block in self.blocks]
+        if self.program is not None:
+            rows.append(("program", self.program))
+        rows.extend(("layout:" + row.layout_id, row.program) for row in self.layout_programs)
+        evidence = []
+        for route, component in rows:
+            source = getattr(component, "_generated_cpp", None)
+            if source is not None and type(source) is not str:
+                raise TypeError("compiled retained source must be exact text or explicit absence")
+            evidence.append(
+                {
+                    "route": route,
+                    "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest()
+                    if source is not None
+                    else None,
+                }
+            )
+        return {"contract": "pops.compiled-program.source-evidence@1", "components": evidence}
+
     def _current_component_evidence(self) -> dict[str, Any]:
         evidence = {
             "blocks": [
@@ -872,6 +898,8 @@ class CompiledSimulationArtifact:
         }
 
     def verify(self) -> None:
+        if self._retained_source_evidence != _deep_freeze(self._current_retained_source_evidence()):
+            raise ValueError("CompiledSimulationArtifact retained source evidence verification failed")
         self.plan.verify()
         for item in self.component_artifacts:
             item.verify()

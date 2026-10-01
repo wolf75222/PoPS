@@ -27,6 +27,7 @@ class _PreparedUniformRestart:
     cadence_state: Any
     auxiliary_checkpoint: bytes
     exchange_checkpoint: bytes
+    program_diagnostic_checkpoint: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +309,7 @@ class _SystemIO(_System):
                 "blocks": block_evidence,
                 "field_slots": list(field_slots),
                 "program_hash": prog_hash,
+                "program_diagnostic_archive": "pops.program-diagnostics.archive@1",
                 "program_cadence": cadence.to_data(),
                 "histories": history_plan.to_data(),
                 "cache": cache_evidence,
@@ -369,6 +371,8 @@ class _SystemIO(_System):
         )
         from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
         capture_checkpoint_continuation(self, out)
+        from pops.runtime._checkpoint_program_diagnostics import capture_checkpoint_program_diagnostics
+        capture_checkpoint_program_diagnostics(self, out)
         identity = seal_checkpoint_payload(self, out, runtime_kind="uniform")
         return out, identity.token
 
@@ -671,7 +675,9 @@ class _SystemIO(_System):
                 )
         from pops.runtime._checkpoint_exchanges import prepare_checkpoint_continuation
         exchanges = prepare_checkpoint_continuation(self, d)
-        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges)
+        from pops.runtime._checkpoint_program_diagnostics import prepare_checkpoint_program_diagnostics
+        diagnostics = prepare_checkpoint_program_diagnostics(self, d)
+        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges, diagnostics)
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
@@ -737,6 +743,8 @@ class _SystemIO(_System):
                 np.asarray(d["cache_value_%d" % node], dtype=np.float64),
             )
         self._s._restore_checkpoint_program_exchanges(prepared.exchange_checkpoint)
+        # Replay may itself record diagnostics. Restore the exact accepted table afterward.
+        self._s._restore_checkpoint_program_diagnostics(prepared.program_diagnostic_checkpoint)
         self._temporal_restart_state = prepared.temporal_state
         self._step_controller = None
         self._last_restart_identity = prepared.restart_identity

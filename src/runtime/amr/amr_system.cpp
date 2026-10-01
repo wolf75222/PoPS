@@ -4,6 +4,8 @@
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/amr/amr_layout_transfer_bridge.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
+#include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/runtime/program/amr_history_flux_snapshot_codec.hpp>
 
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
@@ -19182,6 +19184,58 @@ std::map<std::string, double> AmrSystem<Dim>::program_diagnostics() const {
 }
 
 template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::checkpoint_program_diagnostics() const {
+  if (step_transaction_depth() != 0 || p_->restart_transaction)
+    throw std::logic_error("Program diagnostic checkpoint requires fully accepted native state");
+  Kokkos::fence();
+  const auto& lane = p_->require_package_assembly_lane();
+  return runtime::program::checkpoint_program_diagnostics(p_->program.diagnostics_, lane.rank(),
+                                                          lane.size());
+}
+
+template <int Dim>
+void AmrSystem<Dim>::validate_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t> bytes) const {
+  if (!bytes.empty()) {
+    const auto& lane = p_->require_package_assembly_lane();
+    (void)runtime::program::read_program_diagnostics_checkpoint(bytes, lane.rank(), lane.size());
+  }
+}
+
+template <int Dim>
+void AmrSystem<Dim>::restore_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t> (*producer)(const void*), const void* context) {
+  const auto& lane = p_->require_package_assembly_lane();
+  std::map<std::string, Real> candidate;
+  std::exception_ptr error;
+  try {
+    if (!p_->restart_transaction || p_->restart_transaction_committed ||
+        step_transaction_depth() != 0)
+      throw std::logic_error(
+          "Program diagnostic restore requires an active native restart transaction");
+    if (!producer)
+      throw std::invalid_argument("Program diagnostic restore producer is null");
+    const auto bytes = producer(context);
+    if (!bytes.empty())
+      candidate =
+          runtime::program::read_program_diagnostics_checkpoint(bytes, lane.rank(), lane.size());
+  } catch (...) {
+    error = std::current_exception();
+  }
+  try {
+    Kokkos::fence();
+  } catch (...) {
+    if (!error)
+      error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane, "Program diagnostic restore preparation");
+  // No rank equality: local diagnostics and reduced diagnostics share this accepted table.
+  // Everything fallible completed before any rank publishes; outer restart retains rollback.
+  static_assert(noexcept(p_->program.diagnostics_.swap(candidate)));
+  p_->program.diagnostics_.swap(candidate);
+}
+
+template <int Dim>
 std::map<std::string, double> AmrSystem<Dim>::accepted_balance_terms(
     const std::string& route) const {
   if (!p_->external_step_transaction || p_->external_step_committed)
@@ -22844,4 +22898,11 @@ template std::vector<std::vector<std::string>>
 AmrSystem<kNativeDimension>::checkpoint_temporal_relations() const;
 template std::vector<std::vector<std::string>>
 AmrSystem<kNativeDimension>::checkpoint_transfer_routes() const;
+template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::checkpoint_program_diagnostics()
+    const;
+template void AmrSystem<kNativeDimension>::validate_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t>) const;
+template void AmrSystem<kNativeDimension>::restore_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t> (*)(const void*), const void*);
+
 }  // namespace pops

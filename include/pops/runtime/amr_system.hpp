@@ -1231,6 +1231,11 @@ class AmrSystem {
   /// The recorded diagnostic @p name (0 if absent) / the whole map. Exposed to Python for inspection.
   POPS_EXPORT double program_diagnostic(const std::string& name) const;
   POPS_EXPORT std::map<std::string, double> program_diagnostics() const;
+  /// Rank-owned exact Real-bit diagnostics; replacement belongs to the accepted restart transaction.
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_diagnostics() const;
+  POPS_EXPORT void validate_checkpoint_program_diagnostics(std::span<const std::uint8_t>) const;
+  POPS_EXPORT void restore_checkpoint_program_diagnostics(
+      std::span<const std::uint8_t> (*producer)(const void*), const void* context);
   /// Five current-attempt scalars for one typed balance route. RuntimeInstance calls this only
   /// inside its active outer accepted-step transaction; missing/stale/non-finite evidence fails.
   POPS_EXPORT std::map<std::string, double> accepted_balance_terms(const std::string& route) const;

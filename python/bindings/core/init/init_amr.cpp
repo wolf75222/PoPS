@@ -1226,6 +1226,45 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("program_diagnostic", &AmrSystem::program_diagnostic, py::arg("name"))
       .def("_program_integral", &AmrSystem::program_integral, py::arg("identity"))
       .def("program_diagnostics", &AmrSystem::program_diagnostics)
+      .def("_checkpoint_program_diagnostics",
+           [](const AmrSystem& s) {
+             const auto bytes = s.checkpoint_program_diagnostics();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def(
+          "_validate_checkpoint_program_diagnostics",
+          [](const AmrSystem& s, py::object payload) {
+            if (!PyBytes_CheckExact(payload.ptr()))
+              throw py::type_error("Program diagnostic checkpoint payload must be exact bytes");
+            char* data = nullptr;
+            Py_ssize_t size = 0;
+            if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
+              throw py::error_already_set();
+            s.validate_checkpoint_program_diagnostics(
+                {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)});
+          },
+          py::arg("payload"))
+      .def(
+          "_restore_checkpoint_program_diagnostics",
+          [](AmrSystem& s, py::object payload) {
+            // Type/byte extraction executes inside native preparation before its failure vote.
+            s.restore_checkpoint_program_diagnostics(
+                +[](const void* context) -> std::span<const std::uint8_t> {
+                  const auto& payload = *static_cast<const py::object*>(context);
+                  if (!PyBytes_CheckExact(payload.ptr()))
+                    throw py::type_error(
+                        "Program diagnostic checkpoint payload must be exact bytes");
+                  char* data = nullptr;
+                  Py_ssize_t size = 0;
+                  if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
+                    throw py::error_already_set();
+                  return {reinterpret_cast<const std::uint8_t*>(data),
+                          static_cast<std::size_t>(size)};
+                },
+                &payload);
+          },
+          py::arg("payload"))
+
       .def("_accepted_balance_terms", &AmrSystem::accepted_balance_terms, py::arg("route"))
       .def("_selected_accepted_balance_terms", &AmrSystem::selected_accepted_balance_terms,
            py::arg("route"), py::arg("block"), py::arg("component"), py::arg("levels"),

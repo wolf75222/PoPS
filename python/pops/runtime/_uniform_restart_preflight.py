@@ -163,11 +163,15 @@ def preflight_uniform_restart(payload: Any) -> None:
         "runtime_consumer_graph",
         "runtime_consumer_cursors",
         "runtime_consumer_diagnostics",
+        "program_diagnostics_state",
+        "program_diagnostics_offsets",
         MANIFEST_KEY,
         IDENTITY_KEY,
         *PROGRAM_CADENCE_CHECKPOINT_KEYS,
         *CONTINUATION_CHECKPOINT_KEYS,
     }
+    from pops.runtime._checkpoint_program_diagnostics import validate_checkpoint_program_diagnostic_arrays
+    validate_checkpoint_program_diagnostic_arrays(payload)
     if "blocks" in files:
         blocks = _text_vector(payload, "blocks", unique=True)
         for block in blocks:

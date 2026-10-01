@@ -1378,6 +1378,15 @@ class System {
   /// All recorded diagnostics (name -> last recorded value). Empty when the program records none.
   /// Exposed to Python as sim.program_diagnostics() (a dict); program_diagnostic(name) reads one.
   POPS_EXPORT std::map<std::string, Real> program_diagnostics() const;
+  /// Accepted, rank-local diagnostic image. Refuses an active native attempt.
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_diagnostics() const;
+  /// Decode/allocate without changing the live table; all values retain exact bits.
+  POPS_EXPORT void validate_checkpoint_program_diagnostics(std::span<const std::uint8_t>) const;
+  /// Replace the entire table inside an authenticated external restart transaction.
+  /// Empty bytes explicitly clear diagnostics absent from legacy archives.
+  POPS_EXPORT void restore_checkpoint_program_diagnostics(
+      std::span<const std::uint8_t> (*producer)(const void*), const void* context);
+
   /// Five current-attempt scalars for one typed balance route. RuntimeInstance calls this only
   /// inside its active outer accepted-step transaction; missing/stale/non-finite evidence fails.
   POPS_EXPORT std::map<std::string, Real> accepted_balance_terms(const std::string& route) const;

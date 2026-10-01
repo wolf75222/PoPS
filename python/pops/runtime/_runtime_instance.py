@@ -497,7 +497,8 @@ class RuntimeInstance:
                 "RuntimeInstance executor lacks its authenticated checkpoint resource authority"
             )
         # Copy the immutable executor authority into the wrapper during the bind transaction. No
-        # restart or checkpoint seam may install, infer or replace it later.
+        # restart or checkpoint seam may infer or replace it later. Only explicit accepted-boundary
+        # resource configuration may replace the authority after the bind transaction.
         self._checkpoint_resource_budget = resource_budget
         self._consumer_cursors = ConsumerCursorSet()
         self._consumer_cursor_authority = ConsumerCursorAuthority(self._consumer_cursors)
@@ -633,6 +634,17 @@ class RuntimeInstance:
     @property
     def last_run_manifest(self) -> Any:
         return getattr(self._executor, "last_run_manifest", None)
+
+    def configure_checkpoint_diagnostics(self, *, capacity_per_rank: int) -> None:
+        """Choose rank-local diagnostic archive bytes at an accepted boundary, collectively.
+
+        Includes codec headers, opaque names and exact value bits. The resource contract is
+        pops.program-diagnostics.checkpoint-capacity@1; it changes no physical/numerical control.
+        Call on every owner rank before capture/restart. Defaults inventory compiler-retained
+        literal diagnostic names; external/raw records may require a larger explicit capacity.
+        """
+        from ._checkpoint_resource_budget import configure_checkpoint_diagnostic_capacity
+        configure_checkpoint_diagnostic_capacity(self, capacity_per_rank)
 
     def _checkpoint_initial_temporal_state(self) -> Any:
         """Read accepted executor authority for the public checkpoint reseal.

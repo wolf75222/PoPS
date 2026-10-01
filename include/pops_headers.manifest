@@ -347,6 +347,7 @@ sdk-support pops/runtime/program/prepared_integral_capture.hpp
 sdk-support pops/runtime/program/program_cadence_continuation.inc
 sdk-support pops/runtime/program/prepared_condensed_sampling.hpp
 sdk-support pops/runtime/program/prepared_scalar_boundary_session.hpp
+sdk-support pops/runtime/program/program_diagnostics_checkpoint.hpp
 sdk-support pops/runtime/program/program_owner_field_identity.hpp
 sdk-support pops/runtime/program/prepared_tensor_boundary_session.hpp
 sdk-support pops/runtime/program/same_level_cell_temporal_provider.hpp
