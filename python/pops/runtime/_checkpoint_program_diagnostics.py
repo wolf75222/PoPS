@@ -11,6 +11,11 @@ import numpy as np
 _STATE = "program_diagnostics_state"
 _OFFSETS = "program_diagnostics_offsets"
 PROGRAM_DIAGNOSTIC_CHECKPOINT_KEYS = frozenset((_STATE, _OFFSETS))
+_CAPACITY_ERROR = (
+    "Program diagnostic checkpoint exceeds its chosen resource capacity; call "
+    "runtime.configure_checkpoint_diagnostics(capacity_per_rank=larger_bytes) "
+    "collectively before capture/restart"
+)
 
 
 def _exact_native_image(image, *, rank=None, ranks=None):
@@ -37,9 +42,14 @@ def capture_checkpoint_program_diagnostics(owner, payload):
         )
 
         _require_checkpoint_diagnostic_authority(owner)
+        capacity = getattr(owner, "_checkpoint_program_diagnostic_capacity_per_rank", None)
+        if type(capacity) is not int:
+            raise ValueError(_CAPACITY_ERROR)
         local = _exact_native_image(
             owner._s._checkpoint_program_diagnostics(), rank=topology.rank, ranks=topology.size
         )
+        if len(local) > capacity:
+            raise ValueError(_CAPACITY_ERROR)
     except BaseException as exc:
         error = exc
     consensus(topology, "accepted Program diagnostic preparation", error=error)
@@ -61,9 +71,7 @@ def capture_checkpoint_program_diagnostics(owner, payload):
             or type(bound) is not int
             or offsets[-1] > bound
         ):
-            raise ValueError(
-                "Program diagnostic checkpoint exceeds its chosen resource capacity; call runtime.configure_checkpoint_diagnostics(capacity_per_rank=larger_bytes) collectively before capture/restart"
-            )
+            raise ValueError(_CAPACITY_ERROR)
         raw = np.frombuffer(b"".join(images), dtype=np.uint8).copy()
         index = np.asarray(offsets, dtype=np.int64)
         payload[_STATE], payload[_OFFSETS] = raw, index
@@ -72,7 +80,7 @@ def capture_checkpoint_program_diagnostics(owner, payload):
     consensus(topology, "accepted Program diagnostic serialization", error=error)
 
 
-def validate_checkpoint_program_diagnostic_arrays(payload):
+def validate_checkpoint_program_diagnostic_arrays(payload, *, capacity=None, bound=None):
     present = PROGRAM_DIAGNOSTIC_CHECKPOINT_KEYS.intersection(payload)
     if not present:
         return False  # Explicit legacy absence; restart replaces with empty, not stale data.
@@ -90,8 +98,18 @@ def validate_checkpoint_program_diagnostic_arrays(payload):
         or np.any(index[1:] <= index[:-1])
     ):
         raise ValueError("Program diagnostic checkpoint rank image arrays are malformed")
+    if capacity is not None and (
+        type(capacity) is not int
+        or type(bound) is not int
+        or len(raw) > bound
+        or any(int(hi) - int(lo) > capacity for lo, hi in zip(index[:-1], index[1:], strict=True))
+    ):
+        raise ValueError(_CAPACITY_ERROR)
     for rank, (lo, hi) in enumerate(zip(index[:-1], index[1:], strict=True)):
-        _exact_native_image(raw[int(lo) : int(hi)].tobytes(), rank=rank, ranks=len(index) - 1)
+        if int(hi) - int(lo) < 40:
+            raise ValueError("Program diagnostic checkpoint is not an exact native @1 image")
+        # Only the fixed header is copied here, never a possibly oversized body.
+        _exact_native_image(raw[int(lo) : int(lo) + 40].tobytes(), rank=rank, ranks=len(index) - 1)
     return True
 
 
@@ -102,23 +120,18 @@ def prepare_checkpoint_program_diagnostics(owner, payload):
 
     _require_checkpoint_diagnostic_authority(owner)
     topology = checkpoint_topology(owner)
-    present = validate_checkpoint_program_diagnostic_arrays(payload)
+    capacity = getattr(owner, "_checkpoint_program_diagnostic_capacity_per_rank", None)
+    bound = getattr(owner, "_checkpoint_program_diagnostic_byte_capacity", None)
+    if PROGRAM_DIAGNOSTIC_CHECKPOINT_KEYS.intersection(payload) and (
+        type(capacity) is not int or type(bound) is not int
+    ):
+        raise ValueError(_CAPACITY_ERROR)
+    present = validate_checkpoint_program_diagnostic_arrays(payload, capacity=capacity, bound=bound)
     image = b""
     if present:
         raw, index = payload[_STATE], payload[_OFFSETS]
         if len(index) != topology.size + 1:
             raise ValueError("Program diagnostic checkpoint belongs to another rank count")
-        bound = getattr(owner, "_checkpoint_program_diagnostic_byte_capacity", None)
-        capacity = getattr(owner, "_checkpoint_program_diagnostic_capacity_per_rank", None)
-        if (
-            type(capacity) is not int
-            or any(int(hi - lo) > capacity for lo, hi in zip(index[:-1], index[1:], strict=True))
-            or type(bound) is not int
-            or len(raw) > bound
-        ):
-            raise ValueError(
-                "Program diagnostic checkpoint exceeds its chosen resource capacity; call runtime.configure_checkpoint_diagnostics(capacity_per_rank=larger_bytes) collectively before capture/restart"
-            )
         image = np.asarray(raw)[int(index[topology.rank]) : int(index[topology.rank + 1])].tobytes()
     owner._s._validate_checkpoint_program_diagnostics(image)
     return image

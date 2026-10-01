@@ -62,6 +62,19 @@ are enforced, including when one oversized shard would fit the aggregate. Public
 does not change the contents of an old checkpoint. It allocates no arbitrary global diagnostic
 limit in C++.
 
+The archive/transport reserve is checked locally and its admission voted on the owner lane
+before `allgather_bytes`. A failing peer therefore cannot send an oversized image. Read-only
+array validation copies only each fixed 40-byte header; owner preflight checks all shard lengths
+and the aggregate capacity before copying the selected rank body for native validation. The
+remaining post-gather checks defend transport results before joining the admitted images.
+
+This contract does not bound total runtime RAM. The existing accepted native map and the local
+native encoding can allocate their full contents before the serialized-length guard, and NumPy
+archive decoding has the separate live NPZ/ZIP resource budget. In particular, a raw diagnostic
+map larger than the selected reserve can create a large local encoded image, but that image is
+refused before collective byte transport. Capacity is neither a native map allocation limit nor
+a claim about peak memory during encoding, gathering, or archive construction.
+
 ## Retained source evidence and bind compatibility
 
 `pops.compiled-program.source-evidence@1` is a frozen local attestation captured when
@@ -85,6 +98,13 @@ The closed donor inventory has no authenticated rank-one Program text. Equal pro
 in the separate pending inventory are not used as a substitute for that missing comparison.
 
 ## Bounded checks and remaining reception
+
+The allocation-order follow-up at base `0298d696` passed 28 source/runtime checks and the three
+existing extracted native codec/restore/real-header syntax checks on 2026-10-01. Four new tests
+observe the actual Python helper's refused local/peer transport, unchanged payload, fixed-header
+copies and admitted owner-only body copy. Transport and peer votes in those tests are explicit
+substitutes; they do not qualify real MPI or Kokkos execution. No native header changed in this
+follow-up.
 
 On 2026-10-01, source-only Python used this private checkout through explicit `PYTHONPATH=python`
 and the existing `pops-api040/bin/python`, without installing or executing its native package.

@@ -316,6 +316,65 @@ def test_capture_and_preflight_rank_local_bits_legacy_and_perrank_bounds(monkeyp
         codec.capture_checkpoint_program_diagnostics(engine, {})
 
 
+@pytest.mark.parametrize("refusal", ("oversized", "unconfigured", "peer"))
+def test_capture_capacity_votes_before_transport(monkeypatch, refusal):
+    from pops import _native_collectives
+
+    calls = seam(monkeypatch, ranks=2, remote_error=refusal == "peer")
+    engine = owner(ranks=2, capacity=None if refusal == "unconfigured" else 60)
+    encoded = []
+
+    def capture():
+        encoded.append(True)
+        return image(0, 2, ((b"large" * 20, 1),)) if refusal == "oversized" else image(0, 2)
+
+    engine._s._checkpoint_program_diagnostics = capture
+    monkeypatch.setattr(
+        _native_collectives, "allgather_bytes", lambda *_: pytest.fail("transport before admission")
+    )
+    payload = {"preserved": object()}
+    original = dict(payload)
+    with pytest.raises((ValueError, RuntimeError)):
+        codec.capture_checkpoint_program_diagnostics(engine, payload)
+    assert payload == original
+    assert len(calls) == 1 and calls[0][0] == "accepted Program diagnostic preparation"
+    assert encoded == ([] if refusal == "unconfigured" else [True])
+
+
+def test_array_preflight_copies_only_headers_then_admitted_owner_body(monkeypatch):
+    seam(monkeypatch, ranks=2)
+    copies = []
+
+    class TracedArray(np.ndarray):
+        def tobytes(self, *args, **kwargs):
+            copies.append(len(self))
+            return super().tobytes(*args, **kwargs)
+
+    asarray = np.asarray
+    monkeypatch.setattr(
+        codec.np, "asarray", lambda data, *a, **kw: asarray(data, *a, **kw).view(TracedArray)
+    )
+    records = (image(0, 2, ((b"x" * 30, 1),)), image(1, 2))
+    payload = {
+        NAMES[0]: np.frombuffer(b"".join(records), dtype=np.uint8).view(TracedArray),
+        NAMES[1]: np.array([0, len(records[0]), sum(map(len, records))], dtype=np.int64),
+    }
+    # General archive preflight may inspect headers before owner admission, never full bodies.
+    assert codec.validate_checkpoint_program_diagnostic_arrays(payload)
+    assert copies == [40, 40]
+    copies.clear()
+    engine = owner(ranks=2, capacity=70)
+    engine._s._validate_checkpoint_program_diagnostics = lambda _: pytest.fail("oversized native input")
+    with pytest.raises(ValueError, match="configure_checkpoint_diagnostics"):
+        codec.prepare_checkpoint_program_diagnostics(engine, payload)
+    assert copies == []
+    checked = []
+    engine = owner(ranks=2, capacity=100)
+    engine._s._validate_checkpoint_program_diagnostics = checked.append
+    assert codec.prepare_checkpoint_program_diagnostics(engine, payload) == records[0]
+    assert copies == [40, 40, len(records[0])] and checked == [records[0]]
+
+
 @pytest.mark.parametrize("attack", ("partial", "dtype", "offset", "empty", "rankdup", "rankcount"))
 def test_arrays_refuse_before_native_or_publication(monkeypatch, attack):
     seam(monkeypatch, ranks=2)
