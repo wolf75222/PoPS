@@ -1,0 +1,84 @@
+{
+  "build": {
+    "bytes": 4146,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-bb668797/build-reception.json",
+    "sha256": "3b62a3bf2cf4a0275c98064aa1c7737fa35a47052740be898ba7f0147ac4ac57"
+  },
+  "causal_native_trace": {
+    "generated_cpp": {
+      "bytes": 73001,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdka37-amr-tagging-diagnostic/program-0.cpp",
+      "sha256": "1fe452ee233d1ca4e3fa0d825bc99e051beb428684bab9eae71e4b420f16e0c8"
+    },
+    "result": {
+      "bytes": 1073,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdka37-amr-tagging-diagnostic/result.json",
+      "sha256": "aef30244e5774acc795353cc2d5328d7ef211763eead390c87a9b05297134543"
+    },
+    "script": {
+      "bytes": 3904,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdka37-amr-tagging-diagnostic.py",
+      "sha256": "5e4e345381a484e47f5109c138fb5e411f27c9c75373951309d988570da6d559"
+    },
+    "source_program_ir": {
+      "bytes": 334270,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdka37-amr-tagging-diagnostic/program-0.json",
+      "sha256": "212ce623cd17a1f45d1c81c1337f061e01dd9b376c30d6e3c8231ccc9a6ade9f"
+    },
+    "trace": {
+      "bytes": 4846,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdka37-amr-tagging-diagnostic/trace.json",
+      "sha256": "eaa2e47003df3c984ab45261cf9a9c8de21188f762bd65a2acbc5a34938494b6"
+    }
+  },
+  "contract_cause": "Native bound mesh_marker variable and 1.03 threshold are correct. Transition nesting buffer2 + derived nesting lookahead1 are conflated with candidate tag dilation, expanding the 2-column tag band across N8.",
+  "counts": {
+    "errors": 0,
+    "failures": 1,
+    "skipped": 0,
+    "tests": 1
+  },
+  "cpp_to_dso_cryptographic_graph_proof": false,
+  "elapsed_seconds": 68.76271379180253,
+  "identity_after": {
+    "bytes": 2917,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-representative-serial-dim2/after/identity.json",
+    "sha256": "f0b06724ed2543cb6d06c4107f559a130b45a4a033cd6749693b2783f88ca6c6"
+  },
+  "identity_before": {
+    "bytes": 2917,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-representative-serial-dim2/identity.json",
+    "sha256": "f0b06724ed2543cb6d06c4107f559a130b45a4a033cd6749693b2783f88ca6c6"
+  },
+  "independent_causal_review_commit": "f492a1c0",
+  "installed_package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/__init__.py",
+  "installed_source_files": 1132,
+  "log": {
+    "bytes": 2863,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-representative-serial-dim2/pytest.log",
+    "sha256": "99b0bc536e8d6816a57948823edccf53c4c09ed987752401034202bbb9cd411e"
+  },
+  "mpi_gpu_acceptance": false,
+  "native_scientific_acceptance": false,
+  "native_sha256": "13b3d024eed5f2776e96dbee6f674fe2e7f48ccf3ff31382b13749444cfe18f7",
+  "preserved_package": {
+    "bytes": 934,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/preserved-sdka37c-pre-tag-selection-package.json",
+    "sha256": "a6977fa20573422fc8e2089e24fa1a73d9a3d389f48c2f122d0e19c17e437d26"
+  },
+  "reached": "Two accepted native steps, checkpoints, restart and replay; full carrier/history/diagnostic/lifecycle equality assertions precede terminal failure.",
+  "result": {
+    "bytes": 1707,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-representative-serial-dim2/result.json",
+    "sha256": "e4c0ab69e75c28795bc13e31407471a0dc1b746de312d22e9fd7a04c65f804c7"
+  },
+  "schema": "root.api040.sdka37c-amr12-representative-attempt@1",
+  "source_commit": "bb668797c2bc15b9fcfc744e94d9bde874ec5e7d",
+  "source_inventory_unchanged": true,
+  "terminal_failure": "check_saved requires partly active coarse level, but actual initial/accepted coarse mask is 0/64 and fine is 256/256.",
+  "xml": {
+    "bytes": 1517,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-representative-serial-dim2/pytest.xml",
+    "sha256": "9dcfe1797891a917d04758b10e2fd5c39b328d96cdcc19a0babd1e33974c30a3"
+  }
+}
