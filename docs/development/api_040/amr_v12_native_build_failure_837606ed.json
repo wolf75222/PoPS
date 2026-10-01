@@ -1,0 +1,33 @@
+{
+  "schema": "root.api040.amr-v12-native-build-failure@1",
+  "source_commit": "837606ed016f1770ba964c4a76ec5ae342a20e43",
+  "dimension": 2,
+  "returncode": 1,
+  "closed_at": "2026-10-01T20:19:53.046811+00:00",
+  "failure": {
+    "source": "src/runtime/amr/amr_system.cpp",
+    "line": 11096,
+    "diagnostic": "no member named 'allgather_bytes' in 'pops::ExecutionLane'",
+    "cause": "Method belongs to ObserverMpiLane; source inspection misattributed its enclosing class."
+  },
+  "driver_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-837606ed/build-reception.json",
+    "bytes": 1318,
+    "sha256": "b0cbafa6e86d01991229ea961e007969910e5fc218866275e257d77760a7859b"
+  },
+  "build_log": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-837606ed/build.log",
+    "bytes": 7503,
+    "sha256": "01b4b869bcf369cf2800061486bbe0dc19ef68d965fee7fe6e6da10627a28d4b"
+  },
+  "source_and_preserved_sdk2e4_unchanged": true,
+  "author_correction_commit": "0690571a079e3817276bb03439387aa0955276a4",
+  "integrated_source_correction_commit": "73b4b892",
+  "independent_review_commit": "e96ee9e7",
+  "host_probe_scope": "Exact source transport block compiled against actual headers; serial empty/NUL/70000-byte payloads pass.",
+  "replacement_native_build_source": "bb668797c2bc15b9fcfc744e94d9bde874ec5e7d",
+  "replacement_native_build_pass": false,
+  "native_scientific_acceptance": false,
+  "mpi_gpu_acceptance": false,
+  "cpp_to_dso_cryptographic_graph_proof": false
+}
