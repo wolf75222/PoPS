@@ -1,0 +1,27 @@
+# AMR reader @3: NativeABI6, accepted8, TagSelection1
+
+Private Source worktree based on MAINcd0ebd61. Production, native worktree and installed ENV remain untouched. Historical @1/CP11 and @2/CP12-schema7 reader files and qualifications are byte-for-byte unchanged.
+
+New `sol61_evolved_stage_amr_saved_reception_v3.py` uses owner pins @3 and ROOT approval @3, qualification `homogeneous-original-composite-Q-tag-selection@3`. It requires CP12 with POPSCAR1, accepted schema8 and exact authored Buffer0 TagSelection1 rows: `[pops.amr.tag-selection@1,1]`, `[tag-buffer,0,0]`, `[parent-coverage,0,2,2,1,2,2,1]`, all native fields represented as strings. There is exactly one rank-two spatial transition, ratio2 in each axis, numerical parent buffer2 and lookahead1. Those values are not used to invent a physical tag mask or weaken the coarse-active N8 guard.
+
+Norms read: native checkpoint_tag_selection_contract and checkpoint_transfer_routes, Python accepted-contract schema8, public StateTransfer route capabilities and authored original fixture. Nonempty typed interpolation identities, dimension2 and ratio2, canonical order/ghost widths and the declared conservative-linear/volume-average/conservative-coarse-fine/linear-time interpolation kernels are checked. Second-order route requirements must support ranked ghost width2 and lookahead1. Original Q/T/aux field-provider identity/depth provenance is mandatory. Accepted ledgers and rational clocks retain the previous strict checks. Missing/mutated tags, absent provenance and schema7 are refused.
+
+Checkpoint math/CP12/full-carrier wire validation reuses the exact @2 checkpoint code object through a new FunctionType with a copy of its globals. The only differing binding is accepted_contract, now the strict @3 callback. No historical module, function or wire global is patched. Tests check function/code-object bijection, distinct namespaces, exactly one changed binding and historical acceptance/refusal separately. The scientific receive orchestration is static @3 code with distinct seals; shared mathematical and binary-codec helpers remain immutable imports. This avoids copying the entire600-line reader while keeping @1/@2 semantics unchanged.
+
+NativeABI6 is explicit exact-int owner-pins field native_abi_version. A mandatory pin native_abi_receipt authenticates ROOT's actual runtime observation JSON with exact keys schema,native,header_signature,module_abi_version,capability_abi_version,release_native_abi_version. Schema is root.api040.native-abi@1; native is the exact DSO path+sha256 from owner pins; header_signature is a nonempty actual ROOT header-origin string; each of the three versions must be exact int6. Package manifest remains an authenticated opaque file, without a guessed schema. Header signature/source-to-DSO authenticity remains ROOT-attested, not cryptographically reconstructed here. Old actual DSO ABI5 cannot enter @3. This work supplies no NativeABI runtime receipt.
+
+Actual local Source validate/resolve/_serialize for original N8 widths1/2 both emits ProgramIR16, with pops._pops absent. Therefore the retained16/17 reader guard is appropriate to this declared source; it is not an artificial downgrade of a21 program. The source build AST guard remains unchanged. No model was compiled, bound or run in this check.
+
+New candidate helper `sol61_amr_owner_candidate_v3.py` reuses the original inventory assembler code in a private globals namespace with reader@3, then requires NativeABI6 receipt and accepted8/TagSelection1 for every accepted/continuous/replay checkpoint before naming a @3 candidate. No @2 owner object is accepted as a scientific proof or relabeled into approval. Output remains candidate_pending_ROOT_audit and scientific_reception=false. Add native_abi_version:6 and the absolute native_abi_receipt path to the earlier candidate spec; external roots must contain that actual receipt. ROOT alone audits and issues both final immutable external seals.
+
+Commands:
+
+```sh
+rtk proxy env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops/bin/python tests/review/sol61_evolved_stage_amr_saved_reception_v3.py contract
+rtk proxy env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops/bin/python tests/review/sol61_amr_owner_candidate_v3.py /absolute/actual-spec.json /absolute/candidate-pending-root-audit.json
+rtk proxy env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops/bin/python tests/review/sol61_evolved_stage_amr_saved_reception_v3.py receive --pins /absolute/root-owner3.json --pins-sha256 ROOT_EXTERNAL_SHA --approval /absolute/root-approval3.json --approval-sha256 ROOT_EXTERNAL_SHA
+```
+
+The last two commands contain descriptive placeholders, never fabricated seals. `contract` is only a description/template, not approval.
+
+Source verification: **136 PASS,1.91s** (new profile34, candidate6, previous candidate8 and reader88). Counterexamples mutate accepted schema, tag version/buffer/rank/ratio/nesting/lookahead/transition/types, interpolation identity/kernel/ghost width/order/rank/duplicates, field identity/depth, provisional ledgers/clocks, NativeABI module/capability/release versions, DSO pin/header presence, old seals and resealed checkpoint profile arrays. Candidate Source tests explicitly stub source/CPP admission to isolate inventory plumbing; no synthetic image, XML or version declaration is a Native receipt. No full scientific receive, ROOT seal, native run, JIT/build or ENV mutation occurs. Root's rebuilt NativeABI6 + actual four-case Serial/MPI2 science remains pending.
