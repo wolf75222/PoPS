@@ -1,0 +1,137 @@
+{
+  "build": {
+    "CMakeCache.txt": {
+      "bytes": 32716,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-ir20-ir21-dim2-7dd325d4/CMakeCache.txt",
+      "sha256": "6cba0ae826728b53880215a78f4a49775cde54eef94b7787c048e4cc5e86c07c"
+    },
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=5ec7f246c3670e526f6c3ea9bbe503b2e808977e30ffafaef282c4dba5618fbe;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=4f0ddfff213bbc8f41ec9b7c80af3672d966f0527a55a041ed2b7e91e90198ab;dim=2",
+    "build.ninja": {
+      "bytes": 97822,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-ir20-ir21-dim2-7dd325d4/build.ninja",
+      "sha256": "df14dfa8c940adffe15ba966cd7731313d361db9abc6fff2336d4ab7179ceafb"
+    },
+    "build_log": {
+      "bytes": 68041,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-ir20-ir21-dim2-7dd325d4/build.log",
+      "sha256": "e645f43885de0a1a3a036f991fcb82459172385b918aef0ade71fcffb9431ad5"
+    },
+    "build_returncode": 0,
+    "closed_at": "2026-10-01T18:54:51.102922+00:00",
+    "command": {
+      "bytes": 1408,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-ir20-ir21-dim2-7dd325d4/command.json",
+      "sha256": "cf9b1f41b70025677412875b02625e4266714b058ad2d5d3f67f9d21da728c37"
+    },
+    "compile_commands.json": {
+      "bytes": 51436,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-ir20-ir21-dim2-7dd325d4/compile_commands.json",
+      "sha256": "9f9a71569d4d986c79d76f2cadc53297d18162caf10f526b9ac1fcbc475d20de"
+    },
+    "cpp_to_dso_cryptographic_graph_proof": false,
+    "dimension": 2,
+    "environment": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17",
+    "installed_identity": {
+      "bytes": 2917,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-ir20-ir21-dim2-7dd325d4/installed-identity/identity.json",
+      "sha256": "e3d02cc492031d234d3234c5abb58604ad2c870cc891a60bda4919144762b271"
+    },
+    "installed_identity_returncode": 0,
+    "native": {
+      "bytes": 13589464,
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+      "sha256": "9c2dd647d7ba1bae703e042c507f2d9a592c4f56e2baae65556905e9bbd98c33"
+    },
+    "native_scientific_acceptance": false,
+    "ninja_commands": {
+      "bytes": 50600,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-ir20-ir21-dim2-7dd325d4/ninja-commands.txt",
+      "sha256": "45b275819a43a19487715ceb49716ee53aa31ae58e08d1962973b800ca2bef69"
+    },
+    "preserved_copy_receipt": {
+      "bytes": 1585,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/next-sdk-environment-clone-reception.json",
+      "sha256": "02cdf62b13bd97eadcfc3bc8dc9867c880642843d660a605c404b4473e1775ae"
+    },
+    "preserved_sdk2e4_unchanged": true,
+    "production_bytes_unchanged": true,
+    "schema": "root.api040.repository-native-build@3",
+    "sdk_manifest_file": {
+      "bytes": 21537,
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/include/pops_headers.manifest",
+      "sha256": "64801a0868bed87060d969ebe1911b4c5937bbe72f55c96000e6c9ae60d9dbac"
+    },
+    "source_commit": "7dd325d48636dda590ee5aaf2ed34aaf43b74d0c",
+    "source_file_count": 1225,
+    "source_head_unchanged": true,
+    "verified_installed_source_files": 1130,
+    "wheel": {
+      "bytes": 8910128,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-ir20-ir21-dim2-7dd325d4/retained-wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+      "sha256": "d491a9e7abbd0a568575363845983d0b96edb477c801f8a04b2c0e99dd8ac6bd"
+    },
+    "wheel_and_installed_native_bytes_equal": true,
+    "wheel_native_member": "pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "wheel_native_member_sha256": "9c2dd647d7ba1bae703e042c507f2d9a592c4f56e2baae65556905e9bbd98c33"
+  },
+  "build_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-ir20-ir21-dim2-7dd325d4/build-reception.json",
+    "sha256": "71a458ceadd21d2963f9650bcf826b007685ada5a5cd7ffb0ade4a8ab1ad7a63"
+  },
+  "current_scope": "Installed Dim2 SDK5ec source7dd325d4; exact source/installed authentication and real build, no full AMR/nonlocal acceptance. Dims1/3 copied and incompatible.",
+  "native_scientific_acceptance": false,
+  "schema": "root.api040.sdk5ec-native-build@1",
+  "sdk5ec-amr-full-fixture-diagnostic": {
+    "error": "Traceback (most recent call last):\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/python/support/collective_checks.py\", line 40, in collective_check\n    yield\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/python/integration/runtime/test_public_evolved_stage_amr.py\", line 192, in test_public_evolved_stage_amr_checkpoint_and_composite_Q\n    same_images(reloaded, phases[\"accepted\"])\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/python/integration/runtime/test_public_evolved_stage_amr.py\", line 64, in same_images\n    assert left[1] == right[1] and len(left[0]) == len(right[0])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk5ec-amr-full-fixture-diagnostic.py\", line 35, in <module>\n    stage(\"complete-public-native-fixture\",lambda:test_public_evolved_stage_amr_checkpoint_and_composite_Q(OUT/\"cache\",data,lambda k,v:records.append((k,v)),8,1))\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk5ec-amr-full-fixture-diagnostic.py\", line 27, in stage\n    t=time.monotonic();v=fn();rows.append({\"stage\":label,\"seconds\":time.monotonic()-t})\n                         ^^^^\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk5ec-amr-full-fixture-diagnostic.py\", line 35, in <lambda>\n    stage(\"complete-public-native-fixture\",lambda:test_public_evolved_stage_amr_checkpoint_and_composite_Q(OUT/\"cache\",data,lambda k,v:records.append((k,v)),8,1))\n                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/python/integration/runtime/test_public_evolved_stage_amr.py\", line 191, in test_public_evolved_stage_amr_checkpoint_and_composite_Q\n    with collective_check(world):\n         ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/contextlib.py\", line 158, in __exit__\n    self.gen.throw(value)\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/python/support/collective_checks.py\", line 44, in collective_check\n    assert not any(failures), failures\n           ^^^^^^^^^^^^^^^^^\nAssertionError: (('AssertionError', '', False),)\n",
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk5ec-amr-full-fixture-diagnostic/result.json",
+    "receipt_sha256": "eab49b5c198f6ecef90b239d692e0b0a4ed98854c53d01ef7f9b7191e2567f6e",
+    "seconds": 20.309218666981906,
+    "stages": [],
+    "status": "failed"
+  },
+  "sdk5ec-amr-representative-diagnostic": {
+    "error": null,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk5ec-amr-representative-diagnostic/result.json",
+    "receipt_sha256": "242125cf3c254f0c7dab7fb84a1b2e6de497ef2713af1a181228bf0531d3f094",
+    "seconds": 14.820334790972993,
+    "stages": [
+      {
+        "seconds": 0.5515012920368463,
+        "stage": "public-build"
+      },
+      {
+        "seconds": 0.9713114998303354,
+        "stage": "validate"
+      },
+      {
+        "seconds": 2.400695083895698,
+        "stage": "resolve"
+      },
+      {
+        "seconds": 6.603667249903083,
+        "stage": "compile"
+      },
+      {
+        "seconds": 0.004224833101034164,
+        "stage": "execution-context"
+      },
+      {
+        "seconds": 3.1267823327798396,
+        "stage": "bind"
+      },
+      {
+        "seconds": 0.3342469579074532,
+        "stage": "run-first-step"
+      }
+    ],
+    "status": "passed"
+  },
+  "sdk5ec-amr-restart-image-diagnostic": {
+    "error": "Traceback (most recent call last):\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/python/support/collective_checks.py\", line 40, in collective_check\n    yield\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/python/integration/runtime/test_public_evolved_stage_amr.py\", line 192, in test_public_evolved_stage_amr_checkpoint_and_composite_Q\n    same_images(reloaded, phases[\"accepted\"])\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk5ec-amr-restart-image-diagnostic.py\", line 40, in record_images\n    return original(left,right)\n           ^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/python/integration/runtime/test_public_evolved_stage_amr.py\", line 64, in same_images\n    assert left[1] == right[1] and len(left[0]) == len(right[0])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk5ec-amr-restart-image-diagnostic.py\", line 45, in <module>\n    stage(\"complete-public-native-fixture\",lambda:test_public_evolved_stage_amr_checkpoint_and_composite_Q(OUT/\"cache\",data,lambda k,v:records.append((k,v)),8,1))\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk5ec-amr-restart-image-diagnostic.py\", line 27, in stage\n    t=time.monotonic();v=fn();rows.append({\"stage\":label,\"seconds\":time.monotonic()-t})\n                         ^^^^\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk5ec-amr-restart-image-diagnostic.py\", line 45, in <lambda>\n    stage(\"complete-public-native-fixture\",lambda:test_public_evolved_stage_amr_checkpoint_and_composite_Q(OUT/\"cache\",data,lambda k,v:records.append((k,v)),8,1))\n                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/python/integration/runtime/test_public_evolved_stage_amr.py\", line 191, in test_public_evolved_stage_amr_checkpoint_and_composite_Q\n    with collective_check(world):\n         ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/contextlib.py\", line 158, in __exit__\n    self.gen.throw(value)\n  File \"/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/python/support/collective_checks.py\", line 44, in collective_check\n    assert not any(failures), failures\n           ^^^^^^^^^^^^^^^^^\nAssertionError: (('AssertionError', '', False),)\n",
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk5ec-amr-restart-image-diagnostic/result.json",
+    "receipt_sha256": "3ee0a17dd5cfdc75daa5b41517cb29b001c54bfcadff4e6f9f0a28c4b31b8cd3",
+    "seconds": 19.912791916867718,
+    "stages": [],
+    "status": "failed"
+  }
+}

@@ -1786,6 +1786,17 @@
         "negative_countermodels_refused": 19,
         "strong_cpp_dso_link_qualified": false,
         "migration_complete": false
+      },
+      "sdk5ec_dim2_build_and_amr_full_storage_defect": {
+        "id": "sdk5ec_dim2_build_and_amr_full_storage_defect",
+        "receipt": "sdk5ec7_dim2_native_build.json",
+        "source_commit": "7dd325d48636dda590ee5aaf2ed34aaf43b74d0c",
+        "backend": "arm64 LLVM21 Kokkos5.2 Serial/OpenMP MPICH4.1.2 Dim2",
+        "status": "build_authentic_representative_run_pass_full_restart_fail",
+        "native_scientific_acceptance": false,
+        "exact_defect": "coarse state ghosts absent from v11 persistence; valid fields/history/diagnostics/clocks exact",
+        "next_action": "native v12 full-state carrier codec build and full fixture reception",
+        "principles_core_remaining": "M14–16 central Hermite recipe/canonical affine ordering; generic-core composition audit4562ee3c"
       }
     },
     "limits": [

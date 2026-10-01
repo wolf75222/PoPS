@@ -38,6 +38,7 @@ class _PreparedAMRRestart:
     owner_ranks: tuple[int, ...]
     multi: bool
     state_payload: tuple[Any, ...]
+    state_carrier_checkpoint: bytes
     auxiliary_checkpoint_payload: tuple[bytes, ...]
     history_flux_snapshot_shards: tuple[bytes, ...] | None
     exchange_checkpoint: bytes
@@ -529,10 +530,11 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     for index, value in enumerate(field_levels):
         out["field_provider_levels_%d" % index] = value
     capture_identity = make_identity(
-        "checkpoint-capture-plan-v2",
+        "checkpoint-capture-plan-v3",
         {
             "runtime_kind": "amr",
             "program_diagnostic_archive": "pops.program-diagnostics.archive@1",
+            "state_carriers_contract": "pops.amr.state-carriers-checkpoint@1",
             "target": str(target),
             "clock": {"time": time.hex(), "macro_step": macro_step},
             "spatial_contract": spatial.to_data(),
@@ -729,6 +731,9 @@ def _capture_v3(owner, sim, prepared):
 
     final_accepted_contract = encode_contract(sim)
     out["amr_accepted_contract"] = final_accepted_contract
+    from pops.runtime._checkpoint_state_carriers import capture_checkpoint_state_carriers
+
+    capture_checkpoint_state_carriers(owner, sim, out)
     auxiliary_checkpoint = sim.capture_auxiliary_checkpoint_accepted_state()
     if type(auxiliary_checkpoint) is not list or len(auxiliary_checkpoint) != prepared.levels:
         raise RuntimeError(
@@ -810,7 +815,7 @@ def prepare_v3(
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
 ):
-    """Validate an accepted-state v11 AMR payload without mutating the native engine.
+    """Validate an accepted-state v12 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
@@ -921,7 +926,7 @@ def prepare_v3(
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # Program-hash guard: an accepted-state v11 checkpoint refuses a different compiled Program.
+    # Program-hash guard: an accepted-state v12 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
@@ -1134,6 +1139,7 @@ def prepare_v3(
     from pops.runtime._checkpoint_program_diagnostics import prepare_checkpoint_program_diagnostics
     from pops.runtime._checkpoint_exchanges import prepare_checkpoint_continuation
     from pops.runtime._checkpoint_history_flux_snapshots import prepare_history_flux_snapshots
+    from pops.runtime._checkpoint_state_carriers import prepare_checkpoint_state_carriers
     snapshot_capacity_provider = getattr(
         sim, "_checkpoint_program_history_flux_snapshot_capacity", None
     )
@@ -1160,6 +1166,7 @@ def prepare_v3(
         owner_ranks=tuple(int(rank) for rank in owner_ranks),
         multi=bool(multi),
         state_payload=tuple((block, tuple(levels)) for block, levels in state_payload),
+        state_carrier_checkpoint=prepare_checkpoint_state_carriers(owner, sim, d),
         auxiliary_checkpoint_payload=tuple(auxiliary_checkpoint_payload),
         history_flux_snapshot_shards=history_flux_snapshot_shards,
         exchange_checkpoint=prepare_checkpoint_continuation(owner, d),
@@ -1488,6 +1495,10 @@ def apply_v3(owner, sim, prepared):
             [slot for slot, _levels in prepared.field_payload],
             [[value.tolist() for value in levels] for _slot, levels in prepared.field_payload],
         )
+    # Global valid-cell arrays do not preserve patch-local ghosts. Restore the
+    # authenticated native storage after replay and the final topology mutation,
+    # before validating the exact recorded image or invoking RegridOnRestart.
+    sim.restore_checkpoint_state_carriers(prepared.state_carrier_checkpoint)
     if prepared.hierarchy_mode == "regrid_on_restart":
         _restart_collective_phase(
             owner,
