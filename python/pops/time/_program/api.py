@@ -66,6 +66,8 @@ class Program(
     """
 
     def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_global_field_history_issuance" and hasattr(self, name):
+            raise AttributeError("global field history original issuance cannot be replaced")
         if name == "name" and hasattr(self, "name"):
             raise AttributeError(
                 "pops.time.Program name is an immutable identity anchor; construct a new Program"
@@ -78,6 +80,8 @@ class Program(
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
+        if name == "_global_field_history_issuance" and hasattr(self, name):
+            raise AttributeError("global field history original issuance cannot be deleted")
         if name == "name":
             raise AttributeError(
                 "pops.time.Program name is an immutable identity anchor; construct a new Program"

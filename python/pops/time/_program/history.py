@@ -240,8 +240,9 @@ class _ProgramHistory(_ProgramBase):
         require_top_level(self, value, "store_history")
         storage = None
         if owner_block is not None:
-            from .global_history_storage import storage_contract
+            from .global_history_storage import prepare_issuance, storage_contract
             storage = storage_contract(self, value, owner_block)
+            issued_storage = prepare_issuance(self, name, storage)
         storage_owner = value.block if storage is None else owner_block
         declared_lag = self._histories.get(name, 0)
         if history_depth is None:
@@ -307,6 +308,9 @@ class _ProgramHistory(_ProgramBase):
             "state", "store_history", (value,),
             attrs, name, storage_owner,
             space=value.space, state_ref=value.state_ref)
+        if storage is not None:
+            from .global_history_storage import publish_issuance
+            publish_issuance(self, name, issued_storage)
         self._histories[name] = max_lag
         self._history_persistence[name] = (ring_slots, policy)
         return node

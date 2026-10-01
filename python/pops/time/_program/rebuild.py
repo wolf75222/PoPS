@@ -73,6 +73,8 @@ def rebuild_program(
         raise TypeError("Program._rebuild registry_keep must be callable or None")
     if not isinstance(canonical_owner, bool):
         raise TypeError("Program._rebuild canonical_owner must be bool")
+    from .global_history_storage import transfer_issuances, validate_issuances
+    validate_issuances(self)
     out = type(self)(self.name)
     if canonical_owner:
         object.__setattr__(out, "_owner_path", out.owner_path.canonical())
@@ -299,10 +301,19 @@ def rebuild_program(
             % (type(value).__module__, type(value).__qualname__)
         )
 
+    def remap_storage_metadata(image: Any) -> Any:
+        mapped = remap_metadata(image)
+        mapped["clock"] = remap_clock(image["clock"])
+        mapped["point"] = remap_point(image["point"])
+        mapped["region"] = mapped_region(image["region"])
+        return mapped
+
     def clone_attrs(v: Any) -> Any:
         attrs = {}
         for key, val in v.attrs.items():
-            if key in ("parent_clock", "child_clock"):
+            if key == "global_field_storage":
+                attrs[key] = remap_storage_metadata(val)
+            elif key in ("parent_clock", "child_clock"):
                 attrs[key] = remap_clock(val)
             elif key in ("cond_block", "body_block", "apply_block", "residual_block",
                        "true_block", "false_block"):
@@ -426,6 +437,7 @@ def rebuild_program(
         out._dt_bound = (cloned_sub, idmap[rep(result).id])
     self._rebuild_time_handle_tables(
         out, idmap, rep, reference_of=reference_of, state_keep=state_keep)
+    transfer_issuances(self, out, remap_storage_metadata, history_names)
     return out
 
 

@@ -176,6 +176,8 @@ class _ProgramSerialization(_ProgramBase):
     def _serialize(self, *, include_provenance: bool = True) -> dict[str, Any]:
         if not isinstance(include_provenance, bool):
             raise TypeError("Program._serialize include_provenance must be bool")
+        from .global_history_storage import validate_issuances
+        validate_issuances(self)
         order = self._block_indices()
         result = {
             "name": self.name,

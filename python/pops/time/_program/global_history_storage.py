@@ -1,7 +1,11 @@
 """Explicit storage scope for a consumed global solved-field observation."""
 from __future__ import annotations
 
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
+
+from pops._frozen_data import freeze_containers, thaw_data
 
 CONTRACT = "pops.program.global-field-history-storage@1"
 
@@ -26,7 +30,7 @@ def storage_contract(program: Any, source: Any, owner: Any) -> dict[str, Any]:
         native = next((value for value in reachable if value.op == "field_problem_load"), None)
         if native is None:
             raise NotImplementedError("global history storage @1 has no realized physical field authority")
-        field = Handle.from_canonical_identity(native.attrs["field_handle"])
+        field = Handle.from_canonical_identity(thaw_data(native.attrs["field_handle"]))
     if source.point != source.inputs[0].point or source.point != solve.point \
             or source.region != source.inputs[0].region:
         raise ValueError("global field history changes the consumed solve point or region")
@@ -54,25 +58,68 @@ def storage_contract(program: Any, source: Any, owner: Any) -> dict[str, Any]:
     declared = [state for state in program._time_states.values() if state.block is owner]
     if not declared:
         raise ValueError("global field history storage block requires an issued Program TimeState scope")
-    matching = [state for state in declared if source.point is not None and state.clock == source.point.clock]
+    from pops.time.points import point_clock
+    clock = point_clock(source.point, "global field history storage")
+    matching = [state for state in declared if state.clock == clock]
     if not matching:
         raise ValueError("global field history storage changes the observation clock")
     if any(state.state != matching[0].state for state in matching[1:]):
         raise ValueError("global field history storage has ambiguous allocation State authority")
     # No borrow of StateSpace, state identity, temperature or field ownership.
-    return {"contract":CONTRACT, "owner_block":owner, "clock":source.point.clock,
+    return {"contract":CONTRACT, "owner_block":owner, "clock":clock,
         "point":source.point, "region":source.region, "layout_witness":allocation,
         "storage_state_witness":matching[0].state, "field_problem_identity":source.attrs["field_problem_identity"],
         "field_unknown":source.attrs["field_unknown"], "ncomp":1,
         "sampling":"cell", "representation":"valid_cell_copy"}
 
 
+_ISSUER = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class _IssuedStorage:
+    """An original storage declaration, never reconstructed from mutable IR projections."""
+    metadata: Any
+
+    def __init__(self, metadata: Any, *, issuer: Any) -> None:
+        if issuer is not _ISSUER:
+            raise TypeError("global history authority requires its private issuer")
+        object.__setattr__(self, "metadata", freeze_containers(metadata))
+
+
+def _equal_metadata(left: Any, right: Any) -> bool:
+    from pops.time._program.serialization import _json_ready
+    return _json_ready(left) == _json_ready(right)
+
+
+def prepare_issuance(program: Any, name: str, metadata: Any) -> _IssuedStorage:
+    """Validate a repeated store without changing an already issued ring authority."""
+    issued = getattr(program, "_global_field_history_issuance", {}).get(name)
+    if issued is not None:
+        if type(issued) is not _IssuedStorage or not _equal_metadata(issued.metadata, metadata):
+            raise ValueError("global field history changed its originally issued storage authority")
+        return issued
+    return _IssuedStorage(metadata, issuer=_ISSUER)
+
+
+def publish_issuance(program: Any, name: str, issued: _IssuedStorage) -> None:
+    current = dict(getattr(program, "_global_field_history_issuance", {}))
+    if name in current and current[name] is not issued:
+        raise ValueError("global field history cannot replace an issued storage authority")
+    current[name] = issued
+    object.__setattr__(program, "_global_field_history_issuance", MappingProxyType(current))
+
+
 def validate_storage_node(program: Any, node: Any) -> dict[str, Any]:
     if node.op != "store_history" or len(node.inputs) != 1:
         raise ValueError("global field history storage requires exactly one observation")
+    issued = getattr(program, "_global_field_history_issuance", {}).get(node.attrs["history"])
+    if type(issued) is not _IssuedStorage:
+        raise ValueError("global field history lost its originally issued storage authority")
     expected = storage_contract(program, node.inputs[0], node.block)
-    from pops.time._program.serialization import _json_ready
-    if _json_ready(node.attrs.get("global_field_storage")) != _json_ready(expected) \
+    if not _equal_metadata(issued.metadata, expected):
+        raise ValueError("global field history changed its originally issued storage authority")
+    if not _equal_metadata(node.attrs.get("global_field_storage"), issued.metadata) \
             or node.point != node.inputs[0].point or node.state_ref is not None or node.space is not None:
         raise ValueError("global field history storage changed its immutable authority")
     if program._history_blocks.get(node.attrs["history"]) is not node.block \
@@ -81,10 +128,35 @@ def validate_storage_node(program: Any, node: Any) -> dict[str, Any]:
     return expected
 
 
+def validate_issuances(program: Any) -> None:
+    """Authenticate source declarations before cloning, detaching or freezing any projections."""
+    if not getattr(program, "_global_field_history_issuance", None):
+        return
+    from pops.codegen.program_field_plan import _nodes
+    found = set()
+    for node in _nodes(program):
+        if node.op == "store_history" and node.attrs.get("history") in program._global_field_history_issuance:
+            validate_storage_node(program, node)
+            found.add(node.attrs["history"])
+    if found != set(program._global_field_history_issuance):
+        raise ValueError("global field history lost an originally issued storage operation")
+
+
+def transfer_issuances(source: Any, target: Any, remap_metadata: Any, history_names: Any) -> None:
+    """Transfer only the already authenticated, original immutable declarations."""
+    issued = getattr(source, "_global_field_history_issuance", {})
+    if issued:
+        object.__setattr__(target, "_global_field_history_issuance", MappingProxyType({
+            name: _IssuedStorage(remap_metadata(record.metadata), issuer=_ISSUER)
+            for name, record in issued.items() if name in history_names
+        }))
+
+
 def descriptor(program: Any, name: str) -> str | None:
     import json
     from pops.time._program.serialization import _json_ready
 
+    validate_issuances(program)
     stores = [node for node in program._values if node.op == "store_history"
         and node.attrs.get("history") == name and "global_field_storage" in node.attrs]
     if not stores:
