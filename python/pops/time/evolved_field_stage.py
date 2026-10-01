@@ -136,6 +136,7 @@ class EvolvedOriginalFieldRate:
     def to_data(self) -> dict[str, Any]:
         from pops.fields._identity import strict_field_data
 
+        self.__post_init__()
         return {"contract": "pops.evolved-field-rate.spatial-additive@1",
                 "spatial": strict_field_data(self.spatial),
                 "additive": strict_field_data(self.additive)}
