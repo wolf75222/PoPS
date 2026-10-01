@@ -969,5 +969,474 @@
       },
       "limits": "Closed Dim1 Hall/component-gradient and scalar-shear witnesses, CPU serial/MPI2. The distinct 0cd16d01 Python refresh receives the old five Dim2 implicit/diffusion cases serial only. No complete Hall MHD, NS/conduction, AMR/GPU/HPC, new IntegralState ABI or remote CI qualification."
     }
+  },
+  "scoped_receptions_20261001": {
+    "schema": "pops.api040.scoped-reception-index@1",
+    "date": "2026-10-01",
+    "metadata_base_commit": "54dc1c0dd56c8fbc1a8982a259fc894739389f90",
+    "production_snapshot": "ceecd4f889b0067709c5544c5e7e9c0b02711fa4",
+    "historical_fields_preserved": true,
+    "baseline_requalified": false,
+    "note": "scoped_reception_20261001.md",
+    "entries": {
+      "m18_sdk375f_actual": {
+        "status": "scoped_native_scientific_received",
+        "related_models": [
+          "M18"
+        ],
+        "related_witnesses": [
+          "W09"
+        ],
+        "evidence": {
+          "commit": "2f2903d2ee155b131bbfeb4324284fbd0d5275ff",
+          "path": "docs/development/api_040/m18_sdk375f_native_reception.json",
+          "sha256": "f7c40bfbd569d7006db3937a34c8ea47b1980c17520c63db00fd8dc2aea13f0b"
+        },
+        "dimension": 2,
+        "sdk_signature": "375fbdebb4b68bb43164ba3fdfa32ead3beaa8d89606925609e96507eeed3eff",
+        "native_sha256": "8dcdfacab20fffd876128c2ee4b06bd26f4c952f2d7ed6ce76fb028815bb6310",
+        "runtime_source": "33dee906850d56eec542dd0a7d0b21954aa244d3",
+        "native_build_source": "32235b93296fe6d4337194e17d0d45569dc63a08",
+        "native_passes": {
+          "serial": 1,
+          "mpi2_per_rank": 1
+        },
+        "phases_per_backend": 10,
+        "moderate_targets": 20,
+        "pinned_files": {
+          "serial": 35,
+          "mpi2": 36
+        },
+        "outside_refusals_per_backend": 2,
+        "safe_rebind": true,
+        "accepted_retry_same_outside_runtime": false,
+        "readonly_target_bitexact": true,
+        "original_moment_residual": 4.548139642679416e-12,
+        "original_residual_guard": 2e-11,
+        "scientific_countermodels_refused_per_backend": 12,
+        "original_files_reverified_unchanged": true,
+        "countermodel_native_execution": false,
+        "exchange_reader": "sol61.m18-empty-exchange-reader@2",
+        "scientific_reader": "sol61.m18-offline-reception@2",
+        "owners": {
+          "serial": {
+            "workspace_path": "outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-codec-20261001/owner-pins.json",
+            "sha256": "6e047b1121882183ac3a5ca9cef63deeb3a430b579b0e175d1bafdb80f50b144"
+          },
+          "mpi2": {
+            "workspace_path": "outputs/installed-m18-entropy-mpi2-dim2-sdk375f-owner-codec-20261001/owner-pins.json",
+            "sha256": "6a3878b52b6435b2bd1494a2edeeff98758168934ef55e87e45858fb024730d6"
+          }
+        },
+        "limits": [
+          "Five fixed quadrature nodes, three multipliers, twenty moderate interior targets only.",
+          "Safe rebind is a new interior bind, not an accepted retry of the unchanged impossible target.",
+          "No near-boundary, general quadrature, native boundary-versus-infeasible classification, M19/BGK or AMR/GPU qualification.",
+          "System-generated CPP not exposed; no reconstructed source substitutes for it."
+        ],
+        "contract_links": {
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "Three solved multipliers and read-only five-node targets."
+          },
+          "C16": {
+            "title_as_in_spec": "Région de résidu fermée",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 65,
+            "scoped_relation": "Original closed moment residual recomputed from real saved populations."
+          },
+          "C17": {
+            "title_as_in_spec": "Résolution et contrôle d'erreur",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 67,
+            "scoped_relation": "Original residual guard retained; no universal Newton/error bound."
+          },
+          "C19": {
+            "title_as_in_spec": "Résultat faillible",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 77,
+            "scoped_relation": "Two actual outside refusals; generic outcome, not a new infeasibility classification."
+          },
+          "C33": {
+            "title_as_in_spec": "État d'une tentative",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 46,
+            "scoped_relation": "Read-only target/state/clock rollback on repeated outside attempts."
+          },
+          "C35": {
+            "title_as_in_spec": "Acceptation numérique séparée",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 76,
+            "scoped_relation": "Original numerical residual and positive-population/entropy guards."
+          },
+          "C40": {
+            "title_as_in_spec": "Reprise",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 135,
+            "scoped_relation": "Ten real phases include checkpoint/restart and exact restored state."
+          }
+        }
+      },
+      "t5_physical_global_sdk375f_actual": {
+        "status": "scoped_native_and_offline_source_component_received_root_association",
+        "related_models": [],
+        "fixture": "tests/python/integration/runtime/test_public_integral_feedback.py",
+        "wrapper": "sol61.physical-global-feedback.offline-reception@2",
+        "wrapper_commit": "54dc1c0dd56c8fbc1a8982a259fc894739389f90",
+        "dimension": 2,
+        "sdk_signature": "375fbdebb4b68bb43164ba3fdfa32ead3beaa8d89606925609e96507eeed3eff",
+        "native_sha256": "8dcdfacab20fffd876128c2ee4b06bd26f4c952f2d7ed6ce76fb028815bb6310",
+        "runtime_source": "180afdc5b294788f370e3720c71772d70805919c",
+        "native_build_source": "32235b93296fe6d4337194e17d0d45569dc63a08",
+        "native_batches": {
+          "serial_feedback_and_fields": 8,
+          "serial_field_consumers_separate": 3,
+          "mpi2_combined_per_rank": 11
+        },
+        "native_batch_outputs": [
+          "outputs/installed-public-physical-global-field-serial-dim2-sdk375f-20261001",
+          "outputs/installed-public-field-consumers-serial-dim2-sdk375f-20261001",
+          "outputs/installed-public-physical-global-field-mpi2-dim2-sdk375f-20261001"
+        ],
+        "true_feedback_cases_per_backend": 3,
+        "phases_per_backend": 13,
+        "phase_files_per_backend": 39,
+        "serial_secondary_batch_scope": "Field source/transport False and True plus joint Neumann consumed gradient; distinct from the three True feedback witnesses.",
+        "root_inputs": {
+          "serial": {
+            "workspace_path": "outputs/physical-global-serial-root-owner-20261001/root-inputs-associated.json",
+            "sha256": "8a38ae1f13f6fe90027c3fa488fe155b81b93a4226d32aeda7499bd6d41d2efe"
+          },
+          "mpi2": {
+            "workspace_path": "outputs/physical-global-mpi2-root-owner-20261001/root-inputs-associated.json",
+            "sha256": "383252dd21ca867173de787e3084867251b78ebd4b4d0a6d8fca47b472d8080e"
+          }
+        },
+        "mathematical_owners": {
+          "serial": {
+            "workspace_path": "outputs/physical-global-serial-root-owner-20261001/mathematical-owner-pins.json",
+            "sha256": "8f4aeca8ad6f37d95aeeacea5a6ff14d516a9c38a8745761f9dc5e60f126b753"
+          },
+          "mpi2": {
+            "workspace_path": "outputs/physical-global-mpi2-root-owner-20261001/mathematical-owner-pins.json",
+            "sha256": "d8d7dd753fb514baa7878d5758a645c246632b1ddcec91bf4a75ff6232e756a8"
+          }
+        },
+        "linkage_receipts": {
+          "serial": {
+            "workspace_path": "outputs/physical-global-serial-root-owner-20261001/physical-source-linkage-reception-v2.json",
+            "sha256": "de99d62a8c322efb595972e9906929c4ddb97ee7e6855767ccb07c50e2f80367"
+          },
+          "mpi2": {
+            "workspace_path": "outputs/physical-global-mpi2-root-owner-20261001/physical-source-linkage-reception-v2.json",
+            "sha256": "613f60e30b10fbad080e9ffbf22ae589a7b966e398ab9808aca8e9241af8ea8e"
+          }
+        },
+        "field_linf_max": 2.220446049250313e-16,
+        "physical_inventory_residual_max": 8.304988641238964e-17,
+        "native_ledger_residual_max": 1.951563910473908e-18,
+        "original_source": "S=-0.3*circuit_quantity*U; candidate q consumed once before local cell loops; no extra q.",
+        "component_binary_binding_recomputed": true,
+        "cryptographic_aggregate_binding": false,
+        "aggregate_binding": "ROOT-attested execution/cache association; original aggregate payload not retained.",
+        "historical_sdk7b_program_false_requalified": false,
+        "limits": [
+          "Only three physicalTrue feedback witnesses receive the 13-phase math/source/CPP/component linkage; other native cases retain their own scope.",
+          "No cryptographic aggregate-to-child binding, synthesized aggregate payload, AMR/vector/Dim3 qualification."
+        ],
+        "contract_links": {
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "Typed read-only integral candidate as original physical-source global input."
+          },
+          "C20": {
+            "title_as_in_spec": "Temps et identité",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 88,
+            "scoped_relation": "Exact candidate capture point n and accepted clocks."
+          },
+          "C23": {
+            "title_as_in_spec": "Continuation et échange effectif",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 94,
+            "scoped_relation": "Unique real exterior x+ trace, selected occurrence and actual accepted ledger."
+          },
+          "C24": {
+            "title_as_in_spec": "Ordre d'exécution",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 96,
+            "scoped_relation": "Original source evaluates captured global quantity once before local loops."
+          },
+          "C25": {
+            "title_as_in_spec": "Compilation de corps inspectables",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 115,
+            "scoped_relation": "Authentic retained CPP/source and recomposed component SO identities; aggregate limit explicit."
+          },
+          "C33": {
+            "title_as_in_spec": "État d'une tentative",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 46,
+            "scoped_relation": "Rejected transport preserves captured q/state/clock before safe retry."
+          },
+          "C40": {
+            "title_as_in_spec": "Reprise",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 135,
+            "scoped_relation": "Accepted checkpoint state/ledger and restart/replay bytes received."
+          }
+        }
+      },
+      "m04_fe_fixed_courant_sdk375f_control": {
+        "status": "separate_native_control_received_historical_case_failed",
+        "related_models": [
+          "M04"
+        ],
+        "related_witnesses": [
+          "W02"
+        ],
+        "output": "outputs/installed-m04-forward-euler-fixed-courant-control-dim2-sdk375f-20261001",
+        "dimension": 2,
+        "ranks": 1,
+        "sdk_signature": "375fbdebb4b68bb43164ba3fdfa32ead3beaa8d89606925609e96507eeed3eff",
+        "native_sha256": "8dcdfacab20fffd876128c2ee4b06bd26f4c952f2d7ed6ce76fb028815bb6310",
+        "seconds": 116.70078783296049,
+        "temporal_method": "ForwardEuler",
+        "step_policy": "fixed_courant",
+        "advective_courant_cap": 0.125,
+        "resolutions": [
+          32,
+          64,
+          128
+        ],
+        "final_time": 0.1,
+        "observed_orders": [
+          0.978645834436066,
+          0.9884487638692555
+        ],
+        "original_order_guard": 0.7,
+        "independent_saved_npz_oracle": "passed",
+        "scientific_receipt": {
+          "workspace_path": "outputs/installed-m04-forward-euler-fixed-courant-control-dim2-sdk375f-20261001/states/receipt.json",
+          "sha256": "74bbf113d611d1894870cfaa4843bbefaa7645f78b0013475d4332eeecca2407"
+        },
+        "independent_receipt": {
+          "workspace_path": "outputs/installed-m04-forward-euler-fixed-courant-control-dim2-sdk375f-20261001/independent-reception.json",
+          "sha256": "78e42e7bce3b47d09c22a2545e24442d0b30881cd786862a26fe2c63fa76ad1b"
+        },
+        "historical_combined_bound_forward_euler": {
+          "status": "failed",
+          "observed_order": 0.60635,
+          "guard": 0.7,
+          "closed": false
+        },
+        "limits": [
+          "Separate fixed-Courant regime/cancellation control, not closure of historical combined-bound M04.",
+          "ForwardEuler, original physics/constants/resolutions/L1 and order guards preserved; SSPRK2 remains a distinct method.",
+          "Native Serial Dim2 y-invariant x-only tensor, no MPI/general tensor/GPU convergence qualification."
+        ],
+        "contract_links": {
+          "C14": {
+            "title_as_in_spec": "Diffusion, flux joints et ordre supérieur",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 57,
+            "scoped_relation": "Scoped x-only diagonal diffusion and original advection-diffusion equations."
+          },
+          "C21": {
+            "title_as_in_spec": "Méthode construite",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 90,
+            "scoped_relation": "Separately declared ForwardEuler fixed-Courant control; historical method failure retained."
+          }
+        }
+      },
+      "amr_original_fixture_v2": {
+        "status": "historical_native_red_and_source_admission_gap_preserved_corrected_fixture_native_pending",
+        "related_models": [],
+        "old_output": "outputs/installed-public-original-amr-serial-dim2-sdk375f-20261001",
+        "historical_native_cases": 4,
+        "historical_native_status": "failed",
+        "historical_failures": [
+          "N16 scalar accepted rows exist but coarse active mask is entirely false.",
+          "N16 three-component accepted rows exist but coarse active mask is entirely false.",
+          "N32 original GMRES exhausts unchanged 240-column budget.",
+          "Rollback fixture used nonexistent RuntimeInstance.step before attempts."
+        ],
+        "fixture_commit": "a2f7a2a9902de5ec21571efac7de401ea5f13167",
+        "fixture_contract": "sol61.public-original-amr-fixture@2",
+        "fixture": "tests/python/integration/runtime/test_public_amr_original_field.py",
+        "explicit_cpp_jacobi": "c7cdd2c38cc7145abb5981b90f38e9b6035b6e5e",
+        "python_port": "433f0d3f511b102d9c09076e57bc332838f0c6df",
+        "historical_source_review": "c880644af0cc73c6144b18786bbbee93dadcdc7d",
+        "historical_source_review_scope": "Ten source/math/extracted-controller checks passed without public Case/validate/resolve admission; unsupported LT tag was missed. Not integrated or qualified as admissible.",
+        "subsequent_root_source_counts": {"passed": 162, "failed": 5, "seconds": 653.75},
+        "corrected_fixture_commit": "b943dd6627550364337d41743cb4efe2f7b33480",
+        "corrected_fixture_public_resolve_reception": "pending independent source replay",
+        "realization": "SpatialBasisJacobi@1",
+        "builder_default": null,
+        "layout_change": "Current corrected fixture uses admitted strict a>1.035 narrow extrema bands, buffer1 and box maximum8. The previous a<.97 central strip is inadmissible; original a=1+.04cos remains unchanged.",
+        "duration_change": "Guarded FixedDt10DT once; public pops.run same runtime clips safe DT endpoint.",
+        "original_equations_and_numeric_controls_preserved": true,
+        "native_reception": false,
+        "limits": [
+          "Corrected public Case/validate/resolve admission, genuine partial clustering/ownership, explicit Jacobi N16/N32/permutations and original residual remain pending their respective source/native receptions.",
+          "Old full-fine N16 rows are constant-reaction observations only, not partial AMR qualification.",
+          "Legacy N32 budget failure remains failed; no hidden budget/tolerance/physics change."
+        ],
+        "contract_links": {
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "Original captured forcing/coefficient inputs, unchanged unknown product."
+          },
+          "C16": {
+            "title_as_in_spec": "Région de résidu fermée",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 65,
+            "scoped_relation": "Original nonlinear closed F preserved; new native original-residual proof pending."
+          },
+          "C17": {
+            "title_as_in_spec": "Résolution et contrôle d'erreur",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 67,
+            "scoped_relation": "Explicit right realization, unchanged Newton/linear budgets; no legacy failure requalification."
+          },
+          "C19": {
+            "title_as_in_spec": "Résultat faillible",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 77,
+            "scoped_relation": "Original solve and domain refusals remain explicit; actual new native outcomes pending."
+          },
+          "C33": {
+            "title_as_in_spec": "État d'une tentative",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 46,
+            "scoped_relation": "Corrected public large-attempt/safe-retry route; native rollback pending."
+          },
+          "C40": {
+            "title_as_in_spec": "Reprise",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 135,
+            "scoped_relation": "Strict accepted restart/history comparisons retained, new native reception pending."
+          }
+        }
+      },
+      "captured_diffusion_v2_ir10": {
+        "status": "source_math_syntax_received_native_pending",
+        "related_models": [],
+        "production_commit": "4ae5c4de2c73b88e1ed1644293df1c3ad0c66b9a",
+        "evidence": {
+          "commit": "3ceab3b719ad3ea316ddcf6b34b73396fce0e6d1",
+          "path": "docs/development/api_040/original_field_captured_diffusion_source_receipt.json",
+          "sha256": "d77011fa5ca761d9d9d6f353a34b09f646285bf23056a38d3f29d10551bd3c03"
+        },
+        "captured_diffusion_contract_version": 2,
+        "program_ir_version": 10,
+        "source_checks": {
+          "new_captured_and_combined": 24,
+          "legacy": 22
+        },
+        "syntax_dimensions": [
+          1,
+          2,
+          3
+        ],
+        "legacy_cpp_ir_modules_byte_exact": true,
+        "native_execution": false,
+        "mpi_execution": false,
+        "jit": false,
+        "limits": [
+          "Captured State coefficients frozen per prepared original residual; unknown-dependent diffusion refused.",
+          "No installed/native convergence, MPI or scientific campaign qualification; source syntax is not execution."
+        ],
+        "contract_links": {
+          "C14": {
+            "title_as_in_spec": "Diffusion, flux joints et ordre supérieur",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 57,
+            "scoped_relation": "Declared captured diffusion realization @2; native flux/operator reception pending."
+          },
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "Read-only captured State coefficients, distinct from unknown-dependent diffusion."
+          },
+          "C16": {
+            "title_as_in_spec": "Région de résidu fermée",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 65,
+            "scoped_relation": "Original closed residual coefficient capture preserved in source."
+          },
+          "C25": {
+            "title_as_in_spec": "Compilation de corps inspectables",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 115,
+            "scoped_relation": "Inspectable emitter and actual Dim1/2/3 syntax, not native execution."
+          },
+          "C31": {
+            "title_as_in_spec": "Version et validité",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 34,
+            "scoped_relation": "Explicit @2/IR10 discriminator with byte-exact old legacy branch."
+          }
+        }
+      },
+      "m19_finite_product_observation": {
+        "status": "historical_native_red_preserved_relay_source_received_full_native_pending",
+        "related_models": [
+          "M19"
+        ],
+        "historical_serial_compiled_and_bound": 6,
+        "historical_serial_status": "failed_before_saved_phases",
+        "historical_failure": "MultiLayout.local_boxes absent during initial _save after successful compile/bind.",
+        "source_relay": "9ccd3efbc92518899680360189c5b1f6c3e0ff4a",
+        "independent_source_commit": "ceecd4f889b0067709c5544c5e7e9c0b02711fa4",
+        "independent_source_checks": 43,
+        "source_doc": "docs/development/api_040/multi_layout_local_observation_sol61.md",
+        "native_reception": false,
+        "full_six_serial_and_mpi_replay": "pending",
+        "limits": [
+          "Source per-block relay and shape/ownership guards only; not replay of six installed cases.",
+          "Finite product reduction/field/lift mechanism only; no complete Vlasov-Poisson/BGK, Landau damping or AMR/GPU qualification."
+        ],
+        "contract_links": {
+          "C05": {
+            "title_as_in_spec": "Identité, type et coordonnées",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 3,
+            "scoped_relation": "Per-block local geometry and rank/component/ownership observation guards, source only."
+          },
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "Distinct product/fixed input supports; complete installed finite-chain reception pending."
+          },
+          "C39": {
+            "title_as_in_spec": "Propriétés du transfert",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 133,
+            "scoped_relation": "Declared support-map finite chain cannot be qualified before real saved phases."
+          },
+          "C40": {
+            "title_as_in_spec": "Reprise",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 135,
+            "scoped_relation": "Finite composite/child restart remains pending the full six-case Serial/MPI replay."
+          }
+        }
+      }
+    },
+    "limits": [
+      "No corpus-wide completion or PR/GitHub CI gate claim.",
+      "No GPU, official OpenMPI or Kokkos4.4 native reception claim.",
+      "Source/native build commits and runtime owners remain distinct; later source is not assigned an older native pass."
+    ]
   }
 }
