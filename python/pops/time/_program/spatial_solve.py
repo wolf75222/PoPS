@@ -63,17 +63,22 @@ FULL_RESIDUAL_BASIS_LU = "pops.amr.full-residual-basis-lu@1"
 def dense_resource_contract(max_dense_bytes: Any) -> dict[str, Any]:
     if type(max_dense_bytes) is not int or not 0 < max_dense_bytes < 2**64:
         raise SolveRequestError("invalid_resource_budget", "FullResidualBasisLU@1 requires exact positive uint64 max_dense_bytes")
-    return {"version": 1, "max_dense_bytes": max_dense_bytes,
+    from pops.solvers.nonlinear import _dense_bytes_identity_data
+    return {"version": 1, "max_dense_bytes": _dense_bytes_identity_data(max_dense_bytes),
             "scope": "per_rank_dense_arrays_active_map_and_numeric_towers"}
 
 
 def validate_dense_resource_contract(resources: Any) -> int:
     if not isinstance(resources, Mapping) or set(resources) != {"version", "max_dense_bytes", "scope"} or type(resources["version"]) is not int or resources["version"] != 1:
         raise SolveRequestError("invalid_resource_budget", "unknown FullResidualBasisLU@1 resource contract")
-    expected = dense_resource_contract(resources["max_dense_bytes"])
+    encoded = resources["max_dense_bytes"]
+    if not isinstance(encoded, Mapping) or set(encoded) != {"uint64_hex"} or type(encoded["uint64_hex"]) is not str or len(encoded["uint64_hex"]) != 16 or any(c not in "0123456789abcdef" for c in encoded["uint64_hex"]):
+        raise SolveRequestError("invalid_resource_budget", "dense budget requires canonical uint64 hexadecimal data")
+    budget = int(encoded["uint64_hex"], 16)
+    expected = dense_resource_contract(budget)
     if dict(resources) != expected:
         raise SolveRequestError("invalid_resource_budget", "FullResidualBasisLU@1 resource scope changed")
-    return expected["max_dense_bytes"]
+    return budget
 
 
 def spatial_solver_identity(controls: Any, policy: Any = None, max_dense_bytes: Any = None) -> Any:

@@ -20,6 +20,13 @@ def _scalar_data(value: Any) -> dict[str, Any]:
     return scalar_data(value)
 
 
+def _dense_bytes_identity_data(value: Any) -> dict[str, str]:
+    """New budget domain only: CBOR's legacy integer domain remains signed int64."""
+    if type(value) is not int or not 0 < value < 2**64:
+        raise ValueError("FullResidualBasisLU@1 requires exact positive uint64 max_dense_bytes")
+    return {"uint64_hex": f"{value:016x}"}
+
+
 def _runtime_number(value: Any) -> float:
     if isinstance(value, Mapping):
         encoded = value.get("value")
@@ -260,7 +267,7 @@ class Newton(Descriptor):
         if self.right_preconditioner is not None:
             data["right_preconditioner"] = self.right_preconditioner
         if self.max_dense_bytes is not None:
-            data["max_dense_bytes"] = self.max_dense_bytes
+            data["max_dense_bytes"] = _dense_bytes_identity_data(self.max_dense_bytes)
         return data
 
     def numerical_options(self) -> dict[str, Any]:
