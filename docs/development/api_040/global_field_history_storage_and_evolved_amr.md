@@ -131,3 +131,61 @@ changed width metadata, absent TimeState, divergent clock and different frame.
 Four real AMR source emissions check the distinct IR16 contract and solve route.
 All these are source/math/syntax evidence. ROOT exclusively owns rebuilt native
 Serial/MPI reception. MAIN, reception checkout, ENV and SDK were not mutated.
+
+## Follow-up: original authoring authority, not resealed projections
+
+Independent reception of `0bc86f3` found five public counter-cases: the linear
+Case.field route could not parse its frozen handle image; TimePoint worked but
+StagePoint incorrectly borrowed a nonexistent `.clock`; and coherent replacement
+of node owner/metadata/history tables, or deletion of the storage qualifier,
+could replace or downgrade an existing ring. The historical source and syntax
+checks above did not qualify those cases. This follow-up keeps the contract URI,
+IR16 and the emitted native interface unchanged.
+
+The linear handle parser now receives detached ordinary containers via
+`thaw_data`. `point_clock` is the existing exact single-clock authority for both
+TimePoint and StagePoint; mixed-clock stages still refuse. No clock is guessed.
+
+The original authorized `store_history` issues a private frozen declaration and
+publishes it only after the store node was successfully built. A read-only map
+holds that declaration independently of the mutable node attrs and history
+tables; ordinary replacement/deletion of the map is refused. Later stores and
+serialization compare every projected descriptor against this original image.
+Removing a qualifier, renaming/removing the issued store, or coherently selecting
+another valid block cannot turn the existing ring into a new declaration.
+As elsewhere in the Python authoring layer, this is an API authority boundary,
+not isolation from arbitrary reflection into private issuer internals.
+
+Freeze and every Program rebuild authenticate the original before copying any
+projection. Rebuild transfers only the authenticated declaration, remapping its
+handles, clock, exact point and region. Compiled detachment removes the Case
+registries from its owner, layout and State witnesses. The proof retains no live
+Case or registry in the detached Program, and to_graph retains no Program proof
+object. A new ring remains a legitimate public choice of another storage block.
+The stored observation stays physically global and scalar, including when its
+storage-only State has five components; no extra physical solve capture is added.
+
+Six production files change in this follow-up: api.py, freeze.py, history.py,
+global_history_storage.py, rebuild.py and serialization.py. Programs with no
+explicit global storage have no issuance map and retain their old images. Three
+fresh Stage and six legacy/captured/candidate/Jacobi full IR/C++/module/manifest/
+request images remain byte-identical to the previously recorded baseline hashes.
+The two-carrier AMR C++ and IR digest likewise remain exactly those listed above.
+
+The new unit fixture uses a genuine public linear FieldProblem plus an independent
+five-component storage-only State at both endpoint and StagePoint. It exercises
+freeze/to_graph/compiled detachment and eight reseal/deletion attacks at four
+snapshot boundaries, plus immutable-map guards. Transformation provenance is
+recorded by the existing rebuild; the whole executable IR, original source
+provenance and hash are checked separately. The independent 26 public probes are
+replayed without editing their checkout; that replay is author verification, not
+the reviewer's own reception of the new SHA. Native AMR execution remains ROOT's
+separate campaign.
+
+Final follow-up check: 66 passes, four native cases deselected, 164.62 seconds;
+JUnit `/tmp/sol61-history-origin-corrected-source.xml`. It comprises 11 new
+snapshot/immutable-origin checks, 29 existing emission/history checks and the
+26 independently authored public probes replayed by the implementation author.
+Ruff and diff whitespace checks pass. The regenerated two-carrier C++ also
+passes the same real Dim2 clang++ syntax command above, with input
+`/tmp/sol61-history-origin-amr.cpp`; no linking, JIT or native execution occurs.
