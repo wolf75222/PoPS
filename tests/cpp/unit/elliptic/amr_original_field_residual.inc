@@ -593,7 +593,9 @@ TEST(CompositeGeneralField, OriginalForeignLaneValidationRefusesCollectivelyAndR
     (void)outcome.consume(SolveConsumption::kAccept);
   } catch (const std::exception& error) {
     refused = true;
-    EXPECT_NE(std::string(error.what()).find("stale owner/attempt/point/capture authority"),
+    // SolveOutcome converges the failed validation on its authenticated lane
+    // before surfacing a common error, including on ranks without injection.
+    EXPECT_NE(std::string(error.what()).find("SolveOutcome accept validation failed"),
               std::string::npos) << error.what();
   }
   // Every vote after injection deliberately uses the authenticated lane. The
