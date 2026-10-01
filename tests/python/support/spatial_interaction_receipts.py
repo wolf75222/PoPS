@@ -7,6 +7,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import struct
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -146,9 +149,111 @@ def digest(path):
         return checksum.hexdigest()
 
 
+
+_WIRE_CONTRACT = "pops.spatial-interaction-fixture-array-wire@1"
+
+
+def _array_dtype(value):
+    if type(value) is not str or re.fullmatch(r"(?:[<>][iu][248]|[<>]f[48]|\|[biu]1)", value) is None:
+        raise ValueError("array wire dtype must be an exact canonical numeric string")
+    try:
+        dtype = np.dtype(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("array wire dtype is invalid") from error
+    if dtype.str != value or dtype.fields is not None or dtype.subdtype is not None \
+            or dtype.kind not in "biuf" or dtype.itemsize not in (1, 2, 4, 8) \
+            or (dtype.kind == "f" and dtype.itemsize not in (4, 8)):
+        raise ValueError("array wire dtype must be a canonical plain numeric dtype")
+    return dtype
+
+
+def _hex_bytes(value, *, expected=None):
+    if type(value) is not str or len(value) % 2 or re.fullmatch("[0-9a-f]*", value) is None:
+        raise ValueError("array wire Cbytes must be exact lowercase hexadecimal")
+    if len(value)//2 > sys.maxsize or (expected is not None and len(value)//2 != expected):
+        raise ValueError("array wire byte length differs from its bounded shape")
+    return bytes.fromhex(value)
+
+
+def _wire_node(value, *, decode, depth=0):
+    if depth > 64:
+        raise ValueError("array wire nesting is too deep")
+    def visit(item):
+        return _wire_node(item, decode=decode, depth=depth+1)
+    if not decode:
+        if type(value) is np.ndarray:
+            dtype = _array_dtype(value.dtype.str)
+            return ["array", {"dtype": dtype.str, "shape": list(value.shape),
+                              "Cbytes": value.tobytes(order="C").hex()}]
+        if type(value) is bytes:
+            return ["bytes", value.hex()]
+        if type(value) is float:
+            return ["float", struct.pack(">d", value).hex()]
+        if value is None or type(value) in (str, int, bool):
+            return ["scalar", value]
+        if type(value) in (tuple, list):
+            return ["tuple" if type(value) is tuple else "list", [visit(item) for item in value]]
+        if type(value) is dict and all(type(key) is str and key for key in value):
+            return ["map", [[key, visit(item)] for key, item in value.items()]]
+        raise TypeError("array wire refuses unsupported values")
+    if type(value) is not list or len(value) != 2 or type(value[0]) is not str:
+        raise ValueError("array wire node is invalid")
+    tag, payload = value
+    if tag == "scalar" and (payload is None or type(payload) in (str, int, bool)):
+        return payload
+    if tag == "float":
+        return struct.unpack(">d", _hex_bytes(payload, expected=8))[0]
+    if tag == "bytes":
+        return _hex_bytes(payload)
+    if tag in ("tuple", "list") and type(payload) is list:
+        result = [visit(item) for item in payload]
+        return tuple(result) if tag == "tuple" else result
+    if tag == "map" and type(payload) is list:
+        result = {}
+        for row in payload:
+            if type(row) is not list or len(row) != 2 or type(row[0]) is not str \
+                    or not row[0] or row[0] in result:
+                raise ValueError("array wire mapping keys must be unique exact strings")
+            result[row[0]] = visit(row[1])
+        return result
+    if tag == "array" and type(payload) is dict and set(payload) == {"dtype", "shape", "Cbytes"}:
+        dtype = _array_dtype(payload["dtype"])
+        shape = payload["shape"]
+        if type(shape) is not list or len(shape) > 32 or any(
+                type(size) is not int or size < 0 or size > sys.maxsize for size in shape):
+            raise ValueError("array wire shape requires bounded nonnegative exact integers")
+        count, strides = 1, 1
+        for size in shape:
+            # Even a zero-size axis cannot hide unrepresentable NumPy strides.
+            if strides > sys.maxsize // dtype.itemsize // max(size, 1):
+                raise ValueError("array wire shape overflows native byte arithmetic")
+            strides *= max(size, 1)
+            count *= size
+        data = _hex_bytes(payload["Cbytes"], expected=count*dtype.itemsize)
+        return np.frombuffer(data, dtype=dtype).reshape(tuple(shape)).copy(order="C")
+    raise ValueError("array wire tag or payload is invalid")
+
+
+def array_wire_encode(value):
+    return {"contract": _WIRE_CONTRACT, "value": _wire_node(value, decode=False)}
+
+
+def array_wire_decode(value):
+    if type(value) is not dict or set(value) != {"contract", "value"} \
+            or value["contract"] != _WIRE_CONTRACT:
+        raise ValueError("array wire envelope differs from its versioned contract")
+    return _wire_node(value["value"], decode=True)
+
+
+def _allgather_array_values(world, value):
+    from pops._native_collectives import allgather_value
+    # A local encoding error must vote before peers enter the payload collective.
+    encoded = collective_call(world, lambda: array_wire_encode(value))
+    gathered = collective_call(world, lambda: tuple(allgather_value(world, encoded)))
+    return collective_call(world, lambda: tuple(array_wire_decode(copy) for copy in gathered))
+
 def capture(world, runtime, width, *, adaptive, step):
     """Preserve replicas as replicas; rank zero writing does not assign ownership."""
-    from pops._native_collectives import allgather_value
     executor = runtime._executor
     count = collective_call(world, lambda: runtime.n_levels()) if adaptive else 1
     epoch = collective_call(world, lambda: executor.checkpoint_topology_epoch()) if adaptive else 0
@@ -198,14 +303,14 @@ def capture(world, runtime, width, *, adaptive, step):
                 history_meta[canonical_name] = dict(native_name=name, sample_hex=sample.hex(),
                     depth=depth, fill_count=filled, initialized=initialized, slot_dt=durations)
         local = {"pieces": pieces, "history_values": history_values, "history_meta": history_meta}
-        copies = collective_call(world, lambda local=local: tuple(allgather_value(world, local)))
+        copies = _allgather_array_values(world, local)
         with collective_check(world):
             levels.append({"level": level, "shape": shape, "origin": LOWER, "spacing": spacing,
                            "geometry": geometry, "copies": copies})
     clock = collective_call(world, lambda: (runtime.time(), runtime.macro_step()))
     auxiliary = collective_call(world, lambda: tuple(bytes(part) for part in executor.capture_auxiliary_checkpoint_accepted_state())
         if adaptive else (bytes(executor.capture_auxiliary_checkpoint_accepted_state()),))
-    auxiliary = collective_call(world, lambda: tuple(allgather_value(world, auxiliary)))
+    auxiliary = _allgather_array_values(world, auxiliary)
     return {"levels": levels, "clock": clock, "auxiliary": auxiliary, "epoch": epoch}
 
 
