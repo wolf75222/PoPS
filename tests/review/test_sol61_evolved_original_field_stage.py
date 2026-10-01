@@ -144,7 +144,7 @@ def test_original_stage_resolves_and_emits_actual_duration_and_same_Q(factor):
         resolved.time, model=ProgramModelGraph.from_resolved_blocks(resolved.blocks)
     )
     assert resolved.time._serialize()["version"] == 12
-    assert "ctx.step_dt()" in code
+    assert "ctx.boundary_evaluation_point(" in code and ").dt" in code
     assert "nonfinite_original_accumulation" in code
     assert "original_field_residual_recheck_failed" in code
     assert "physical-temperature" in code

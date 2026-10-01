@@ -62,7 +62,7 @@ def test_scalar_additive_original_case_uses_actual_RHS_and_duration():
     assert resolved.time._serialize()["version"] == 14
     solve = next(row for row in resolved.time._values if row.op == "solve_spatial_field")
     assert solve.attrs["source_contract"]["evolved_stage"]["schema_version"] == 2
-    assert "ctx.step_dt()" in cpp and "original_field_residual_recheck_failed" in cpp
+    assert "ctx.boundary_evaluation_point(" in cpp and ").dt" in cpp and "original_field_residual_recheck_failed" in cpp
     assert "field.evolution" not in cpp
 
 
@@ -94,7 +94,7 @@ def test_two_separate_Q_carriers_three_unknowns_resolve_emit_same_original_stage
     assert {row.attrs["component_indices"] for row in projections} == {(0,), (1,)}
     assert all(row.attrs["projection_contract"].endswith("@2") for row in projections)
     assert "nonfinite_original_accumulation" in cpp and "original_field_residual_recheck_failed" in cpp
-    assert "ctx.step_dt()" in cpp
+    assert "ctx.boundary_evaluation_point(" in cpp and ").dt" in cpp
 
 
 def test_partition_requires_both_actual_commits_and_unmodified_component_selection():
