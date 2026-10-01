@@ -127,12 +127,10 @@ struct AnalyticCellAverage {
     // would perturb even an unchanged conserved component during initialization/reprojection.
     if (program.instruction_count == 1 && program.instructions[0].op == AnalyticOp::Constant)
       return program.eval(center);
-    // Affine form enforces partition of unity in floating arithmetic too: any
-    // expression with identical sampled values has zero correction, independent
-    // of rounded tensor weights. Normalizing their actual sum retains the same
-    // Gauss rule without perturbing its constant mode.
-    Real reference = Real(0);
-    Real correction = Real(0);
+    // A progressive convex average normalizes the actual rounded weights and
+    // preserves identical samples exactly. Its sign-aware interpolation avoids
+    // overflowing value-mean for finite opposite-sign samples.
+    Real mean = Real(0);
     Real total_weight = Real(0);
     for (int sample = 0; sample < sample_count; ++sample) {
       int encoded = sample;
@@ -145,15 +143,19 @@ struct AnalyticCellAverage {
         point[axis] += Real(0.5) * geometry.spacing(axis) * gauss_node(quadrature_index);
       }
       const Real value = program.eval(point);
+      const Real next_weight = total_weight + weight;
       if (sample == 0)
-        reference = value;
-      else
-        correction += weight * (value - reference);
-      total_weight += weight;
+        mean = value;
+      else if (value != mean) {
+        const Real fraction = weight / next_weight;
+        if ((value < Real(0)) != (mean < Real(0)))
+          mean = (Real(1) - fraction) * mean + fraction * value;
+        else
+          mean += fraction * (value - mean);
+      }
+      total_weight = next_weight;
     }
-    // Preserve the exact reference bit pattern, including signed zero, when
-    // the quadrature correction vanishes. This is not a tolerance or rounding.
-    return correction == Real(0) ? reference : reference + correction / total_weight;
+    return mean;
   }
 };
 

@@ -10,15 +10,19 @@ binary weights, accumulated sum(w*f), then multiplied by2^-Dim. That sequence
 perturbs even an expression constant at every quadrature point. The existing
 single-literal optimization cannot handle the public expression1+0*cos(x).
 
-The generic affine form is now ref + sum(w*(f-ref))/sum(w), with ref taken from
-the first actual Gauss point. Nodes, tensor sample count, weights, exact-integral
-and Gaussian-specialized paths are unchanged. In exact arithmetic this is the
-same normalized Gauss average; in floating arithmetic identical sample values
-have exactly zero correction for any constant. Returning ref when the correction
-is exactly zero preserves its bit pattern, including signed zero. No tolerance,
+The first author gel ab026d4 used a fixed affine reference. Independent review
+found an avoidable overflow: f=A*x with A=1.5e308 on [-1,1] has finite samples
+and exact mean0, but subtracting opposite-sign samples overflowed. That gel
+must not be integrated alone.
+
+The corrected rule forms a progressive weighted convex mean. At each sample,
+t=weight/(prior_weight+weight). Same-sign values use mean+t*(value-mean), whose
+difference cannot overflow for finite operands; opposite signs use
+(1-t)*mean+t*value, avoiding the dangerous subtraction. Identical values skip
+interpolation entirely and retain their exact bit pattern, including signed zero.
+Nodes, weights, sample count, exact-integral and Gaussian paths remain unchanged.
+In exact arithmetic this is the same normalized Gauss average, and no tolerance,
 rounding, model/field name or particular physical value enters the algorithm.
-Normalizing actual tensor weights enforces their partition of unity; polynomial
-accuracy/order and the spatial cell measure remain those of the same Gauss rule.
 
 Source-only host validation compiles the exact source quadrature body with POD
 geometry/evaluator interfaces in a temporary directory, without PoPS/Kokkos/DSO
@@ -46,3 +50,11 @@ Coherent Source host plus actual public Tag validate/resolve/emission suite:
 11PASS13.02s, true private WT/python path asserted and _pops absent. No installed
 Native module selected. Required ROOT C++ node:
 AnalyticExpression.ExpressionCellAveragesPreserveConstantsAndPolynomialMomentsOnHost.
+
+Correction validation also adopts the independently authored opposed-sample
+probe (Galileo/ROMEO inventory review), changing its regression assertion to
+finite exact-body reception. Dimensions1/2/3 and both equivalent linear
+expressions now stay finite and near the independent odd antiderivative0.
+Max-magnitude/subnormal/signed-zero constants and degree1..7 moments also pass.
+The actual C++ host suite receives the same opposed-sign antiderivative control;
+ROOT still owns its complete build/execution. Tiny Source host pair:2PASS2.15s.

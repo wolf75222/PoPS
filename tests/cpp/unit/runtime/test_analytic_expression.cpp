@@ -417,6 +417,24 @@ void check_expression_constant_and_polynomial_averages() {
       });
     }
   }
+  // Finite opposite-sign samples must not overflow an affine reference
+  // difference. The odd function has independently known mean zero.
+  pops::RealVector<Dim> lower{}, upper{};
+  for (int axis = 0; axis < Dim; ++axis) { lower[axis] = Real(-1); upper[axis] = Real(1); }
+  const auto wide_geometry = pops::Geometry<Dim>::from_bounds(
+      pops::Box<Dim>::from_extents(uniform_extent<Dim>(1)), lower, upper);
+  const Real amplitude = std::numeric_limits<Real>::max() * Real(.8);
+  for (bool reordered : {false, true}) {
+    const auto expression = reordered
+        ? binary(AnalyticOp::Sub, binary(AnalyticOp::Mul, c(amplitude),
+                     binary(AnalyticOp::Add, x, c(.25))), c(amplitude * Real(.25)))
+        : binary(AnalyticOp::Mul, c(amplitude), x);
+    const auto program = compile_analytic_expression(expression);
+    const pops::analytic::detail::AnalyticCellAverage<Dim> average{program.view(), wide_geometry};
+    const Real actual = average(pops::Index<Dim>{});
+    EXPECT_TRUE(std::isfinite(actual));
+    EXPECT_LE(std::abs(actual / amplitude), Real(128) * std::numeric_limits<Real>::epsilon());
+  }
   // An independent antiderivative oracle for degree-six: the 4-point rule is
   // exact through degree seven. Reordering addition must preserve that accuracy.
   for (bool reverse : {false, true}) {
