@@ -555,8 +555,8 @@ std::vector<field_type> original_candidate_interaction(std::int64_t solve_id, in
   });
   core->require_evaluation(candidate, current, provider.get(), evaluation, lane);
   for (int level = 0; level < nlev(); ++level) {
-    const auto geometry = facade_->prepared_amr_level_geometry(level);
     interaction_phase(lane, [&] {
+      const auto geometry = facade_->prepared_amr_level_geometry(level);
       levels.push_back({&candidate.at(level), facade_->prepared_amr_block_level_active_mask(owner, level),
           &facade_->prepared_amr_block_level_coverage_mask(owner, level),
           facade_->prepared_amr_block_level_volume_fraction(owner, level), geometry});
