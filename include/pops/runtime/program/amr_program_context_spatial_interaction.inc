@@ -237,6 +237,36 @@ void seal_original_field_source(std::int64_t solve_id,
     closed_interaction_phase_([&] { geometries.push_back(geometry); });
   }
   (void)core->candidate(current_authority(), lane);
+  // The Accept stamp identifies the original candidate, not mutable public
+  // provider storage. Authenticate every published cell bit before allocating
+  // a source image. Accept reconstructs its own halos, so only valid cells are
+  // part of this comparison; direct quadrature never consumes either halo.
+  closed_interaction_phase_([&] {
+    (void)provider->accepted_original_candidate_generation(&tower, lane);
+    if (tower.empty() || tower.size() != static_cast<std::size_t>(nlev()))
+      throw std::invalid_argument("closed original source is not a complete tower");
+    for (int level = 0; level < nlev(); ++level) {
+      const auto& published = provider->solution(level);
+      const auto& accepted = tower.at(level);
+      if (published.layout() != accepted.layout() || published.distribution() != accepted.distribution() ||
+          published.local_rank() != accepted.local_rank() || published.ncomp() != accepted.ncomp())
+        throw std::invalid_argument("accepted original source tuple layout/width changed");
+      for (std::size_t patch = 0; patch < accepted.local_size(); ++patch) {
+        const auto actual = published.fab(patch).view();
+        const auto expected = accepted.fab(patch).view();
+        const int width = accepted.ncomp();
+        const Real changed = for_each_cell_reduce_max(accepted.box(patch),
+            [=] POPS_HD(const Index<Dim>& cell) {
+          for (int component = 0; component < width; ++component)
+            if (std::bit_cast<InteractionRealWord>(actual(cell, component)) !=
+                std::bit_cast<InteractionRealWord>(expected(cell, component))) return Real(1);
+          return Real(0);
+        });
+        if (changed != Real(0))
+          throw std::invalid_argument("accepted original source values changed after Accept");
+      }
+    }
+  });
   std::map<std::int64_t, std::shared_ptr<const ClosedOriginalFieldSource>> staged;
   closed_interaction_phase_([&] {
     const auto stamp = provider->accepted_original_candidate_generation(&tower, lane);
@@ -263,7 +293,7 @@ void seal_original_field_source(std::int64_t solve_id,
     }
     std::size_t bytes = interaction_add(binding_bytes, interaction_product(tower.size(), 2 * sizeof(field_type) + sizeof(Geometry<Dim>)));
     for (int level = 0; level < nlev(); ++level) {
-      const auto& field = provider->solution(level);
+      const auto& field = tower.at(level);
       const auto& original = tower.at(level);
       if (field.layout() != original.layout() || field.distribution() != original.distribution() ||
           field.local_rank() != original.local_rank() || field.ncomp() != original.ncomp())
@@ -293,7 +323,7 @@ void seal_original_field_source(std::int64_t solve_id,
     issued->active_image.reserve(tower.size());
     issued->geometries = std::move(geometries);
     for (int level = 0; level < nlev(); ++level) {
-      issued->image.emplace_back(provider->solution(level));
+      issued->image.emplace_back(tower.at(level));
       issued->active_image.emplace_back(provider->active_cell_mask(level));
     }
     Kokkos::fence();
