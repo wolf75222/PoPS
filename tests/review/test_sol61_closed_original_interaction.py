@@ -113,7 +113,8 @@ def test_actual_native_source_stamp_and_complete_output_path_are_load_bearing():
     assert "restore_or_terminate_" in accept and "++staged->owner->original_acceptance_generation_" in accept
     native = (ROOT/"include/pops/runtime/program/amr_program_context_spatial_interaction.inc").read_text().split("// IR19:")[1]
     assert "accepted_original_candidate_generation(&tower, lane)" in native
-    assert "issued->image.emplace_back(provider->solution(level))" in native
+    assert "issued->image.emplace_back(tower.at(level))" in native
+    assert native.index("accepted original source values changed after Accept") < native.index("auto issued =")
     assert "source->image.at(level)" in native
     assert "for (std::size_t level = 0; level < levels.size(); ++level)" in native
     assert "field.distribution().replicated() && lane.rank() != 0" in native
@@ -165,3 +166,90 @@ def test_global_component_authoring_is_exact_integer(component):
         program.spatial_interaction(source,SpatialInteractionKernel(2,lambda x,y:1),output_space=result.space,
             measure=CellVolumeMeasure(),quadrature=CellMidpoint(),realization=DirectSpatialInteraction(2**24),
             source_scope="completed_original",owner_block=result.attrs["closed_field_source"]["owner_block"],components=(component,))
+
+
+def test_exact_accepted_value_guard_on_actual_phase_body(tmp_path):
+    """Pure host fault probe of the exact native phase, not a PoPS runtime."""
+    import subprocess
+
+    source = (ROOT/"include/pops/runtime/program/amr_program_context_spatial_interaction.inc").read_text()
+    phase = source[source.index("template <class Function>\nvoid closed_interaction_phase_"):
+                   source.index("// IR19:")]
+    start = source.index("  closed_interaction_phase_([&] {", source.index("// The Accept stamp identifies"))
+    guard = source[start:source.index("  std::map<std::int64_t", start)]
+    cpp = r'''
+#include <algorithm>
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <exception>
+#include <stdexcept>
+#include <vector>
+#define POPS_HD
+using Real = double; using InteractionRealWord = std::uint64_t;
+constexpr int Dim = 1;
+template<int> struct Index { int value; };
+bool launch_failure = false; int votes = 0, fences = 0;
+namespace Kokkos { void fence() { ++fences; } }
+void collectively_rethrow_exception(std::exception_ptr error, int, const char*) {
+  ++votes; if (error) std::rethrow_exception(error);
+}
+template<class Function> Real for_each_cell_reduce_max(int cells, Function body) {
+  if (launch_failure) throw std::runtime_error("injected launch");
+  Real result = 0; for (int cell = 0; cell < cells; ++cell)
+    result = std::max(result, body(Index<Dim>{cell})); return result;
+}
+struct Field {
+  std::vector<Real> values; int width = 3;
+  int layout() const { return 1; } int distribution() const { return 0; }
+  int local_rank() const { return 0; } int ncomp() const { return width; }
+  int local_size() const { return 1; } int box(std::size_t) const { return 2; }
+  const Field& fab(std::size_t) const { return *this; }
+  struct View { const Real* values; int width;
+    Real operator()(Index<Dim> cell, int component) const { return values[cell.value*width+component]; }
+  };
+  View view() const { return {values.data(),width}; }
+};
+struct Provider {
+  std::vector<Field> image;
+  std::uint64_t accepted_original_candidate_generation(const std::vector<Field>*, int) const { return 1; }
+  const Field& solution(int level) const { return image.at(level); }
+};
+struct Probe {
+  int prepared_execution_lane() const { return 7; }
+''' + phase + r'''
+  int levels; int nlev() const { return levels; }
+  void validate(const std::vector<Field>& tower, const Provider* provider) const {
+    const int lane = prepared_execution_lane();
+''' + guard + r'''
+  }
+};
+int main() {
+  const std::vector<Field> original{{{3,4,5,6,7,8}},{ {9,10,11,12,13,14}}};
+  Probe probe{2}; Provider provider{original}; int checks = 0;
+  auto check = [&](bool refuse) {
+    votes = fences = 0; bool failed = false;
+    try { probe.validate(original,&provider); } catch (...) { failed = true; }
+    if (failed != refuse || votes != 1 || fences < 1) throw std::runtime_error("bad guarded outcome");
+    ++checks;
+  };
+  check(false);
+  for (int level = 0; level < 2; ++level) for (int slot = 0; slot < 6; ++slot) {
+    provider.image = original; provider.image[level].values[slot] = 99; check(true);
+  }
+  provider.image = original; provider.image[0].values[0] = std::nextafter(3.,4.); check(true);
+  provider.image = original; provider.image[1].width = 2; check(true);
+  provider.image = original; launch_failure = true; check(true); launch_failure = false;
+  auto zeros = original; zeros[0].values[0] = 0.; provider.image = zeros;
+  votes = fences = 0; probe.validate(zeros,&provider);
+  if (votes != 1) return 1; ++checks;
+  provider.image[0].values[0] = -0.; votes = fences = 0; bool refused = false;
+  try { probe.validate(zeros,&provider); } catch (...) { refused = true; }
+  if (!refused || votes != 1 || fences < 1) return 1; ++checks;
+  if (checks != 18) return 1;
+}
+'''
+    path = tmp_path/"accepted_guard.cpp"
+    path.write_text(cpp)
+    subprocess.run(["/usr/bin/clang++","-std=c++20",str(path),"-o",str(tmp_path/"guard")],check=True,timeout=30)
+    subprocess.run([str(tmp_path/"guard")],check=True,timeout=10)

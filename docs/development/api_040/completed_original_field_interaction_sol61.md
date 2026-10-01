@@ -48,9 +48,15 @@ must therefore be reacquired after a new provider invocation.
 `seal_original_field_source` requires the real typed
 `PreparedAmrFieldResidual<Dim>`, its current authority callback and the exact
 prepared provider. It calls the gated `core.candidate(current, prepared_lane)`
-accessor, then checks the provider's completed Accept stamp. It deep-copies every
-**accepted provider solution level**, including the entire unknown tuple, after
-validating layout/ownership/width against the original candidate. The active
+accessor, then checks the provider's completed Accept stamp. Before allocating a
+snapshot, it checks the provider's public solution against the authenticated
+candidate bit-for-bit on every valid cell and component, with collective failure
+consensus on the prepared lane. It deep-copies every **authenticated candidate
+level**, including the entire unknown tuple. A native caller that changes the
+public solution after Accept cannot substitute those values into the snapshot.
+Accept copies valid cells and reconstructs its own ghosts; direct quadrature
+reads valid cells only. Ghosts are therefore outside this equality proof, and
+ghost consumers remain explicitly unavailable. The active
 masks are also deep-owned and the Geometry values are captured at that same
 barrier, rather than read lazily from a subsequent phase. Fab copy uses
 real Kokkos deep-copy, not shared borrowed Views. The immutable binding table
@@ -147,6 +153,16 @@ The recorded syntax command below used `pops-api040/include`; it is not
 attributed to ROOT's newer `pops-api040-ir17` dependency environment. ROOT's
 378f compile_commands authenticates that newer environment for the upcoming
 native reception and reviewer syntax, which remain separate evidence.
+
+The subsequent accepted-value fix is not covered by that full-TU syntax receipt.
+Its actual native comparison phase and exception/fence/vote wrapper were
+extracted verbatim into a small standard-library host probe. Eighteen scenarios
+cover two levels and three components, every valid value substitution, one-ULP
+drift, signed-zero drift, width mismatch, and an injected launch exception that
+must reach the error vote. The host substitutions are explicit and do not
+constitute a Kokkos or MPI run. The independent historical counterexample on
+`ac687142` (accepted candidate 3, mutable provider value 99) remains recorded;
+the corrective gel adds no numerical tolerance.
 
 ```sh
 rtk proxy env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python:. \
