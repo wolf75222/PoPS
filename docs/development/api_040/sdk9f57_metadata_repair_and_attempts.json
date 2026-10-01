@@ -1,0 +1,98 @@
+{
+  "schema": "root.api040.sdk9f57-metadata-repair-and-attempts@1",
+  "source_commit": "378f29084c915ae316308481949ea174858197b2",
+  "original_native_compilation_source_commit": "0abbe25395a44e570d8d5525693b8e2dcbf4d387",
+  "installation_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-python-metadata-repair-378f/build-reception.json",
+    "sha256": "7b94b886b963db4c1c5c7a358c805057fd4daf1289bd23dedaba2086d22ba8ba",
+    "bytes": 4122
+  },
+  "production_changed_from_first_build": [
+    "python/pops/codegen/program_emit_amr.py",
+    "python/pops/codegen/program_emit_control.py"
+  ],
+  "cpp_headers_unchanged": true,
+  "ninja_no_work": true,
+  "native_sha256": "c8a45b013042f53a76ca6754a0285203aa5a9fda6a18f1d580e181dec99642fe",
+  "sdk_manifest_file_sha256": "64801a0868bed87060d969ebe1911b4c5937bbe72f55c96000e6c9ae60d9dbac",
+  "verified_installed_source_files": 1128,
+  "preserved_sdk2e4_unchanged": true,
+  "amr_post_metadata": {
+    "status": "failed",
+    "counts": {
+      "tests": 4,
+      "failures": 4,
+      "errors": 0,
+      "skipped": 0
+    },
+    "duration_seconds": 320.0049584591761,
+    "identity": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-evolved-stage-amr-serial-after-metadata-378f/identity.json",
+      "sha256": "34bf5fc1efa5e1b7476ab958dbe4cab0680d2d57eb44e3a9304297b8260cd0f0",
+      "bytes": 2917
+    },
+    "source_files": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-evolved-stage-amr-serial-after-metadata-378f/source-files.json",
+      "sha256": "e588ff4deeb92b3fa5143811f4f1066984482bc07af50294e40c6d01510cb44e",
+      "bytes": 131919
+    },
+    "result": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-evolved-stage-amr-serial-after-metadata-378f/result.json",
+      "sha256": "52f6aba67270d626553f5dd79c47dfbf65d43ab186c694a17e45b62ab4430977",
+      "bytes": 1728
+    },
+    "xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-evolved-stage-amr-serial-after-metadata-378f/pytest.xml",
+      "sha256": "869e5067fa9a17d25198a4a42bb8a010328da7e71de1c26a766245d9d83cd11e",
+      "bytes": 3412
+    },
+    "log": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-evolved-stage-amr-serial-after-metadata-378f/pytest.log",
+      "sha256": "1ebd7ebfa4383723a7358b1bd5a6ce24f0cc8ba01e596cdf41a2da2f344dfc7a",
+      "bytes": 5891
+    },
+    "failure": "AMR scalar output history projection has an invalid frozen capability",
+    "phase": "initial bind/regrid, after component compilation",
+    "source_and_installed_product_unchanged_after": true
+  },
+  "spatial_initial_fixture": {
+    "status": "failed",
+    "counts": {
+      "tests": 6,
+      "failures": 6,
+      "errors": 0,
+      "skipped": 0
+    },
+    "duration_seconds": 198.4756879170891,
+    "identity": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-first-dim2/identity.json",
+      "sha256": "aad6e0297cddc0aa7b17a34eb58a5a90b2363d19805f2a28dfd398d07254b3b1",
+      "bytes": 2917
+    },
+    "source_files": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-first-dim2/source-files.json",
+      "sha256": "405784a5e29489cabdd52da441e59be2ad1cdbc54a0a9663fb0a863cbb453f79",
+      "bytes": 131919
+    },
+    "result": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-first-dim2/result.json",
+      "sha256": "7fd99cbad735fe90aa8e7a517eba079a6cd0b15cd672d54884ac19ce22792f48",
+      "bytes": 1658
+    },
+    "xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-first-dim2/pytest.xml",
+      "sha256": "12879a2f34fef1c0f38fd45b3ee1bbf33bcae636d3b2ce02d3b8540d0f35a6b8",
+      "bytes": 6711
+    },
+    "log": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-first-dim2/pytest.log",
+      "sha256": "5d435116359b958c97eacdd75a1f447282265e73e9561e1690a6438bf02beb1f",
+      "bytes": 10154
+    },
+    "failure": "InitialConditionPlan is the single layout initialization authority; initial_state cannot duplicate it",
+    "phase": "initial bind, after component compilation",
+    "installed_source_authentication": "before-only historical identity; installation subsequently changes two emission files"
+  },
+  "native_scientific_acceptance": false,
+  "thresholds_changed": false
+}

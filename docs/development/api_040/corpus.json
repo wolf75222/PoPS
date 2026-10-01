@@ -1722,6 +1722,25 @@
           "skipped": 0
         },
         "native_scientific_acceptance": false
+      },
+      "sdk9f57_metadata_repair_and_attempts": {
+        "receipt": "sdk9f57_metadata_repair_and_attempts.json",
+        "receipt_sha256": "4c32c862cdedc9b4f96a036a65d67312e3c652eb7089984c09d4b7922173399c",
+        "installation_passed": true,
+        "new_native_compilation": false,
+        "amr_counts": {
+          "tests": 4,
+          "failures": 4,
+          "errors": 0,
+          "skipped": 0
+        },
+        "spatial_initial_counts": {
+          "tests": 6,
+          "failures": 6,
+          "errors": 0,
+          "skipped": 0
+        },
+        "native_scientific_acceptance": false
       }
     },
     "limits": [
