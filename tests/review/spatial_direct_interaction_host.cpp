@@ -1,4 +1,5 @@
 #include <pops/runtime/program/spatial_direct_interaction.hpp>
+#include <pops/runtime/program/spatial_interaction_history_source.hpp>
 #include <pops/numerics/time/amr/levels/amr_subcycling.hpp>
 #include <cassert>
 #include <iostream>
@@ -115,6 +116,61 @@ int accepted_carriers_after_coarse_commit(const ExecutionLane& lane) {
   return assertions;
 }
 
+int retained_history_authority() {
+  HistoryManager<1> manager;
+  const auto sample = HistorySampleIdentity{std::bit_cast<std::uint64_t>(0.0),
+      std::bit_cast<std::uint64_t>(.01), 1, HistorySampleKind::Publication};
+  const mesh::BoxArray<1> boxes({Box<1>(Index<1>{0}, Index<1>{0})});
+  const mesh::RankSpace<1> ranks(Index<1>{0}, Extent<1>{1});
+  const auto distribution = mesh::Distribution<1>::replicated(boxes, ranks);
+  MultiFab<1> seed(boxes, distribution, Index<1>{0}, 1, Extent<1>{}); seed.set_val(Real(2));
+  for (const std::string key : {"coarse", "fine"}) {
+    MultiFab<1> retained(boxes, distribution, Index<1>{0}, 1, Extent<1>{}); retained.set_val(Real(2));
+    manager.histories[key] = {retained, retained}; manager.depth[key] = 2; manager.owner[key] = 0;
+    manager.state_identity[key] = "rho"; manager.space_identity[key] = "rho-space";
+    manager.clock_identity[key] = "clock"; manager.interpolation_identity[key] = "none";
+    manager.initialized[key] = true; manager.fill_count[key] = 2; manager.store_pending[key] = false;
+    manager.slot_dt[key] = {Real(.01), Real(.01)}; manager.slot_sample[key] = {sample, sample};
+  }
+  int checks = 0;
+  auto selected = [&](const std::string& key) {
+    ExactContractBuilder exact;
+    return interaction_history_selected(manager, key, 1, 0, "rho", "rho-space", "clock", "none", exact);
+  };
+  assert(!selected("coarse")); ++checks;
+  manager.slot_sample["coarse"] = manager.prepare_sample_store("coarse", .01, .02);
+  manager.slot_dt["coarse"][0] = Real(.02); manager.store_pending["coarse"] = true;
+  assert(!selected("coarse") && !selected("fine")); ++checks;
+  bool refused = false;
+  try { manager.matching_authenticated_sample("coarse", "fine", 1); } catch (const std::invalid_argument&) { refused = true; }
+  assert(refused); ++checks;  // Old consumer guard still refuses the exact counter-before.
+  manager.state_identity["coarse"] = "storage-Q";
+  refused = false; try { selected("coarse"); } catch (const std::invalid_argument&) { refused = true; }
+  assert(refused); ++checks; manager.state_identity["coarse"] = "rho";
+  for (const std::string key : {"coarse", "fine"}) {
+    manager.fill_count[key] = 0; manager.store_pending[key] = false; manager.initialized[key] = false;
+    manager.slot_dt[key] = {Real(0), Real(0)};
+    manager.slot_sample[key] = {HistorySampleIdentity::zero_start(), HistorySampleIdentity::zero_start()};
+    assert(selected(key)); ++checks;
+  }
+  manager.slot_sample["coarse"] = manager.prepare_sample_store("coarse", 0., .01);
+  manager.slot_dt["coarse"] = {Real(.01), Real(.01)};
+  manager.initialized["coarse"] = true; manager.store_pending["coarse"] = true;
+  assert(selected("coarse") && selected("fine")); ++checks;
+  interaction_history_cold_equal(manager.histories["coarse"][1], seed); ++checks;
+  seed.set_val(Real(6));  // Q=T+T^2 must never substitute the physical T=2 seed.
+  refused = false; try { interaction_history_cold_equal(manager.histories["coarse"][1], seed); }
+  catch (const std::invalid_argument&) { refused = true; }
+  assert(refused); ++checks;
+  auto negative_zero = seed.fab(0).view();
+  for_each_cell(seed.box(0), [=] POPS_HD(const Index<1>& cell) { negative_zero(cell, 0) = -Real(0); });
+  manager.histories["coarse"][1].set_val(Real(0));
+  refused = false; try { interaction_history_cold_equal(manager.histories["coarse"][1], seed); }
+  catch (const std::invalid_argument&) { refused = true; }
+  assert(refused); ++checks;
+  return checks;
+}
+
 int main() {
   auto lane = ExecutionLane::world("direct-interaction-host");
   constexpr int D = 2;
@@ -174,6 +230,7 @@ int main() {
   assert(refused); ++assertions;
   assertions += composite<1>(lane) + composite<3>(lane);
   assertions += accepted_carriers_after_coarse_commit(lane);
+  assertions += retained_history_authority();
   bool overflow = false;
   try { (void)interaction_product(std::numeric_limits<std::size_t>::max(), 2); }
   catch (const std::overflow_error&) { overflow = true; }

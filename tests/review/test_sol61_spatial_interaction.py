@@ -114,7 +114,8 @@ def test_dimensional_contract_is_W_times_density_times_volume():
 
 
 @pytest.mark.parametrize("target", ("system", "amr_system"))
-def test_true_public_case_resolve_and_program_emission(tmp_path, target):
+@pytest.mark.parametrize("history", (False, True))
+def test_true_public_case_resolve_and_program_emission(tmp_path, target, history):
     from pops.domain import CartesianDomain
     from pops.frames import Cartesian2D
     from pops.mesh import CartesianGrid, PeriodicAxes
@@ -144,11 +145,13 @@ def test_true_public_case_resolve_and_program_emission(tmp_path, target):
     case.numerics(numerics, block=block)
     program = Program("public_direct")
     u = program.state(block[rho])
-    field = program.spatial_interaction(u.n, SpatialInteractionKernel(2, lambda x, y: 1 + x[0] * y[1]),
+    if history:
+        program.keep_history(u, depth=2)
+    field = program.spatial_interaction(u.prev if history else u.n, SpatialInteractionKernel(2, lambda x, y: 1 + x[0] * y[1]),
         output_space=FieldSpace("potential", components=("c", "a"), frame=u.n.space.frame,
             support=u.n.space.support, sampling="cell_center"), components=(2, 0),
         measure=CellVolumeMeasure(), quadrature=CellMidpoint(), realization=DirectSpatialInteraction(1 << 20),
-        source_scope="accepted" if target == "amr_system" else "issued")
+        source_scope="accepted" if target == "amr_system" and not history else "issued")
     program.record_scalar("nonlocal_observation", program.sum_component(field, 0))
     candidate = program.value("candidate", u.n + program.dt * program.rhs(state=u.n, terms=[Flux()]), at=u.next.point)
     program.commit(u.next, candidate)
@@ -175,6 +178,9 @@ def test_true_public_case_resolve_and_program_emission(tmp_path, target):
     graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
     source = emit_cpp_program(resolved.time, model_graph=graph, target=target)
     assert "ctx.spatial_interaction" in source and "static_assert(pops::kNativeDimension == 2" in source
+    if history:
+        assert resolved.time._serialize()["version"] == 18
+        assert "ctx.spatial_interaction_history" in source
     assert "ctx.commit_many(" in source
     (tmp_path / "public.cpp").write_text(source)
     prefix = Path(sys.prefix)
@@ -201,7 +207,7 @@ def test_actual_header_syntax_and_host_quadrature(tmp_path, real_type):
     env = dict(os.environ, OMP_NUM_THREADS="2")
     result = subprocess.run([str(binary)], capture_output=True, text=True, env=env, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "spatial direct host assertions=61" in result.stdout
+    assert "spatial direct host assertions=71" in result.stdout
 
 
 @pytest.mark.parametrize("mutation", ("version", "kernel_axis", "kernel_opaque", "measure", "quadrature", "realization", "duplicate_component", "bool_width", "budget_upper", "scope"))
@@ -269,6 +275,8 @@ def test_authored_history_preserves_exact_lag_clock_and_owner():
     assert value.inputs[0].op == "history" and "history_contract" in value.inputs[0].attrs
     assert value.point == u.prev.point and value.block == u.block and value.clock == u.clock
     interaction_contract(value)
+    assert value.attrs["contract"] == "pops.spatial-interaction@2"
+    assert program._serialize()["version"] == 18
 
 
 def test_accepted_composite_routes_to_preserved_carriers_and_active_commit_is_detached():
@@ -429,3 +437,43 @@ def test_declared_measure_coordinate_units_cannot_normalize_unknown_axes():
         interaction_contract(changed)
     with pytest.raises(ValueError, match="coordinate units cannot be unknown"):
         program._serialize()
+
+
+@pytest.mark.parametrize("mutation", ("lag_bool", "seed_bool", "wrong_state", "wrong_seed", "alias_seed"))
+def test_history_seed_closure_refuses_forged_authority(mutation):
+    # Use a genuine TimeStateHandle and keeper; no Native catalogue substitute.
+    model = pops.Model("seed_density")
+    rho = model.state("rho", components=("r",))
+    case = pops.Case("seed_case")
+    block = case.block("density", model, states=(rho,))
+    program = Program("seed_program")
+    u = program.state(block[rho])
+    program.keep_history(u, depth=2)
+    value = program.spatial_interaction(u.prev, SpatialInteractionKernel(1, lambda x, y: 1),
+        output_space=FieldSpace("I", components=("r",), sampling="cell_center"),
+        measure=CellVolumeMeasure(), quadrature=CellMidpoint(), realization=DirectSpatialInteraction(4096))
+    attrs = dict(value.attrs)
+    seed = dict(attrs["history_source"])
+    if mutation == "lag_bool":
+        seed["lag"] = True
+    elif mutation == "seed_bool":
+        seed["seed_id"] = bool(seed["seed_id"])
+    elif mutation == "wrong_state":
+        seed["state"] = None
+    else:
+        store = program._time_history_stores[u]
+        source = program._replace_value(u.n, point=u.next.point) if mutation == "alias_seed" else program.value("observation", 2*u.n, at=u.n.point)
+        program._time_history_stores[u] = program.store_history(store.attrs["history"], source, depth=2)
+    attrs["history_source"] = seed
+    forged = program._replace_value(value, attrs=attrs)
+    with pytest.raises(ValueError, match="seed|State.n"):
+        interaction_contract(forged)
+
+
+def test_old_ir17_history_native_consumer_remains_exact():
+    import hashlib
+    source = (ROOT / "include/pops/runtime/program/amr_program_context_spatial_interaction.inc").read_bytes()
+    old = source.split(b"\n// IR18 selected-history source.", 1)[0]
+    assert hashlib.sha256(old).hexdigest() == "ca23e5b348a2bb8bde50e25cd0f58764057660dd7bf4284d9abe069b7cae0e28"
+    # The historical entrypoint still authenticates the complete pending-free ring.
+    assert b"history.matching_authenticated_sample(reference, key, family->history_lag)" in old

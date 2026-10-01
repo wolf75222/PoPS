@@ -61,3 +61,47 @@ rtk proxy env -u PYTHONPATH -u POPS_NATIVE_DIM PYTHONDONTWRITEBYTECODE=1 PYTHONP
 The suite uses actual public Case/validate/resolve/ProgramModelGraph/emit_cpp_program for Uniform and synchronous AMR, syntax-checks both genuine emitted Dim2 MPI branches, and compiles/runs the actual direct header with Kokkos CPU and two threads. The host quadrature checks real MultiFab dimensions 1/2/3, signed nonsymmetric component permutation, EB fractional measure, covered coarse exclusion, genuine partial fine source coverage, target nonweighting, finite/overflow/budget refusals and signed-zero cell extraction. The final bounded suite receives 47 checks and 61 actual-header host assertions per Real width. Four existing public profiles (mixed linear, its component permutation, implicit stage, nonlinear-map implicit stage) preserve exact IR and emitted C++ hashes against the git archive of bf1b2cfb via tests/review/sol61_spatial_field_legacy_parity.py. These are source/host checks, not native DSO execution, AMR runtime, MPI execution, GPU, or scientific PDE qualification.
 
 ROOT must rebuild the new System/AmrSystem volume-fraction exports and receive real native Uniform/AMR and MPI2: owned/distributed/replicated/empty-rank snapshots, one-rank invalid kappa/source/budget, replica divergence, authority mismatches, nonfinite self kernel, exact refusal before physical publication, saved output quadrature/selected-component permutations, history/regrid/restart provenance and retry rollback. Full candidate AMR needs a separately reviewed composite barrier. A scientific M26 acceptance still requires its original flux/diffusion and equation-specific oracle.
+
+## History source extension @2 / IR18 (source and host reception only)
+
+History authoring now seals `pops.spatial-interaction@2` with the separate
+`pops.spatial-interaction-history-source@1` descriptor. It records the actual
+keeper name, retained lag, qualified State/StateSpace/clock, State.n seed SSA and
+point, and CopyCurrent policy. Admission rederives that image from the Program's
+real keeper/store/configuration, with typed canonical comparison. A computed
+observation, relabelled State.n, or storage-owner witness is not a State.n seed.
+In particular, IR16 observation T stored under Q=T+T² cannot cold-copy Q as T;
+that expression-seed realization remains an explicit extension, refused here.
+Only this new history descriptor raises the Program schema to IR18. Plain
+Issued/Accepted maps remain @1/IR17, and historical @1 history keeps its old
+entrypoint and refusal behavior. The general matching_authenticated_sample
+implementation is unchanged.
+
+The dedicated native entrypoints authenticate owner, physical state, space,
+clock, interpolation, complete ring lifecycle/stamps, and selected slot. Warm
+lag >= 1 requires the same publication identity and native dt bits on every
+level. A pending write to slot zero may differ between levels; it cannot remap
+or replace the selected slot. Cold fill_count=0 uses the proven accepted
+State.n carriers on every prepared level, and bit-compares every already
+cold-stored slot against that seed before taking the compact source snapshot.
+It never initializes a ring, advances maturity, or fabricates a Publication
+sample. Remaps, mixed maturity, foreign descriptors, malformed windows, or
+changed lifecycle/attempt/epoch/frame refuse collectively before result
+publication. The all-level geometry preparations remain outside local callbacks.
+
+The confirmed counter-before used real HistoryManager and real MultiFabs: after
+prepare_sample_store published pending slot-zero metadata, old matching refused
+although the lag-one data and sample were unchanged. The new consumer accepts
+that selected lag while the old matcher still refuses. Actual-header checks
+also reject Q/T substitution and preserve signed-zero bit distinctions. The
+source suite receives 54 coherent tests plus one frozen-body compatibility
+check (55 total) and 71 host assertions per native Real width,
+including genuine Case/validate/resolve/emitted Uniform and AMR Dim2 syntax.
+No installed runtime, MPI execution, checkpoint archive, or scientific M26
+PDE qualification follows from these checks. The added header changes the SDK
+signature; Root must rebuild and receive the installed providers.
+
+The budget precedes source-density payload transport and snapshot/target
+allocation, not every collective: the constant-size geometry/mask/measure
+metadata census and owner counts occur first. Native cache/control/string
+allocations and RSS remain outside the documented workspace bound.
