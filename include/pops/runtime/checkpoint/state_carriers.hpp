@@ -7,6 +7,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -186,14 +187,101 @@ StateCarrierArchive<Dim> merge_state_carrier_shards(const std::vector<std::strin
   return result;
 }
 
+/// Optional host inspection counters. They measure actual BVH traversal and allocated index
+/// storage; they do not change validation, payload format or impose a patch-count limit.
+struct StateCarrierSpatialValidationStats {
+  std::uint64_t node_tests = 0, leaf_pairs = 0;
+  std::size_t peak_index_bytes = 0;
+};
+
+namespace state_carrier_detail {
+/// Balanced BVH over closed int64 cell boxes. Midpoints never add signed endpoints, and spans
+/// use exact unsigned subtraction. The index only supplies candidates; closed-box intersection
+/// remains the authority. Median splitting guarantees bounded recursion for arbitrary geometry.
+template <int Dim> class SpatialIndex {
+  struct Node {
+    std::array<std::int64_t, Dim> lo{}, hi{};
+    std::size_t left = 0, right = 0, patch = 0;
+    bool leaf = false;
+  };
+  std::span<const StateCarrierPatch<Dim>> rows_;
+  std::vector<std::size_t> order_;
+  std::vector<Node> nodes_;
+  std::size_t build(std::size_t begin, std::size_t end) {
+    const auto slot = nodes_.size();
+    Node node;
+    node.lo = rows_[order_[begin]].lo; node.hi = rows_[order_[begin]].hi;
+    for (std::size_t at = begin + 1; at < end; ++at)
+      for (int d = 0; d < Dim; ++d) {
+        node.lo[d] = std::min(node.lo[d], rows_[order_[at]].lo[d]);
+        node.hi[d] = std::max(node.hi[d], rows_[order_[at]].hi[d]);
+      }
+    nodes_.push_back(node);
+    if (end - begin == 1) {
+      nodes_[slot].leaf = true; nodes_[slot].patch = order_[begin];
+      return slot;
+    }
+    int axis = 0;
+    for (int d = 1; d < Dim; ++d)
+      if (std::uint64_t(node.hi[d]) - std::uint64_t(node.lo[d]) >
+          std::uint64_t(node.hi[axis]) - std::uint64_t(node.lo[axis])) axis = d;
+    const auto middle = begin + (end - begin) / 2;
+    std::nth_element(order_.begin() + begin, order_.begin() + middle, order_.begin() + end,
+      [&](auto a, auto b) {
+        const auto ca = std::midpoint(rows_[a].lo[axis], rows_[a].hi[axis]);
+        const auto cb = std::midpoint(rows_[b].lo[axis], rows_[b].hi[axis]);
+        return ca < cb || (ca == cb && a < b);
+      });
+    // Recursion can grow nodes_, so retain an index rather than a Node reference.
+    const auto left = build(begin, middle), right = build(middle, end);
+    nodes_[slot].left = left; nodes_[slot].right = right;
+    return slot;
+  }
+  bool query(std::size_t query_patch, std::size_t slot,
+             StateCarrierSpatialValidationStats* stats) const {
+    const auto& node = nodes_[slot];
+    if (node.leaf && node.patch <= query_patch) return false;
+    if (stats) ++stats->node_tests;
+    const auto& row = rows_[query_patch];
+    for (int d = 0; d < Dim; ++d)
+      if (row.lo[d] > node.hi[d] || node.lo[d] > row.hi[d]) return false;
+    if (node.leaf) {
+      if (stats) ++stats->leaf_pairs;
+      return true;
+    }
+    return query(query_patch, node.left, stats) || query(query_patch, node.right, stats);
+  }
+ public:
+  explicit SpatialIndex(std::span<const StateCarrierPatch<Dim>> rows) : rows_(rows) {
+    if (rows.empty()) throw std::invalid_argument("state carrier spatial index is empty");
+    if (rows.size() > std::numeric_limits<std::size_t>::max() / 2)
+      throw std::length_error("state carrier spatial index node count overflows");
+    order_.resize(rows.size()); std::iota(order_.begin(), order_.end(), std::size_t{0});
+    nodes_.reserve(rows.size() * 2 - 1); build(0, rows.size());
+  }
+  void require_disjoint(StateCarrierSpatialValidationStats* stats = nullptr) const {
+    if (stats) stats->peak_index_bytes = std::max(stats->peak_index_bytes,
+        order_.capacity() * sizeof(std::size_t) + nodes_.capacity() * sizeof(Node));
+    for (std::size_t patch = 0; patch < rows_.size(); ++patch)
+      if (query(patch, 0, stats))
+        throw std::invalid_argument("state carrier source valid patches overlap");
+  }
+};
+}  // namespace state_carrier_detail
+
 /// A global archive covers every block on every source level, with contiguous global patches.
 /// Block carriers share physical patch geometry and source ownership; component/ghost widths
 /// remain individual storage properties. This check never assumes the destination topology.
-template <int Dim> void validate_complete_state_carriers(const StateCarrierArchive<Dim>& a) {
+template <int Dim> void validate_complete_state_carriers(
+    const StateCarrierArchive<Dim>& a, StateCarrierSpatialValidationStats* stats = nullptr) {
   state_carrier_detail::validate(a);
   if (a.shard != -1) throw std::invalid_argument("state carrier restore requires a merged archive");
   if (state_carrier_detail::product(a.blocks.size(), a.levels) > a.patches.size())
     throw std::invalid_argument("state carrier source block/level count exceeds actual rows");
+  // Cache block-zero source ranges once. All subsequent blocks compare linearly to these exact
+  // rows, rather than scanning the archive or searching all source levels for every patch.
+  std::vector<std::pair<std::size_t, std::size_t>> first_ranges;
+  first_ranges.reserve(static_cast<std::size_t>(a.levels));
   std::size_t at = 0;
   for (std::size_t block = 0; block < a.blocks.size(); ++block)
     for (std::uint64_t level = 0; level < a.levels; ++level) {
@@ -202,29 +290,25 @@ template <int Dim> void validate_complete_state_carriers(const StateCarrierArchi
       while (at < a.patches.size() && a.patches[at].block == block && a.patches[at].level == level) {
         const auto& p = a.patches[at++];
         if (p.patch != patch++) throw std::invalid_argument("state carrier source coverage has a gap");
-        if (at > begin + 1 && (p.components != a.patches[begin].components))
+        if (at > begin + 1 && p.components != a.patches[begin].components)
           throw std::invalid_argument("state carrier source component count changes within level");
-        // Other blocks must reproduce block zero's geometry below, so check overlap only once.
-        for (std::size_t j = begin; block == 0 && j + 1 < at; ++j) {
-          bool overlap = true;
-          for (int d = 0; d < Dim; ++d)
-            overlap = overlap && p.lo[d] <= a.patches[j].hi[d] && a.patches[j].lo[d] <= p.hi[d];
-          if (overlap) throw std::invalid_argument("state carrier source valid patches overlap");
-        }
         if (block) {
-          const auto key = std::tuple(std::uint64_t{0}, level, p.patch);
-          const auto first = std::lower_bound(a.patches.begin(), a.patches.end(), key,
-              [](const auto& row, const auto& sought) { return row.key() < sought; });
-          if (first == a.patches.end() || first->key() != key || first->lo != p.lo ||
-              first->hi != p.hi || first->owner != p.owner)
+          const auto [first, count] = first_ranges[static_cast<std::size_t>(level)];
+          if (p.patch >= count) throw std::invalid_argument("state carrier source patch coverage differs");
+          const auto& row = a.patches[first + static_cast<std::size_t>(p.patch)];
+          if (row.lo != p.lo || row.hi != p.hi || row.owner != p.owner)
             throw std::invalid_argument("state carrier source block geometries disagree");
         }
       }
       if (at == begin) throw std::invalid_argument("state carrier source block/level is missing");
       if (block) {
-        std::uint64_t first_count = 0;
-        for (const auto& row : a.patches) if (row.block == 0 && row.level == level) ++first_count;
-        if (first_count != patch) throw std::invalid_argument("state carrier source patch coverage differs");
+        if (first_ranges[static_cast<std::size_t>(level)].second != patch)
+          throw std::invalid_argument("state carrier source patch coverage differs");
+      } else {
+        first_ranges.emplace_back(begin, at - begin);
+        state_carrier_detail::SpatialIndex<Dim>(
+            std::span<const StateCarrierPatch<Dim>>(a.patches).subspan(begin, at - begin))
+            .require_disjoint(stats);
       }
     }
   if (at != a.patches.size()) throw std::invalid_argument("state carrier source coverage is incomplete");

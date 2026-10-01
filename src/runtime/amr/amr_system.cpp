@@ -11118,13 +11118,12 @@ void AmrSystem<Dim>::validate_checkpoint_state_carriers(
     runtime::checkpoint::validate_complete_state_carriers(image);
     if (image.real_bits != sizeof(RealBits) * 8 || image.blocks.size() != p_->blocks.size())
       throw std::invalid_argument("state carrier native scalar/block envelope changed");
-    for (std::size_t block = 0; block < p_->blocks.size(); ++block) {
+    for (std::size_t block = 0; block < p_->blocks.size(); ++block)
       if (image.blocks[block] != p_->blocks[block].name)
         throw std::invalid_argument("state carrier block identity changed");
-      for (const auto& row : image.patches)
-        if (row.block == block && row.components != static_cast<std::uint64_t>(p_->blocks[block].ncomp))
-          throw std::invalid_argument("state carrier block component count changed");
-    }
+    for (const auto& row : image.patches)
+      if (row.components != static_cast<std::uint64_t>(p_->blocks[row.block].ncomp))
+        throw std::invalid_argument("state carrier block component count changed");
     identity = prefixed_sha256("pops.amr.state-carriers@1:sha256:",
         std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
   } catch (...) { error = std::current_exception(); }
