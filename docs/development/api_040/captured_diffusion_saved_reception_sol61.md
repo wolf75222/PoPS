@@ -408,3 +408,98 @@ Frozen physical cases. The two actual MPI2 archives' format/math/IR/history/
 clock/replay admission passes, as do both full clean eight-case XML files. The
 same residual maxima as Serial were observed. External MPI2 owner seals remain
 required; no native execution or multiplied-by-rank scientific claim occurs.
+
+## Independent sealed Serial and MPI2 reception, 2026-10-01
+
+Both genuine ROOT campaigns were independently received using their separate
+external pins and approval hashes. No native process was launched by this
+review. The computed result object exactly matches ROOT's independently
+published scientific-reception object in each mode, with these authenticated
+files under `/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001`:
+
+| Mode | Owner directory | Pins SHA256 | Approval SHA256 |
+|---|---|---|---|
+| Serial | diffusion-frozen-serial-scientific-root-owner-v4 | 12e931977dec0c66777ce3eb971ab7ec871cd0ccc10885585a8f23d5dad16e8e | 21f94cbdb2a23648710d945aec91495d3b827f66dd0465c075c8cefbd83ca74a |
+| MPI2 | diffusion-frozen-mpi2-scientific-root-owner-v1 | 822a6ebb8ced27e74b4c1f041b25aaaa26eb9278d53b8d337e13a821096dc57c | 920fa353dbea8f26a33b8f90717c157e3301f47bf78b49fbc6cc5c9f0fb47b83 |
+
+Scientific result hashes are respectively
+`09e15e65cc9360f7350401738ee357e9c1f065f62b8a23fecb79c4e04ab388f9` and
+`fe23a53da9a148b26d30744fae049ce11e1328001b7db749574fe1fb25b85e3a`.
+The root-reception records were independently hash-checked too:
+`0579249f991c39308eef285f8cd5c3ce9d0b045565577bdd193262061c688f32` and
+`d94fa18160c72663a5d557787f3179c434a49f6f462f8173be52919151f56487`.
+Private computed outputs are `outputs/sol61-frozen-v3-independent-reception/{serial,mpi2}.json`;
+they are not substitute donor states or new owner seals.
+
+Observed source commits are Serial `457e07000c35a466be3c80a7d7864f44a5f546c6`
+and MPI2 `1807a16b4e20b3d40fb88cd0c3ba3f4f263ac8ad`; the independently
+checked owner records identify native-build source
+`e01c12a7988b1fb0f5e55658d76ce9e0d2cb8c6a`. Selected Dim2 SDK header signature
+is `2e4d69fd3574933f4b83cf014ad2d0159902fea6197d74623bee4b4ee6cf1675`;
+native extension hash is
+`b8a5166c3ebe0a64e370be233bb2e987cbd7324f2b64dfac782718ead03f234b`.
+The owner-authenticated source, loaded-package, SDK and binary leaves were
+rechecked by the receiver, not inferred from a synthetic run.
+
+Each mode qualifies **two** Uniform periodic Dim2 witnesses (scalar1 and
+coupled3-201), not a count multiplied by rank. MPI2's two shared archives reside
+under rank0-tmp/test_public_captured_diffusion{0,1}/captured-D-MMS; rank1 uses
+the collectively selected publication directory. Each actual checkpoint has
+both rank-owned diagnostic images, five records per rank. Their values happen
+to agree here, but equality between ranks is not imposed by the reader.
+
+The full Serial XML contains seven clean tests; each of the two MPI2 XML files
+contains eight clean tests. Only the two exact Frozen cases per rank enter this
+scientific qualification. Candidate and diagnostic cases are explicitly sealed
+additional names and remain outside it. The reader checks actual carried IR10,
+CPP/receipt/checkpoint Program hashes, original F, exact initial captures,
+accepted/reloaded/continuous/replay arrays, Uniform8 envelopes, physical
+POPSHID1 histories, logical lag cursors, POPSDIA1 diagnostics and byte-identical
+continuous/replay payloads. Maximum original relative L2 residuals are
+2.9075324825715963e-15 and 1.883688360197054e-15 in both modes.
+
+### Fully resealed negative copies
+
+`tests/review/sol61_frozen_v3_negative_copies.py` authenticates the genuine
+MPI2 donor with the two externally supplied hashes before copying. It makes
+fresh copies only under an explicit NEGATIVE-TEST-ONLY directory. Source/binary
+origins remain read-only. Every changed NPZ checkpoint is given new typed-array
+hashes and a new restart digest; receipt/file/IR/XML pins are refreshed. Simulated
+ROOT approvals are deliberately minted only for these labelled negative copies,
+as explicitly authorized for this counter-review. No mutated copy is ever
+qualified as native evidence. After all injections the genuine donor is received
+again and must reproduce its original result.
+
+Fifteen copied attacks were refused at their intended semantic/codec guards:
+
+- Transposed signed D with a freshly recomputed alternative equilibrium forcing,
+  and a shifted constant origin with recomputed F/response/history: original
+  declared forcing or centre-sample target guards reject the false equations.
+- Stale material capture: exact readonly capture bytes reject it.
+- Fully resealed history publication ordinal and logical oldest lag, and
+  checkpoint clock: publication/cursor/exact phase guards reject them.
+- Missing diagnostic image, nonfinite diagnostic bits, and finite replay counter
+  bits: required durable image, admissibility and exact replay-byte guards reject.
+- Duplicate/reordered rank images and overlapping offsets: actual rank/size/
+  width and offset geometry guards reject them.
+- Changed carried IR body/point with refreshed outer file pins: the actual
+  IR-to-retained-CPP/receipt Program hash link rejects them.
+- A duplicated Frozen receipt in rank1's otherwise eight-case XML: exact
+  per-rank receipt uniqueness rejects it.
+
+The corrected negative run completed 15/15 refusals. Its private report is
+`outputs/sol61-frozen-v3-independent-reception/NEGATIVE-TEST-ONLY/mpi2-sdk2e4-v2/negative-results.json`,
+SHA256 `bd6273ce37a05d0a7fede4279af7deffc6837353c1d9bc0d7dea214057aa6b0d`.
+The first run's copies remain preserved: it reached the final XML refusal, then
+stopped because the harness expected a different error-text fragment; the
+receiver's actual refusal was already correct. The corrected run uses that exact
+existing diagnostic. Ruff passes; the source/protocol suite remains 151 passing
+tests. The negative script is an explicit external-data probe, with no implicit
+fetch, native setup, PoPS import or fabricated positive fixture.
+
+The qualification remains `saved-states-original-residual@3` with
+`cpp_dso_link_qualified=false`. All listed gaps remain: full artifact aggregate,
+block CPP, independently reloaded checkpoint, separately saved in-memory
+comparison images, private capture lease/point, CPP-to-DSO proof, AMR/GPU/
+convergence/arbitrary-D solvability and empty-rank ownership. These checks do not
+qualify a complete physical model or a different numerical realization.
