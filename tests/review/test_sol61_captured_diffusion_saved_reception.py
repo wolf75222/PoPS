@@ -745,3 +745,73 @@ def test_v3_block_order_linked_to_actual_cpp_not_old_literal(attack):
     else:
         with pytest.raises(ValueError):
             r.program_blocks(json.dumps(ir),cpp)
+
+
+@pytest.fixture(scope="module")
+def shared_frozen_source_bytes(original_source_bytes):
+    # Synthetic refactoring of the authenticated historical source, never executed.
+    source = original_source_bytes.decode()
+    old = "lhs -= DivCoeffGrad(unknowns[column], float(diffusion[row, column])*(1+material[0]))"
+    replacement = "coefficient = float(diffusion[row, column])*(1+material[0])\n                if candidate_diffusion:\n                    coefficient *= 1+CANDIDATE_BETA*ValueExpr(unknowns[column])**2\n                lhs -= DivCoeffGrad(unknowns[column], coefficient)"
+    assert old in source and "def build(cells, width, order, *, omit_material=False):" in source
+    assert 'face_policy="Arithmetic@1"), boundaries=()' in source
+    source = source.replace(old, replacement).replace(
+        "def build(cells, width, order, *, omit_material=False):",
+        "def build(cells, width, order, *, omit_material=False, candidate_diffusion=False):").replace(
+        'face_policy="Arithmetic@1"), boundaries=()',
+        'face_policy="Arithmetic@1", coefficient_evaluation="PerCandidate@1" if candidate_diffusion else None), boundaries=()')
+    return source.encode()
+
+
+def test_v3_shared_physical_source_contract_is_explicit_not_legacy_upcast(shared_frozen_source_bytes, original_source_bytes):
+    r.declared_source(shared_frozen_source_bytes, fixture_version=3)
+    with pytest.raises(ValueError):
+        r.declared_source(shared_frozen_source_bytes)
+    r.declared_source(original_source_bytes)
+    with pytest.raises(ValueError):
+        r.declared_source(original_source_bytes, fixture_version=3)
+
+
+@pytest.mark.parametrize("before,after", [
+    (b"candidate_diffusion=False", b"candidate_diffusion=True"),
+    (b"candidate_diffusion=False", b"candidate_diffusion=0"),
+    (b"if candidate_diffusion:", b"if not candidate_diffusion:"),
+    (b"coefficient *= 1+CANDIDATE_BETA", b"coefficient *= 2+CANDIDATE_BETA"),
+    (b"coefficient = float(diffusion[row, column])*(1+material[0])",
+     b"coefficient = float(diffusion[row, column])*(1+material[0])\n                candidate_diffusion = True"),
+    (b'"PerCandidate@1" if candidate_diffusion else None', b'"PerCandidate@1"'),
+    (b"forcing.n}", b"forcing.next}"),
+    (b"= coefficient.n", b"= coefficient.next"),
+    (b"c=0)", b"c=1)"),
+    (b"lhs -= DivCoeffGrad", b"lhs += DivCoeffGrad"),
+    (b"*(1+material[0])", b"*(1+2*material[0])"),
+    (b"current.n+program.dt*rhs", b"current.n+2*program.dt*rhs")])
+def test_v3_shared_source_frozen_branch_point_capture_and_consumer_refuse(shared_frozen_source_bytes,before,after):
+    assert before in shared_frozen_source_bytes
+    with pytest.raises(ValueError):
+        r.declared_source(shared_frozen_source_bytes.replace(before,after), fixture_version=3)
+
+
+SYNTHETIC_SHARED_FIXTURE = b"""
+def test_public_captured_diffusion_nonconstant_saved_and_exact_replay(isolated_native_cache,tmp_path,record_property,width,order):
+    _run_public_diffusion_mms(isolated_native_cache,tmp_path,record_property,width,order)
+def _run_public_diffusion_mms(isolated_native_cache,tmp_path,record_property,width,order,*,candidate_diffusion=False):
+    return build(cells,width,order,candidate_diffusion=candidate_diffusion)
+"""
+
+
+@pytest.mark.parametrize("before,after", [(None,None),
+    (b"candidate_diffusion=False", b"candidate_diffusion=True"),
+    (b"candidate_diffusion=False", b"candidate_diffusion=0"),
+    (b"candidate_diffusion=candidate_diffusion", b"candidate_diffusion=True"),
+    (b"    return build", b"    candidate_diffusion=True\n    return build"),
+    (b"record_property,width,order)\ndef _run", b"record_property,width,order,candidate_diffusion=True)\ndef _run"),
+    (b"    _run_public_diffusion_mms", b"    unrelated_call()\n    _run_public_diffusion_mms")])
+def test_v3_public_frozen_entry_cannot_select_candidate_or_reassign(before,after):
+    raw=SYNTHETIC_SHARED_FIXTURE
+    if before is None:
+        r.declared_frozen_fixture_v3(raw)
+    else:
+        assert before in raw
+        with pytest.raises(ValueError):
+            r.declared_frozen_fixture_v3(raw.replace(before,after))

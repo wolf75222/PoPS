@@ -370,3 +370,41 @@ in-memory comparison images, private capture lease/point image, CPP-to-DSO
 linking, and AMR/GPU/convergence/arbitrary-D/empty-rank qualification. No native
 execution, install, JIT, environment mutation or production change occurred in
 this review. Native Serial/MPI results belong to ROOT's authenticated campaigns.
+
+### Version 3 shared-helper source contract follow-up
+
+ROOT's first Serial assembly failed before any qualification because the old
+source AST contract required the @2 inline expression
+`DivCoeffGrad(q, float(Dij)*(1+material[0]))`. The actual shared helper at
+`457e07000c35a466be3c80a7d7864f44a5f546c6` (SHA256
+`0226d9889de555b20c4a4a97d3ce29ff055fb719c1d6829cc4935240e8ca6f34`)
+assigns that exact frozen coefficient to a local variable, conditionally
+multiplies it by the Candidate recipe, then calls DivCoeffGrad. The helper and
+public runner default `candidate_diffusion=False`; the Frozen public entry
+calls that runner without overriding the selector. The method's PerCandidate
+policy is selected only in its true branch. The saved Frozen IR10 and original
+F are unchanged. The earlier unsealed archive/math admission did not invoke
+`origins`/assembly and therefore did not qualify this source-contract seam.
+Both ROOT assembly failures remain historical harness evidence.
+
+The follow-up gives @3 a strict, separate shared-helper AST contract: exact
+entire coefficient branch (including condition/order/sign), exact false default,
+no selector reassignment, exact conditional method policy, unchanged original
+reaction/equations/captures `.n`/stage c0/exterior consumer, and the exact Frozen
+entry/default/forwarding route. @2 still requires its original inline recipe;
+neither source spelling is automatically accepted under the other scope.
+Additional tests reject future-state captures, changed stage/duration/material,
+coefficient sign/conditional/body, true or integer defaults, reassignment,
+unconditional PerCandidate and forged public selection. No physical guard was
+weakened. The source suite now has 151 passing tests, including the same 80
+historical @2 tests; Ruff passes.
+
+Read-only actual ROOT Serial execution-owner leaves and the two exact457e source
+AST contracts now pass `origins(..., fixture_version=3)`. This is metadata/source
+admission without consuming ROOT's external approval. MPI2 likewise has two
+collectively published Frozen case archives under rank0-tmp, each storing both
+ranks' diagnostics, plus two raw rank XML files; there are not four independent
+Frozen physical cases. The two actual MPI2 archives' format/math/IR/history/
+clock/replay admission passes, as do both full clean eight-case XML files. The
+same residual maxima as Serial were observed. External MPI2 owner seals remain
+required; no native execution or multiplied-by-rank scientific claim occurs.

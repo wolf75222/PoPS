@@ -276,8 +276,9 @@ def pinned(row, roots, *, budget=protocol.MAX_FILE_BYTES):
     return path, raw
 
 
-def declared_source(raw):
+def declared_source(raw, *, fixture_version=2):
     """Literal D/R verification in ROOT-pinned original declaration, no execution."""
+    scope(fixture_version)
     tree = ast.parse(raw)
     fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "matrices"), None)
     need(fn is not None, "original matrix recipe absent")
@@ -297,7 +298,6 @@ def declared_source(raw):
     critical = (
         'lhs = Reaction(unknowns[row], .2*ValueExpr(unknowns[row])**2)',
         'lhs += Reaction(unknowns[column], float(reaction[row, column]))',
-        'lhs -= DivCoeffGrad(unknowns[column], float(diffusion[row, column])*(1+material[0]))',
         'equations.append(lhs == load[row])',
         'source = fluid.source("actual_field_response", on=response, value=auxiliaries)',
         'captures = {blocks[1][load]: forcing.n}',
@@ -307,10 +307,52 @@ def declared_source(raw):
         'rhs = program.rhs(state=current.n, fields=publication, terms=[SourceTerm(blocks[0][module.operator_handle("actual_field_response")])])',
         'program.commit(current.next, program.value("response-update", current.n+program.dt*rhs, at=current.next.point))',
     )
+    if fixture_version == 2:
+        critical += ('lhs -= DivCoeffGrad(unknowns[column], float(diffusion[row, column])*(1+material[0]))',)
+    else:
+        critical += ("""if diffusion[row, column] != 0:
+    coefficient = float(diffusion[row, column])*(1+material[0])
+    if candidate_diffusion:
+        coefficient *= 1+CANDIDATE_BETA*ValueExpr(unknowns[column])**2
+    lhs -= DivCoeffGrad(unknowns[column], coefficient)""",)
+        defaults = dict(zip((arg.arg for arg in build.args.kwonlyargs), build.args.kw_defaults, strict=True))
+        need(isinstance(defaults.get("candidate_diffusion"), ast.Constant)
+             and defaults["candidate_diffusion"].value is False,
+             "Frozen@3 shared helper default must select frozen coefficients")
+        need(not any(isinstance(n, ast.Name) and n.id == "candidate_diffusion" and isinstance(n.ctx, ast.Store)
+                     for n in ast.walk(build)), "Frozen selector cannot be reassigned")
+        methods = [n for n in ast.walk(build) if isinstance(n, ast.Call)
+                   and isinstance(n.func, ast.Name) and n.func.id == "CellCenteredNonlinearCoupled"]
+        policy = ast.parse('"PerCandidate@1" if candidate_diffusion else None', mode="eval").body
+        need(len(methods) == 1 and any(keyword.arg == "coefficient_evaluation"
+             and ast.dump(keyword.value, include_attributes=False) == ast.dump(policy, include_attributes=False)
+             for keyword in methods[0].keywords), "Frozen/Candidate method policy selection differs")
     nodes = {ast.dump(n, include_attributes=False) for n in ast.walk(build)}
     need(all(ast.dump(ast.parse(statement).body[0], include_attributes=False) in nodes for statement in critical),
          "source original body/capture point/consumer contract differs")
 
+
+
+def declared_frozen_fixture_v3(raw):
+    """Authenticate the public Frozen entry's explicit shared-helper route."""
+    tree = ast.parse(raw)
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    frozen = functions.get("test_public_captured_diffusion_nonconstant_saved_and_exact_replay")
+    runner = functions.get("_run_public_diffusion_mms")
+    need(frozen is not None and runner is not None, "Frozen@3 public entry/runner absent")
+    expected = ast.parse("_run_public_diffusion_mms(isolated_native_cache, tmp_path, record_property, width, order)").body
+    need([ast.dump(n, include_attributes=False) for n in frozen.body]
+         == [ast.dump(n, include_attributes=False) for n in expected], "Frozen public entry does not select default frozen path")
+    defaults = dict(zip((arg.arg for arg in runner.args.kwonlyargs), runner.args.kw_defaults, strict=True))
+    need(isinstance(defaults.get("candidate_diffusion"), ast.Constant)
+         and defaults["candidate_diffusion"].value is False,
+         "Frozen public runner default is not exact false")
+    need(not any(isinstance(n, ast.Name) and n.id == "candidate_diffusion" and isinstance(n.ctx, ast.Store)
+                 for n in ast.walk(runner)), "Frozen public runner selector reassigned")
+    builds = [n for n in ast.walk(runner) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "build"]
+    need(len(builds) == 1 and any(keyword.arg == "candidate_diffusion"
+         and isinstance(keyword.value, ast.Name) and keyword.value.id == "candidate_diffusion"
+         for keyword in builds[0].keywords), "Frozen runner must forward exact selector to physical helper")
 
 def history_point(raw, name, step):
     need(type(step) is int and step in (1, 2), "foreign history phase step")
@@ -521,7 +563,7 @@ def case_inventory(directory, *, fixture_version=2):
     return result
 
 
-def origins(value, roots):
+def origins(value, roots, *, fixture_version=2):
     exact(value, ("schema", "source_commit", "native_build_source_commit", "abi_key", "python_package", "sdk", "native", "sources", "cpp_dso_links"), "owner")
     need(value["schema"] == "sol61.captured-d-execution-owner@2", "owner schema differs")
     for key in ("source_commit", "native_build_source_commit"):
@@ -531,8 +573,10 @@ def origins(value, roots):
     for key in ("python_package", "sdk", "native"):
         pinned(value[key], roots, budget=MAX_BINARY_BYTES if key == "native" else protocol.MAX_FILE_BYTES)
     exact(value["sources"], ("fixture", "physical_helper"), "source origins")
-    declared_source(pinned(value["sources"]["physical_helper"], roots)[1])
-    pinned(value["sources"]["fixture"], roots)
+    declared_source(pinned(value["sources"]["physical_helper"], roots)[1], fixture_version=fixture_version)
+    fixture = pinned(value["sources"]["fixture"], roots)[1]
+    if fixture_version == 3:
+        declared_frozen_fixture_v3(fixture)
     need(value["cpp_dso_links"] is None, "unreviewed CPP-to-DSO link format cannot certify linking")
 
 
@@ -542,7 +586,7 @@ def assemble(root, directories, junits, owner, roots, *, fixture_version=2, othe
     root = wire.canonical(root)
     need(len(directories) == 2 and len(junits) in (1, 2), "two cases and Serial/MPI2 required")
     need(type(roots) is list and len(roots) == len(set(roots)) and str(root) in roots, "approved roots differ")
-    origins(owner, roots)
+    origins(owner, roots, fixture_version=fixture_version)
     cases = {}
     for directory in directories:
         case = case_inventory(directory, fixture_version=fixture_version)
@@ -578,7 +622,7 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
          and pins["mode"] == ("serial" if pins["ranks"] == 1 else "mpi2"), "owner scope differs")
     roots = pins["file_roots"]
     need(type(roots) is list and pins["archive_root"] in roots and len(roots) == len(set(roots)), "file roots differ")
-    origins(pins["owner"], roots)
+    origins(pins["owner"], roots, fixture_version=version)
     exact(pins["cases"], CASES, "sealed cases")
     need(len(pins["junit"]) == pins["ranks"] and len({r["path"] for r in pins["junit"]}) == pins["ranks"], "JUnit rank inventory differs")
     for rank, row in enumerate(pins["junit"]):
