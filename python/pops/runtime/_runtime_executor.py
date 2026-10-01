@@ -396,9 +396,8 @@ def _install_adaptive_native_engine(plan: Any) -> Any:
         transition_ratios=normalized_layout.transition_ratios,
     )
     engine._execution_context = plan.execution_context
-    from pops.runtime._runtime_mesh_lowering import install_embedded_boundary
-
-    install_embedded_boundary(engine, normalized_layout)
+    # AMR embedded geometry needs the owned assembly lane AND generated block providers.
+    # The install seam binds it after those providers, before hierarchy materialization.
     from pops.runtime._runtime_authorities import install_runtime_authorities
 
     install_runtime_authorities(engine, plan)
