@@ -1684,6 +1684,18 @@
         "rank_test_parity": true,
         "scientific_owner_seal": false,
         "remaining_fix": "verified multi-layout compiled diagnostic source inventory and fresh native reception"
+      },
+      "integrated_ir16_ir17_source_contracts": {
+        "schema": "root.api040.integrated-source-reception@1",
+        "scope": "SOURCE_ONLY-plus-actual-header-host",
+        "receipt": {
+          "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/ir16_ir17_integrated_source_reception.json",
+          "sha256": "b8e3e93ce7ffde6880a6c9577c71d88a60074314926fd451122af465284c0687",
+          "bytes": 5708
+        },
+        "native_scientific_acceptance": false,
+        "tests": 91,
+        "new_sdk_freeze_pending": true
       }
     },
     "limits": [
