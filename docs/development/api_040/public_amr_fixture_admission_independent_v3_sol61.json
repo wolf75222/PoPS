@@ -1,0 +1,56 @@
+{
+  "schema": "sol61.public-amr-fixture-admission-review@3",
+  "status": "source_admission_received",
+  "fixture_commit": "b943dd6627550364337d41743cb4efe2f7b33480",
+  "parent_commit": "54dc1c0dd56c8fbc1a8982a259fc894739389f90",
+  "checkout": "PoPS-sol61-amr-fixture-admission-review",
+  "native_execution": false,
+  "native_module_loaded": false,
+  "jit": false,
+  "compile_bind_run_called": false,
+  "catalogue_or_provider_monkeypatch": false,
+  "historical_review": {
+    "commit": "c880644af0cc73c6144b18786bbbee93dadcdc7d",
+    "source_math_host_passes": 10,
+    "public_case_validate_resolve_received": false,
+    "missed_refusal": "AMR refine value rule requires strict > threshold",
+    "requalified": false
+  },
+  "independent_checks": {
+    "passed": 9,
+    "seconds": 75.85,
+    "public_selected_variants": 4,
+    "real_public_validate_resolve_verify_emit": true,
+    "dimension": 2,
+    "selected_realization": "SpatialBasisJacobi@1",
+    "selected_ir_version": 9,
+    "legacy_default_ir_version": 8,
+    "historical_lt_builder_refused": true,
+    "source_origin_checked": true,
+    "original_equations_controls_transfers_history_and_rollback_body_unchanged": true,
+    "analytic_average_tags_at_cells": [16, 32],
+    "native_active_masks_created": false
+  },
+  "existing_source_checks": {
+    "passed": 5,
+    "deselected": 3,
+    "seconds": 70.36,
+    "selection": "closed_public or refuses_subcycling"
+  },
+  "layout": {
+    "predicate": "strict a>1.035",
+    "physical_coefficient": "1+.04*cos(2*pi*x)",
+    "buffer_cells": 1,
+    "maximum_box_size": 8,
+    "source_math_geometry": "symmetric extrema bands at periodic ends with untagged interior",
+    "native_genuine_partial_coverage_received": false
+  },
+  "limits": [
+    "Corrected source admission only; exact current fixture and public immutable plan/codegen route.",
+    "No installed native extension loading or generated C++ execution.",
+    "No native clustering, partial masks, distributed ownership, N32 convergence, original residual, rollback/retry/history/restart or MPI qualification.",
+    "Old N16 full-fine saved rows and old legacy N32 budget failure are not requalified.",
+    "Captured-diffusion @2/IR10 extension is outside this source fixture freeze.",
+    "No GPU, corpus-wide acceptance or GitHub CI claim."
+  ]
+}
