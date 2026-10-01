@@ -120,7 +120,10 @@ def test_actual_native_source_stamp_and_complete_output_path_are_load_bearing():
     assert "field.distribution().replicated() && lane.rank() != 0" in native
     assert "result->source->candidate()" in native
     assert "all_ranks_agree_exact_ordered_byte_pairs" in native
-    assert "facade_->prepared_amr_block_state(result->storage_owner, level)" in native
+    assert "storage_owner = sys_block(storage_block);" in native
+    assert "result->storage_owner = storage_owner;" in native
+    assert "facade_->prepared_amr_block_state(storage_owner, level)" in native
+    assert "identity, lane, kernel, output_prototypes.at(level)" in native
     assert "field.ncomp() != storage.ncomp()" not in native
 
 

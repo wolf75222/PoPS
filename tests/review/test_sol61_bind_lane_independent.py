@@ -172,8 +172,17 @@ def test_uniform_native_authority_and_guards_are_byte_unchanged():
         return ast.get_source_segment(source, node)
     assert provider(old) == provider(current)
     for path in ("python/pops/runtime/_runtime_authorities.py",
-                 "python/pops/runtime/_runtime_mesh_lowering.py", "src/runtime/amr/amr_system.cpp"):
+                 "python/pops/runtime/_runtime_mesh_lowering.py"):
         assert subprocess.check_output(["git", "show", f"{BASE}:{path}"], cwd=ROOT) == (ROOT/path).read_bytes()
+    # Other AMR changes (including history capability @2) are independent of EB
+    # assembly. Keep the complete native EB setter and its guards byte-pinned.
+    path = "src/runtime/amr/amr_system.cpp"
+    old_cpp = subprocess.check_output(["git", "show", f"{BASE}:{path}"], cwd=ROOT, text=True)
+    current_cpp = (ROOT / path).read_text()
+    def eb_setter(source):
+        start = source.index("void AmrSystem<Dim>::set_analytic_level_set(")
+        return source[start:source.index("\ntemplate <int Dim>", start)]
+    assert eb_setter(old_cpp) == eb_setter(current_cpp)
 
 
 @pytest.mark.parametrize("changed", (None, "artifact", "instances", "params", "aux", "field_plans", "context"))

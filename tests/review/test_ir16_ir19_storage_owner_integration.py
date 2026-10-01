@@ -42,7 +42,15 @@ def test_global_history_and_completed_source_share_an_unread_storage_owner(histo
     assert image["version"] == 19
     clone = detach_compiled_program(program)
     assert clone._serialize(include_provenance=False) == image
-    assert clone._block_indices() == routes
+    clone_routes = clone._block_indices()
+    # Detachment reissues Case-owned handles; runtime routes retain local IDs.
+    assert {block.local_id: index for block, index in clone_routes.items()} == {
+        block.local_id: index for block, index in routes.items()
+    }
+    clone_storage = next(block for block in clone_routes if block.local_id == storage.local_id)
+    assert clone_storage is not storage
+    assert not any(value.op == "state" and value.block is clone_storage for value in clone._values)
+    assert not any(state.block_ref is clone_storage for state in clone._commits)
     program.freeze()
     assert program._serialize(include_provenance=False) == image
     assert program._block_indices() == routes
