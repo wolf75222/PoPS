@@ -1760,6 +1760,32 @@
         "native_scientific_acceptance": false,
         "migration_complete": false,
         "preserved_sdk2e4_unchanged": true
+      },
+      "sdk9f57_product_entropy_feedback_mpi2_nonreg": {
+        "receipt": "sdk9f57_product_entropy_feedback_mpi2_nonreg.json",
+        "receipt_sha256": "b5bbebef7aa2970b1b8e39cef4b5c9f34cdabb528617b731a3d1d8000dea00ec",
+        "counts_per_rank": {
+          "tests": 13,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "same_installation": true,
+        "rank_test_parity": true,
+        "scientific_owner_seal": false,
+        "migration_complete": false
+      },
+      "sdk9f57_m19_scientific_reception": {
+        "receipt": "sdk9f57_m19_scientific_reception.json",
+        "receipt_sha256": "40257d35b32a5c698478cb3bbcc80d859da4dee87a085aea2a284730385917df",
+        "cases_per_backend": 6,
+        "phases_per_case": 4,
+        "max_original_error": 2.842170943040401e-14,
+        "scientific_owner_seal": true,
+        "archived_execution_only": true,
+        "negative_countermodels_refused": 19,
+        "strong_cpp_dso_link_qualified": false,
+        "migration_complete": false
       }
     },
     "limits": [

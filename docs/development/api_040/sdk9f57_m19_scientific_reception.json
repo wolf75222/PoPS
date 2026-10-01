@@ -1,0 +1,96 @@
+{
+  "schema": "pops.m19-sdk9f-ROOT-reception@1",
+  "date": "2026-10-01",
+  "actual_root_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-root-approved-20261001/ROOT-reception.json",
+    "sha256": "b9378b130bbd16d005e2c659ca8f76de95d21ab7f099a760437e6f62148115c3"
+  },
+  "authority": "ROOT",
+  "archive_files_audited": 2892,
+  "archive_blobs_audited": 1406,
+  "unchanged_actual_campaign_files": 610,
+  "frozen_inputs": {
+    "origin-bytes.zip": "fb0b0d13c767ec1b0ca1470621e27d4d35478656263ec1082725b9a41d15c053",
+    "origin-inventory.pending.json": "676a171583a8739b99dc4e50c493b94ca22b88ea916c30ffbe70821423799ff1",
+    "independent-reader-source.zip": "3d5ff959483a5d45c8d98b8d436a17d70b808e5fa42956067b6db3b08004e3a9",
+    "serial-owner-pins.pending.json": "8fe3cf1aa2befa14c72aaad4dad9379c0799dfcf20ff6689281e78d599199bf5",
+    "mpi2-owner-pins.pending.json": "112d0f585aecb2fdb717bf03baea03c8a7c2ee73e7dbe5e2926d2d6be68a6203"
+  },
+  "modes": {
+    "serial": {
+      "pins": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-offline-pending-20261001/serial-owner-pins.pending.json",
+        "sha256": "8fe3cf1aa2befa14c72aaad4dad9379c0799dfcf20ff6689281e78d599199bf5"
+      },
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-root-approved-20261001/serial-ROOT-approval.json",
+        "sha256": "8bea510ef7e41973ecbdbd33b76e2e1d547c70c075dea92277b102e918b3d9ec"
+      },
+      "report": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-root-approved-20261001/serial-independent-scientific-report.json",
+        "sha256": "9281a79a6d2fdf88d9a9239928df9dac3145570fbc4a5adf3e332441727afdb8"
+      },
+      "command": [
+        "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/python",
+        "-I",
+        "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-root-approved-20261001/frozen-independent-reader/tests/review/sol61_m19_saved_reception.py",
+        "check",
+        "--pins",
+        "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-offline-pending-20261001/serial-owner-pins.pending.json",
+        "--pins-sha256",
+        "8fe3cf1aa2befa14c72aaad4dad9379c0799dfcf20ff6689281e78d599199bf5",
+        "--approval",
+        "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-root-approved-20261001/serial-ROOT-approval.json",
+        "--approval-sha256",
+        "8bea510ef7e41973ecbdbd33b76e2e1d547c70c075dea92277b102e918b3d9ec"
+      ],
+      "returncode": 0,
+      "max_original_error": 2.842170943040401e-14
+    },
+    "mpi2": {
+      "pins": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-offline-pending-20261001/mpi2-owner-pins.pending.json",
+        "sha256": "112d0f585aecb2fdb717bf03baea03c8a7c2ee73e7dbe5e2926d2d6be68a6203"
+      },
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-root-approved-20261001/mpi2-ROOT-approval.json",
+        "sha256": "de0ca3ce79e8123b70b43e7edc60fc50b356e9ec17132da7bcf43e05ce77bd7e"
+      },
+      "report": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-root-approved-20261001/mpi2-independent-scientific-report.json",
+        "sha256": "521fded2e0b4fc28e3c83f1d950762da04622dbbe9dadb4336889c8763a7f529"
+      },
+      "command": [
+        "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/python",
+        "-I",
+        "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-root-approved-20261001/frozen-independent-reader/tests/review/sol61_m19_saved_reception.py",
+        "check",
+        "--pins",
+        "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-offline-pending-20261001/mpi2-owner-pins.pending.json",
+        "--pins-sha256",
+        "112d0f585aecb2fdb717bf03baea03c8a7c2ee73e7dbe5e2926d2d6be68a6203",
+        "--approval",
+        "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-root-approved-20261001/mpi2-ROOT-approval.json",
+        "--approval-sha256",
+        "de0ca3ce79e8123b70b43e7edc60fc50b356e9ec17132da7bcf43e05ce77bd7e"
+      ],
+      "returncode": 0,
+      "max_original_error": 2.842170943040401e-14
+    }
+  },
+  "scope": "finite-product reduce/lift, true native saved states and exact restart; six cases per backend",
+  "limitations": [
+    "No full Vlasov/BGK/field solve qualification",
+    "No GPU reception",
+    "Build and CompiledPlanRecord are ROOT-owner-attested; no independent CPP/DSO compile graph"
+  ],
+  "independent_negative_reception": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-sdk9f-offline-pending-20261001/real-countermodels-final/countermodels-report.json",
+    "sha256": "5def0db6d83bde493d856f7d80daf037bb61f98db27350bf5b07509c301d1439",
+    "refused": 19,
+    "scope": "offline-copied-real-files-only",
+    "ROOT_authenticity_claim": false
+  },
+  "current_integrated_source_requalified": false,
+  "migration_complete": false
+}
