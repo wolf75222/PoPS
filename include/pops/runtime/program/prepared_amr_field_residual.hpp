@@ -164,6 +164,7 @@ class PreparedAmrFieldResidual final {
                     [](ExactContractBuilder& out, const std::string& value) { out.text(value); });
       if (candidate_evaluation_)
         exact.text(PreparedHierarchyCandidateFieldOperator<Dim>::identity)
+            .text("pops.field.linear.true-correction-residual@1")
             .text("restriction-q/evaluate-D/restriction-D/halo-D/composite-flux@1")
             .scalar(evaluation_generation_);
       if (preconditioner_ != AmrFieldRightPreconditioner::kIdentity)

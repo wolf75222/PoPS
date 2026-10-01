@@ -69,11 +69,13 @@ class FieldNewtonKrylovWorkspace final {
   template <class ResidualProvider, class JvpProvider, class GaugeProvider>
   SolveReport solve(field_type& iterate, ResidualProvider&& evaluate_residual,
                     JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge,
-                    const ExecutionLane& lane, bool guard_local = false) {
+                    const ExecutionLane& lane, bool guard_local = false,
+                    bool verify_true_correction = false) {
     auto&& residual_provider = evaluate_residual;
     auto&& jvp_provider = apply_jvp;
     auto&& gauge_provider = apply_gauge;
     guard_local_ = guard_local;
+    verify_true_correction_ = verify_true_correction;
     local_phase_(lane, [&] { authenticate_(iterate, "iterate"); });
     local_phase_(lane, [&] { gauge_provider(iterate); });
     residual_provider(iterate, residual_, 0);
@@ -251,7 +253,7 @@ class FieldNewtonKrylovWorkspace final {
       bool updated = false;
       local_phase_(lane, [&] { updated = update_correction_(used); });
       if (!updated) return result;
-      if (cycle_converged) {
+      if (cycle_converged && !verify_true_correction_) {
         result.converged = true;
         return result;
       }
@@ -333,6 +335,7 @@ class FieldNewtonKrylovWorkspace final {
   }
 
   bool guard_local_ = false;
+  bool verify_true_correction_ = false;
   static bool finite_(Real value) noexcept { return std::isfinite(static_cast<double>(value)); }
 
   FieldNewtonOptions options_;

@@ -140,6 +140,7 @@ class CellCenteredNonlinearCoupled(CellCenteredGeneralCoupled):
                 raise ValueError("unknown original field candidate coefficient realization")
             data["contract"] = "pops.spatial-field-residual@3"
             data["coefficient_evaluation"] = "pops.field.coefficients.per-candidate@1"
+            data["linear_residual_verification"] = "pops.field.linear.true-correction-residual@1"
         return data
 
 

@@ -168,7 +168,8 @@ class ResolvedProgramFieldPlan:
                 diffusion, local = compile_equations(self.operator, captures, per_candidate=method_data.get("coefficient_evaluation") is not None)
                 if solve.attrs["contract"] != method_data["contract"] or \
                         solve.attrs.get("coefficient_face_policy") != method_data.get("coefficient_face_policy") or \
-                        solve.attrs.get("coefficient_evaluation") != method_data.get("coefficient_evaluation"):
+                        solve.attrs.get("coefficient_evaluation") != method_data.get("coefficient_evaluation") or \
+                        solve.attrs.get("linear_residual_verification") != method_data.get("linear_residual_verification"):
                     raise ValueError("original field coefficient realization differs from registered method")
                 if _canonical(local) != _canonical(solve.attrs["local_expressions"]) or \
                         _canonical(diffusion) != _canonical(solve.attrs["source_contract"]["diffusion"] if method_data.get("coefficient_evaluation") else solve.inputs[1].attrs["expressions"]) or \

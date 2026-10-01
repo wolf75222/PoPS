@@ -455,6 +455,8 @@ def _persistent_solver_buffers(program: Any) -> list:
                     "identity": v.attrs["coefficient_evaluation"],
                     "coefficient_components": v.attrs["ncomp"] ** 2,
                     "per_residual": "evaluate D(q,captures), prepare covered restriction/halos, apply original full F",
+                    "linear_residual_verification": v.attrs["linear_residual_verification"],
+                    "per_gmres_correction": "one full JVP and true residual norm, including projected convergence",
                     "amr_resource": "private apply-only composite FAC entries; no second GMRES basis",
                     "storage_cost": "O(components^2 * stored cells); coarse/fine transfer workspace additional",
                 }

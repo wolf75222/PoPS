@@ -18,7 +18,8 @@ class PreparedSpatialResidual final {
 
   PreparedSpatialResidual(const field_type& prototype, FieldNewtonOptions options,
                           Real difference_step, bool guard_local = false,
-                          const ExecutionLane* authority_lane = nullptr)
+                          const ExecutionLane* authority_lane = nullptr,
+                          bool verify_true_correction = false)
       : newton_(prototype.layout(), prototype.distribution(), prototype.local_rank(), options,
                 prototype.ncomp()),
         candidate_(prototype.layout(), prototype.distribution(), prototype.local_rank(),
@@ -29,7 +30,8 @@ class PreparedSpatialResidual final {
               prototype.ncomp(), Extent<Dim>{}),
         minus_(prototype.layout(), prototype.distribution(), prototype.local_rank(),
                prototype.ncomp(), Extent<Dim>{}),
-        difference_step_(difference_step), guard_local_(guard_local), authority_lane_(authority_lane) {
+        difference_step_(difference_step), guard_local_(guard_local), authority_lane_(authority_lane),
+        verify_true_correction_(verify_true_correction) {
     if (guard_local_ && !authority_lane_)
       throw std::invalid_argument("guarded spatial residual requires its prepared execution lane");
     if (prototype.ncomp() <= 0 || !std::isfinite(difference_step_) || difference_step_ <= Real(0))
@@ -89,7 +91,7 @@ class PreparedSpatialResidual final {
       local_phase_(prepared_lane, [&] { lincomb(result, Real(0.5) / step, plus_, -Real(0.5) / step, minus_); });
     };
     auto no_gauge = [](field_type&) {};
-    auto report = newton_.solve(candidate_, defect, derivative, no_gauge, prepared_lane, guard_local_);
+    auto report = newton_.solve(candidate_, defect, derivative, no_gauge, prepared_lane, guard_local_, verify_true_correction_);
     // Report actual full-residual evaluations, including the two evaluations per JVP.
     report.evaluations = residual_evaluations_;
     return report;
@@ -125,6 +127,7 @@ class PreparedSpatialResidual final {
   Real difference_step_;
   bool guard_local_ = false;
   const ExecutionLane* authority_lane_ = nullptr;
+  bool verify_true_correction_ = false;
   int residual_evaluations_ = 0;
   int derivative_evaluations_ = 0;
 };

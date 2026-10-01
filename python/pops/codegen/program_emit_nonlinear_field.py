@@ -46,7 +46,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
         ("_workspace", "_trial", "_status", "_output", "_boundary", "_coefficient_boundary"))
     prelude += [
         "auto %s = std::make_shared<pops::runtime::program::PreparedSpatialResidual<pops::kNativeDimension>>(%s, %s, %s%s);"
-        % (workspace, prototype, controls, scalar_cpp(spatial_scalar(value.attrs["finite_difference_step"])), ", true, &ctx.prepared_execution_lane()" if per_candidate else ""),
+        % (workspace, prototype, controls, scalar_cpp(spatial_scalar(value.attrs["finite_difference_step"])), ", true, &ctx.prepared_execution_lane(), true" if per_candidate else ""),
         "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(%d, 1));" % (trial, width),
         "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(1, 0));" % status,
         "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(%d, 0));" % (output, width),

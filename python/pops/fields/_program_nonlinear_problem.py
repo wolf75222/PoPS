@@ -160,6 +160,7 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
         source_data["coefficient_face_policy"] = face_policy
     if candidate_policy is not None:
         source_data["coefficient_evaluation"] = candidate_policy
+        source_data["linear_residual_verification"] = method_data["linear_residual_verification"]
     source = freeze_containers(source_data)
     residual = _SpatialFieldResidual(field, prototype, coefficients, captures, local,
                                      numerical.method.finite_difference_step, boundary, source)
@@ -202,6 +203,7 @@ def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict
         realization["coefficient_face_policy"] = token.attrs["coefficient_face_policy"]
     if "coefficient_evaluation" in token.attrs:
         realization["coefficient_evaluation"] = token.attrs["coefficient_evaluation"]
+        realization["linear_residual_verification"] = token.attrs["linear_residual_verification"]
     if realization:
         result["schema_version"] = 2
         result["realization"] = realization
@@ -245,6 +247,7 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
         attrs["coefficient_face_policy"] = face_policy
     if candidate_policy is not None:
         attrs["coefficient_evaluation"] = candidate_policy
+        attrs["linear_residual_verification"] = residual.source_contract["linear_residual_verification"]
         if prepared.right_preconditioner is not None:
             raise SolveRequestError("unsupported_realization", "SpatialBasisJacobi@1 requires a frozen linear spatial operator; PerCandidate@1 needs a separately declared Jacobian preconditioner")
     prepared.__post_init__()
@@ -277,6 +280,9 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
         raise SolveRequestError("equation_identity_drift", "candidate coefficient realization changed")
     if token.attrs.get("coefficient_evaluation") != candidate_policy or (candidate_policy and token.attrs.get("right_preconditioner") is not None):
         raise SolveRequestError("unsupported_realization", "candidate coefficient policy/preconditioner mismatch")
+    criterion = "pops.field.linear.true-correction-residual@1" if candidate_policy else None
+    if source.get("linear_residual_verification") != criterion or token.attrs.get("linear_residual_verification") != criterion:
+        raise SolveRequestError("unsupported_realization", "true correction residual realization changed")
     expected_contract = CANDIDATE_DIFFUSION_CONTRACT if candidate_policy else CAPTURED_DIFFUSION_CONTRACT if face_policy is not None else CONTRACT
     if (face_policy is not None and (type(face_policy) is not str or face_policy != ARITHMETIC_FACES)) or \
             token.attrs["contract"] != expected_contract or token.attrs["problem_kind"] != "original_field_equations":
