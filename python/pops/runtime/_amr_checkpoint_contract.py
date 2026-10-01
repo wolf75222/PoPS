@@ -11,7 +11,7 @@ import struct
 from pops.identity import make_identity
 
 
-_SCHEMA = 7
+_SCHEMA = 8
 _GUARANTEE = "bit_identical_accepted_state"
 _CONTRACT_KEYS = {
     "schema_version",
@@ -26,6 +26,7 @@ _CONTRACT_KEYS = {
     "level_relations",
     "transfer_routes",
     "field_providers",
+    "tag_selection",
 }
 _PREFLIGHT_KEYS = {
     "schema_version",
@@ -34,6 +35,7 @@ _PREFLIGHT_KEYS = {
     "level_relations",
     "transfer_routes",
     "field_providers",
+    "tag_selection",
 }
 
 
@@ -149,6 +151,7 @@ def contract_for(sim):
         "history_qualifications": _rows(sim.program_accepted_state_manifest()),
         "level_relations": relations,
         "transfer_routes": _rows(sim.checkpoint_transfer_routes()),
+        "tag_selection": _rows(sim.checkpoint_tag_selection_contract()),
         "field_providers": _field_provider_contract_rows(
             sim.field_provider_checkpoint_manifest()
         ),

@@ -129,8 +129,9 @@ class ResolvedTaggingAuthority:
 
     def canonical_identity(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "authority_type": "resolved_amr_tagging",
+            "selection_contract": "pops.amr.tag-selection@1",
             "graph": self.graph.canonical_identity(),
             "buffer_cells": self.buffer_cells,
         }
@@ -613,9 +614,9 @@ def _hierarchy(
             )
         ),
     )
-    minimum_buffer = tuple(
-        max(tagging.buffer_cells, value) for value in nesting.minimum_buffer
-    )
+    # Authored tag dilation is a separate selection policy. Derived nesting
+    # constrains parent coverage, never which cells the predicates select.
+    minimum_buffer = nesting.minimum_buffer
     hierarchy_data = _protocol(
         authoring, "to_data", where="AMR hierarchy authority"
     )()

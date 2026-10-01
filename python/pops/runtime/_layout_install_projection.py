@@ -133,6 +133,10 @@ class LayoutInstallProjection:
         return self.local.authorities.hierarchy
 
     @property
+    def resolved_tagging(self):
+        return self.local.authorities.tagging
+
+    @property
     def amr_transfer(self):
         return self.local.authorities.transfer
 

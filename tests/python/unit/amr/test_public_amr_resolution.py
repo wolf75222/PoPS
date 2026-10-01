@@ -29,6 +29,7 @@ def _resolved_target(
     conflict_policy=None,
     patch_layout=None,
     load_balance=None,
+    tag_buffer=None,
 ):
     from pops.amr._resolution import AMRResolutionContext
     from pops.mesh import normalize_layout_plan
@@ -40,6 +41,7 @@ def _resolved_target(
         or conflict_policy is not None
         or patch_layout is not None
         or load_balance is not None
+        or tag_buffer is not None
     ):
         if hysteresis is None or conflict_policy is None:
             if hysteresis is not None or conflict_policy is not None:
@@ -53,6 +55,11 @@ def _resolved_target(
                 hysteresis=hysteresis,
                 conflict_policy=conflict_policy,
             )
+        if tag_buffer is not None:
+            from dataclasses import replace
+            from pops.amr import Buffer
+            tagging = replace(tagging, rules=tuple(
+                Buffer(tag_buffer) if type(rule) is Buffer else rule for rule in tagging.rules))
         authored_layout = type(authored_layout)(
             grid=authored_layout.grid,
             hierarchy=authored_layout.hierarchy,
@@ -125,6 +132,9 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
     from pops.runtime._amr_bind_lowering import amr_config_from_layout
 
     class NativeConfigProbe:
+        tag_selection_contract_version = None
+        tag_selection_buffer = None
+
         def _set_load_balance_provider(self, *values):
             self.load_balance_provider = values
 
@@ -155,6 +165,7 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
     config = amr_config_from_layout(
         layout,
         hierarchy=authorities.hierarchy,
+        tagging=authorities.tagging,
         native_layout=_native_layout(layout_plan),
     )
     assert config.distribute_coarse is True
@@ -183,6 +194,7 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
     automatic_config = amr_config_from_layout(
         automatic_layout,
         hierarchy=automatic.hierarchy,
+        tagging=automatic.tagging,
         native_layout=_native_layout(automatic_plan),
     )
     assert automatic_config.distribute_coarse is True
@@ -198,6 +210,9 @@ def test_native_lowering_carries_rectangular_grid_without_collapsing_axes(monkey
     from pops.runtime._amr_bind_lowering import amr_config_from_layout
 
     class NativeConfigProbe:
+        tag_selection_contract_version = None
+        tag_selection_buffer = None
+
         def _set_load_balance_provider(self, *values):
             self.load_balance_provider = values
 
@@ -235,6 +250,7 @@ def test_native_lowering_carries_rectangular_grid_without_collapsing_axes(monkey
     config = amr_config_from_layout(
         RectangularRuntimeLayout(),
         hierarchy=authorities.hierarchy,
+        tagging=authorities.tagging,
         native_layout=rectangular_native,
     )
     assert config.shape == (30, 12)
@@ -283,6 +299,9 @@ def test_measured_knapsack_roundtrips_exact_native_decision_policy(monkeypatch):
     from pops.runtime._amr_bind_lowering import amr_config_from_layout
 
     class NativeConfigProbe:
+        tag_selection_contract_version = None
+        tag_selection_buffer = None
+
         def _set_load_balance_provider(self, *values):
             self.load_balance_provider = values
 
@@ -301,6 +320,7 @@ def test_measured_knapsack_roundtrips_exact_native_decision_policy(monkeypatch):
     config = amr_config_from_layout(
         layout,
         hierarchy=authorities.hierarchy,
+        tagging=authorities.tagging,
         native_layout=_native_layout(layout_plan),
     )
     assert config.load_balance_provider == (
@@ -883,3 +903,56 @@ def test_symbolic_gradient_indicator_cannot_escape_discrete_resolution():
         assert "discrete consumer context" in str(exc)
     else:
         raise AssertionError("continuous-looking indicator bypassed discrete resolution")
+
+
+@pytest.mark.parametrize("buffer", (0, 1, 7))
+def test_authored_tag_buffer_is_separate_from_multilevel_nesting(buffer):
+    from pops.runtime._amr_bind_lowering import _install_native_tag_selection_config
+    from pops.mesh._amr.hierarchy_native import lower_native_hierarchy
+
+    class ConfigProjection:
+        tag_selection_contract_version = None
+        tag_selection_buffer = None
+
+    _, _, _, baseline = _resolved_target(tag_buffer=0)
+    _, _, _, changed = _resolved_target(tag_buffer=buffer)
+    native = lower_native_hierarchy(changed.hierarchy)
+    assert native.level_count == 3
+    assert native.transition_buffers == ((2, 2), (2, 2))
+    assert native.transition_lookaheads == (1, 1)
+    # Provider identities may include the entire layout (including tag policy).
+    # Their numerical coverage requirements and ordered transitions must not grow.
+    assert changed.hierarchy.plan.transitions == baseline.hierarchy.plan.transitions
+    assert changed.hierarchy.plan.nesting.minimum_buffer == baseline.hierarchy.plan.nesting.minimum_buffer
+    assert changed.hierarchy.plan.nesting.minimum_lookahead == baseline.hierarchy.plan.nesting.minimum_lookahead
+    assert changed.tagging.buffer_cells == buffer
+    if buffer:
+        assert changed.tagging.canonical_identity() != baseline.tagging.canonical_identity()
+    for dimension in (1, 2, 3):
+        cfg = ConfigProjection()
+        _install_native_tag_selection_config(cfg, changed.tagging, dimension=dimension)
+        assert cfg.tag_selection_contract_version == 1
+        assert cfg.tag_selection_buffer == (buffer,) * dimension
+
+
+def test_tag_selection_lowering_refuses_old_config_and_overflow():
+    from dataclasses import replace
+    from pops.runtime._amr_bind_lowering import _install_native_tag_selection_config
+
+    class ConfigProjection:
+        tag_selection_contract_version = None
+        tag_selection_buffer = None
+
+    _, _, _, authorities = _resolved_target(tag_buffer=0)
+    with pytest.raises(TypeError, match="lacks pops.amr.tag-selection@1"):
+        _install_native_tag_selection_config(SimpleNamespace(), authorities.tagging, dimension=2)
+    with pytest.raises(OverflowError, match="signed 32-bit"):
+        _install_native_tag_selection_config(ConfigProjection(),
+            replace(authorities.tagging, buffer_cells=2**31), dimension=2)
+    with pytest.raises(OverflowError, match="neighborhood exceeds size_t"):
+        _install_native_tag_selection_config(ConfigProjection(),
+            replace(authorities.tagging, buffer_cells=2**31-1), dimension=3)
+    with pytest.raises(ValueError, match="integer >= 0"):
+        replace(authorities.tagging, buffer_cells=-1)
+    with pytest.raises(ValueError, match="dimension"):
+        _install_native_tag_selection_config(ConfigProjection(), authorities.tagging, dimension=4)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import math
+import struct
 from typing import Any
 
 
@@ -172,7 +173,7 @@ def _native_load_balance_options(options: dict[str, Any]) -> dict[str, Any]:
 def _install_native_hierarchy_config(
     config: Any, lowering: Any, *, dimension: int
 ) -> None:
-    """Install every hierarchy-v2 transition without reducing ranked facts to scalars."""
+    """Install every hierarchy-v3 transition without reducing ranked facts to scalars."""
     from pops.mesh._amr.hierarchy_native import PreparedHierarchyNativeLowering
 
     if type(lowering) is not PreparedHierarchyNativeLowering:
@@ -191,10 +192,35 @@ def _install_native_hierarchy_config(
     )
 
 
+def _install_native_tag_selection_config(config: Any, tagging: Any, *, dimension: int) -> None:
+    """Carry the exact authored Buffer, independently of numerical nesting."""
+    from pops.amr._resolution import ResolvedTaggingAuthority
+
+    if type(tagging) is not ResolvedTaggingAuthority:
+        raise TypeError("native tag selection requires an exact ResolvedTaggingAuthority")
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise ValueError("native tag selection requires spatial dimension 1, 2, or 3")
+    cells = tagging.buffer_cells
+    if type(cells) is not int or cells < 0:
+        raise ValueError("native tag selection Buffer must be an exact non-negative integer")
+    if cells > 2_147_483_647:
+        raise OverflowError("native tag selection Buffer exceeds signed 32-bit coordinates")
+    if (2*cells+1)**dimension > (1 << (8*struct.calcsize("P"))) - 1:
+        raise OverflowError("native tag selection neighborhood exceeds size_t")
+    # Pybind exposes exact version/ranked setters. An older DSO cannot silently
+    # accept a Python-only attribute as a replacement for this native contract.
+    if not hasattr(type(config), "tag_selection_contract_version") \
+            or not hasattr(type(config), "tag_selection_buffer"):
+        raise TypeError("native AMR config lacks pops.amr.tag-selection@1")
+    config.tag_selection_contract_version = 1
+    config.tag_selection_buffer = (cells,) * dimension
+
+
 def amr_config_from_layout(
     layout: Any,
     *,
     hierarchy: Any = None,
+    tagging: Any = None,
     native_layout: Any,
 ) -> Any:
     """Build ``AmrSystemConfig`` without inferring or dropping authored facts."""
@@ -217,6 +243,7 @@ def amr_config_from_layout(
     _install_native_hierarchy_config(
         cfg, native_hierarchy, dimension=len(cells)
     )
+    _install_native_tag_selection_config(cfg, tagging, dimension=len(cells))
     cfg.regrid_every = _regrid_every(data)
     cfg.explicit_bootstrap = True
 

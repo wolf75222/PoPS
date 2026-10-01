@@ -158,6 +158,10 @@ struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
   std::vector<Extent<Dim>> transition_ratios{runtime_config_detail::filled_extent<Dim>(2)};
   std::vector<Extent<Dim>> transition_buffers{runtime_config_detail::filled_extent<Dim>(2)};
   std::vector<Extent<Dim>> transition_lookaheads{runtime_config_detail::filled_extent<Dim>(2)};
+  /// pops.amr.tag-selection@1: only this authored ranked buffer dilates candidates.
+  /// Transition buffers/lookaheads are separate parent-coverage requirements.
+  std::uint32_t tag_selection_contract_version = 1;
+  Extent<Dim> tag_selection_buffer{};
   bool explicit_bootstrap = false;  ///< coarse-only start; BootstrapPlan creates fine levels
   /// OWNERSHIP POLICY of the coarse level (cf. AmrCouplerMP::replicated_coarse).
   /// false (DEFAULT, historical): coarse mono-box REPLICATED on all ranks. The coarse Poisson
@@ -1008,6 +1012,8 @@ class AmrSystem {
   std::uint64_t checkpoint_topology_epoch() const;
   void restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch);
   std::vector<std::vector<std::string>> checkpoint_temporal_relations() const;
+  /// Exact selection and parent-coverage policy for strict accepted restart preflight.
+  std::vector<std::vector<std::string>> checkpoint_tag_selection_contract() const;
   /// Canonical rows for every required bootstrap transfer route: subject, operation, route identity,
   /// provider, kernel, descriptor fields.  The sealed checkpoint compares these rows byte-for-byte.
   std::vector<std::vector<std::string>> checkpoint_transfer_routes() const;

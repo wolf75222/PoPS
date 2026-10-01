@@ -212,6 +212,23 @@ TEST(test_amr_seed_no_refine, TransitionNeighborhoodOverflowFailsBeforeHierarchy
   EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::overflow_error);
 }
 
+TEST(test_amr_seed_no_refine, TagSelectionRejectsLegacyAndRankedOverflowBeforeAllocation) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.tag_selection_contract_version = 0;
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::invalid_argument);
+  config.tag_selection_contract_version = 1;
+  config.tag_selection_buffer[0] = -1;
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::overflow_error);
+  config.tag_selection_buffer[0] = std::numeric_limits<std::int64_t>::max();
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::overflow_error);
+  if constexpr (Dim == 3) {
+    for (int axis = 0; axis < Dim; ++axis)
+      config.tag_selection_buffer[axis] = std::numeric_limits<int>::max();
+    EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::overflow_error);
+  }
+}
+
 TEST(test_amr_seed_no_refine, AutomaticBootstrapRefusesFieldLeafBeforeMaterialization) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;

@@ -1613,6 +1613,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("checkpoint_topology_epoch", &AmrSystem::checkpoint_topology_epoch)
       .def("restore_checkpoint_counters", &AmrSystem::restore_checkpoint_counters,
            py::arg("regrid_count"), py::arg("topology_epoch"))
+      .def("checkpoint_tag_selection_contract", &AmrSystem::checkpoint_tag_selection_contract)
       .def("checkpoint_temporal_relations", &AmrSystem::checkpoint_temporal_relations)
       .def("set_temporal_relations", &AmrSystem::set_temporal_relations, py::arg("numerators"),
            py::arg("denominators"), py::arg("remainder_policies"))
@@ -1767,6 +1768,15 @@ void init_amr(py::module_& m) {
           [](NativeAmrSystemConfig& config, const py::handle& value) {
             config.transition_lookaheads = ranked_extents_from_python<kNativeDimension>(
                 value, "AmrSystemConfig.transition_lookaheads", 0);
+          })
+      .def_readwrite("tag_selection_contract_version", &NativeAmrSystemConfig::tag_selection_contract_version)
+      .def_property("tag_selection_buffer",
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_extent_to_python(config.tag_selection_buffer);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.tag_selection_buffer = ranked_extent_from_python<kNativeDimension>(
+                value, "AmrSystemConfig.tag_selection_buffer", true);
           })
       .def_readwrite("explicit_bootstrap", &NativeAmrSystemConfig::explicit_bootstrap)
       .def_property(

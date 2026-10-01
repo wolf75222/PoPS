@@ -256,6 +256,19 @@ void validate_amr_config(const AmrSystemConfig<Dim>& config) {
   if (config.regrid_every < 0)
     throw std::invalid_argument("AmrSystem regrid_every must be non-negative");
 
+  if (config.tag_selection_contract_version != 1)
+    throw std::invalid_argument("AmrSystem requires pops.amr.tag-selection@1");
+  std::size_t tag_neighborhood = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto buffer = config.tag_selection_buffer[axis];
+    if (buffer < 0 || buffer > std::numeric_limits<int>::max())
+      throw std::overflow_error("AmrSystem tag selection buffer exceeds signed coordinates");
+    const auto width = std::uint64_t{2} * static_cast<std::uint64_t>(buffer) + 1;
+    if (width > std::numeric_limits<std::size_t>::max() ||
+        tag_neighborhood > std::numeric_limits<std::size_t>::max() / width)
+      throw std::overflow_error("AmrSystem tag selection neighborhood exceeds size_t");
+    tag_neighborhood *= static_cast<std::size_t>(width);
+  }
   const std::size_t transitions = static_cast<std::size_t>(config.level_count - 1);
   if (config.transition_ratios.size() != transitions ||
       config.transition_buffers.size() != transitions ||
@@ -4418,7 +4431,8 @@ struct AmrSystem<Dim>::Impl {
           "materialize the hierarchy before installing that callback");
     ExactContractBuilder contract;
     contract.text("pops.amr-system.initial-materialization")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
+        .scalar(cfg.tag_selection_contract_version)
         .scalar(std::int32_t{Dim})
         .text(package_assembly_lane ? package_assembly_lane->identity() : std::string_view{})
         .scalar(std::int32_t{cfg.regrid_every})
@@ -4445,7 +4459,8 @@ struct AmrSystem<Dim>::Impl {
           .scalar(cfg.lower[axis])
           .scalar(cfg.upper[axis])
           .scalar(cfg.periodicity[axis])
-          .scalar(cfg.coarse_max_grid[axis]);
+          .scalar(cfg.coarse_max_grid[axis])
+          .scalar(cfg.tag_selection_buffer[axis]);
     contract.scalar(static_cast<std::uint64_t>(cfg.transition_ratios.size()));
     for (std::size_t transition = 0; transition < cfg.transition_ratios.size(); ++transition)
       for (int axis = 0; axis < Dim; ++axis)
@@ -9602,7 +9617,12 @@ struct AmrSystem<Dim>::Impl {
     const auto& parent = engine->hierarchy().layout(level);
     auto options = exact_cluster_options(cfg, parent);
     for (int axis = 0; axis < Dim; ++axis) {
-      options.nesting_buffer[axis] = cfg.transition_buffers[level][axis];
+      // Both derived minima constrain coverage. Neither expands predicate tags.
+      const auto coverage = static_cast<std::uint64_t>(cfg.transition_buffers[level][axis]) +
+                            static_cast<std::uint64_t>(cfg.transition_lookaheads[level][axis]);
+      if (coverage > std::numeric_limits<int>::max())
+        throw std::overflow_error("AMR parent nesting coverage exceeds native coordinates");
+      options.nesting_buffer[axis] = static_cast<int>(coverage);
       options.periodic_axes[axis] = topology().is_periodic(Face<Dim>{axis, BoundarySide::lower});
     }
     const auto include_stencil = [&](const Extent<Dim>& ghosts, int source_radius) {
@@ -9693,12 +9713,8 @@ struct AmrSystem<Dim>::Impl {
     std::array<std::size_t, Dim> reach{};
     std::array<std::size_t, Dim> width{};
     std::size_t neighborhood = 1;
-    const std::size_t transition = static_cast<std::size_t>(parent_level);
     for (int axis = 0; axis < Dim; ++axis) {
-      reach[axis] =
-          checked_size_sum(static_cast<std::size_t>(cfg.transition_buffers[transition][axis]),
-                           static_cast<std::size_t>(cfg.transition_lookaheads[transition][axis]),
-                           "AMR tagging transition reach exceeds size_t");
+      reach[axis] = static_cast<std::size_t>(cfg.tag_selection_buffer[axis]);
       width[axis] =
           checked_size_sum(checked_size_product(std::size_t{2}, reach[axis],
                                                 "AMR tagging transition width exceeds size_t"),
@@ -22470,6 +22486,27 @@ AmrSystem<Dim>::prepared_program_temporal_relations() const {
 }
 
 template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_tag_selection_contract() const {
+  std::vector<std::vector<std::string>> rows{
+      {"pops.amr.tag-selection@1", std::to_string(p_->cfg.tag_selection_contract_version)}};
+  // Read the retained immutable config, not a reconstructed tag mask.
+  std::vector<std::string> selection{"tag-buffer"};
+  for (int axis = 0; axis < Dim; ++axis)
+    selection.push_back(std::to_string(p_->cfg.tag_selection_buffer[axis]));
+  rows.push_back(std::move(selection));
+  for (std::size_t transition = 0; transition < p_->cfg.transition_ratios.size(); ++transition) {
+    std::vector<std::string> nesting{"parent-coverage", std::to_string(transition)};
+    for (int axis = 0; axis < Dim; ++axis) {
+      nesting.push_back(std::to_string(p_->cfg.transition_ratios[transition][axis]));
+      nesting.push_back(std::to_string(p_->cfg.transition_buffers[transition][axis]));
+      nesting.push_back(std::to_string(p_->cfg.transition_lookaheads[transition][axis]));
+    }
+    rows.push_back(std::move(nesting));
+  }
+  return rows;
+}
+
+template <int Dim>
 std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_temporal_relations() const {
   std::vector<std::vector<std::string>> rows;
   rows.reserve(p_->temporal_relations.size());
@@ -23164,6 +23201,8 @@ template std::vector<std::vector<std::string>> AmrSystem<kNativeDimension>::prog
     const;
 template std::vector<::pops::amr::ParentChildClockRelation>
 AmrSystem<kNativeDimension>::prepared_program_temporal_relations() const;
+template std::vector<std::vector<std::string>>
+AmrSystem<kNativeDimension>::checkpoint_tag_selection_contract() const;
 template std::vector<std::vector<std::string>>
 AmrSystem<kNativeDimension>::checkpoint_temporal_relations() const;
 template std::vector<std::vector<std::string>>

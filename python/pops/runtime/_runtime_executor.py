@@ -386,6 +386,7 @@ def _install_adaptive_native_engine(plan: Any) -> Any:
     engine = AmrSystem(amr_config_from_layout(
         plan.layout,
         hierarchy=plan.resolved_hierarchy,
+        tagging=plan.resolved_tagging,
         native_layout=normalized_layout.native_spatial_layout,
     ))
     from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
