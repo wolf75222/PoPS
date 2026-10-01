@@ -32,12 +32,18 @@ def assemble(spec):
     # Strictly receive the new accepted schema/tag provenance before naming this @3.
     for case in pins["cases"]:
         receipt=reader.strict_json(Path(case["receipt"]["path"]).read_bytes())
+        programs = [row for row in receipt["compilation"] if row["component"].startswith("program-")]
+        reader.need(len(programs)==1,"one retained Program registry required")
+        ir_pin = programs[0]["ir.json"]
+        raw_ir = Path(ir_pin["path"]).read_bytes()
+        reader.need(reader.digest(raw_ir)==case["files"][ir_pin["path"]],"Program registry changed during candidate validation")
+        subjects = reader.program_transfer_subjects(reader.strict_json(raw_ir))
         for phase in ("accepted","continuous","replay"):
             row=receipt["checkpoints"][phase]
             raw=Path(row["path"]).read_bytes()
             reader.need(reader.digest(raw)==case["files"][row["path"]],"checkpoint changed during candidate profile validation")
             arrays=reader.wire.archive(raw)
-            reader.accepted_contract(reader.strict_json(str(arrays["amr_accepted_contract"].item())),reader.STEPS[phase])
+            reader.accepted_contract(reader.strict_json(str(arrays["amr_accepted_contract"].item())),reader.STEPS[phase],subjects)
     pins.update(schema="sol61.evolved-stage-amr.owner-pins@3",qualification=reader.QUALIFICATION,native_abi_version=6,native_abi_receipt=abi_pin)
     result.update(profile="NativeABI6-accepted8-TagSelection1@3")
     return result

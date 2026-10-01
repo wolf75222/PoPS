@@ -10,7 +10,11 @@ spec=importlib.util.spec_from_file_location("independent_amr_v3_test",Path(__fil
 r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
 
 
-def source_contract(step=1):
+def source_subjects(count=2):
+    return frozenset(f"pops.handle.v1::case:SOURCE_ONLY/block:generic{i}/model_definition:arbitrary::state::S{i}" for i in range(count))
+
+
+def source_contract(step=1, subject_count=2):
     result={key:[] for key in r.CONTRACT_KEYS}
     result.update(schema_version=8,guarantee="bit_identical_accepted_state",program_state="compiled",
         ledger=dict(accepted_entries=0,transaction_depth=0,entries=[]),interface_ledger=dict(accepted_entries=0,transaction_depth=0,entries=[]),
@@ -18,13 +22,13 @@ def source_contract(step=1):
         field_providers=[["pops.amr.field-provider-checkpoint-manifest@1","SOURCE_ONLY-slot","2","SOURCE_ONLY-provider","SOURCE_ONLY-plan","SOURCE_ONLY-config","SOURCE_ONLY-owner","Q0","T0","0","0"]])
     kernels=(("prolongation","conservative_linear",2,"1,1"),("restriction","volume_average",1,"0,0"),
         ("coarse_fine_fill","conservative_coarse_fine",2,"2,2"),("temporal_interpolation","linear_time_interpolation",2,"0,0"))
-    result["transfer_routes"]=[["SOURCE_ONLY-subject",operation,"SOURCE_ONLY-route","SOURCE_ONLY-provider",kernel,"state","cell","conservative","dense",operation,str(order),ghosts,"2","2,2"] for operation,kernel,order,ghosts in kernels]
+    result["transfer_routes"]=[[subject,operation,"pops.amr-resolved-transfer.v1:sha256:"+"a"*64,r.transfer_provider_identity(subject,operation),kernel,"cell","cell","conservative","dense",operation,str(order),ghosts,"2","2,2"] for subject in sorted(source_subjects(subject_count)) for operation,kernel,order,ghosts in kernels]
     return result
 
 
 @pytest.mark.parametrize("step",(1,2))
 def test_source_only_profile8_tag_provenance_admission(step):
-    r.accepted_contract(source_contract(step),step)
+    r.accepted_contract(source_contract(step),step,source_subjects())
     assert "pops" not in sys.modules
 
 
@@ -54,7 +58,7 @@ def test_source_only_profile8_refuses_old_or_mutated_protocol(attack):
     elif attack=="clock":row["clocks"][0][2]="0"
     elif attack=="provisional":row["ledger"]["transaction_depth"]=1
     else:row["invented"]=True
-    with pytest.raises(ValueError):r.accepted_contract(row,1)
+    with pytest.raises(ValueError):r.accepted_contract(row,1,source_subjects())
 
 
 def source_abi():
@@ -77,16 +81,16 @@ def test_source_only_abi6_origin_protocol_refuses(attack):
 
 
 def test_checkpoint_private_profile_is_bijective_and_historical_functions_unchanged():
-    assert r.checkpoint is not r.v2.checkpoint
-    assert r.checkpoint.__code__ is r.v2.checkpoint.__code__
-    assert r.checkpoint.__globals__ is not r.v2.checkpoint.__globals__
-    assert r.checkpoint.__globals__["accepted_contract"] is r.accepted_contract
+    bound=r.checkpoint_profile(source_subjects())
+    assert bound is not r.v2.checkpoint
+    assert bound.__code__ is r.v2.checkpoint.__code__
+    assert bound.__globals__ is not r.v2.checkpoint.__globals__
     assert r.v2.checkpoint.__globals__["accepted_contract"] is r.v2.accepted_contract
-    changed={key for key in r.checkpoint.__globals__ if r.checkpoint.__globals__[key] is not r.v2.checkpoint.__globals__[key]}
+    changed={key for key in bound.__globals__ if bound.__globals__[key] is not r.v2.checkpoint.__globals__[key]}
     assert changed=={"accepted_contract"}
     historical=source_contract();historical["schema_version"]=7
     r.v2.accepted_contract(historical,1)
-    with pytest.raises(ValueError):r.accepted_contract(historical,1)
+    with pytest.raises(ValueError):r.accepted_contract(historical,1,source_subjects())
     assert r.contract()["schema"].endswith("@3") and r.v2.contract()["schema"].endswith("@2")
 
 
@@ -98,3 +102,35 @@ def test_old_owner_or_approval_never_upcast(tmp_path):
         path=tmp_path/(name+".json");raw=json.dumps(value).encode();path.write_bytes(raw);paths.append(path);digests.append(r.digest(raw))
     with pytest.raises(ValueError,match="ROOT approval scope"):
         r.receive(paths[0],digests[0],paths[1],digests[1])
+
+
+@pytest.mark.parametrize("subject_count",(2,3,4))
+@pytest.mark.parametrize("attack",("missingrestriction","orderdowngrade","representation","space","centering","storage","operationkey","haloprojection","halorestriction","halotemporal","providerhash","subjectgone","subjectforeign"))
+def test_independent_per_subject_descriptors_and_complete_registry_refuse(subject_count,attack):
+    row=source_contract(subject_count=subject_count);expected=source_subjects(subject_count)
+    r.accepted_contract(row,1,expected)
+    routes=row["transfer_routes"]
+    if attack=="missingrestriction":del routes[1]
+    elif attack=="orderdowngrade":routes[0][10]="1"
+    elif attack=="representation":routes[0][7]="foreign"
+    elif attack=="space":routes[0][5]="face"
+    elif attack=="centering":routes[0][6]="node"
+    elif attack=="storage":routes[0][8]="sparse"
+    elif attack=="operationkey":routes[0][9]="restriction"
+    elif attack=="haloprojection":routes[0][11]="0,0"
+    elif attack=="halorestriction":routes[1][11]="1,1"
+    elif attack=="halotemporal":routes[3][11]="1,1"
+    elif attack=="providerhash":routes[0][3]=routes[0][3][:-1]+("0" if routes[0][3][-1]!="0" else "1")
+    elif attack=="subjectgone":del routes[:4]
+    else:
+        for item in routes[:4]:item[0]="pops.handle.v1::case:SOURCE_ONLY/block:foreign::state::Z"
+    with pytest.raises(ValueError):r.accepted_contract(row,1,expected)
+
+
+def test_expected_subject_registry_is_from_ir_not_observed_routes():
+    expected=source_subjects(3)
+    ir={"commits":[{"state":{"kind":"state","qualified_id":subject}} for subject in sorted(expected)]}
+    assert r.program_transfer_subjects(ir)==expected
+    for attack in ({"commits":[]},{"commits":[{"state":{"kind":"field","qualified_id":next(iter(expected))}}]},
+                   {"commits":[ir["commits"][0],ir["commits"][0]]}):
+        with pytest.raises(ValueError):r.program_transfer_subjects(attack)

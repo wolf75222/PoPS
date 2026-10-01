@@ -23,10 +23,15 @@ def prepared(tmp_path,monkeypatch):
     historical=a.load("candidate_v3_historical_envelope","test_sol61_evolved_stage_amr_saved_reception.py")
     for path in value["receipts"]:
         path=Path(path);receipt=json.loads(path.read_text())
+        subject_count=receipt["width"]+1
+        ir_path=Path(receipt["compilation"][0]["ir.json"]["path"])
+        ir={"commits":[{"state":{"kind":"state","qualified_id":subject}} for subject in sorted(profile.source_subjects(subject_count))]}
+        ir_path.write_text(json.dumps(ir))
+        receipt["compilation"][0]["ir.json"]["sha256"]=a.reader.digest(ir_path.read_bytes())
         for phase,row in receipt["checkpoints"].items():
             with np.load(row["path"],allow_pickle=False) as archive:
                 arrays={name:archive[name].copy() for name in archive.files if name not in ("pops_checkpoint_manifest","pops_restart_identity")}
-            arrays["amr_accepted_contract"]=np.array(json.dumps(profile.source_contract(a.reader.STEPS[phase])))
+            arrays["amr_accepted_contract"]=np.array(json.dumps(profile.source_contract(a.reader.STEPS[phase],subject_count)))
             np.savez(row["path"],**historical.source_only_envelope(arrays))
             row["sha256"]=a.reader.digest(Path(row["path"]).read_bytes())
         path.write_text(json.dumps(receipt))

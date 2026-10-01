@@ -9,6 +9,7 @@ import struct
 import sys
 import xml.etree.ElementTree as ET
 from types import FunctionType
+from urllib.parse import quote
 import numpy as np
 
 _spec = importlib.util.spec_from_file_location("amr_v3_historical_v2",Path(__file__).with_name("sol61_evolved_stage_amr_saved_reception_v2.py"))
@@ -29,7 +30,40 @@ CONTRACT_KEYS = {"schema_version","guarantee","program_state","ledger","interfac
     "temporal_partition","synchronization","history_qualifications","level_relations","transfer_routes","field_providers","tag_selection"}
 
 
-def accepted_contract(contract, step):
+TRANSFER_DESCRIPTIONS = {
+    "prolongation": ("prolongation", "conservative_linear", "2", "1,1"),
+    "restriction": ("restriction", "volume_average", "1", "0,0"),
+    "coarse_fine_fill": ("coarse_fine", "conservative_coarse_fine", "2", "2,2"),
+    "temporal_interpolation": ("temporal", "linear_time_interpolation", "2", "0,0"),
+}
+
+
+def program_transfer_subjects(ir):
+    """Expected registry comes from authenticated committed state handles, not routes."""
+    commits = ir.get("commits")
+    need(type(commits) is list and bool(commits), "Program committed-state provenance missing")
+    subjects = []
+    for commit in commits:
+        state = commit.get("state")
+        need(type(state) is dict and state.get("kind") == "state"
+             and type(state.get("qualified_id")) is str, "Program committed state identity missing")
+        subject = state["qualified_id"]
+        need(subject.startswith("pops.handle.v1::case:") and "/block:" in subject
+             and "::state::" in subject and subject not in subjects, "Program transfer subject registry differs")
+        subjects.append(subject)
+    return frozenset(subjects)
+
+
+def transfer_provider_identity(subject, operation):
+    route = TRANSFER_DESCRIPTIONS[operation][0]
+    payload = dict(subjects=[subject], route=route, kind="amr_transfer_provider")
+    token = "pops.amr-authored-provider.v1:sha256:" + digest(wire.cbor(
+        dict(protocol="pops.identity", domain="amr-authored-provider", schema_version=1, payload=payload)))
+    case_owner = subject.split("/block:", 1)[0]
+    return case_owner + "::amr_transfer_provider::" + quote(route+"_"+token, safe="")
+
+
+def accepted_contract(contract, step, transfer_subjects):
     exact(contract,CONTRACT_KEYS,"NativeABI6 accepted contract")
     need(type(contract["schema_version"]) is int and contract["schema_version"] == 8
          and contract["guarantee"] == "bit_identical_accepted_state" and contract["program_state"] == "compiled",
@@ -41,25 +75,24 @@ def accepted_contract(contract, step):
         need(type(row) is list and len(row) >= 11 and all(type(v) is str for v in row)
              and row[0] == "pops.amr.field-provider-checkpoint-manifest@1" and row[2] == "2"
              and all(row[index] for index in (1,3,4,5,6,7,8)), "original field provider identities/depth differ")
+    need(type(transfer_subjects) is frozenset and bool(transfer_subjects), "authenticated Program transfer registry required")
+    expected = {(subject, operation) for subject in transfer_subjects for operation in TRANSFER_DESCRIPTIONS}
     routes = contract["transfer_routes"]
-    need(type(routes) is list and bool(routes),"original interpolation provenance missing")
-    ghosts, lookahead, keys = [], [], set()
+    need(type(routes) is list and len(routes) == len(expected), "complete per-subject interpolation coverage differs")
+    seen = set()
     for row in routes:
-        need(type(row) is list and len(row) == 14 and all(type(v) is str for v in row)
-             and all(row[index] for index in (0,1,2,3,4)) and row[12] == "2" and row[13] == "2,2",
-             "original interpolation rank/ratio/identity differs")
-        need((row[0],row[1]) not in keys,"duplicate interpolation subject/operation")
-        keys.add((row[0],row[1]))
-        need(re.fullmatch("[1-9][0-9]*",row[10]) is not None
-             and re.fullmatch("(0|[1-9][0-9]*),(0|[1-9][0-9]*)",row[11]) is not None,"interpolation widths/order not canonical")
-        kernels = {"prolongation":"conservative_linear", "restriction":"volume_average",
-                   "coarse_fine_fill":"conservative_coarse_fine", "temporal_interpolation":"linear_time_interpolation"}
-        need(row[9] in kernels and row[4] == kernels[row[9]],"authored original interpolation kernel/operation differs")
-        order = int(row[10]); halo = tuple(map(int,row[11].split(",")))
-        need(order in (1,2) and all(0 <= depth <= 2 for depth in halo),"original second-order interpolation requirements differ")
-        ghosts.append(halo); lookahead.append(order-1)
-    need(tuple(max(row[axis] for row in ghosts) for axis in (0,1)) == (2,2)
-         and max(lookahead) == 1,"original Q/T/aux transfer coverage provenance differs")
+        need(type(row) is list and len(row) == 14 and all(type(v) is str for v in row), "typed interpolation row differs")
+        key = (row[0],row[1])
+        need(key in expected and key not in seen, "foreign or duplicate interpolation subject/operation")
+        seen.add(key)
+        operation = row[1]
+        _, kernel, order, halo = TRANSFER_DESCRIPTIONS[operation]
+        need(row[4:] == [kernel,"cell","cell","conservative","dense",operation,order,halo,"2","2,2"],
+             "exact authored interpolation descriptor differs")
+        need(re.fullmatch(r"pops\.amr-resolved-transfer\.v1:sha256:[0-9a-f]{64}", row[2]) is not None,
+             "native resolved route identity differs")
+        need(row[3] == transfer_provider_identity(row[0],operation), "authored subject/provider provenance differs")
+    need(seen == expected, "complete per-subject interpolation coverage differs")
     for name in ("ledger","interface_ledger"):
         row = contract[name]
         need(type(row["accepted_entries"]) is int and row["accepted_entries"] == len(row["entries"])
@@ -72,12 +105,18 @@ def accepted_contract(contract, step):
          and len(contract["clocks"]) == 3,"native AMR logical clock publication differs")
 
 
-# A new function object with private globals binds the strict profile callback.
-# The code object is identical: all prior checkpoint math/wire checks are retained.
-_checkpoint_globals = dict(v2.checkpoint.__globals__)
-_checkpoint_globals["accepted_contract"] = accepted_contract
-checkpoint = FunctionType(v2.checkpoint.__code__, _checkpoint_globals, "checkpoint", v2.checkpoint.__defaults__, v2.checkpoint.__closure__)
+# Bind each checkpoint to the independent committed-state registry from its retained IR.
+# This creates a private function object; no historical globals are modified.
+def checkpoint_profile(transfer_subjects):
+    private = dict(v2.checkpoint.__globals__)
+    def accepted(contract, step):
+        return accepted_contract(contract, step, transfer_subjects)
+    private["accepted_contract"] = accepted
+    return FunctionType(v2.checkpoint.__code__,private,"checkpoint",v2.checkpoint.__defaults__,v2.checkpoint.__closure__)
 
+
+def checkpoint(arrays, phase, images, n, width, ranks, identities, abi, *, transfer_subjects):
+    return checkpoint_profile(transfer_subjects)(arrays,phase,images,n,width,ranks,identities,abi)
 
 
 def native_abi_receipt(receipt, native):
@@ -166,19 +205,21 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         images = {phase:[wire.archive(row_file(row)) for row in receipt["phases"][phase]["levels"]] for phase in PHASES}
         arrays = {phase:wire.archive(row_file(receipt["checkpoints"][phase])) for phase in ("accepted", "continuous", "replay")}
         need(len({receipt["checkpoints"][p]["path"] for p in arrays}) == 3, "checkpoint overwrite aliases")
-        program_hashes = []
+        program_hashes, transfer_subjects = [], None
         for component in receipt["compilation"]:
             for name in ("DSO", "sidecar"):
                 row_file(component[name])
             if component["component"].startswith("program-"):
-                program_hashes.append(program_image(strict_json(row_file(component["ir.json"])),
+                program_ir = strict_json(row_file(component["ir.json"]))
+                transfer_subjects = program_transfer_subjects(program_ir)
+                program_hashes.append(program_image(program_ir,
                     row_file(component["cpp"]).decode(), pins["ir_version"], component["program_hash"],width))
         need(len(program_hashes) == 1, "this same-layout witness requires one actual Program IR")
         manifests, masks, diagnostics = {}, None, {}
         for phase in arrays:
             need(str(arrays[phase]["program_hash"].item()) == program_hashes[0], "checkpoint installed Program differs")
             manifests[phase], actual_masks, diagnostics[phase] = checkpoint(arrays[phase], phase, images, n,width,pins["ranks"],
-                (case["artifact"],case["bind"],case["semantic"]),pins["abi_key"])
+                (case["artifact"],case["bind"],case["semantic"]),pins["abi_key"],transfer_subjects=transfer_subjects)
             need("state_carriers_checkpoint" in arrays[phase], "CP12 full carrier image missing")
             archive = carriers.receive_carriers(arrays[phase], registry["phases"][phase]["rows_by_rank"],
                 {**{f"Q{i}":1 for i in range(width)}, "forcing":width+1})
