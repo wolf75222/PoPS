@@ -1,0 +1,129 @@
+{
+  "schema": "root.sdk2e4-product-entropy-feedback-nonreg@1",
+  "migration_complete": false,
+  "status": "six-product-checkpoint-capacity-failures-and-seven-passes-per-rank",
+  "source_commit": "135179aa9039101f47e47472979f97434ee2b0c9",
+  "installed_python_source_commit": "1807a16b4e20b3d40fb88cd0c3ba3f4f263ac8ad",
+  "native_cpp_source_commit": "e01c12a7988b1fb0f5e55658d76ce9e0d2cb8c6a",
+  "sdk_signature": "2e4d69fd3574933f4b83cf014ad2d0159902fea6197d74623bee4b4ee6cf1675",
+  "environment": "/Users/romaindespoulain/miniforge3/envs/pops-api040",
+  "native_dimension": 2,
+  "native_sha256": "b8a5166c3ebe0a64e370be233bb2e987cbd7324f2b64dfac782718ead03f234b",
+  "backend": {
+    "cpu": "arm64",
+    "compiler": "Apple LLVM 21",
+    "kokkos": "5.2.0 OpenMP/Serial",
+    "mpi": "MPICH 4.1.2",
+    "ranks": 2,
+    "threads": 1
+  },
+  "execution": {
+    "seconds": 1139.2764830000233,
+    "timeout": false,
+    "returncode": 1,
+    "authentication_before": 0,
+    "authentication_after": 0,
+    "same_installation": true,
+    "test_sources_unchanged": true,
+    "rank_test_parity": true
+  },
+  "counts_per_rank": {
+    "selected": 13,
+    "passed": 7,
+    "failed": 6,
+    "errors": 0,
+    "skipped": 0
+  },
+  "observed_failure": {
+    "family": "finite-product reduction/extension checkpoint before first step",
+    "boundary": "runtime.checkpoint(initial)",
+    "message": "Program diagnostic checkpoint exceeds its chosen resource capacity",
+    "compile_and_bind_completed": true,
+    "initial_checkpoint_published": false,
+    "reduce_lift_executed": false,
+    "cause_review": "compiler-retained diagnostic inventory of verified multi-layout Programs"
+  },
+  "passed_families": {
+    "discrete_entropy_projection": {
+      "cases": 1,
+      "interior_targets": 20,
+      "outside_cone_refusal": true
+    },
+    "integral_feedback_original_source": {
+      "cases": 4,
+      "cells": [
+        8,
+        16
+      ],
+      "physical_global_source": [
+        false,
+        true
+      ]
+    },
+    "feedback_rejection_and_safe_retry": {
+      "cases": 2,
+      "physical_global_source": [
+        false,
+        true
+      ]
+    }
+  },
+  "raw": {
+    "result.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/result.json",
+      "sha256": "9be99e8f9d68c54ccac5869dfe2ce90f349832e4a296d3b129b1a3c910121183",
+      "bytes": 7092
+    },
+    "test-sources.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/test-sources.json",
+      "sha256": "41bdefa80083d8f8f374a2d3df4b817c6159d8ed80b340fbf1e2e5facdd6662c",
+      "bytes": 675
+    },
+    "before/identity.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/before/identity.json",
+      "sha256": "ff8e35e63f016fabb9126b009fe0cdba3af47c3b71c13bc7536a4febfc735046",
+      "bytes": 2862
+    },
+    "after/identity.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/after/identity.json",
+      "sha256": "ff8e35e63f016fabb9126b009fe0cdba3af47c3b71c13bc7536a4febfc735046",
+      "bytes": 2862
+    },
+    "rank0.identity.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/rank0.identity.json",
+      "sha256": "de191553da548d50f9184ccce61b4f1868da757af404632d1b51cb45bdf35b7e",
+      "bytes": 569
+    },
+    "rank1.identity.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/rank1.identity.json",
+      "sha256": "ec7cbc397bb8f9f28ac8488c927b22de36047f84e3d4f08b77b44a15ea1c3859",
+      "bytes": 569
+    },
+    "rank0.xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/rank0.xml",
+      "sha256": "c53f382aa23acba735065db05195a358791c38449df5af17153195091d42dbb3",
+      "bytes": 127798
+    },
+    "rank1.xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/rank1.xml",
+      "sha256": "6896c3c090b41e20ab68f1af7a8e37d5fa597e589a8108a220dae63986fe2ba5",
+      "bytes": 127798
+    },
+    "rank0.log": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/rank0.log",
+      "sha256": "64eeefb3fa5503ac8f36ffb080c26f7a3a5bf4776f64c4f8de84c16c62d9b436",
+      "bytes": 68909
+    },
+    "rank1.log": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/rank1.log",
+      "sha256": "b82177b88f92db2b7fa2f65e4ada02fc6b9f0580f1eecb4fd4b9517c2bc18a29",
+      "bytes": 68969
+    }
+  },
+  "limits": [
+    "Seven passing fixtures do not constitute a new independently sealed scientific reception.",
+    "Historical SDK7 finite-product acceptance is not assigned to this SDK2e4 attempt.",
+    "No full kinetics, full corpus, GPU, official OpenMPI or GitHub CI qualification.",
+    "This failed attempt is immutable; a corrected reception must use a fresh output directory."
+  ]
+}

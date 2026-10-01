@@ -1664,6 +1664,26 @@
           "failed": 0
         },
         "remaining_port": "explicit global-field history storage owner for AMR; implementation and independent reception pending"
+      },
+      "sdk2e4_product_entropy_feedback_nonreg": {
+        "status": "six-product-checkpoint-capacity-failures-and-seven-passes-per-rank",
+        "evidence": {
+          "path": "docs/development/api_040/sdk2e4_product_entropy_feedback_nonreg.json",
+          "sha256": "245937b0d85ccac1ee66869d1a3996ba264dedd3fdf73a32be5fdb4b529bb223"
+        },
+        "migration_complete": false,
+        "sdk_signature": "2e4d69fd3574933f4b83cf014ad2d0159902fea6197d74623bee4b4ee6cf1675",
+        "counts_per_rank": {
+          "selected": 13,
+          "passed": 7,
+          "failed": 6,
+          "errors": 0,
+          "skipped": 0
+        },
+        "same_installation": true,
+        "rank_test_parity": true,
+        "scientific_owner_seal": false,
+        "remaining_fix": "verified multi-layout compiled diagnostic source inventory and fresh native reception"
       }
     },
     "limits": [
