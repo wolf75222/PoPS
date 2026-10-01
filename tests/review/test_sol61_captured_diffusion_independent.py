@@ -270,7 +270,13 @@ def test_scalar_amr_arithmetic_uses_original_guarded_operator():
     assert "ctx.hierarchy_field_assembly" in cpp and "input" in cpp
     assert cpp.index("ctx.hierarchy_field_assembly") < cpp.index("_Core::prepare(")
     core = (ROOT / "include/pops/runtime/program/prepared_amr_field_residual.hpp").read_text()
-    assert core.index("op.prepare_original_field_operator();") < core.index(
+    # Frozen@1 prepares its captured operator before recording that preparation.
+    # PerCandidate@1 has a separate allocation-only branch and generation witness;
+    # its earlier textual occurrence must not stand in for the legacy control flow.
+    frozen = core.split(
+        "if (coefficient_evaluation == AmrFieldCoefficientEvaluation::kFrozen)", 1
+    )[1]
+    assert frozen.index("op.prepare_original_field_operator();") < frozen.index(
         "result->coefficient_generation_"
     )
     provider = (
