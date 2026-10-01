@@ -1042,6 +1042,29 @@ class InstallPlan:
     def resolved_hierarchy(self) -> Any:
         return self.artifact.plan.resolved_hierarchy
 
+    def _resolved_tagging_for_layout(self, layout_id: str) -> Any:
+        """Return only the exact registered local tagging authority."""
+        from pops.amr._resolution import ResolvedTaggingAuthority
+        from pops.codegen._layout_amr_authorities import ResolvedLayoutAMRAuthorities
+
+        if layout_id not in {row.handle.qualified_id
+                             for row in self.artifact.layout_plan.layouts}:
+            raise ValueError("tagging requires an exact registered layout identity")
+        local = self.layout_amr_authorities.get(layout_id)
+        if type(local) is not ResolvedLayoutAMRAuthorities or local.layout_id != layout_id:
+            raise TypeError("tagging requires an exact registered local AMR authority")
+        tagging = local.authorities.tagging
+        if type(tagging) is not ResolvedTaggingAuthority:
+            raise TypeError("local AMR tagging must be an exact ResolvedTaggingAuthority")
+        return tagging
+
+    @property
+    def resolved_tagging(self) -> Any:
+        layouts = self.artifact.layout_plan.layouts
+        if len(layouts) != 1:
+            raise ValueError("tagging requires a single layout or an exact layout projection")
+        return self._resolved_tagging_for_layout(layouts[0].handle.qualified_id)
+
     @property
     def amr_transfer(self) -> Any:
         return self.artifact.plan.amr_transfer
