@@ -1,0 +1,49 @@
+{
+  "schema": "root.api040.sdk9f57-amr-stage-attempt@1",
+  "scope": "actual installed Dim2 CPU Kokkos/MPI-enabled, serial execution",
+  "status": "failed",
+  "counts": {
+    "tests": 4,
+    "failures": 4,
+    "errors": 0,
+    "skipped": 0
+  },
+  "source_commit": "0abbe25395a44e570d8d5525693b8e2dcbf4d387",
+  "native_build_source_commit": "0abbe25395a44e570d8d5525693b8e2dcbf4d387",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=9f57def42c90cfc0e7ee127afa5050d95f27ecbc65b4ed198f788a097e4b4bad;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=4f0ddfff213bbc8f41ec9b7c80af3672d966f0527a55a041ed2b7e91e90198ab;dim=2",
+  "native_sha256": "c8a45b013042f53a76ca6754a0285203aa5a9fda6a18f1d580e181dec99642fe",
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/__init__.py",
+  "verified_installed_source_files_before_after": 1128,
+  "production_sources_and_native_unchanged": true,
+  "duration_seconds": 320.21809583297,
+  "identity": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-evolved-stage-amr-serial-dim2/identity.json",
+    "sha256": "b4afdc991277df4a9d325d6c8e1975fc6f643a710363a2fcc22c37f3e2bedb91",
+    "bytes": 2917
+  },
+  "source_files": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-evolved-stage-amr-serial-dim2/source-files.json",
+    "sha256": "405784a5e29489cabdd52da441e59be2ad1cdbc54a0a9663fb0a863cbb453f79",
+    "bytes": 131919
+  },
+  "result": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-evolved-stage-amr-serial-dim2/result.json",
+    "sha256": "ac1e48eef509993cd65ad04a61349465612d84e7cdc6997cf9e613cb62f517eb",
+    "bytes": 1696
+  },
+  "raw_xml": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-evolved-stage-amr-serial-dim2/pytest.xml",
+    "sha256": "9586dadd4743cf795c167ba405e2946502c898501974b07b23fa9522e2733bc0",
+    "bytes": 3467
+  },
+  "log": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-evolved-stage-amr-serial-dim2/pytest.log",
+    "sha256": "f5e90884610073945f8c271a7a156aa87268faf051d1f9655fa075ebde6b7630",
+    "bytes": 5904
+  },
+  "failure": "live AMR Program checkpoint state differs from its frozen capacity metadata",
+  "phase": "initial bind, after component compilation and before first physical run",
+  "source_diagnosis": "IR16 global history prelude uses issued storage descriptor; frozen metadata retains scalar-history identity",
+  "native_scientific_acceptance": false,
+  "thresholds_changed": false
+}

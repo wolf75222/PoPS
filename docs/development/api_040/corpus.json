@@ -1710,6 +1710,18 @@
         "native_scientific_acceptance": false,
         "other_dimensions_rebuilt": false,
         "preserved_sdk2e4_unchanged": true
+      },
+      "sdk9f57_amr_stage_initial_attempt": {
+        "receipt": "sdk9f57_amr_stage_initial_attempt.json",
+        "receipt_sha256": "39868d3104c1a89b28d83ca35d92785b19cdd00d8be86fa6021b861b39612ecb",
+        "status": "failed",
+        "counts": {
+          "tests": 4,
+          "failures": 4,
+          "errors": 0,
+          "skipped": 0
+        },
+        "native_scientific_acceptance": false
       }
     },
     "limits": [
