@@ -142,6 +142,9 @@ class ArchivedBacking:
                      and not info.is_dir() and not stat.S_ISLNK(info.external_attr >> 16),
                      "backing archive member aliases or escapes")
             available = {info.filename: info for info in infos}
+            if pins.get("schema") == "sol61.m19-owner-pins@3":
+                need(set(available) == {row["member"] for row in rows.values()},
+                     "batch backing archive has unpinned members")
             for original, row in rows.items():
                 exact(row, ("member", "sha256"), "backing member")
                 need(row["sha256"] == expected[original] and row["member"] == "sha256/" + expected[original],
@@ -315,17 +318,31 @@ def closed_phases(directory):
     return files
 
 
-def junit(raw, rank, ranks, cases):
+def junit(raw, rank, ranks, cases, other_cases=()):
     need(b"<!DOCTYPE" not in raw and b"<!ENTITY" not in raw, "JUnit external declarations forbidden")
     root = ET.fromstring(raw)
     tests = list(root.iter("testcase"))
-    need(len(tests) == 6 and not any(list(t.iter("failure")) + list(t.iter("error")) + list(t.iter("skipped")) for t in tests),
-         "JUnit requires six passing cases without failure/error/skip")
+    need(type(other_cases) in (list, tuple), "mixed JUnit inventory type differs")
+    other = set()
+    for row in other_cases:
+        exact(row, ("classname", "name"), "other JUnit case")
+        need(all(type(row[k]) is str and row[k] for k in row), "other JUnit identity types differ")
+        key = (row["classname"], row["name"])
+        need(key not in other and row["classname"] != "tests.python.integration.runtime.test_m19_product_support_runtime",
+             "duplicate/foreign mixed JUnit identity")
+        other.add(key)
+    need(len(tests) == 6 + len(other) and not any(list(t.iter("failure")) + list(t.iter("error")) + list(t.iter("skipped")) for t in tests),
+         "JUnit requires exact passing batch without failure/error/skip")
     for suite in root.iter("testsuite"):
         need(suite.get("tests") == str(len(list(suite.iter("testcase"))))
              and all(suite.get(k, "0") == "0" for k in ("failures", "errors", "skipped")), "JUnit suite counters differ")
-    seen = set()
+    seen, seen_other = set(), set()
     for test in tests:
+        identity = (test.get("classname"), test.get("name"))
+        if identity in other:
+            need(identity not in seen_other, "duplicate other JUnit case")
+            seen_other.add(identity)
+            continue
         need(test.get("classname") == "tests.python.integration.runtime.test_m19_product_support_runtime",
              "JUnit source realm differs")
         name = test.get("name", "")
@@ -340,7 +357,7 @@ def junit(raw, rank, ranks, cases):
              and values.get("mpi_size") == str(ranks)
              and values.get("native_sha256") == cases[key]["native_sha256"]
              and values.get("saved_receipts") == cases[key]["directory"], "JUnit rank/native/realm differs")
-    need(seen == set(cases), "JUnit case set differs")
+    need(seen == set(cases) and seen_other == other, "JUnit case set differs")
 
 
 def checkpoint(raw, receipt, state, phase, abi):
@@ -519,7 +536,7 @@ def origin_records(data, cases):
     return roots
 
 
-def assemble(base, mode, directories, junits, origins):
+def _assembled_pins(base, mode, directories, junits, origins):
     base = canonical(base)
     ranks = 1 if mode == "serial" else 2 if mode == "mpi2" else 0
     need(ranks and len(directories) == 6 and len(junits) == ranks, "exact serial/MPI2 six-case inventory required")
@@ -546,15 +563,37 @@ def assemble(base, mode, directories, junits, origins):
                              native_sha256=provenance["native_sha256"])
     result = dict(schema="sol61.m19-owner-pins@1", mode=mode, ranks=ranks, archive_root=str(base),
                   execution_origins=origins, junit=[leaf(path) for path in junits], cases=cases)
+    return result
+
+
+def assemble(base, mode, directories, junits, origins):
+    result = _assembled_pins(base, mode, directories, junits, origins)
     validate_inventory(result)
+    return result
+
+
+def assemble_archived_batch(base, mode, directories, junits, origins, batch):
+    """Unapproved @3: full mixed XML and closed portable origins, no live fallback."""
+    exact(batch, ("backing", "other_junit_cases", "supporting_evidence"), "batch archive input")
+    with archived_context({"schema": "sol61.m19-owner-pins@3", **batch}):
+        result = {**_assembled_pins(base, mode, directories, junits, origins),
+                  "schema": "sol61.m19-owner-pins@3", **batch}
+        validate_inventory(result)
     return result
 
 
 def validate_inventory(pins):
     version2 = pins.get("schema") == "sol61.m19-owner-pins@2"
+    version3 = pins.get("schema") == "sol61.m19-owner-pins@3"
     keys = ("schema", "mode", "ranks", "archive_root", "execution_origins", "junit", "cases")
-    exact(pins, (*keys, "backing") if version2 else keys, "pins")
-    need((version2 and _BACKING.get() is not None or pins["schema"] == "sol61.m19-owner-pins@1"
+    exact(pins, (*keys, "backing", "other_junit_cases", "supporting_evidence") if version3
+          else (*keys, "backing") if version2 else keys, "pins")
+    if version3:
+        rows = pins["supporting_evidence"]
+        need(type(rows) is list and rows, "closed batch supporting origins absent")
+        paths = [str(pinned(row, "/")[0]) for row in rows]
+        need(len(set(paths)) == len(paths), "duplicate batch supporting origin")
+    need(((version2 or version3) and _BACKING.get() is not None or pins["schema"] == "sol61.m19-owner-pins@1"
           and _BACKING.get() is None) and type(pins["ranks"]) is int
          and (pins["mode"], pins["ranks"]) in (("serial", 1), ("mpi2", 2)), "mode/rank types differ")
     base = canonical(pins["archive_root"])
@@ -575,7 +614,7 @@ def validate_inventory(pins):
     for rank, row in enumerate(pins["junit"]):
         path, raw = pinned(row, base)
         paths.append(path)
-        junit(raw, rank, pins["ranks"], pins["cases"])
+        junit(raw, rank, pins["ranks"], pins["cases"], pins.get("other_junit_cases", ()))
     need(len(set(paths)) == len(paths), "JUnit rank file reused")
 
 
@@ -586,16 +625,18 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
     pins = strict_json(raw)
     approval = strict_json(approved)
     exact(approval, ("schema", "approved_by", "pins_sha256"), "ROOT approval")
-    version = 2 if pins.get("schema") == "sol61.m19-owner-pins@2" else 1
+    version = {"sol61.m19-owner-pins@1": 1, "sol61.m19-owner-pins@2": 2,
+               "sol61.m19-owner-pins@3": 3}.get(pins.get("schema"))
+    need(version is not None, "ROOT has not approved this exact manifest: owner pins schema differs")
     need(approval == dict(schema=f"sol61.m19-root-approval@{version}", approved_by="ROOT", pins_sha256=pins_sha),
          "ROOT has not approved this exact manifest")
-    if version == 2:
+    if version in (2, 3):
         with archived_context(pins):
-            return _receive_pins(pins)
-    return _receive_pins(pins)
+            return _receive_pins(pins, externally_approved=True)
+    return _receive_pins(pins, externally_approved=True)
 
 
-def _receive_pins(pins):
+def _receive_pins(pins, *, externally_approved=False):
     """Internal science checks; qualification requires receive() external seals."""
     validate_inventory(pins)
     reports = {}
@@ -632,6 +673,10 @@ def _receive_pins(pins):
             receipt = strict_json(pinned(row["receipt"], base)[1])
             exact(receipt, ("schema", "phase", "time", "time_hex", "macro_step", "artifact_identity", "bind_identity",
                             "mapping_counts", "local_boxes_by_rank", "checkpoint", "checkpoint_sha256", "saved_state_sha256"), "phase receipt")
+            if pins["schema"] == "sol61.m19-owner-pins@3":
+                need(receipt["saved_state_sha256"] == row["state"]["sha256"]
+                     and receipt["checkpoint_sha256"] == row["checkpoint"]["sha256"],
+                     "receipt state/checkpoint cross-pin differs")
             time, step = {"initial": (0., 0), "accepted": (.01, 1), "restored": (.01, 1), "replayed": (.02, 2)}[phase]
             need(receipt["schema"] == "sol61.m19-product-state@1" and receipt["phase"] == phase
                  and type(receipt["time"]) is float and receipt["time"].hex() == time.hex() == receipt["time_hex"]
@@ -649,13 +694,14 @@ def _receive_pins(pins):
         errors = original(states["initial"], [states[p] for p in PHASES[1:]], nx, nv, width)
         reports[key] = dict(max_original_error=max(errors.values()), owner_modes=layouts,
                             aggregate_scope="recomputed_actual_artifact_payload", resolved_plan_sha256=plan_digest,
-                            original_resolved_plan_payload_scope="not_stored", compiled_plan_record_scope="ROOT_owner_attested",
+                            original_resolved_plan_payload_scope="not_stored", compiled_plan_record_scope="ROOT_owner_attested" if externally_approved else "pending_ROOT_owner_attestation",
                             retained_cpp=origins["generated_cpp"][key] is not None,
                             cpp_dso_link_scope="owner_supplied_build_receipts" if origins["cpp_dso_links"][key] else "not_stored")
     return dict(scope="finite_product_saved_states_authsource_scope", cases=reports,
-                **({"evidence_backing": "ROOT_approved_archive@2"} if _BACKING.get() is not None else {}),
+                **({"evidence_backing": ("ROOT_approved_archive@" if externally_approved else "unapproved_archive@")
+                    + pins["schema"].rsplit("@", 1)[1]} if _BACKING.get() is not None else {}),
                 source_commit=origins["source_commit"], native_build_source_commit=origins["native_build_source_commit"],
-                native_build_source_scope="not_stored" if origins["native_build_source_commit"] is None else "ROOT_owner_attested",
+                native_build_source_scope="not_stored" if origins["native_build_source_commit"] is None else "ROOT_owner_attested" if externally_approved else "pending_ROOT_owner_attestation",
                 strong_cpp_dso_link_qualified=False, limitation="No Vlasov/BGK/field solve or new native execution; build receipts are ROOT-attested, not independently proven compile graphs.")
 
 
@@ -669,6 +715,14 @@ def main(argv=None):
     pending.add_argument("--junit", action="append", required=True)
     pending.add_argument("--execution-origins", required=True)
     pending.add_argument("--output", required=True)
+    batch = sub.add_parser("assemble-archived-batch")
+    batch.add_argument("--archive-root", required=True)
+    batch.add_argument("--mode", choices=("serial", "mpi2"), required=True)
+    batch.add_argument("--case-directory", action="append", required=True)
+    batch.add_argument("--junit", action="append", required=True)
+    batch.add_argument("--execution-origins", required=True)
+    batch.add_argument("--batch", required=True)
+    batch.add_argument("--output", required=True)
     portable = sub.add_parser("archive")
     for name in ("pins", "backing", "output"):
         portable.add_argument("--" + name, required=True)
@@ -676,7 +730,14 @@ def main(argv=None):
     for name in ("pins", "pins-sha256", "approval", "approval-sha256"):
         check.add_argument("--" + name, required=True)
     args = parser.parse_args(argv)
-    if args.command == "assemble":
+    if args.command == "assemble-archived-batch":
+        value = assemble_archived_batch(args.archive_root, args.mode, args.case_directory, args.junit,
+                                       strict_json(Path(args.execution_origins).read_bytes()),
+                                       strict_json(Path(args.batch).read_bytes()))
+        with Path(args.output).open("x") as stream:
+            stream.write(json.dumps(value, indent=2, allow_nan=False) + "\n")
+        print("pending @3 external ROOT approval; no native reception performed")
+    elif args.command == "assemble":
         value = assemble(args.archive_root, args.mode, args.case_directory, args.junit,
                          strict_json(Path(args.execution_origins).read_bytes()))
         with Path(args.output).open("x") as stream:
