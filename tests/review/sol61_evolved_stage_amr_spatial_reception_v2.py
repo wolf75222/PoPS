@@ -575,8 +575,8 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         if phase == "accepted":
             c.receive_carriers(cp, registry["phases"]["reloaded"]["rows_by_rank"], {"Q0":1,"Q1":1,"forcing":3})
         if masks is not None:
-            for a, c in zip(masks, current, strict=True):
-                same(a, c, "stationary topology")
+            for previous_mask, current_mask in zip(masks, current, strict=True):
+                same(previous_mask, current_mask, "stationary topology")
         masks = current
     need(
         receipt["active_scalar_DOFs"] == 3 * sum(int(mask.sum()) for mask in masks),

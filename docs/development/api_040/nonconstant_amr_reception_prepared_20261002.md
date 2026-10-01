@@ -49,8 +49,17 @@ included. Reproduce from this checkout:
 env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
   /Users/romaindespoulain/miniforge3/envs/pops/bin/python -m pytest --noconftest \
   tests/review/test_sol61_evolved_stage_amr_spatial_reception_v2.py \
-  tests/review/test_sol61_evolved_stage_amr_spatial_reception.py -q --tb=short
+  tests/review/test_sol61_evolved_stage_amr_spatial_reception.py \
+  tests/review/test_sol61_spatial_orchestration_alias_independent.py -q --tb=short
 ```
+
+Banach's independent orchestration test caught a codec alias overwritten by a
+mask comparison loop in the first preparation gel. The corrected loop uses
+`previous_mask/current_mask`. The Source test checks the full function's lexical
+scope, executes the exact accepted/continuous/replay loop with explicit
+orchestration stubs, checks all four carrier dispatches and the subsequent codec
+calls. It performs no decoding, seals or scientific approval. The coherent suite
+now has 60 passes, with the original 59 science/protocol tests unchanged.
 
 ROOT owns installed fixture execution, all-rank JUnit, file inventories,
 native/SDK/package/ABI receipts, owner pins and approval seals. The command
