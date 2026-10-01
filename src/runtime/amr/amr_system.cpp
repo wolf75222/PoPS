@@ -11093,7 +11093,43 @@ std::vector<std::uint8_t> AmrSystem<Dim>::checkpoint_state_carriers() const {
     shard.assign(reinterpret_cast<const char*>(encoded.data()), encoded.size());
   } catch (...) { error = std::current_exception(); }
   collectively_rethrow_exception(error, lane, "state carrier capture staging");
-  const auto shards = lane.allgather_bytes(shard);
+  // ExecutionLane owns the authenticated runtime communicator. Its byte broadcast primitive
+  // chunks at the MPI count boundary; ObserverMpiLane::allgather_bytes is not a runtime API.
+  std::vector<std::string> shards;
+  error = {};
+  try { shards.resize(static_cast<std::size_t>(lane.size())); }
+  catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "state carrier source-shard allocation");
+  for (int source = 0; source < lane.size(); ++source) {
+    std::array<char, 8> length_bytes{};
+    error = {};
+    try {
+      if (lane.rank() == source) {
+        if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t))
+          if (shard.size() > std::numeric_limits<std::uint64_t>::max())
+            throw std::length_error("state carrier source shard exceeds uint64 wire capacity");
+        const auto length = static_cast<std::uint64_t>(shard.size());
+        for (unsigned byte = 0; byte < 8; ++byte)
+          length_bytes[byte] = static_cast<char>(length >> (8 * byte));
+      }
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "state carrier source-shard length staging");
+    broadcast_bytes_inplace(length_bytes.data(), length_bytes.size(), lane, source);
+    std::uint64_t length = 0;
+    for (unsigned byte = 0; byte < 8; ++byte)
+      length |= std::uint64_t(static_cast<unsigned char>(length_bytes[byte])) << (8 * byte);
+    error = {};
+    try {
+      if (length > std::numeric_limits<std::size_t>::max())
+        throw std::length_error("state carrier source shard exceeds destination size_t capacity");
+      auto& destination = shards[static_cast<std::size_t>(source)];
+      if (lane.rank() == source) destination = shard;
+      else destination.resize(static_cast<std::size_t>(length));
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "state carrier source-shard payload staging");
+    auto& destination = shards[static_cast<std::size_t>(source)];
+    broadcast_bytes_inplace(destination.data(), destination.size(), lane, source);
+  }
   std::vector<std::uint8_t> result;
   error = {};
   try {
