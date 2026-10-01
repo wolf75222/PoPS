@@ -93,14 +93,14 @@ def capture(world, runtime, cells, width, *, step, first_solution=None):
     return states, (carriers, diagnostics, tuple(history), lifecycle)
 
 
-def check_saved(saved, expected_initial, target, time):
+def check_saved(saved, expected_initial, target, time, *, candidate_diffusion=False):
     # All scientific inputs are values reloaded from this actual native image.
     with np.load(BytesIO(bounded_bytes(saved)), allow_pickle=False) as image:
         q, alpha, forcing, response = (image[key].copy() for key in (
             "solution", "material", "forcing", "response"))
     np.testing.assert_array_equal(alpha, expected_initial["material"])
     np.testing.assert_array_equal(forcing, expected_initial["forcing"])
-    action, spatial = original_action(q, alpha[0])
+    action, spatial = original_action(q, alpha[0], candidate_diffusion=candidate_diffusion)
     relative = float(np.linalg.norm(action-forcing)/np.linalg.norm(forcing))
     error = float(np.max(np.abs(q-target)))
     consumer_error = float(np.max(np.abs(response/time-q)))
@@ -125,6 +125,12 @@ def same_images(left, right):
 @pytest.mark.parametrize("width,order", [(1, (0,)), (3, (2, 0, 1))])
 def test_public_captured_diffusion_nonconstant_saved_and_exact_replay(
         isolated_native_cache, tmp_path, record_property, width, order):
+    _run_public_diffusion_mms(isolated_native_cache, tmp_path, record_property, width, order)
+
+
+def _run_public_diffusion_mms(
+        isolated_native_cache, tmp_path, record_property, width, order, *,
+        candidate_diffusion=False):
     del isolated_native_cache
     from pops._native_selector import select_native_dimension
     native = select_native_dimension(2)
@@ -132,8 +138,10 @@ def test_public_captured_diffusion_nonconstant_saved_and_exact_replay(
     with collective_check(world):
         assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
     cells = 16
-    case, layout, _, _ = collective_call(world, lambda: build(cells, width, order))
-    initial, target, _ = collective_call(world, lambda: initial_data(cells, width))
+    case, layout, _, token = collective_call(world, lambda: build(
+        cells, width, order, candidate_diffusion=candidate_diffusion))
+    initial, target, _ = collective_call(world, lambda: initial_data(
+        cells, width, candidate_diffusion=candidate_diffusion))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
     artifact = compile_resolved_plan_once(world, resolved, route="captured-D-original-Uniform",
                                           compile_artifact=pops.compile)
@@ -173,7 +181,8 @@ def test_public_captured_diffusion_nonconstant_saved_and_exact_replay(
                 path = directory/(phase+".npz")
                 np.savez(path, **image[0], time=time, step=image[1][-1][1])
                 phases[phase] = {"npz": str(path), "sha256": hashlib.sha256(bounded_bytes(path)).hexdigest(),
-                                 "checks": check_saved(path, initial, target, time)}
+                                 "checks": check_saved(path, initial, target, time,
+                                                      candidate_diffusion=candidate_diffusion)}
             # Preserve exact compiler-owned source and every actual linked DSO.
             components = [("block-"+row.name, row.model) for row in artifact.blocks]
             components += [("program-"+row.layout_id, row.program) for row in artifact.layout_programs]
@@ -202,11 +211,31 @@ def test_public_captured_diffusion_nonconstant_saved_and_exact_replay(
                 "initial_sha256": hashlib.sha256(bounded_bytes(directory/"initial.npz")).hexdigest(),
                 "phases": phases, "checkpoints": checkpoints,
                 "exact_restart_and_replay": True}
+            if candidate_diffusion:
+                from tests.python.support.captured_diffusion_mms import CANDIDATE_BETA
+                receipt.update(
+                    kind="actual-native-candidate-D-original-MMS",
+                    fixture_schema="pops.candidate-diffusion-native-fixture@1",
+                    coefficient_evaluation=token.inputs[1].attrs["coefficient_evaluation"],
+                    linear_residual_verification=token.attrs["source_contract"]["linear_residual_verification"],
+                    candidate_beta=CANDIDATE_BETA,
+                )
             (directory/"receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True)+"\n")
         for name, value in (("artifact_identity", artifact.artifact_identity.token), ("dimension", 2),
                             ("rank", world.rank), ("size", world.size), ("evidence_path", str(directory)),
                             ("captured_diffusion_receipt", str(directory/"receipt.json"))):
             record_property(name, value)
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+@pytest.mark.parametrize("width,order", [(1, (0,)), (3, (2, 0, 1))])
+def test_public_candidate_diffusion_nonconstant_saved_and_exact_replay(
+        isolated_native_cache, tmp_path, record_property, width, order):
+    _run_public_diffusion_mms(
+        isolated_native_cache, tmp_path, record_property, width, order,
+        candidate_diffusion=True)
 
 
 @pytest.mark.parametrize("width,order", [(1, (0,)), (3, (2, 0, 1))])

@@ -31,6 +31,7 @@ CONTROLS = dict(tolerance=1e-10, max_iterations=20, linear_tolerance=1e-8,
 # an error up to 300 times that tolerance, not a discretization error fit.
 SOLUTION_TOL = 3e-8
 RESIDUAL_TOL = 3e-8
+CANDIDATE_BETA = 3.
 
 
 def matrices(width):
@@ -45,11 +46,13 @@ def matrices(width):
     raise ValueError("this manufactured witness declares one or three fields")
 
 
-def original_action(q, alpha):
+def original_action(q, alpha, *, candidate_diffusion=False):
     """Independent periodic Cartesian FV -div(D grad q)+R q+.2 q^3."""
     width, ny, nx = q.shape
     diffusion, reaction = matrices(width)
     cell_d = diffusion[:, :, None, None] * (1 + alpha[None, None])
+    if candidate_diffusion:
+        cell_d = cell_d * (1 + CANDIDATE_BETA*q[None]**2)
     spatial = np.zeros_like(q)
     for axis, cells in ((1, ny), (2, nx)):
         # q is (component,y,x), D is (row,column,y,x).
@@ -66,20 +69,20 @@ def original_action(q, alpha):
     return spatial + local, spatial
 
 
-def initial_data(cells, width):
+def initial_data(cells, width, *, candidate_diffusion=False):
     coordinate = (np.arange(cells) + .5)/cells
     y, x = np.meshgrid(coordinate, coordinate, indexing="ij")
     alpha = .25*np.sin(2*np.pi*x) + .15*np.cos(2*np.pi*y)
     target = np.stack(tuple(.15 + .025*np.cos(2*np.pi*(index+1)*x)
                            + .02*np.sin(2*np.pi*y) for index in range(width)))
-    forcing, spatial = original_action(target, alpha)
+    forcing, spatial = original_action(target, alpha, candidate_diffusion=candidate_diffusion)
     assert np.ptp(alpha) > .5 and all(np.ptp(row) > .07 for row in target)
     assert np.max(np.abs(spatial)) > .01, "MMS must exercise diffusion"
     return ({"response": np.zeros_like(target), "forcing": np.ascontiguousarray(forcing),
              "material": np.ascontiguousarray(alpha[None])}, target, spatial)
 
 
-def build(cells, width, order, *, omit_material=False):
+def build(cells, width, order, *, omit_material=False, candidate_diffusion=False):
     if tuple(sorted(order)) != tuple(range(width)):
         raise ValueError("MMS order must be an exact field permutation")
     diffusion, reaction = matrices(width)
@@ -102,7 +105,10 @@ def build(cells, width, order, *, omit_material=False):
             if reaction[row, column] != 0:
                 lhs += Reaction(unknowns[column], float(reaction[row, column]))
             if diffusion[row, column] != 0:
-                lhs -= DivCoeffGrad(unknowns[column], float(diffusion[row, column])*(1+material[0]))
+                coefficient = float(diffusion[row, column])*(1+material[0])
+                if candidate_diffusion:
+                    coefficient *= 1+CANDIDATE_BETA*ValueExpr(unknowns[column])**2
+                lhs -= DivCoeffGrad(unknowns[column], coefficient)
         equations.append(lhs == load[row])
     problem = FieldProblem("captured-D-original-equations", unknowns=tuple(unknowns[i] for i in order),
         equations=tuple(equations[i] for i in order), boundaries=tuple(FieldBoundary(unknowns[i],
@@ -123,7 +129,9 @@ def build(cells, width, order, *, omit_material=False):
         blocks.append(block)
     solver = Newton(**CONTROLS)
     field = case.field(problem, FieldDiscretization(method=CellCenteredNonlinearCoupled(
-        finite_difference_step=FD_STEP, face_policy="Arithmetic@1"), boundaries=(), solver=solver))
+        finite_difference_step=FD_STEP, face_policy="Arithmetic@1",
+        coefficient_evaluation="PerCandidate@1" if candidate_diffusion else None),
+        boundaries=(), solver=solver))
     program = pops.Program("captured-diffusion-accepted-response")
     current, forcing, coefficient = (program.state(block[state]) for block, state in
         zip(blocks, (response, load, material), strict=True))
