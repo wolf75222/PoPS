@@ -18,7 +18,8 @@ def body(text, signature):
     return text[begin:end]
 
 
-def test_ac687_historical_sealer_accepts_mutated_provider_values_at_unchanged_receipt(tmp_path):
+@pytest.mark.parametrize("fixed", (False, True))
+def test_historical_counter_and_fixed_real_sealer_receipt_values(tmp_path, fixed):
     # Real sealer and receipt reader; only low-level lane/field/core authority
     # storage is substituted. This demonstrates source semantics, not Kokkos/MPI.
     def historical(path):
@@ -28,7 +29,11 @@ def test_ac687_historical_sealer_accepts_mutated_provider_values_at_unchanged_re
         ).decode()
 
     seal = body(
-        historical("include/pops/runtime/program/amr_program_context_spatial_interaction.inc"),
+        (
+            ROOT / "include/pops/runtime/program/amr_program_context_spatial_interaction.inc"
+        ).read_text()
+        if fixed
+        else historical("include/pops/runtime/program/amr_program_context_spatial_interaction.inc"),
         "void seal_original_field_source(",
     )
     stamp = body(
@@ -37,7 +42,10 @@ def test_ac687_historical_sealer_accepts_mutated_provider_values_at_unchanged_re
     )
     prefix = r"""
 #include <cassert>
+#include <bit>
+#define POPS_HD
 #include <cstdint>
+using InteractionRealWord=std::uint64_t;
 #include <functional>
 #include <map>
 #include <memory>
@@ -52,15 +60,19 @@ struct ExecutionLane {};
 namespace Kokkos { void fence() {} }
 template<int> struct Box { std::size_t numPts() const {return 1;} };
 template<int> struct Index {};
+template<class Fn> Real for_each_cell_reduce_max(Box<1>,Fn fn) {return fn(Index<1>{});}
 template<int> struct Geometry {};
 struct Field {
  std::vector<double> values;
- struct Fab { Box<1> grown_box() const {return {};} };
+ struct View { const double* data; double operator()(Index<1>,int c) const {return data[c];} };
+ struct Fab { const std::vector<double>* data=nullptr; Box<1> grown_box() const {return {};}
+   View view() const {return {data->data()};} };
  using fab_type=Fab;
  std::vector<int> layout() const {return {1};}
  int distribution() const {return 1;} int local_rank() const {return 0;}
  int ncomp() const {return 1;} std::size_t local_size() const {return 1;}
- Fab fab(std::size_t) const {return {};}
+ Fab fab(std::size_t) const {return {&values};}
+ Box<1> box(std::size_t) const {return {};}
 };
 using field_type=Field;
 struct AmrFieldResidualAuthority {};
@@ -125,6 +137,31 @@ int main() {
  assert(provider->accepted_original_candidate_generation(&core->image,ctx.lane)==generation);
 }
 """
+    if fixed:
+        suffix = (
+            suffix[: suffix.index(" // Layout,")]
+            + r"""
+ ctx.seal_original_field_source(1,provider,core,[]{return AmrFieldResidualAuthority{};},
+   {{2,3,0,0,"binding"}},"original",1ULL<<24);
+ const auto prior=ctx.closed_original_sources_.at(1);
+ provider->solution(0).values[0]=99.;
+ bool refused=false;
+ try { ctx.seal_original_field_source(1,provider,core,[]{return AmrFieldResidualAuthority{};},
+   {{2,3,0,0,"binding"}},"original",1ULL<<24); }
+ catch(const std::invalid_argument& e) {
+   refused=std::string(e.what())=="accepted original source values changed after Accept";
+ }
+ assert(refused && ctx.closed_original_sources_.at(1)==prior && prior->image[0].values[0]==3.);
+ // Signed zero is a bit difference, not a tolerance comparison.
+ core->image[0].values[0]=0.; provider->solution(0).values[0]=-0.;
+ refused=false;
+ try { ctx.seal_original_field_source(1,provider,core,[]{return AmrFieldResidualAuthority{};},
+   {{2,3,0,0,"binding"}},"original",1ULL<<24); }
+ catch(const std::invalid_argument&) {refused=true;}
+ assert(refused && ctx.closed_original_sources_.at(1)==prior);
+}
+"""
+        )
     source = tmp_path / "actual_ir19_seal_host.cpp"
     source.write_text(prefix + stamp + middle + seal + suffix)
     executable = tmp_path / "actual_ir19_seal_host"

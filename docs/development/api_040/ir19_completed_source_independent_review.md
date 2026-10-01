@@ -45,3 +45,24 @@ Replay uses source PYTHONPATH and the preserved Python interpreter:
 `pytest tests/review/test_sol61_ir19_independent.py -q -p no:cacheprovider --tb=short`.
 **8 SOURCE_ONLY/host PASS60.59s; historical git-pinned replay1 PASS.**
 Ruff and diff-check pass. No native positive is generated here.
+
+## Distinct correction reception 8ec640e9
+
+The new guard compares every local valid cell and all tuple components against the
+actual core candidate by exact InteractionRealWord bit_cast, in a fenced/voted
+phase before source allocation. It then copies tower.at(level), preserving owned
+candidate values. Publication's independently rebuilt ghosts are not falsely
+compared; direct quadrature consumes valid cells and ghost consumers remain refused.
+
+Independent replay executes the **entire corrected sealer** with the same explicit
+host substitutes as the historical counter. It accepts the unchanged baseline,
+refuses provider3-to99 and +0-to-0 mutations with the exact diagnostic, and preserves
+the previous source-map shared object and its image on refusal. The historical
+ac687 branch still accepts99, proving the counter discriminates the fix.
+
+Three targeted SOURCE_ONLY/host cases pass2.44s on the correction, alongside the
+previous six public admission/emission checks on ac687 whose Python/CPP emission
+code this header-only follow-up does not change. Ruff/diff-check pass. No Kokkos/MPI
+execution, Native rebuild, arbitrary EB support, nonlinear interaction inside
+Newton, or deep Runtime restart qualification is claimed. No new blocker is
+demonstrated after this bounded fix; ROOT still owns the coherent SDK reception.
