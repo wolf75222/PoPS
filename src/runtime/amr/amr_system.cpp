@@ -5,6 +5,7 @@
 #include <pops/runtime/amr/amr_layout_transfer_bridge.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
+#include <pops/runtime/checkpoint/state_carriers.hpp>
 #include <pops/parallel/collective_exception.hpp>
 #include <pops/runtime/program/amr_history_flux_snapshot_codec.hpp>
 
@@ -11050,6 +11051,170 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
           {{std::string_view("pops.amr-auxiliary-checkpoint"), collective_contract}}, lane))
     throw std::runtime_error("AMR auxiliary checkpoint differs between communicator ranks");
   return result;
+}
+
+template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::checkpoint_state_carriers() const {
+  const auto& lane = p_->require_package_assembly_lane();
+  using namespace runtime::checkpoint;
+  std::string shard;
+  std::exception_ptr error;
+  try {
+    if (step_transaction_depth() != 0 || p_->restart_transaction || !p_->engine ||
+        !p_->prepared_hierarchy)
+      throw std::logic_error("state carrier checkpoint requires prepared accepted state");
+    StateCarrierArchive<Dim> image;
+    image.real_bits = sizeof(RealBits) * 8;
+    image.ranks = lane.size(); image.shard = lane.rank();
+    image.levels = p_->engine->hierarchy().num_levels();
+    for (const auto& block : p_->blocks) image.blocks.push_back(block.name);
+    Kokkos::fence();
+    for (std::size_t block = 0; block < p_->blocks.size(); ++block)
+      for (std::size_t level = 0; level < image.levels; ++level) {
+        const auto& field = p_->block_state(block, level);
+        for (std::size_t local = 0; local < field.local_size(); ++local) {
+          const auto& fab = field.fab(local);
+          StateCarrierPatch<Dim> row;
+          row.block = block; row.level = level; row.patch = field.global_index(local);
+          row.components = field.ncomp();
+          row.owner = field.distribution().replicated() ? -1 : lane.rank();
+          for (int d = 0; d < Dim; ++d) {
+            row.lo[d] = fab.box().lo[d]; row.hi[d] = fab.box().hi[d];
+            row.grown_lo[d] = fab.grown_box().lo[d]; row.grown_hi[d] = fab.grown_box().hi[d];
+          }
+          auto host = fab.create_host_mirror(); fab.copy_to_host(host);
+          row.bits.reserve(host.size());
+          for (std::size_t value = 0; value < host.size(); ++value)
+            row.bits.push_back(std::bit_cast<RealBits>(host(value)));
+          image.patches.push_back(std::move(row));
+        }
+      }
+    auto encoded = encode_state_carriers(image);
+    shard.assign(reinterpret_cast<const char*>(encoded.data()), encoded.size());
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "state carrier capture staging");
+  const auto shards = lane.allgather_bytes(shard);
+  std::vector<std::uint8_t> result;
+  error = {};
+  try {
+    auto image = merge_state_carrier_shards<Dim>(shards);
+    validate_complete_state_carriers(image);
+    result = encode_state_carriers(image);
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "state carrier capture canonicalization");
+  return result;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::validate_checkpoint_state_carriers(
+    std::span<const std::uint8_t> (*producer)(const void*), const void* context) const {
+  const auto& lane = p_->require_package_assembly_lane();
+  std::exception_ptr error;
+  std::string identity;
+  try {
+    if (!producer) throw std::invalid_argument("state carrier byte producer is null");
+    const auto bytes = producer(context);
+    const auto image = runtime::checkpoint::decode_state_carriers<Dim>(bytes);
+    runtime::checkpoint::validate_complete_state_carriers(image);
+    if (image.real_bits != sizeof(RealBits) * 8 || image.blocks.size() != p_->blocks.size())
+      throw std::invalid_argument("state carrier native scalar/block envelope changed");
+    for (std::size_t block = 0; block < p_->blocks.size(); ++block) {
+      if (image.blocks[block] != p_->blocks[block].name)
+        throw std::invalid_argument("state carrier block identity changed");
+      for (const auto& row : image.patches)
+        if (row.block == block && row.components != static_cast<std::uint64_t>(p_->blocks[block].ncomp))
+          throw std::invalid_argument("state carrier block component count changed");
+    }
+    identity = prefixed_sha256("pops.amr.state-carriers@1:sha256:",
+        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "state carrier source preflight");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"state-carrier-archive", identity}}, lane))
+    throw std::invalid_argument("state carrier archive differs between destination ranks");
+}
+
+template <int Dim>
+void AmrSystem<Dim>::restore_checkpoint_state_carriers(
+    std::span<const std::uint8_t> (*producer)(const void*), const void* context) {
+  const auto& lane = p_->require_package_assembly_lane();
+  // Freeze caller bytes once inside the collective phase; a producer may not change its image
+  // between source consensus and target preparation.
+  std::vector<std::uint8_t> bytes;
+  std::exception_ptr error;
+  try {
+    if (!producer) throw std::invalid_argument("state carrier byte producer is null");
+    const auto view = producer(context);
+    bytes.assign(view.begin(), view.end());
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "state carrier restore immutable staging");
+  validate_checkpoint_state_carriers(
+      +[](const void* image) -> std::span<const std::uint8_t> {
+        return *static_cast<const std::vector<std::uint8_t>*>(image);
+      }, &bytes);
+  std::vector<std::pair<MultiFab<Dim>*, std::unique_ptr<MultiFab<Dim>>>> candidates;
+  error = {};
+  try {
+    if (!p_->restart_transaction || p_->restart_transaction_committed || step_transaction_depth() != 0)
+      throw std::logic_error("state carrier restore requires active native restart transaction");
+    const auto image = runtime::checkpoint::decode_state_carriers<Dim>(bytes);
+    if (!p_->engine || image.levels != p_->engine->hierarchy().num_levels())
+      throw std::invalid_argument("state carrier target hierarchy level count changed");
+    for (std::size_t block = 0; block < p_->blocks.size(); ++block)
+      for (std::size_t level = 0; level < image.levels; ++level) {
+        auto& target = p_->block_state(block, level);
+        const auto begin = std::lower_bound(image.patches.begin(), image.patches.end(),
+            std::tuple(std::uint64_t(block), std::uint64_t(level), std::uint64_t{0}),
+            [](const auto& row, const auto& key) { return row.key() < key; });
+        auto end = begin;
+        while (end != image.patches.end() && end->block == block && end->level == level) ++end;
+        if (static_cast<std::size_t>(end - begin) != target.layout().size())
+          throw std::invalid_argument("state carrier target patch count changed");
+        // Validate every global patch even if it is owned elsewhere on this destination rank.
+        for (std::size_t patch = 0; patch < target.layout().size(); ++patch) {
+          const auto& row = begin[patch]; const auto& valid = target.layout()[patch];
+          for (int d = 0; d < Dim; ++d)
+            if (row.lo[d] != valid.lo[d] || row.hi[d] != valid.hi[d] ||
+                row.grown_lo[d] != std::int64_t(valid.lo[d]) - target.ghosts()[d] ||
+                row.grown_hi[d] != std::int64_t(valid.hi[d]) + target.ghosts()[d])
+              throw std::invalid_argument("state carrier target valid/grown geometry changed");
+        }
+        auto candidate = std::make_unique<MultiFab<Dim>>(target.layout(), target.distribution(),
+            target.local_rank(), target.ncomp(), target.ghosts());
+        for (std::size_t local = 0; local < target.local_size(); ++local) {
+          const auto& row = begin[target.global_index(local)];
+          const auto& live = target.fab(local);
+          auto prior = live.create_host_mirror(); live.copy_to_host(prior);
+          auto& fab = candidate->fab(local); auto host = fab.create_host_mirror();
+          if (row.bits.size() != host.size())
+            throw std::invalid_argument("state carrier target storage size changed");
+          const auto stride = checked_cells(fab.grown_box());
+          for (int component = 0; component < target.ncomp(); ++component)
+            for (std::size_t cell = 0; cell < checked_cells(fab.box()); ++cell) {
+              const auto index = unflatten(fab.box(), cell);
+              const auto address = static_cast<std::size_t>(component) * stride + offset(index, fab.grown_box());
+              if (row.bits[address] != std::bit_cast<RealBits>(prior(address)))
+                throw std::invalid_argument("state carrier valid cells contradict scientific state projection");
+            }
+          for (std::size_t value = 0; value < host.size(); ++value)
+            host(value) = std::bit_cast<Real>(static_cast<RealBits>(row.bits[value]));
+          fab.copy_from_host(host);
+        }
+        candidates.emplace_back(&target, std::move(candidate));
+      }
+    Kokkos::fence();
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "state carrier restore candidate preparation");
+  // Preserve target allocations: prepared ghost/provider views and restored field warm starts
+  // retain their storage authority. Device publication can fail; the enclosing restart snapshot
+  // owns rollback, and every destination votes that failure before the caller can commit.
+  error = {};
+  try {
+    for (const auto& [target, candidate] : candidates)
+      copy_full_field_in_place(*candidate, *target);
+    Kokkos::fence();
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "state carrier restore device publication");
+  p_->discard_level_evaluations();
 }
 
 template <int Dim>
@@ -22573,6 +22738,11 @@ template void AmrSystem<kNativeDimension>::publish_program_field_components(
     const std::string&, const std::vector<AmrSystem<kNativeDimension>::ProgramFieldLevel>&);
 template std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>>
 AmrSystem<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
+template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::checkpoint_state_carriers() const;
+template void AmrSystem<kNativeDimension>::validate_checkpoint_state_carriers(
+    std::span<const std::uint8_t> (*)(const void*), const void*) const;
+template void AmrSystem<kNativeDimension>::restore_checkpoint_state_carriers(
+    std::span<const std::uint8_t> (*)(const void*), const void*);
 template std::vector<std::vector<std::string>>
 AmrSystem<kNativeDimension>::checkpoint_rank_local_carrier_manifest() const;
 template std::vector<std::string> AmrSystem<kNativeDimension>::dirty_auxiliary_provider_identities()

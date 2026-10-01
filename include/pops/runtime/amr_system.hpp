@@ -893,6 +893,15 @@ class AmrSystem {
   /// owner-qualified ComponentKeys, shapes and accepted provider generations before publication.
   [[nodiscard]] POPS_EXPORT std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>
   capture_auxiliary_checkpoint_accepted_state() const;
+  /// Canonical all-source-patch POPSCAR1 image, including every accepted ghost bit.
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_state_carriers() const;
+  /// Schema/source coverage validation before target hierarchy rebuild. Collective, nonmutating.
+  POPS_EXPORT void validate_checkpoint_state_carriers(
+      std::span<const std::uint8_t> (*producer)(const void*), const void* context) const;
+  /// Exact-geometry restore on the current ownership, within the native restart transaction.
+  /// Valid cells must already match the independently restored scientific-state projection.
+  POPS_EXPORT void restore_checkpoint_state_carriers(
+      std::span<const std::uint8_t> (*producer)(const void*), const void* context);
   /// Rank-local, collective-free rollback witness for accepted state, auxiliary and elliptic
   /// carriers plus each level-qualified auxiliary registry. Values include full ghost storage.
   [[nodiscard]] POPS_EXPORT std::vector<std::vector<std::string>>

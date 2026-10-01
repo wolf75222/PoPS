@@ -1226,6 +1226,34 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("program_diagnostic", &AmrSystem::program_diagnostic, py::arg("name"))
       .def("_program_integral", &AmrSystem::program_integral, py::arg("identity"))
       .def("program_diagnostics", &AmrSystem::program_diagnostics)
+      .def("checkpoint_state_carriers", [](const AmrSystem& s) {
+        const auto bytes = s.checkpoint_state_carriers();
+        return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+      })
+      .def("validate_checkpoint_state_carriers", [](const AmrSystem& s, py::object payload) {
+        s.validate_checkpoint_state_carriers(
+            +[](const void* context) -> std::span<const std::uint8_t> {
+              const auto& value = *static_cast<const py::object*>(context);
+              if (!PyBytes_CheckExact(value.ptr()))
+                throw py::type_error("state carrier checkpoint payload must be exact bytes");
+              char* data = nullptr; Py_ssize_t size = 0;
+              if (PyBytes_AsStringAndSize(value.ptr(), &data, &size) != 0)
+                throw py::error_already_set();
+              return {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)};
+            }, &payload);
+      }, py::arg("payload"))
+      .def("restore_checkpoint_state_carriers", [](AmrSystem& s, py::object payload) {
+        s.restore_checkpoint_state_carriers(
+            +[](const void* context) -> std::span<const std::uint8_t> {
+              const auto& value = *static_cast<const py::object*>(context);
+              if (!PyBytes_CheckExact(value.ptr()))
+                throw py::type_error("state carrier checkpoint payload must be exact bytes");
+              char* data = nullptr; Py_ssize_t size = 0;
+              if (PyBytes_AsStringAndSize(value.ptr(), &data, &size) != 0)
+                throw py::error_already_set();
+              return {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)};
+            }, &payload);
+      }, py::arg("payload"))
       .def("_checkpoint_program_diagnostics",
            [](const AmrSystem& s) {
              const auto bytes = s.checkpoint_program_diagnostics();
