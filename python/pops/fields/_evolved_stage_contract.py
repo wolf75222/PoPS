@@ -128,20 +128,25 @@ def build_evolved_state(solution: Any, *, target: Any) -> Any:
         if len(matches) != 1:
             raise ValueError("original accumulation has no exact previous State witness")
         previous = matches[0]
+        indices = _projection_indices(stage, previous)
+        partitioned = indices != tuple(range(len(stage["previous"])))
+        expressions = tuple(source["accumulation"][index] for index in indices)
+        partition = {"component_indices": indices} if partitioned else {}
         result = program._new(
             "scalar_field",
             "field_evolved_state",
             (solution.packed, *captures),
             {
-                "projection_contract": "pops.evolved-original-field-stage@1",
+                "projection_contract": "pops.evolved-original-field-stage@2" if partitioned else "pops.evolved-original-field-stage@1",
                 "ncomp": len(target.space.components),
                 "previous_capture_index": next(
                     index for index, row in enumerate(captures) if row is previous
                 ),
                 "field_problem_identity": solution.problem_identity,
-                "expressions": source["accumulation"],
+                "expressions": expressions if partitioned else source["accumulation"],
                 "stage": stage,
                 "stencil_access": StencilAccess.pointwise(),
+                **partition,
             },
             "evolved_accumulation",
             target.block,
@@ -161,7 +166,8 @@ def validate_evolved_state(value: Any) -> Any:
     if (
         value.op != "field_evolved_state"
         or len(value.inputs) < 2
-        or value.attrs.get("projection_contract") != "pops.evolved-original-field-stage@1"
+        or value.attrs.get("projection_contract") not in (
+            "pops.evolved-original-field-stage@1", "pops.evolved-original-field-stage@2")
     ):
         raise ValueError("original accumulation publication lost its versioned contract")
     packed = value.inputs[0]
@@ -184,6 +190,17 @@ def validate_evolved_state(value: Any) -> Any:
     if previous.point != TimePoint(value.prog.clock, 0):
         raise ValueError("original accumulation requires the previous accepted frame endpoint")
     stage = _json_ready(source.get("evolved_stage"))
+    indices = _projection_indices(stage, previous)
+    partitioned = indices != tuple(range(len(stage["previous"])))
+    expected_contract = "pops.evolved-original-field-stage@2" if partitioned else "pops.evolved-original-field-stage@1"
+    expressions = tuple(source["accumulation"][index] for index in indices)
+    declared_indices = _json_ready(value.attrs.get("component_indices"))
+    if value.attrs["projection_contract"] != expected_contract or (
+        partitioned and (not isinstance(declared_indices, list)
+                         or any(type(index) is not int for index in declared_indices)
+                         or declared_indices != list(indices))
+    ) or (not partitioned and "component_indices" in value.attrs):
+        raise ValueError("original accumulation changed its exact State partition")
     space = value.space
     if (
         not isinstance(space, StateSpace)
@@ -206,7 +223,7 @@ def validate_evolved_state(value: Any) -> Any:
         or value.attrs.get("ncomp") != len(space.components)
         or value.attrs.get("field_problem_identity") != source["field_problem_identity"]
         or _json_ready(value.attrs.get("stage")) != stage
-        or _json_ready(value.attrs.get("expressions")) != _json_ready(source.get("accumulation"))
+        or _json_ready(value.attrs.get("expressions")) != _json_ready(expressions)
     ):
         raise ValueError("original accumulation changed its exact solve, target or declaration")
     from pops._ir.quantity import QuantityRef
@@ -216,10 +233,46 @@ def validate_evolved_state(value: Any) -> Any:
         QuantityRef(canonical_handle(previous.state_ref), component, space=space).to_data()
         for component in space.components
     ]
-    if stage["previous"] != expected or len(stage["accumulation"]) != len(space.components):
+    if [stage["previous"][index] for index in indices] != expected or len(expressions) != len(space.components):
         raise ValueError("original accumulation changed its previous component tuple")
     validate_tau_data(stage["tau"], program=value.prog, point=value.point)
     return solve
+
+
+def _projection_indices(stage: Any, previous: Any) -> tuple:
+    """Select Q only through exact qualified prior State/component identities."""
+    from pops._ir.quantity import QuantityRef
+    from pops.time.references import canonical_handle
+
+    rows = _json_ready(stage["previous"])
+    if len(rows) != len(stage["accumulation"]):
+        raise ValueError("original accumulation partition has mismatched declarations")
+    result = []
+    for component in previous.space.components:
+        expected = QuantityRef(canonical_handle(previous.state_ref), component, space=previous.space).to_data()
+        matches = [index for index, row in enumerate(rows) if row == expected]
+        if len(matches) != 1:
+            raise ValueError("original accumulation has no unique exact previous component")
+        result.append(matches[0])
+    return tuple(result)
+
+
+def validate_evolved_partitions(program: Any) -> None:
+    """Every partition of one solved stage is committed exactly once together."""
+    groups = {}
+    for value in program._values:
+        if value.op == "field_evolved_state" and value.attrs.get("projection_contract") == "pops.evolved-original-field-stage@2":
+            solve = validate_evolved_state(value)
+            groups.setdefault(solve.id, (solve, []))[1].append(value)
+    for solve, values in groups.values():
+        seen = []
+        for value in values:
+            if program._commits.get(value.state_ref) is not value:
+                raise ValueError("original accumulation partition must be committed exactly once")
+            seen.extend(value.attrs["component_indices"])
+        expected = list(range(len(solve.attrs["source_contract"]["evolved_stage"]["previous"])))
+        if sorted(seen) != expected:
+            raise ValueError("original accumulation partitions do not cover the complete solved stage")
 
 
 def compile_accumulation(projection: Any, states: Any, unknowns: Any) -> tuple:

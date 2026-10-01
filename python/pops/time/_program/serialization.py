@@ -298,6 +298,8 @@ class _ProgramSerialization(_ProgramBase):
                      node.attrs.get("source_contract", {}).get("evolved_stage", {}))
             if stage.get("schema_version") == 2:
                 result["version"] = max(result["version"], 14)
+            if node.op == "field_evolved_state" and node.attrs.get("projection_contract") == "pops.evolved-original-field-stage@2":
+                result["version"] = max(result["version"], 15)
             elif node.op == "reduce" and node.attrs.get("kind") == "dot_all":
                 result["version"] = max(result["version"], 7)
             for key in ("cond_block", "body_block", "true_block", "false_block",
