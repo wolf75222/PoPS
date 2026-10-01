@@ -142,6 +142,16 @@
   "native_scientific_acceptance": false,
   "native_sha256": "13b3d024eed5f2776e96dbee6f674fe2e7f48ccf3ff31382b13749444cfe18f7",
   "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/__init__.py",
+  "preserved_native": {
+    "bytes": 13672632,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/preserved-sdka37c-pre-tag-selection-package/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "13b3d024eed5f2776e96dbee6f674fe2e7f48ccf3ff31382b13749444cfe18f7"
+  },
+  "preserved_package_receipt": {
+    "bytes": 934,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/preserved-sdka37c-pre-tag-selection-package.json",
+    "sha256": "a6977fa20573422fc8e2089e24fa1a73d9a3d389f48c2f122d0e19c17e437d26"
+  },
   "protocol_reception": true,
   "root_offline_audit": {
     "bytes": 7433,
