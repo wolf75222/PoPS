@@ -9,6 +9,7 @@ import numpy as np
 import pops
 import pytest
 
+from pops._native_collectives import allgather_value
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.integration.runtime.test_public_captured_diffusion import bounded_bytes
 from tests.python.integration.runtime.test_public_evolved_original_stage import checkpoint_provenance, compare_checkpoint_replay
@@ -182,6 +183,10 @@ def test_public_evolved_stage_amr_checkpoint_and_composite_Q(isolated_native_cac
     runtime = collective_call(world, bind)
     directory = collective_directory(world, tmp_path/"evolved-stage-amr")
     initial = capture(world, runtime, width, histories=False)
+    # All ranks publish their actual rank-local manifests while each phase is live.
+    # Preserve native row/list order; the independent reader binds rank0 to metadata.
+    registry_phases = {"initial": {"rows_by_rank": collective_call(world,
+        lambda: allgather_value(world, initial[1][1]))}}
     paths, seals, authorities, phases = {}, {}, {}, {}
     for phase, owner in (("accepted", runtime), ("continuous", runtime), ("replay", None)):
         if phase == "replay":
@@ -191,6 +196,8 @@ def test_public_evolved_stage_amr_checkpoint_and_composite_Q(isolated_native_cac
             with collective_check(world):
                 same_images(reloaded, phases["accepted"])
             phases["reloaded"] = reloaded
+            registry_phases["reloaded"] = {"rows_by_rank": collective_call(world,
+                lambda: allgather_value(world, reloaded[1][1]))}
         end = DT if phase == "accepted" else 2*DT
         collective_call(world, lambda owner=owner, end=end: pops.run(owner, t_end=end, max_steps=1, console=False))
         path = collective_call(world, lambda owner=owner, phase=phase: owner.checkpoint(directory/(phase+"-checkpoint")))
@@ -198,6 +205,8 @@ def test_public_evolved_stage_amr_checkpoint_and_composite_Q(isolated_native_cac
         authorities[phase] = collective_call(world, lambda owner=owner, path=path: checkpoint_provenance(owner, path))
         paths[phase] = path
         phases[phase] = capture(world, owner, width)
+        registry_phases[phase] = {"rows_by_rank": collective_call(world,
+            lambda phase=phase: allgather_value(world, phases[phase][1][1]))}
     with collective_check(world):
         same_images(phases["continuous"], phases["replay"])
         assert phases["accepted"][1][-1][:2] == (DT, 1)
@@ -248,7 +257,13 @@ def test_public_evolved_stage_amr_checkpoint_and_composite_Q(isolated_native_cac
             assert all(row["sha256"] == seals[phase] for phase, row in checkpoints.items())
             assert {Path(row["path"]).resolve() for row in checkpoints.values()}.isdisjoint(
                 {Path(row["path"]).resolve() for phase in observations.values() for row in phase["levels"]})
-            receipt = {"fixture_schema":"pops.evolved-stage-amr-native-fixture@2", "artifact":artifact.artifact_identity.token,
+            registry_path = directory/"carrier-registry.json"
+            registry_path.write_text(json.dumps({"schema":"sol61.amr.carrier-registry@1",
+                "dimension":2, "size":world.size, "phases":registry_phases},
+                sort_keys=True, indent=2)+"\n")
+            registry_pin = {"path":str(registry_path.resolve()),
+                "sha256":hashlib.sha256(bounded_bytes(registry_path)).hexdigest()}
+            receipt = {"carrier_registry":registry_pin, "fixture_schema":"pops.evolved-stage-amr-native-fixture@2", "artifact":artifact.artifact_identity.token,
                 "dimension":2, "rank":world.rank, "size":world.size, "cells":cells, "width":width,
                 "history_protocol":{"wire":"POPSHID1", "raw_slots_after_publication":True,
                     "latest_slot":1, "previous_slot":0, "depth":2},
