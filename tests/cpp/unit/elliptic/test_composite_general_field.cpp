@@ -3,6 +3,7 @@
 #include <pops/numerics/elliptic/nd/prepared_composite_general_field.hpp>
 #include <pops/runtime/program/prepared_amr_field_residual.hpp>
 #include <pops/runtime/program/prepared_resource_cache.hpp>
+#include <pops/runtime/program/spatial_direct_interaction.hpp>
 
 #include <array>
 #include <cmath>
@@ -246,4 +247,5 @@ TEST(CompositeGeneralField, RefusesMissingAndWrongConstantModes) {
   EXPECT_FALSE(provider.supports(request).accepted());
 }
 #include "amr_original_field_residual.inc"
+#include "amr_original_field_interaction.inc"
 }  // namespace
