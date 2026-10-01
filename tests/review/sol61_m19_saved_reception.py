@@ -6,12 +6,17 @@ unit tests use labelled synthetic bytes and never supply native evidence.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from contextvars import ContextVar
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import re
 import sys
+import stat
 import xml.etree.ElementTree as ET
+import zipfile
 from fractions import Fraction
 
 import numpy as np
@@ -33,6 +38,8 @@ NAMES = ("population", "integral", "weighted", "extended")
 CASES = {(nx, nv, width, reverse) for nx, nv, width in ((4, 3, 3), (2, 5, 1), (7, 3, 5))
          for reverse in (False, True)}
 TOL = 2e-12
+ORIGIN_BYTE_BUDGET = 1024 * 1024 * 1024  # evidence reader budget, not a PoPS limit
+_BACKING = ContextVar("m19_authenticated_backing", default=None)
 
 
 def exact(row, keys, where):
@@ -45,7 +52,18 @@ def case_id(nx, nv, width, reverse):
     return f"{reverse}-{nx}-{nv}-{width}"
 
 
+def logical_path(path):
+    need(type(path) is str or isinstance(path, Path), "origin path type differs")
+    original = str(path)
+    path = Path(original)
+    need(path.is_absolute() and str(path) == original and ".." not in path.parts
+         and "\\" not in original, "origin path is not exact absolute canonical spelling")
+    return path
+
+
 def canonical(path):
+    if _BACKING.get() is not None:
+        return logical_path(path)
     path = Path(path).absolute()
     need(".." not in path.parts and not any(p.is_symlink() for p in (path, *path.parents)),
          "path escapes or aliases declared origin")
@@ -55,8 +73,115 @@ def canonical(path):
 
 def leaf(path):
     path = canonical(path)
-    need(path.is_file() and path.stat().st_size <= protocol.MAX_FILE_BYTES, "missing/oversized actual file")
-    return {"path": str(path), "sha256": digest(path.read_bytes())}
+    raw = read_bytes(path)
+    return {"path": str(path), "sha256": digest(raw)}
+
+
+def read_bytes(path):
+    path = canonical(path)
+    backing = _BACKING.get()
+    if backing is not None:
+        return backing.read(path)
+    budget = protocol.MAX_FILE_BYTES if path.suffix == ".npz" else ORIGIN_BYTE_BUDGET
+    need(path.is_file() and path.stat().st_size <= budget, "missing/oversized actual file")
+    return path.read_bytes()
+
+
+def file_pins(value):
+    """Closed set of original leaves; equal content at different paths is valid."""
+    result = {}
+
+    def visit(row):
+        if type(row) is dict:
+            if set(row) == {"path", "sha256"}:
+                path = str(logical_path(row["path"]))
+                sha = row["sha256"]
+                need(type(sha) is str and re.fullmatch("[0-9a-f]{64}", sha), "original digest type differs")
+                need(path not in result or result[path] == sha, "conflicting original path digests")
+                result[path] = sha
+            else:
+                for child in row.values():
+                    visit(child)
+        elif type(row) is list:
+            for child in row:
+                visit(child)
+
+    visit({key: row for key, row in value.items() if key != "backing"})
+    return result
+
+
+class ArchivedBacking:
+    """Approved original names are logical; only sealed archive bytes are read."""
+
+    def __init__(self, pins):
+        exact(pins["backing"], ("archive", "members"), "archived backing")
+        record = pins["backing"]["archive"]
+        exact(record, ("path", "sha256"), "backing archive pin")
+        path = canonical(logical_path(record["path"]))
+        need(type(record["sha256"]) is str and re.fullmatch("[0-9a-f]{64}", record["sha256"]),
+             "backing archive digest type differs")
+        need(path.is_file() and path.stat().st_size <= ORIGIN_BYTE_BUDGET, "missing/oversized backing archive")
+        h = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                h.update(chunk)
+        need(h.hexdigest() == record["sha256"], "backing archive digest differs")
+        expected = file_pins(pins)
+        rows = pins["backing"]["members"]
+        need(type(rows) is dict and set(rows) == set(expected), "backing mapping closed origin inventory differs")
+        self.rows = rows
+        self.zip = zipfile.ZipFile(path)
+        try:
+            infos = self.zip.infolist()
+            need(len({info.filename for info in infos}) == len(infos), "duplicate archive member")
+            need(sum(info.file_size for info in infos) <= ORIGIN_BYTE_BUDGET, "backing archive decompression budget exceeded")
+            for info in infos:
+                name = info.filename
+                need(name and not name.startswith("/") and "\\" not in name
+                     and str(Path(name)) == name and ".." not in Path(name).parts
+                     and not info.is_dir() and not stat.S_ISLNK(info.external_attr >> 16),
+                     "backing archive member aliases or escapes")
+            available = {info.filename: info for info in infos}
+            for original, row in rows.items():
+                exact(row, ("member", "sha256"), "backing member")
+                need(row["sha256"] == expected[original] and row["member"] == "sha256/" + expected[original],
+                     "backing member identity differs from unchanged origin")
+                need(row["member"] in available, "backing member absent")
+                limit = protocol.MAX_FILE_BYTES if Path(original).suffix == ".npz" else ORIGIN_BYTE_BUDGET
+                need(available[row["member"]].file_size <= limit, "oversized backing origin")
+                # Rehash every selected member before entering any scientific reader.
+                need(digest(self.zip.read(row["member"])) == expected[original], "backing member digest differs")
+        except BaseException:
+            self.zip.close()
+            raise
+
+    def read(self, path):
+        need(str(path) in self.rows, "origin absent from closed backing map")
+        row = self.rows[str(path)]
+        raw = self.zip.read(row["member"])
+        need(digest(raw) == row["sha256"], "backing member digest changed")
+        return raw
+
+
+@contextmanager
+def archived_context(pins):
+    need(_BACKING.get() is None, "nested backing context refused")
+    backing = ArchivedBacking(pins)
+    token = _BACKING.set(backing)
+    try:
+        yield
+    finally:
+        _BACKING.reset(token)
+        backing.zip.close()
+
+
+def archive_pins(pins, backing):
+    """Prepare unapproved @2 input; never create either external ROOT seal."""
+    need(pins.get("schema") == "sol61.m19-owner-pins@1", "archive conversion requires exact live @1 input")
+    converted = {**pins, "schema": "sol61.m19-owner-pins@2", "backing": backing}
+    with archived_context(converted):
+        validate_inventory(converted)
+    return converted
 
 
 def pinned(row, root):
@@ -68,7 +193,7 @@ def pinned(row, root):
     need(path.is_relative_to(canonical(root)), "file escapes declared root")
     actual = leaf(path)
     need(actual["sha256"] == row["sha256"], "external file digest differs: " + str(path))
-    return path, path.read_bytes()
+    return path, read_bytes(path)
 
 
 def typed_array(array):
@@ -173,7 +298,7 @@ def closed_phases(directory):
     files["provenance"] = leaf(directory / "provenance.json")
     for phase in PHASES:
         state, receipt = directory / (phase + "-state.npz"), directory / (phase + "-receipt.json")
-        row = strict_json(receipt.read_bytes())
+        row = strict_json(read_bytes(receipt))
         name = row.get("checkpoint")
         need(type(name) is str and name and Path(name).name == name and "\\" not in name,
              "checkpoint basename escapes case")
@@ -183,7 +308,10 @@ def closed_phases(directory):
         need(row["saved_state_sha256"] == files[phase]["state"]["sha256"]
              and row["checkpoint_sha256"] == files[phase]["checkpoint"]["sha256"], "phase receipt digest differs")
         expected.update((state, receipt, checkpoint))
-    need(set(directory.iterdir()) == expected and len(expected) == 13, "case closed 13-file inventory differs")
+    backing = _BACKING.get()
+    actual = (set(directory.iterdir()) if backing is None else
+              {Path(path) for path in backing.rows if Path(path).parent == directory})
+    need(actual == expected and len(expected) == 13, "case closed 13-file inventory differs")
     return files
 
 
@@ -400,13 +528,13 @@ def assemble(base, mode, directories, junits, origins):
         directory = canonical(directory)
         need(directory.is_relative_to(base), "case directory escapes archive")
         files = closed_phases(directory)
-        provenance = strict_json(Path(files["provenance"]["path"]).read_bytes())
+        provenance = strict_json(read_bytes(files["provenance"]["path"]))
         dims = provenance["dimensions"]
         exact(dims, ("nx", "nv", "components"), "dimensions")
         # Reverse is an actual pytest parameter, never inferred from a plan hash.
         names = set()
         for path in junits:
-            root = ET.fromstring(canonical(path).read_bytes())
+            root = ET.fromstring(read_bytes(path))
             for test in root.iter("testcase"):
                 values = {row.get("name"): row.get("value") for row in test.iter("property")}
                 if values.get("saved_receipts") == str(directory):
@@ -423,8 +551,11 @@ def assemble(base, mode, directories, junits, origins):
 
 
 def validate_inventory(pins):
-    exact(pins, ("schema", "mode", "ranks", "archive_root", "execution_origins", "junit", "cases"), "pins")
-    need(pins["schema"] == "sol61.m19-owner-pins@1" and type(pins["ranks"]) is int
+    version2 = pins.get("schema") == "sol61.m19-owner-pins@2"
+    keys = ("schema", "mode", "ranks", "archive_root", "execution_origins", "junit", "cases")
+    exact(pins, (*keys, "backing") if version2 else keys, "pins")
+    need((version2 and _BACKING.get() is not None or pins["schema"] == "sol61.m19-owner-pins@1"
+          and _BACKING.get() is None) and type(pins["ranks"]) is int
          and (pins["mode"], pins["ranks"]) in (("serial", 1), ("mpi2", 2)), "mode/rank types differ")
     base = canonical(pins["archive_root"])
     need(type(pins["cases"]) is dict and len(pins["cases"]) == 6, "six cases required")
@@ -449,13 +580,23 @@ def validate_inventory(pins):
 
 
 def receive(pins_path, pins_sha, approval_path, approval_sha):
+    need(_BACKING.get() is None, "receive requires fresh external seal context")
     raw, approved = canonical(pins_path).read_bytes(), canonical(approval_path).read_bytes()
     need(digest(raw) == pins_sha and digest(approved) == approval_sha, "external seal digest differs")
+    pins = strict_json(raw)
     approval = strict_json(approved)
     exact(approval, ("schema", "approved_by", "pins_sha256"), "ROOT approval")
-    need(approval == dict(schema="sol61.m19-root-approval@1", approved_by="ROOT", pins_sha256=pins_sha),
+    version = 2 if pins.get("schema") == "sol61.m19-owner-pins@2" else 1
+    need(approval == dict(schema=f"sol61.m19-root-approval@{version}", approved_by="ROOT", pins_sha256=pins_sha),
          "ROOT has not approved this exact manifest")
-    pins = strict_json(raw)
+    if version == 2:
+        with archived_context(pins):
+            return _receive_pins(pins)
+    return _receive_pins(pins)
+
+
+def _receive_pins(pins):
+    """Internal science checks; qualification requires receive() external seals."""
     validate_inventory(pins)
     reports = {}
     origins = pins["execution_origins"]
@@ -512,6 +653,7 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
                             retained_cpp=origins["generated_cpp"][key] is not None,
                             cpp_dso_link_scope="owner_supplied_build_receipts" if origins["cpp_dso_links"][key] else "not_stored")
     return dict(scope="finite_product_saved_states_authsource_scope", cases=reports,
+                **({"evidence_backing": "ROOT_approved_archive@2"} if _BACKING.get() is not None else {}),
                 source_commit=origins["source_commit"], native_build_source_commit=origins["native_build_source_commit"],
                 native_build_source_scope="not_stored" if origins["native_build_source_commit"] is None else "ROOT_owner_attested",
                 strong_cpp_dso_link_qualified=False, limitation="No Vlasov/BGK/field solve or new native execution; build receipts are ROOT-attested, not independently proven compile graphs.")
@@ -527,6 +669,9 @@ def main(argv=None):
     pending.add_argument("--junit", action="append", required=True)
     pending.add_argument("--execution-origins", required=True)
     pending.add_argument("--output", required=True)
+    portable = sub.add_parser("archive")
+    for name in ("pins", "backing", "output"):
+        portable.add_argument("--" + name, required=True)
     check = sub.add_parser("check")
     for name in ("pins", "pins-sha256", "approval", "approval-sha256"):
         check.add_argument("--" + name, required=True)
@@ -537,6 +682,11 @@ def main(argv=None):
         with Path(args.output).open("x") as stream:
             stream.write(json.dumps(value, indent=2, allow_nan=False) + "\n")
         print("pending external ROOT approval; no native reception performed")
+    elif args.command == "archive":
+        value = archive_pins(strict_json(read_bytes(args.pins)), strict_json(read_bytes(args.backing)))
+        with Path(args.output).open("x") as stream:
+            stream.write(json.dumps(value, indent=2, allow_nan=False) + "\n")
+        print("pending @2 external ROOT approval; no native reception performed")
     else:
         print(json.dumps(receive(args.pins, args.pins_sha256, args.approval, args.approval_sha256), indent=2, allow_nan=False))
 

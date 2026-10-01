@@ -19,6 +19,65 @@ campaign cannot become a complete reception by collecting only successful phases
 
 ## Two external seals
 
+### Archived origins, explicit reader @2
+
+Live `owner-pins@1` / `root-approval@1` remain supported without conversion or
+fallback. Archived inputs require `sol61.m19-owner-pins@2` and a distinct
+`sol61.m19-root-approval@2`. The approval has the same exact fields shown below,
+with its schema changed explicitly to @2. Both external SHA256 values remain
+mandatory. The checker creates neither seal nor approval.
+
+The @2 pins retain **every original path and digest unchanged**, and add exactly
+one `backing` object:
+
+```json
+{"archive":{"path":"/canonical/physical/snapshot.zip","sha256":"ACTUAL_ARCHIVE_SHA256"},
+ "members":{"/original/absolute/path":{"member":"sha256/ACTUAL_ORIGINAL_SHA256",
+                                        "sha256":"ACTUAL_ORIGINAL_SHA256"}}}
+```
+
+`members` must equal the closed set of all file leaves referenced by case,
+JUnit and execution-origin pins. Missing/extra originals, conflicting digests
+for a reused path, unsafe spelling, member renaming, changed bytes, absent ZIP
+members, duplicate ZIP names, directory/symlink members and traversal aliases
+are refused. Distinct original paths may share one identical content-addressed
+member. The archive may retain additional safe unreferenced source snapshots;
+these bytes grant no additional scientific or build authority.
+
+The physical ZIP path and its parents must be regular canonical paths, with
+symlinks rejected before resolution. All selected members are rehashed before
+inventory or science checks, and again at read. In @2 the recorded historical
+names are logical names: ROOT's external approval attests that the mapping
+preserves the originally observed canonical origins. The reader does not query,
+resolve, discover or fall back to current ENV/donor paths. Directory closure is
+checked against the approved closed mapping, not a mutable live directory. ROOT
+must review this mapping against its original capture; member hashes alone do
+not establish historical path ownership.
+
+Prepare unapproved @2 inputs with:
+
+```sh
+python tests/review/sol61_m19_saved_reception.py archive \
+  --pins actual-live-pins.json --backing actual-backing-map.json \
+  --output pending-archived-pins.json
+```
+
+This command validates archived inventories and writes pending inputs only.
+ROOT must supply a new @2 approval and both external digests to `check`. An old
+@1 approval cannot authorize the converted manifest. The approval is checked
+before the archive is opened. Successful @2 reception adds
+`evidence_backing="ROOT_approved_archive@2"`; all physics, envelopes, ownership,
+clocks, replay guards and explicit CPP→DSO gaps are unchanged. No native run is
+performed. A 64 MiB limit applies to each NPZ; binary/source leaves and total
+ZIP decompression have a 1 GiB reader budget, independent of PoPS production
+dimensions or component limits.
+
+Tests in `test_sol61_m19_archived_backing.py` use labelled synthetic protocol
+bytes, never a native NPZ or positive native campaign. The genuine MPI snapshot
+`ce8010b4b5c11c4d6e7a3d6fac4bd31309726d0917bd6653eedf1d053d1adc83`
+was also read to validate the six actual closed inventories from archived bytes
+only, without creating ROOT approval or claiming a new native reception.
+
 `tests/review/sol61_m19_saved_reception.py assemble` hashes actual inputs and emits
 only pending pins. ROOT must independently approve those exact bytes and supply
 both SHA256 values outside the manifest. The checker does not create an approval.
