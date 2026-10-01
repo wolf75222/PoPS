@@ -106,6 +106,54 @@ class TemporalTau(Expr):
 
 
 @dataclass(frozen=True)
+class EvolvedOriginalFieldRate:
+    """Spatial operator plus an explicit additive captured source (contract @1).
+
+    The additive expression is evaluated by the original RHS provider, with
+    exact State captures and issued duration. Unknown-dependent additive sources
+    require a distinct per-candidate realization of that RHS port.
+    """
+
+    __pops_ir_immutable__ = True
+    spatial: Any
+    additive: Any
+
+    def __post_init__(self) -> None:
+        from pops.fields._references import collect_references
+        from pops.math import elliptic_terms
+
+        if not elliptic_terms(self.spatial):
+            raise TypeError("original field rate requires explicit spatial terms")
+        if not isinstance(self.additive, Expr):
+            object.__setattr__(self, "additive", Const(self.additive))
+        if any(row.kind != "state" for row in collect_references(self.additive)):
+            raise NotImplementedError(
+                "additive original field RHS requires exact State captures; "
+                "unknown-dependent additive sources need a per-candidate RHS realization"
+            )
+
+    def to_data(self) -> dict[str, Any]:
+        from pops.fields._identity import strict_field_data
+
+        return {"contract": "pops.evolved-field-rate.spatial-additive@1",
+                "spatial": strict_field_data(self.spatial),
+                "additive": strict_field_data(self.additive)}
+
+    def resolve_references(self, resolver: Any) -> EvolvedOriginalFieldRate:
+        from pops.fields._references import resolve_value
+
+        return EvolvedOriginalFieldRate(
+            resolve_value(self.spatial, resolver, where="original spatial rate"),
+            resolve_value(self.additive, resolver, where="original additive source"),
+        )
+
+    def declaration_references(self) -> tuple:
+        from pops.fields._references import collect_references
+
+        return collect_references((self.spatial, self.additive))
+
+
+@dataclass(frozen=True)
 class EvolvedOriginalFieldProjection:
     """The accumulation declaration carried by the very same original problem."""
 
@@ -123,7 +171,8 @@ class EvolvedOriginalFieldProjection:
         from pops.fields._identity import strict_field_data
 
         return {
-            "schema_version": 1,
+            "schema_version": 2 if any(type(row) is EvolvedOriginalFieldRate
+                                       for row in self.spatial_rhs) else 1,
             "kind": "evolved_original_field_accumulation",
             "representation": "piecewise_constant_cell",
             "sampling": "cell_average",
@@ -261,14 +310,16 @@ class EvolvedOriginalFieldStage:
                     "conserved accumulation must be an explicit local reaction expression"
                 )
             terms = list(local)
-            for term in elliptic_terms(rate):
+            spatial = rate.spatial if type(rate) is EvolvedOriginalFieldRate else rate
+            for term in elliptic_terms(spatial):
                 if type(term) is Laplacian:
                     terms.append(DivCoeffGrad(term.field, tau, scale=-term.scale))
                 elif type(term) in (DivCoeffGrad, Reaction):
                     terms.append(type(term)(term.field, tau * term.coeff, scale=-term.scale))
                 else:
                     raise TypeError("original spatial stage rate has an undeclared realization")
-            equations[unknown] = EllipticSum(tuple(terms)) == old
+            rhs = old + tau * rate.additive if type(rate) is EvolvedOriginalFieldRate else old
+            equations[unknown] = EllipticSum(tuple(terms)) == rhs
         projection = EvolvedOriginalFieldProjection(
             unknowns,
             evolved_unknowns,
@@ -299,7 +350,7 @@ class EvolvedOriginalFieldStage:
         }
 
 
-__all__ = ["EvolvedOriginalFieldStage", "TemporalTau"]
+__all__ = ["EvolvedOriginalFieldStage", "EvolvedOriginalFieldRate", "TemporalTau"]
 
 
 def evolved_equations(projection: EvolvedOriginalFieldProjection) -> tuple:
@@ -317,12 +368,15 @@ def evolved_equations(projection: EvolvedOriginalFieldProjection) -> tuple:
         strict=True,
     ):
         terms = list(elliptic_terms(q))
-        for term in elliptic_terms(rate):
+        spatial = rate.spatial if type(rate) is EvolvedOriginalFieldRate else rate
+        for term in elliptic_terms(spatial):
             if type(term) is Laplacian:
                 terms.append(DivCoeffGrad(term.field, projection.tau, scale=-term.scale))
             elif type(term) in (DivCoeffGrad, Reaction):
                 terms.append(type(term)(term.field, projection.tau * term.coeff, scale=-term.scale))
             else:
                 raise TypeError("original evolution rate has an undeclared realization")
-        equations[unknown] = EllipticSum(tuple(terms)) == previous
+        rhs = (previous + projection.tau * rate.additive
+               if type(rate) is EvolvedOriginalFieldRate else previous)
+        equations[unknown] = EllipticSum(tuple(terms)) == rhs
     return tuple(equations[row] for row in projection.unknowns)

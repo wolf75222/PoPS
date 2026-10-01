@@ -392,6 +392,9 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
 
 def same_stage_tau(stage: Any, tau: Any, source: Any) -> bool:
     data = _json_ready(stage)
-    return (data.get("schema_version") == 1 and data.get("tau") == _json_ready(tau)
+    additive = any(isinstance(row, dict) and row.get("contract") ==
+                   "pops.evolved-field-rate.spatial-additive@1" for row in data.get("spatial_rhs", ()))
+    return (type(data.get("schema_version")) is int and data.get("schema_version") == (2 if additive else 1)
+            and data.get("tau") == _json_ready(tau)
             and data.get("unknowns") == _json_ready(source["unknown_components"])
             and data in _json_ready(source["field_problem"])["outputs"])
