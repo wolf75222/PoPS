@@ -122,3 +122,19 @@ def test_issued_storage_registered_width_is_an_exact_integer(width):
     program._histories_ncomp["temperature"] = width
     with pytest.raises(ValueError, match="registration changed"):
         program._serialize()
+
+def test_global_observation_keeps_exact_physical_descriptor_and_distinct_storage_owner():
+    from pops.codegen.program_history_identity import (
+        OUTPUT_HISTORY_PROJECTION_SPACE, history_space_identity,
+    )
+    from pops.time._program.global_history_storage import descriptor
+
+    program, blocks, states = authored(False)
+    original = descriptor(program, "temperature")
+    assert original is not None
+    assert len(tuple(states[1])) == 5
+    assert history_space_identity(program, "temperature") == OUTPUT_HISTORY_PROJECTION_SPACE
+    assert descriptor(program, "temperature") == original
+    store = next(value for value in program._values if value.op == "store_history")
+    assert store.block is blocks[1] and store.inputs[0].block is None
+    assert store.inputs[0].state_ref is None

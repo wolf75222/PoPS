@@ -57,6 +57,56 @@ struct ScalarModel {
 // 0/3: ordinary 1:1/2:1 histories; 1: equal-clock output; 2: unequal-clock output.
 class AmrScalarOutputHistory : public ::testing::TestWithParam<int> {};
 
+// Trusted-loader image setup only: these tests exercise the actual frozen-tuple consumer,
+// not dynamic loading or a numerical AMR solve. Installed IR16 witnesses remain separate.
+TEST(AmrOutputHistoryCapability, CompleteFrozenArtifactTupleAndArbitraryTypedRing) {
+  using namespace pops::runtime::program;
+  ProgramRuntimeState<1> state;
+  state.block_map_ = {3, 7};
+  state.installed_hash_ = "installed-test-artifact";
+  state.artifact_backed_ = true;
+  ProgramCheckpointHistoryMetadata row{
+      "temperature", 1, "scalar-history:temperature",
+      std::string(kOutputHistoryProjectionSpace), "clock-exact", "cell-copy", 6, 3};
+  state.checkpoint_metadata_.histories = {row};
+  const auto validate = [&](const ProgramCheckpointHistoryMetadata& candidate, int owner = 7) {
+    return state.require_frozen_output_history_projection(
+        candidate.name, owner, candidate.state_identity, candidate.space_identity,
+        candidate.clock_identity, candidate.interpolation_identity,
+        candidate.depth, candidate.components, candidate.program_owner);
+  };
+  EXPECT_EQ(validate(row), row);
+  for (int field = 0; field < 8; ++field) {
+    auto candidate = row;
+    switch (field) {
+      case 0: candidate.name += ".foreign"; break;
+      case 1: candidate.program_owner = 0; break;
+      case 2: candidate.state_identity += " "; break;
+      case 3: candidate.space_identity = std::string(kScalarOutputHistorySpace); break;
+      case 4: candidate.clock_identity += ".foreign"; break;
+      case 5: candidate.interpolation_identity += ".foreign"; break;
+      case 6: --candidate.depth; break;
+      case 7: --candidate.components; break;
+    }
+    EXPECT_THROW(validate(candidate), std::invalid_argument) << field;
+    EXPECT_EQ(state.checkpoint_metadata_.histories, std::vector{row});
+  }
+  EXPECT_THROW(validate(row, 3), std::invalid_argument);
+  state.artifact_backed_ = false;
+  EXPECT_THROW(validate(row), std::invalid_argument);
+  state.artifact_backed_ = true;
+  state.installed_hash_.clear();
+  EXPECT_THROW(validate(row), std::invalid_argument);
+  state.installed_hash_ = "installed-test-artifact";
+  state.checkpoint_metadata_.histories.push_back(row);
+  EXPECT_THROW(validate(row), std::invalid_argument);
+  state.checkpoint_metadata_.histories = {row};
+  state.block_map_[1] = 8;
+  EXPECT_THROW(validate(row), std::invalid_argument);
+  state.block_map_[1] = 7;
+  EXPECT_EQ(validate(row), row);
+}
+
 TEST_P(AmrScalarOutputHistory, ExpansionPreservesOnlyAuthenticatedOutputOverlap) {
   constexpr int Dim = pops::kNativeDimension;
   const bool output_only = GetParam() == 1 || GetParam() == 2;

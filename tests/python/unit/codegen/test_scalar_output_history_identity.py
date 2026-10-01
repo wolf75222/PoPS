@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_history_identity import (
     SCALAR_OUTPUT_HISTORY_SPACE,
+    OUTPUT_HISTORY_PROJECTION_SPACE,
     history_space_identity,
 )
 from test_mapped_condensed import _mapped_program
@@ -88,6 +89,13 @@ def test_direct_indirect_and_nested_reads_remain_ordinary_histories(consumer):
         assert SCALAR_OUTPUT_HISTORY_SPACE not in source
 
 
-def test_deeper_output_history_has_no_two_slot_capability():
-    program, _, _ = _stored_potential(depth=2)
-    assert history_space_identity(program, "disk.potential") == "scalar-field"
+@pytest.mark.parametrize("depth", (2, 4, 7))
+def test_deeper_output_history_uses_artifact_projection_capability(depth):
+    program, model, _ = _stored_potential(depth=depth)
+    assert history_space_identity(program, "disk.potential") == OUTPUT_HISTORY_PROJECTION_SPACE
+    source = emit_cpp_program(program, model=model, target="amr_system")
+    registrations = [line for line in source.splitlines()
+                     if 'ctx.register_history("disk.potential"' in line]
+    assert len(registrations) >= 2
+    assert all(OUTPUT_HISTORY_PROJECTION_SPACE in line for line in registrations)
+    assert 'ctx.history("disk.potential"' not in source
