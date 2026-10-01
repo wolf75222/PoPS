@@ -40,3 +40,9 @@ python3 scripts/generate_release_contract.py --check
 ```
 
 No native/JIT/C++ build, native execution, GPU, MPI, ENV mutation, Conda setup or SLURM campaign was performed by this author. The C++ guard test is source-prepared only. Independent frozen review and a rebuilt package must precede the representative original AMR run, strict checkpoint/restart/replay, refusal/nonregression and public tag-buffer geometry campaigns. Source success does not close the scientific corpus or native acceptance.
+
+## ROOT integrated release correction
+
+The broader integrated Source batch at Native checkout `9b484f43` closes 168 passes and two failures: release preflight detects module_capabilities.hpp kAbiVersion5 versus generated Native ABI6, and the architecture version assertion still expects5. This defect was outside the author/reviewer focused batches and would also trigger the existing C++ static_assert. ROOT aligns the module ABI constant and its architecture expectation with6 before rebuilding. The raw failed XML is preserved under `tag-selection-integrated-source-9b484f43.xml` in the evidence base. No native build or pass is inferred from this correction.
+
+ROOT also repairs the pre-existing AMR install-ordering fixture with an actual normalized public layout; its complete file passes24 Source tests at `9f169163`. The final integrated batch must include that node without deselection.
