@@ -159,3 +159,42 @@ ROOT provided the actual SDK manifest pin: installed
 This file digest is distinct from the 2e4d69fd… header signature.
 The reader's NPZ budget is 64 MiB and binary-origin budget is 1 GiB; these are
 bounded evidence-reader limits, not caps on production PoPS dimensions.
+
+## Independent reception of ROOT's actual external pairs
+
+ROOT subsequently reviewed the pending pins, checked actual origins/raw batches,
+and issued separate approvals. On 2026-10-01 this agent reopened each actual
+pair once in read-only mode with the four externally supplied hashes below.
+`receive()` passed for both modes. Its complete result exactly equals ROOT's
+saved scientific reception, and every scientific value and receipt pin exactly
+matches the preceding independent observed report. No approval, positive
+rescellage, native execution, environment or donor mutation occurred here.
+
+Under the same evidence BASE, actual reception directories are
+`stage-serial-scientific-root-owner-v1` and
+`stage-mpi2-scientific-root-owner-v1`. Files are `owner-pins.json`,
+`root-approval.json`, `scientific-reception.json`, `root-reception.json`.
+
+| Mode | External owner-pins SHA256 | External approval SHA256 |
+|---|---|---|
+| Serial | 92c593caf674cb98772c81d8bc06f68cfcd825c6a706e110f2c0082a88134e11 | 2576c3baaa0108c63585effd39a1a136dff7b6b8e47b1bb483656f470b09d89c |
+| MPI2 | 029b930014f945f2c547ef9543bb0293f1991c7e5d6169ce96b1c2de68f2444a | 42c98b569c7073c2edd4d449a34550483c492925ecec02dc67baf9f148d2fd22 |
+
+ROOT's scientific-reception SHA256 is
+`aa294483c8e46d7c0a7289b45b5d276aa0648d3ca2c5484367319e9e6d54a8c5`
+for Serial and
+`20898f73255eace06ab904bd55bfd8f91dba6af2f3f150a174efd56830827521`
+for MPI2. ROOT's root-reception SHA256 is
+`dc9a7b3558cd421124c550d8f786c0d34396d2d2464fe5e53e294e4bfdf746f8`
+and `99957114191fa4f8ab890fdd582505d2a883ffbbd13833f4f21e17b75a7383a3`,
+respectively. All four saved result files were independently rehashed.
+
+The independent comparison report was saved outside the repository at
+`/tmp/sol61-stage-external-root-pairs-independent-reception.json`, SHA256
+`68e0b9df0ee6e10e78345a7a8c8e92da66b8ed18db8ab26906ae00793072dd4b`.
+Both modes still give maximum original relative residual
+1.953003193578846e-11. The actual external pairs close reception only for
+`uniform-original-stage-saved-state-equations@1`; all previously documented
+CPP/DSO association and uniform-witness limits remain. Historical source-only
+checks, earlier native compilation failures and unsealed observations are not
+silently promoted into these authenticated campaigns.
