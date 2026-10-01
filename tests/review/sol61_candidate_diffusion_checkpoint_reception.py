@@ -507,6 +507,71 @@ def checkpoint(raw, phase, saved, first, artifact, abi, ranks, names, ir, progra
     return arrays
 
 
+def program_claims(source, sidecar, ir_hash):
+    # The native export is documentary Program._ir_hash(), not the compound
+    # Program component semanticv3 (model/snapshot plus Program). These domains
+    # intentionally need not have equal digests. Original sidecar bytes are
+    # externally pinned; binary/artifact recomposition is performed separately.
+    need(
+        type(ir_hash) is str and re.fullmatch("[0-9a-f]{64}", ir_hash),
+        "receipt Program IR hash differs",
+    )
+    exports = re.findall(
+        r'extern "C" const char\* pops_program_hash\(\) \{ return "([0-9a-f]{64})"; \}', source
+    )
+    need(exports == [ir_hash], "actual CPP/receipt documentary Program identity differs")
+    compound = components.identity_data(sidecar["semantic_identity"], "semantic")
+    need(compound["schema_version"] == 3, "Program component compound semantic schema differs")
+    return dict(
+        documentary_program_ir_hash=ir_hash,
+        component_compound_semantic_identity=sidecar["semantic_identity"],
+        compound_payload_recomputed=False,
+    )
+
+
+def linkage(rows, receipt, cpp, roots):
+    need(type(rows) is dict, "execution association absent")
+    exact(rows, ("authority", "aggregate_artifact", "components"), "case association")
+    need(
+        rows["authority"] == base.ASSOCIATION and rows["aggregate_artifact"] == receipt["artifact"],
+        "unattested aggregate execution association",
+    )
+    binaries = receipt["binaries"]
+    need(
+        type(binaries) is list
+        and len(binaries) == 4
+        and len({r["component"] for r in binaries}) == 4,
+        "actual binary component inventory differs",
+    )
+    by_name = {row["component"]: row for row in binaries}
+    program = receipt["sources"][0]["component"]
+    need(
+        program.startswith("program-")
+        and set(by_name) == {"block-response", "block-forcing", "block-material", program},
+        "physical component owners differ",
+    )
+    exact(rows["components"], by_name, "component associations")
+    result = {}
+    for name, row in rows["components"].items():
+        exact(row, ("so", "sidecar", "cpp"), "component association")
+        binary = by_name[name]
+        exact(binary, ("component", "path", "sha256", "compile_command"), "binary receipt")
+        need(
+            row["so"] == {k: binary[k] for k in ("path", "sha256")}, "association actual SO differs"
+        )
+        so = pinned(row["so"], roots, MAX_BYTES)[1]
+        sidecar = pinned(row["sidecar"], roots)[1]
+        result[name] = components.component(so, sidecar)
+        if name == program:
+            need(row["cpp"] == cpp, "actual Program CPP association differs")
+            source = pinned(cpp, roots)[1].decode("utf-8")
+            program_claims(source, result[name], receipt["program_irs"][0]["program_hash"])
+
+        else:
+            need(row["cpp"] is None, "unretained block source cannot be fabricated")
+    return result
+
+
 def junit_others(raw):
     root = ET.fromstring(raw)
     prefix = "test_public_candidate_diffusion_nonconstant_saved_and_exact_replay["
@@ -559,7 +624,7 @@ def assemble(root, directories, junits, owner, roots):
         )
         need(key is not None and key not in cases, "foreign/duplicate case")
         receipt_contract(receipt, *CASES[key], len(junits), owner)
-        base.linkage(owner["execution_association"][key], receipt, case["cpp"], roots)
+        linkage(owner["execution_association"][key], receipt, case["cpp"], roots)
         ir_contract(
             pinned(case["ir"], roots)[1],
             pinned(case["cpp"], roots)[1],
@@ -659,9 +724,7 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         receipt = strict_json(pinned(case["receipt"], roots)[1])
         width, order = CASES[key]
         receipt_contract(receipt, width, order, pins["ranks"], pins["owner"])
-        binaries = base.linkage(
-            pins["owner"]["execution_association"][key], receipt, case["cpp"], roots
-        )
+        binaries = linkage(pins["owner"]["execution_association"][key], receipt, case["cpp"], roots)
         names, ir = ir_contract(
             pinned(case["ir"], roots)[1],
             pinned(case["cpp"], roots)[1],
@@ -730,6 +793,7 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         documentary_ir_reception=True,
         component_binary_binding_recomputed=True,
         cryptographic_aggregate_binding=False,
+        compound_semantic_payload_recomputed=False,
         execution_association=base.ASSOCIATION,
         gaps=[
             "reloaded checkpoint not independently saved; accepted checkpoint anchored to exact reloaded NPZ",

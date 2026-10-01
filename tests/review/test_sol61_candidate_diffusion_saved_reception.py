@@ -825,3 +825,43 @@ def test_checkpoint_v2_other_junit_inventory_is_explicit_and_unique():
     duplicate = b'<testsuite><testcase classname="synthetic.only" name="other-pass"/><testcase classname="synthetic.only" name="other-pass"/></testsuite>'
     with pytest.raises(ValueError, match="duplicates"):
         c.junit_others(duplicate)
+
+
+@pytest.mark.parametrize(
+    "attack", [None, "cpp_hash", "duplicate", "receipt_hash", "semantic_schema", "semantic_type"]
+)
+def test_checkpoint_program_ir_and_compound_semantic_are_distinct_domains(attack):
+    ir_hash = "1" * 64
+    source = 'extern "C" const char* pops_program_hash() { return "' + ir_hash + '"; }'
+    sidecar = dict(semantic_identity="pops.semantic.v3:sha256:" + "2" * 64)
+    if attack == "cpp_hash":
+        source = source.replace(ir_hash, "3" * 64)
+    elif attack == "duplicate":
+        source += source
+    elif attack == "receipt_hash":
+        ir_hash = "4" * 64
+    elif attack == "semantic_schema":
+        sidecar["semantic_identity"] = "pops.semantic.v2:sha256:" + "2" * 64
+    elif attack == "semantic_type":
+        sidecar["semantic_identity"] = "pops.binary.v1:sha256:" + "2" * 64
+    if attack is None:
+        claims = c.program_claims(source, sidecar, ir_hash)
+        assert claims["compound_payload_recomputed"] is False
+        assert (
+            claims["documentary_program_ir_hash"]
+            != claims["component_compound_semantic_identity"].rsplit(":", 1)[1]
+        )
+    else:
+        with pytest.raises(ValueError):
+            c.program_claims(source, sidecar, ir_hash)
+
+
+def test_resealed_compound_semantic_digest_is_not_authentication_of_missing_payload():
+    # A newly supplied well-formed semantic digest cannot be scientifically
+    # recomposed without its original compound payload. Real-owner leaf seals,
+    # not this function, authenticate that original sidecar's complete bytes.
+    source = 'extern "C" const char* pops_program_hash() { return "' + "1" * 64 + '"; }'
+    claims = c.program_claims(
+        source, dict(semantic_identity="pops.semantic.v3:sha256:" + "f" * 64), "1" * 64
+    )
+    assert claims["compound_payload_recomputed"] is False

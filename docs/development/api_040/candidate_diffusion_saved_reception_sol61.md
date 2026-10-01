@@ -177,8 +177,8 @@ check only, not an approved scientific reception).
 No invocation of scientific `receive()` occurred without ROOT authorization.
 The CPP Program digest equals SHA256 of the real serialized IR with documentary
 `provenance` keys removed, matching the actual source `_ir_hash()` algorithm.
-The same digest is checked in receipt, CPP export, actual Program component
-sidecar and every checkpoint. This authenticates the retained documentary
+The documentary digest is checked in receipt, CPP export and every checkpoint.
+The component sidecar carries a different compound semanticv3 authority. This authenticates the retained documentary
 Program; it still does not certify the absent aggregate payload or a compiler
 graph from CPP to binary.
 
@@ -240,3 +240,47 @@ owner@2/fresh eleven-file directories/all-rank raw JUnits. Assembly validates
 provenance/inventory/CPP/IR, emits pending pins only and never creates approval.
 Scientific receive uses external pins/approval SHA256 arguments as above, with
 the @2 script. Future real serial/MPI reception still belongs to ROOT.
+
+
+## Corrected @2 identity-domain gate (real pending assembly)
+
+ROOT's real positive assembly first refused the 6560121 gate inherited from
+@1: it compared `pops_program_hash()` with sidecar `pops.semantic.v3` digest.
+This source/unit-tested gate was never positively received against ROOT seals.
+It was an independent-reader defect, not a Native producer defect. The original
+@1 file and its historical gate remain unchanged; its positive reception is
+unreceived. @2 now owns its linkage implementation and fixes only that domain
+comparison, preserving every component byte/spec/artifact and external-pin guard.
+
+The producer source `program_artifact_spec()` uses semantic_identity(snapshot)
+or `{model: model_semantic_data, program: program_semantic_data}` as the
+component's semanticv3 authority. The exported documentary Program digest is
+Program `_ir_hash()`, computed from full serialized IR without provenance.
+They must not be equated. Actual scalar documentary digest is
+`0e133bfce2b33a64ed37c561e6e43e761f52cdcf061d81b775d4702238680439`, compound
+semantic is `pops.semantic.v3:sha256:2d5dddf0a0eab6d3de644363e4004d74941c7e3191c2e8f160132ddbf5f3a90e`.
+Coupled documentary digest is
+`ebe063e4a4425ce10b9d884e9760256e94002021fb18eacbefe0f857236c7de8`, compound
+semantic is `pops.semantic.v3:sha256:d13f9b7096639d4195a82a38a81694e8a15a29b87aecb6cd735ac65aecb603e7`.
+
+@2 independently validates documentary IR polynomial and hash, unique exact CPP
+export, receipt hash, and CP program_hash. Actual binary and artifact identity
+are recomputed from actual bytes and sidecar spec/binary identities. The
+component compound semantic remains the canonical schema3 authority from the
+**externally pinned original sidecar**, related by explicit ROOT execution
+association. Its compound semantic payload and artifact-spec payload are not
+retained, so they cannot be recomposed; output says
+`compound_semantic_payload_recomputed=false`. A checksum newly calculated over
+an altered owner or sidecar is not an authenticated ROOT seal. A fully resealed
+well-formed replacement semantic digest could not be discriminated without
+its original authority/payload; a dedicated synthetic limit test records this.
+It is not a Native qualification or a claimed attack refusal. Unresealed
+changed sidecar bytes, malformed domain/version, changed actual SO, and
+IR/CPP/receipt/CP digest disagreement are separate strict guards.
+
+Corrected suite **94 source/math/protocol PASS, 2.49s**. Strict real serial
+assembly using ROOT's pending execution-owner.json passed (no approval and no
+scientific receive), writing only private pending inventory under
+`/Users/romaindespoulain/dev/tmp/pops-sol61-candidate-d-reception-independent-20261001/serial-pending-assembly-v2.json`.
+All originals and ROOT owner files remained read-only. Scientific reception
+and real resealed negatives still wait for external ROOT pins/approval.
