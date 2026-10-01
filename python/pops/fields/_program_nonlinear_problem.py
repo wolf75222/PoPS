@@ -215,6 +215,8 @@ def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict
     realization = {}
     if "right_preconditioner" in token.attrs:
         realization["right_preconditioner"] = token.attrs["right_preconditioner"]
+    if "right_preconditioner_resources" in token.attrs:
+        realization["right_preconditioner_resources"] = _json_ready(token.attrs["right_preconditioner_resources"])
     if token.attrs["contract"] in (CAPTURED_DIFFUSION_CONTRACT, CANDIDATE_DIFFUSION_CONTRACT):
         realization["coefficient_face_policy"] = token.attrs["coefficient_face_policy"]
     if "coefficient_evaluation" in token.attrs:
@@ -264,11 +266,14 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
     if candidate_policy is not None:
         attrs["coefficient_evaluation"] = candidate_policy
         attrs["linear_residual_verification"] = residual.source_contract["linear_residual_verification"]
-        if prepared.right_preconditioner is not None:
+        if prepared.right_preconditioner == "pops.amr.original-spatial-jacobi.basis-response@1":
             raise SolveRequestError("unsupported_realization", "SpatialBasisJacobi@1 requires a frozen linear spatial operator; PerCandidate@1 needs a separately declared Jacobian preconditioner")
     prepared.__post_init__()
     if prepared.right_preconditioner is not None:
         attrs["right_preconditioner"] = prepared.right_preconditioner
+    if prepared.max_dense_bytes is not None:
+        from pops.time._program.spatial_solve import dense_resource_contract
+        attrs["right_preconditioner_resources"] = dense_resource_contract(prepared.max_dense_bytes)
     token = program._new("scalar_field", "solve_spatial_field", inputs if seed is None else (*inputs, seed), attrs,
                          name, None, point=residual.coefficients.point, inherit_state_ref=False)
     data = _request_data(program, token, unknown, _json_ready(request.problem_metadata.to_data()))
@@ -304,7 +309,7 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
     candidate_policy = source.get("coefficient_evaluation")
     if candidate_policy is not None and (type(candidate_policy) is not str or candidate_policy != PER_CANDIDATE or face_policy != ARITHMETIC_FACES):
         raise SolveRequestError("equation_identity_drift", "candidate coefficient realization changed")
-    if token.attrs.get("coefficient_evaluation") != candidate_policy or (candidate_policy and token.attrs.get("right_preconditioner") is not None):
+    if token.attrs.get("coefficient_evaluation") != candidate_policy or (candidate_policy and token.attrs.get("right_preconditioner") == "pops.amr.original-spatial-jacobi.basis-response@1"):
         raise SolveRequestError("unsupported_realization", "candidate coefficient policy/preconditioner mismatch")
     criterion = "pops.field.linear.true-correction-residual@1" if candidate_policy else None
     if source.get("linear_residual_verification") != criterion or token.attrs.get("linear_residual_verification") != criterion:
@@ -375,7 +380,13 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
     spatial_newton_options(controls)
     if "right_preconditioner" in token.attrs and token.attrs["right_preconditioner"] is None:
         raise SolveRequestError("unsupported_realization", "identity realization must retain legacy omission")
-    if token.attrs["solver_identity"] != spatial_solver_identity(controls, token.attrs.get("right_preconditioner")).token:
+    from pops.time._program.spatial_solve import FULL_RESIDUAL_BASIS_LU, validate_dense_resource_contract
+    budget = None
+    if token.attrs.get("right_preconditioner") == FULL_RESIDUAL_BASIS_LU:
+        budget = validate_dense_resource_contract(token.attrs.get("right_preconditioner_resources"))
+    elif "right_preconditioner_resources" in token.attrs:
+        raise SolveRequestError("invalid_resource_budget", "dense budget belongs only to FullResidualBasisLU@1")
+    if token.attrs["solver_identity"] != spatial_solver_identity(controls, token.attrs.get("right_preconditioner"), budget).token:
         raise SolveRequestError("solver_identity_drift", "field Newton controls changed")
 
 

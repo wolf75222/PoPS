@@ -433,7 +433,8 @@ def _persistent_solver_buffers(program: Any) -> list:
             from pops.time._program.spatial_solve import spatial_newton_options
 
             restart = spatial_newton_options(v.attrs["newton_controls"])["restart"]
-            selected_jacobi = v.attrs.get("right_preconditioner") is not None
+            selected_jacobi = v.attrs.get("right_preconditioner") == "pops.amr.original-spatial-jacobi.basis-response@1"
+            selected_full_lu = v.attrs.get("right_preconditioner") == "pops.amr.full-residual-basis-lu@1"
             persistent.append({
                 "kind": "prepared_spatial_residual",
                 "name": v.name,
@@ -449,6 +450,19 @@ def _persistent_solver_buffers(program: Any) -> list:
                     + ("; selected SpatialBasisJacobi@1 adds one inverse field and prepares with 1 + stored DOFs composite operator applications"
                        if selected_jacobi else "")),
             })
+            if selected_full_lu:
+                persistent[-1]["buffers"] += 3
+                persistent[-1]["full_residual_basis_lu"] = {
+                    "identity": v.attrs["right_preconditioner"],
+                    "resources": dict(v.attrs["right_preconditioner_resources"]),
+                    "matrix_scope": "replicated_per_rank_active_owned_quotient",
+                    "residual_evaluations_per_newton": "2*Nactive",
+                    "dense_matrix_bytes_per_rank": "sizeof(Real)*Nactive*Nactive",
+                    "factorization_cost": "O(Nactive**3)",
+                    "additional_numeric_towers": 3,
+                    "control_policy": "seven_Newton_GMRES_controls_unchanged",
+                }
+                persistent[-1]["note"] += "; explicit FullResidualBasisLU@1 adds three numeric towers, active map, two vectors and pivots; rebuilds full central-residual Jacobian each Newton iterate"
             if v.attrs.get("coefficient_evaluation") is not None:
                 persistent[-1]["buffers"] += 1
                 persistent[-1]["candidate_coefficient_evaluation"] = {

@@ -52,6 +52,13 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
     per_candidate = value.attrs.get("coefficient_evaluation") is not None
     if per_candidate:
         policy_argument = ", pops::runtime::program::AmrFieldRightPreconditioner::kIdentity, pops::runtime::program::AmrFieldCoefficientEvaluation::kPerCandidate"
+    if value.attrs.get("right_preconditioner") == "pops.amr.full-residual-basis-lu@1":
+        from pops.time._program.spatial_solve import validate_dense_resource_contract
+        budget = validate_dense_resource_contract(value.attrs["right_preconditioner_resources"])
+        coefficient_mode = "kPerCandidate" if per_candidate else "kFrozen"
+        policy_argument = (", pops::runtime::program::AmrFieldRightPreconditioner::kFullResidualBasisLU, "
+                           "pops::runtime::program::AmrFieldCoefficientEvaluation::%s, std::uint64_t{%dULL}" %
+                           (coefficient_mode, budget))
     controls = "pops::FieldNewtonOptions{" + ", ".join(".%s = %s" %
         (key, str(options[key]) if type(options[key]) is int else scalar_cpp(options[key]))
         for key in ("tolerance", "max_iterations", "linear_tolerance", "linear_max_iterations",

@@ -160,7 +160,8 @@ class ResolvedProgramFieldPlan:
                 from pops.identity.scalar import scalar_data
                 validate_nonlinear_field_request(program, solve)
                 if solve.attrs.get("right_preconditioner") is not None and self.target != "amr_system":
-                    raise ValueError("SpatialBasisJacobi@1 requires the original composite AMR FieldProblem provider; Uniform is unsupported")
+                    name = "FullResidualBasisLU@1" if solve.attrs["right_preconditioner"] == "pops.amr.full-residual-basis-lu@1" else "SpatialBasisJacobi@1"
+                    raise ValueError(f"{name} requires the original composite AMR FieldProblem provider; Uniform is unsupported")
                 if self.target not in ("system", "amr_system") or type(self.discretization.method) is not CellCenteredNonlinearCoupled:
                     raise ValueError("original mixed residual requires its explicit native nonlinear method")
                 captures = solve.inputs[2:2 + solve.attrs["capture_count"]]

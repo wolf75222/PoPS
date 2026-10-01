@@ -110,6 +110,21 @@ class AmrFieldNewtonKrylovWorkspace final {
                                   ResidualProvider&& evaluate_residual, JvpProvider&& apply_jvp,
                                   GaugeProvider&& apply_gauge, RightPreconditioner&& apply_right,
                                   const ExecutionLane& lane, bool collective_local_phases = false) {
+    return solve_rebuilt_preconditioned(destination, std::forward<ResidualProvider>(evaluate_residual),
+        std::forward<JvpProvider>(apply_jvp), std::forward<GaugeProvider>(apply_gauge),
+        std::forward<RightPreconditioner>(apply_right), [](const auto&, auto&, int) {},
+        lane, collective_local_phases);
+  }
+
+  /// Rebuild once at each nonlinear iterate, then keep the right factor stationary
+  /// throughout that GMRES solve. Preparation owns its collective protocol.
+  template <class ResidualProvider, class JvpProvider, class GaugeProvider,
+            class RightPreconditioner, class PrepareRight>
+  SolveReport solve_rebuilt_preconditioned(std::span<field_type* const> destination,
+      ResidualProvider&& evaluate_residual, JvpProvider&& apply_jvp,
+      GaugeProvider&& apply_gauge, RightPreconditioner&& apply_right,
+      PrepareRight&& prepare_right, const ExecutionLane& lane,
+      bool collective_local_phases = false) {
     const auto* previous_lane = local_lane_;
     local_lane_ = collective_local_phases ? &lane : nullptr;
     struct ResetLane {
@@ -149,6 +164,7 @@ class AmrFieldNewtonKrylovWorkspace final {
     }
 
     for (int iteration = 0; iteration < options_.max_iterations; ++iteration) {
+      prepare_right(iterate_, jvp_provider, iteration);
       set_zero_(correction_);
       const Real linear_stop = options_.linear_tolerance * report.residual_norm;
       const LinearResult linear =
