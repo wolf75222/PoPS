@@ -89,8 +89,10 @@ The fixture now requests `accepted-checkpoint`, `continuous-checkpoint` and
 `replay-checkpoint`, seals each returned native file immediately with the
 bounded reader before taking observations, and checks those hashes again
 after all archive writes. Resolved checkpoint and observation paths must be
-disjoint, including the initial image. The existing exact continuous/replay
-checkpoint comparison remains mandatory. Each actual compiled Program
+disjoint, including the initial image. That follow-up retained the original
+raw continuous/replay checkpoint comparison; the subsequent continuation
+correction below replaces it with an exact authenticated payload comparison.
+Each actual compiled Program
 component also exports its carried IR through `dump_ir`, with file SHA256
 and the same component's `program_hash`; no new builder or emitter supplies
 that archive. The eight cases, original Q/source/diffusion equations, seven
@@ -104,3 +106,57 @@ final guard statements on a disjoint archive image, an overwritten hash and
 a colliding path: the valid structure passes and both corruptions refuse.
 Ruff and `git diff --check` pass. The source guard probe is an archive-policy
 check, not a substitute for ROOT's forthcoming native checkpoint reception.
+
+## Continuation identity and exact checkpoint content
+
+The following installed Stage@2 campaign compiled and ran all eight cases
+through two steps, restart and replay, with `same_images` passing. All eight
+then refused the fixture's raw checkpoint-file equality check. Evidence is
+unchanged under ROOT's
+`installed-sdk2e4-evolved-stage-corrected-serial-dim2` directory. This is not
+a positive final fixture receipt and does not replace scientific reception.
+
+The difference follows the real lifecycle contract, rather than a state
+error. `_lifecycle._restore_checkpoint_run_identity` restores the accepted
+source run as `_restart_lineage_identity`. `_run_manifest.begin_run` places
+that identity in the replay run's `continuation_identity`; the uninterrupted
+run has no restart lineage. `_checkpoint_manifest` seals the entire run
+identity into the restart digest. Consequently the final run digest and the
+derived restart digest differ legitimately. On each of the eight real pairs,
+all payload entries other than the canonical manifest and restart token are
+bit-identical (47 for scalar and 74 for coupled cases). Independent integrity
+inspection of each envelope passes.
+
+The replacement fixture contract is
+`pops.evolved-stage-checkpoint-equivalence@1`. Immediately after each native
+checkpoint and hash, it calls `authenticate_checkpoint_payload` against its
+actual creator RuntimeInstance and retains that runtime's canonical
+`last_run_manifest`, run/restart identities, accepted clock, and exact
+semantic/artifact/bind identities. Later comparison authenticates every
+payload digest and the full derived restart identity, decodes each retained
+RunManifest with its strict native contract, and matches those identities
+and clock against the retained creator evidence. Replay must name the
+accepted run as continuation and retain the accepted checkpoint as its last
+restart. Both final runs must have identical bind, start clock, and complete
+controls. Every physical entry must have identical dtype, shape and bytes;
+the complete final manifests must be equal except for the authenticated
+`run_identity` and derived `restart_identity` leaves. No additional key,
+array hash, clock, ABI, artifact or semantic difference is ignored. The
+checkpoint-file hashes and disjoint path guards remain unchanged.
+
+Read-only host validation used ROOT's eight real checkpoint triples and
+reconstructed the exact RunManifest identity from the original FixedDt
+controls, accepted clock and continuation. Thirteen tests pass: all eight
+pairs plus twelve corruption classes, including resealed changed physical
+value/dtype/shape and foreign clock, identities, lineage, last restart,
+controls, run digest and restart token. Corruption copies are written only
+to pytest's fresh temporary directory. This host reconstruction does not
+claim live-runtime provenance; the forthcoming native fixture obtains that
+provenance directly from each creator. The equations, eight cases, seven
+solver controls and 3e-8 acceptance remain unchanged.
+
+    env PYTHONDONTWRITEBYTECODE=1 \
+      PYTHONPATH=/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-codegen-repair/python:/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-codegen-repair \
+      POPS_STAGE_CHECKPOINT_EVIDENCE=/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-corrected-serial-dim2 \
+      /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python -m pytest -q \
+      tests/review/test_sol61_stage_checkpoint_continuation.py
