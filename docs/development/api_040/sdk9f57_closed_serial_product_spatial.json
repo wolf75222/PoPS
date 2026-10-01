@@ -1,0 +1,167 @@
+{
+  "schema": "root.api040.sdk9f57-closed-serial-product-spatial@1",
+  "installed_python_source_commit": "378f29084c915ae316308481949ea174858197b2",
+  "original_native_compilation_source_commit": "0abbe25395a44e570d8d5525693b8e2dcbf4d387",
+  "sdk_signature": "9f57def42c90cfc0e7ee127afa5050d95f27ecbc65b4ed198f788a097e4b4bad",
+  "native_sha256": "c8a45b013042f53a76ca6754a0285203aa5a9fda6a18f1d580e181dec99642fe",
+  "verified_installed_source_files": 1128,
+  "shared_after_identity": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-after-serial-product-and-spatial-cfd5/identity.json",
+    "sha256": "d63fbf10262299f855b51b41f16a28a7828b6d4788bf7da901e206090cbd22b5",
+    "bytes": 2917
+  },
+  "shared_after_source_files": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-after-serial-product-and-spatial-cfd5/source-files.json",
+    "sha256": "e588ff4deeb92b3fa5143811f4f1066984482bc07af50294e40c6d01510cb44e",
+    "bytes": 131919
+  },
+  "preserved_sdk2e4": {
+    "unchanged": true,
+    "verified_source_files": 1120,
+    "verified_pinned_artifacts": 5,
+    "source_receipt": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-product-entropy-feedback-nonreg-mpi2-dim2/before/source-files.json",
+      "sha256": "e62955984c0dcd27211319e4d5f3c156a7002c635977d5b0142e216130a68943",
+      "bytes": 130883
+    },
+    "clone_receipt": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/next-sdk-environment-clone-reception.json",
+      "sha256": "02cdf62b13bd97eadcfc3bc8dc9867c880642843d660a605c404b4473e1775ae",
+      "bytes": 1585
+    }
+  },
+  "campaigns": {
+    "product_serial": {
+      "status": "passed",
+      "counts": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "duration_seconds": 831.7933199580293,
+      "test_source_commit": "b167556663a0736c22699be6976f17c81e26d05b",
+      "identity": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-initial-diagnostic-nonreg-serial-dim2/identity.json",
+        "sha256": "925a0120c9c44a7b88c9808b4b5fb3ec0d26ec91c8fc80fd49cba23c0a98b63b",
+        "bytes": 2917
+      },
+      "source_files": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-initial-diagnostic-nonreg-serial-dim2/source-files.json",
+        "sha256": "e588ff4deeb92b3fa5143811f4f1066984482bc07af50294e40c6d01510cb44e",
+        "bytes": 131919
+      },
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-initial-diagnostic-nonreg-serial-dim2/result.json",
+        "sha256": "19bb8d3d6cca777eaffd4168b28cf2e60896b6d80c8154e083191de6d40ec774",
+        "bytes": 1716
+      },
+      "xml": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-initial-diagnostic-nonreg-serial-dim2/pytest.xml",
+        "sha256": "a10aba41e7930427220095cebeaf01d52eb0955d13e901b6a4d6ca70746c99d7",
+        "bytes": 4306
+      },
+      "log": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-initial-diagnostic-nonreg-serial-dim2/pytest.log",
+        "sha256": "0ca4e648d124fe43fb1ef21a3cfec214fdd78b0b09de4415806f52455b3260ef",
+        "bytes": 2549
+      },
+      "source_and_native_unchanged_after": true,
+      "failure_messages": [],
+      "scientific_owner_seal": false,
+      "passed_scope": "Six native Reduce/Lift/initial checkpoint/restart variants: keep_history false/true and (nx,nv,width)=(4,3,3),(2,5,1),(7,3,5)"
+    },
+    "spatial_after_initial_authority": {
+      "status": "failed",
+      "counts": {
+        "tests": 6,
+        "failures": 6,
+        "errors": 0,
+        "skipped": 0
+      },
+      "duration_seconds": 214.54579895804636,
+      "test_source_commit": "b167556663a0736c22699be6976f17c81e26d05b",
+      "identity": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-after-initial-authority-dim2/identity.json",
+        "sha256": "925a0120c9c44a7b88c9808b4b5fb3ec0d26ec91c8fc80fd49cba23c0a98b63b",
+        "bytes": 2917
+      },
+      "source_files": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-after-initial-authority-dim2/source-files.json",
+        "sha256": "e588ff4deeb92b3fa5143811f4f1066984482bc07af50294e40c6d01510cb44e",
+        "bytes": 131919
+      },
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-after-initial-authority-dim2/result.json",
+        "sha256": "c5cfb77944f8624eb15cde717d8bb7fff434a56a3a01cd027b30965e92434780",
+        "bytes": 1695
+      },
+      "xml": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-after-initial-authority-dim2/pytest.xml",
+        "sha256": "920860ae5737b5d10c07c20ab6fcbc41d5ec8fee729b6414ceac0e281e7ed9aa",
+        "bytes": 7395
+      },
+      "log": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-after-initial-authority-dim2/pytest.log",
+        "sha256": "98c11ec7f501f0cc0562b60f839c12117a0dec6625bdf4303a4c3d08ad896cb1",
+        "bytes": 10760
+      },
+      "source_and_native_unchanged_after": true,
+      "failure_messages": [
+        "native allgather strict codec cannot encode ndarray at $.pieces.active[0].values"
+      ],
+      "scientific_owner_seal": false
+    },
+    "spatial_after_array_wire": {
+      "status": "failed",
+      "counts": {
+        "tests": 6,
+        "failures": 4,
+        "errors": 0,
+        "skipped": 0
+      },
+      "duration_seconds": 202.57453179103322,
+      "test_source_commit": "cfd5b01ed6c409879a823e9f93a9f93b5f5198cb",
+      "identity": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-after-array-wire-dim2/identity.json",
+        "sha256": "d63fbf10262299f855b51b41f16a28a7828b6d4788bf7da901e206090cbd22b5",
+        "bytes": 2917
+      },
+      "source_files": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-after-array-wire-dim2/source-files.json",
+        "sha256": "e588ff4deeb92b3fa5143811f4f1066984482bc07af50294e40c6d01510cb44e",
+        "bytes": 131919
+      },
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-after-array-wire-dim2/result.json",
+        "sha256": "86d7824eeca46bfb9e38b37132c231aae46c82ed840dc7d491bff8755a97e579",
+        "bytes": 1681
+      },
+      "xml": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-after-array-wire-dim2/pytest.xml",
+        "sha256": "305e1da22110f800b461b0246f42956361915360a3002a7af4b7df3b9d347de6",
+        "bytes": 6164
+      },
+      "log": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-after-array-wire-dim2/pytest.log",
+        "sha256": "d437c76f2eaf29c34517fd316a878ed424071a8d0befc494573dd99f51feed64",
+        "bytes": 8003
+      },
+      "source_and_native_unchanged_after": true,
+      "failure_messages": [
+        "ProgramContext history store requires the same exact ranked field contract",
+        "AMR native package requires a pre-staged RuntimeInstance lane"
+      ],
+      "scientific_owner_seal": false,
+      "passed_scope": "Two native negative cases: workspace budget refusal and singular kernel refusal without publication",
+      "failed_scope": "Scalar/vector run history admission, partial-AMR bind lane, nonfinite-source test blocked by history admission"
+    }
+  },
+  "mpi2_followup": "running separately; no MPI result assigned to these Serial receipts",
+  "native_scientific_acceptance": false,
+  "full_m19_kinetic_qualification": false,
+  "full_m26_implicit_nonlocal_qualification": false,
+  "migration_complete": false,
+  "cpp_to_dso_cryptographic_graph_proof": false,
+  "thresholds_changed": false
+}

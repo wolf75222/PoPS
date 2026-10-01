@@ -1741,6 +1741,25 @@
           "skipped": 0
         },
         "native_scientific_acceptance": false
+      },
+      "sdk9f57_closed_serial_product_spatial": {
+        "receipt": "sdk9f57_closed_serial_product_spatial.json",
+        "receipt_sha256": "9b49de3bc1fbb7e5f4ee97669abcd77c1a8cb4830b37d29ec1885c47e400e114",
+        "product_serial_counts": {
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "spatial_after_array_wire_counts": {
+          "tests": 6,
+          "failures": 4,
+          "errors": 0,
+          "skipped": 0
+        },
+        "native_scientific_acceptance": false,
+        "migration_complete": false,
+        "preserved_sdk2e4_unchanged": true
       }
     },
     "limits": [
