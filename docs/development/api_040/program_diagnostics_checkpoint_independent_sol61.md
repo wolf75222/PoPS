@@ -98,3 +98,40 @@ No native package, MPI, Kokkos runtime, AMR hierarchy, NPZ filesystem restart,
 shared environment change, heavy translation unit build or JIT was executed.
 Actual Native one-rank failure/fence, pending outcome, multi-child rollback,
 AMR accepted geometry/flux state and source/DSO reception remain with Root.
+
+## Separate reception of capacity-order fix 521cca58
+
+Authored fix `521cca58a9719dc0843065ac0af0bfaf9aa242fe`, parent Root
+`0298d696`, was cherry-picked as `ee7978cf185986b16491e327109bcc38b3fc3a7a`
+onto the independent historical receipt `6cb791941b580d82c0fa0d5d7b2ca0952aea2f0f`.
+The tested helper is byte-exact to the authored 521 blob. This reception adds
+only tests/documentation; the authored fix changes the Python helper, its
+author test and its author document, with no Native API/header changes.
+
+**33 source/host cases PASS in 5.94s**, Ruff PASS. This comprises the original
+26 checks and seven new checks using the same independent image construction,
+real consensus and two-host-participant transport adapters:
+
+- A valid 66-byte image against chosen N=40 on one or both participants is
+  rejected at the first preparation vote. Neither participant reaches byte
+  transport; neither publishes payload keys. Every participant still votes.
+- Positive bounded capture uses the real helper and real consensus in two
+  phases and transports exactly the two distinct rank images. Both archive
+  images contain exact uint8 bytes and int64 offsets.
+- Per-rank or aggregate excess refuses before any `_exact_native_image` call,
+  hence before even the fixed header conversion. The Native validator is not
+  invoked for the rejected owner image.
+- Standalone admissible array validation copies exactly 40 bytes per rank.
+  Owner preflight checks the chosen capacities first, then copies exactly the
+  selected bounded rank body for Native validation. Opaque/NUL/non-UTF8 names
+  and NaN bits remain unchanged in that selection.
+
+The two historical e86 proofs still execute the old helper from its pinned
+Git source; they continue to establish the original late guards. They are
+not rebased to new behavior or used as evidence of the corrected positive.
+The real codec and extracted restore checks remain unchanged (528 active
+host assertions). No Native/MPI, Kokkos or full physical restart execution is
+attributed to this Python fix reception. The capacity is an archive/transport
+bound; Native writer allocation before the Python size check is still outside
+that bound and is not claimed to be limited by N. No new defect is demonstrated
+within the corrected scope.

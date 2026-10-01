@@ -344,6 +344,133 @@ def test_e86_historical_preflight_copies_full_rank_slices_before_capacity_guard(
     assert live._s.validated == []
 
 
+@pytest.mark.parametrize("oversized_ranks", [(0,), (0, 1)])
+def test_521_current_oversize_votes_before_byte_transport(monkeypatch, oversized_ranks):
+    from pops import _native_collectives
+
+    transport = TwoRanks()
+    transport.install(monkeypatch)
+    owners = [owner(rank, capacity=40 if rank in oversized_ranks else 96) for rank in (0, 1)]
+    payloads = [{}, {}]
+
+    def forbidden_transport(*unused):
+        raise AssertionError("capacity refusal must precede byte transport")
+
+    monkeypatch.setattr(_native_collectives, "allgather_bytes", forbidden_transport)
+
+    def capture(rank):
+        try:
+            diagnostics.capture_checkpoint_program_diagnostics(owners[rank], payloads[rank])
+        except ValueError as error:
+            return str(error)
+        raise AssertionError("oversized diagnostics were accepted")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        errors = list(pool.map(capture, (0, 1)))
+    assert errors[0] == errors[1]
+    assert "exceeds its chosen resource capacity" in errors[0]
+    assert payloads == [{}, {}]
+    assert len(transport.history) == 1
+    assert tuple(row["rank"] for row in transport.history[0] if row["error"] is not None) == (
+        oversized_ranks
+    )
+    assert all(row["value"] is None for row in transport.history[0])
+
+
+def test_521_current_positive_capture_preserves_exact_rank_images(monkeypatch):
+    from pops import _native_collectives
+
+    transport, byte_transport = TwoRanks(), TwoRanks()
+    transport.install(monkeypatch)
+    monkeypatch.setattr(_native_collectives, "allgather_bytes", byte_transport.gather)
+    owners, payloads = [owner(0), owner(1)], [{}, {}]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(
+            pool.map(
+                lambda rank: diagnostics.capture_checkpoint_program_diagnostics(
+                    owners[rank], payloads[rank]
+                ),
+                (0, 1),
+            )
+        )
+    first, second = image(0), image(1)
+    for payload in payloads:
+        assert payload[KEYS[0]].tobytes() == first + second
+        assert payload[KEYS[1]].dtype == np.dtype(np.int64)
+        assert payload[KEYS[1]].tolist() == [0, len(first), len(first) + len(second)]
+    assert len(transport.history) == 2 and len(byte_transport.history) == 1
+    assert all(row["error"] is None for vote in transport.history for row in vote)
+
+
+@pytest.mark.parametrize("attack", ["perrank", "aggregate"])
+def test_521_current_capacity_refuses_before_header_or_body_copy(monkeypatch, attack):
+    monkeypatch.setattr(
+        collective,
+        "checkpoint_topology",
+        lambda x: collective.CheckpointTopology(x.rank, 2, x.rank),
+    )
+    first, second = image(0), image(1)
+    data = {
+        KEYS[0]: np.frombuffer(first + second, dtype=np.uint8),
+        KEYS[1]: np.array([0, len(first), len(first) + len(second)], dtype=np.int64),
+    }
+    live = owner(1, capacity=40)
+    copied_images = []
+
+    def forbidden_header(data, **authority):
+        copied_images.append(data)
+        raise AssertionError("capacity refusal must precede slice conversion")
+
+    monkeypatch.setattr(diagnostics, "_exact_native_image", forbidden_header)
+    if attack == "perrank":
+        with pytest.raises(ValueError, match="exceeds its chosen resource capacity"):
+            diagnostics.prepare_checkpoint_program_diagnostics(live, data)
+        assert live._s.validated == []
+    else:
+        with pytest.raises(ValueError, match="exceeds its chosen resource capacity"):
+            diagnostics.validate_checkpoint_program_diagnostic_arrays(data, capacity=96, bound=40)
+    assert copied_images == []
+
+
+def test_521_current_only_fixed_headers_copied_before_bounded_selection(monkeypatch):
+    monkeypatch.setattr(
+        collective,
+        "checkpoint_topology",
+        lambda x: collective.CheckpointTopology(x.rank, 2, x.rank),
+    )
+    first, second = image(0), image(1, name=b"\x00\xff", bits=0x7FF8000000000042)
+    data = {
+        KEYS[0]: np.frombuffer(first + second, dtype=np.uint8),
+        KEYS[1]: np.array([0, len(first), len(first) + len(second)], dtype=np.int64),
+    }
+    exact = diagnostics._exact_native_image
+    copied_headers = []
+
+    def inspect(header, **authority):
+        copied_headers.append((type(header), len(header), authority))
+        return exact(header, **authority)
+
+    monkeypatch.setattr(diagnostics, "_exact_native_image", inspect)
+    assert diagnostics.validate_checkpoint_program_diagnostic_arrays(data)
+    assert [length for _, length, _ in copied_headers] == [40, 40]
+    copied_headers.clear()
+    live = owner(1)
+    assert diagnostics.prepare_checkpoint_program_diagnostics(live, data) == second
+    assert live._s.validated == [second]
+    assert copied_headers == [
+        (bytes, 40, {"rank": 0, "ranks": 2}),
+        (bytes, 40, {"rank": 1, "ranks": 2}),
+    ]
+
+
+def test_521_helper_exact_authored_blob():
+    relative = "python/pops/runtime/_checkpoint_program_diagnostics.py"
+    authored = subprocess.check_output(
+        ["git", "show", "521cca58a9719dc0843065ac0af0bfaf9aa242fe:" + relative], cwd=ROOT
+    )
+    assert (ROOT / relative).read_bytes() == authored
+
+
 def _restore_definition(source, family):
     marker = "template <int Dim>\nvoid " + family + "<Dim>::restore_checkpoint_program_diagnostics("
     start = source.index(marker)
