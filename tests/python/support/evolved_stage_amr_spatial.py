@@ -164,10 +164,42 @@ def metric_arrays(cells, level, valid):
         "y_edges":np.arange(n+1, dtype=float)/n}
 
 
+def carrier_patch_boxes(rows_by_rank):
+    """Capture full valid geometry from live native state-carrier manifests."""
+    if type(rows_by_rank) not in (list, tuple) or not rows_by_rank:
+        raise ValueError("full geometry requires actual all-rank carrier manifests")
+    blocks = {}
+    for rank in rows_by_rank:
+        for row in rank:
+            if len(row) < 2 or row[1] != "state":
+                continue
+            if len(row) != 16 or row[0] != "pops.amr.rank-local-carrier-manifest@1" or not all(type(v) is str for v in row):
+                raise ValueError("native state-carrier geometry row differs")
+            level, index = int(row[3]), int(row[5])
+            lx, ux, ly, uy = map(int, row[7:11])
+            if level < 0 or index < 0 or lx > ux or ly > uy:
+                raise ValueError("native state-carrier valid geometry differs")
+            boxes = blocks.setdefault(row[2], {})
+            key, value = (level, index), (level, lx, ly, ux, uy)
+            if key in boxes and boxes[key] != value:
+                raise ValueError("replicated carrier geometry disagrees")
+            boxes[key] = value
+    if not blocks:
+        raise ValueError("native state-carrier geometry absent")
+    reference = next(iter(blocks.values()))
+    if any(boxes != reference for boxes in blocks.values()):
+        raise ValueError("physical blocks disagree on native carrier geometry")
+    for level in {key[0] for key in reference}:
+        indices = sorted(key[1] for key in reference if key[0] == level)
+        if indices != list(range(len(indices))):
+            raise ValueError("native carrier patch indices are incomplete")
+    return np.array([reference[key] for key in sorted(reference)], dtype=np.int64)
+
+
 def strip_geometry(rows, cells):
     if len(rows) != 2:
         raise ValueError("this independent reference requires two ratio-two levels")
-    native_boxes = rows[0]["native_patch_boxes"]
+    native_boxes = rows[0]["carrier_patch_boxes"]
     if native_boxes.dtype != np.int64 or native_boxes.ndim != 2 or native_boxes.shape[1] != 5:
         raise ValueError("archived native patch boxes must retain exact integer ranked bounds")
     declared_valid = [np.zeros((cells*2**level,)*2, dtype=bool) for level in range(2)]
@@ -186,7 +218,8 @@ def strip_geometry(rows, cells):
         if not np.array_equal(active, np.broadcast_to(active[0], active.shape)):
             raise ValueError("reference requires full-y composite coverage")
         np.testing.assert_array_equal(row["native_base_shape"], np.array([cells, cells], dtype=np.int64))
-        np.testing.assert_array_equal(row["native_patch_boxes"], native_boxes)
+        np.testing.assert_array_equal(row["carrier_patch_boxes"], native_boxes)
+        np.testing.assert_array_equal(row["native_patch_boxes"], native_boxes[native_boxes[:, 0] > 0])
         np.testing.assert_array_equal(valid, declared_valid[level])
         expected = metric_arrays(cells, level, valid)
         for key in ("cartesian_cell_volume", "declared_no_EB_kappa", "x_edges", "y_edges"):

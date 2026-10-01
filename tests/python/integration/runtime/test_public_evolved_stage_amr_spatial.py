@@ -8,6 +8,7 @@ import sys
 import numpy as np
 import pops
 import pytest
+from pops._native_collectives import allgather_value
 
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.integration.runtime.test_public_captured_diffusion import bounded_bytes
@@ -15,7 +16,7 @@ from tests.python.integration.runtime.test_public_evolved_original_stage import 
 from tests.python.support.amr_snapshots import level_valid_mask
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.evolved_stage_amr_spatial import (
-    ACCEPTANCE, CONTROLS, DENSE_BYTES, DT, FD_STEP, build, check_saved, check_initial, metric_arrays,
+    ACCEPTANCE, CONTROLS, DENSE_BYTES, DT, FD_STEP, build, check_saved, check_initial, metric_arrays, carrier_patch_boxes,
 )
 from tests.python.integration.runtime.test_public_evolved_stage_amr import capture as base_capture, same_images
 from tests.python.support.integral_state_receipts import collective_directory
@@ -26,12 +27,15 @@ def capture(world, runtime, width, *, histories=True):
     rows, metadata = base_capture(world, runtime, width, histories=histories)
     shape = collective_call(world, runtime.spatial_shape)
     boxes = collective_call(world, lambda: tuple(runtime.patch_boxes()))
+    manifests = collective_call(world, lambda: allgather_value(world, metadata[1]))
+    full_boxes = collective_call(world, lambda: carrier_patch_boxes(manifests))
     with collective_check(world):
         assert len(shape) == 2 and shape[0] == shape[1]
     for level, row in enumerate(rows):
         valid = collective_call(world, lambda level=level: level_valid_mask(runtime, level, refinement_ratio=2))
         with collective_check(world):
             row.update(metric_arrays(shape[0], level, np.asarray(valid)))
+            row["carrier_patch_boxes"] = full_boxes.copy()
             row["native_base_shape"] = np.asarray(shape, dtype=np.int64)
             row["native_patch_boxes"] = np.asarray([(lev, *lo, *hi) for lev, lo, hi in boxes], dtype=np.int64)
     return rows, metadata
@@ -84,6 +88,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
                     entry["program_hash"] = component.program_hash
                 compilation.append(entry)
     initial = capture(world, runtime, width, histories=False)
+    registry_phases = {"initial": {"rows_by_rank": collective_call(world, lambda: allgather_value(world, initial[1][1]))}}
     paths, seals, authorities, phases = {}, {}, {}, {}
     for phase, owner in (("accepted", runtime), ("continuous", runtime), ("replay", None)):
         if phase == "replay":
@@ -93,6 +98,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
             with collective_check(world):
                 same_images(reloaded, phases["accepted"])
             phases["reloaded"] = reloaded
+            registry_phases["reloaded"] = {"rows_by_rank": collective_call(world, lambda: allgather_value(world, reloaded[1][1]))}
         end = DT if phase == "accepted" else 2*DT
         collective_call(world, lambda owner=owner, end=end: pops.run(owner, t_end=end, max_steps=1, console=False))
         path = collective_call(world, lambda owner=owner, phase=phase: owner.checkpoint(directory/(phase+"-checkpoint")))
@@ -100,6 +106,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
         authorities[phase] = collective_call(world, lambda owner=owner, path=path: checkpoint_provenance(owner, path))
         paths[phase] = path
         phases[phase] = capture(world, owner, width)
+        registry_phases[phase] = {"rows_by_rank": collective_call(world, lambda phase=phase: allgather_value(world, phases[phase][1][1]))}
     with collective_check(world):
         same_images(phases["continuous"], phases["replay"])
         assert phases["accepted"][1][-1][:2] == (DT, 1)
@@ -120,10 +127,14 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
                     files.append({"path":str(path), "sha256":hashlib.sha256(bounded_bytes(path)).hexdigest()})
                 stored_images[phase] = reloaded_rows
                 observations[phase] = {"levels":files, "metadata":image[1]}
+            registry_path = directory/"carrier-registry.json"
+            registry_path.write_text(json.dumps({"schema":"sol61.amr.carrier-registry@1",
+                "dimension":2, "size":world.size, "phases":registry_phases}, sort_keys=True, indent=2)+"\n")
+            registry_pin = {"path":str(registry_path.resolve()), "sha256":hashlib.sha256(bounded_bytes(registry_path)).hexdigest()}
             # Preserve every actual native capture even if a scientific guard fails.
             (directory/"observation-index.json").write_text(json.dumps({
                 "status":"raw-native-captures-not-yet-qualified", "artifact":artifact.artifact_identity.token,
-                "phases":observations}, sort_keys=True, indent=2)+"\n")
+                "phases":observations, "carrier_registry":registry_pin}, sort_keys=True, indent=2)+"\n")
             for phase, image in (("initial", initial), *phases.items()):
                 reloaded_rows = stored_images[phase]
                 files = observations[phase]["levels"]
@@ -151,7 +162,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
             assert {Path(row["path"]).resolve() for row in checkpoints.values()}.isdisjoint(
                 {Path(row["path"]).resolve() for phase in observations.values()
                     for row in (*phase["levels"], *phase["independent_references"])})
-            receipt = {"fixture_schema":"pops.evolved-stage-amr-spatial-native-fixture@1", "artifact":artifact.artifact_identity.token,
+            receipt = {"fixture_schema":"pops.evolved-stage-amr-spatial-native-fixture@2", "carrier_registry":registry_pin, "artifact":artifact.artifact_identity.token,
                 "dimension":2, "rank":world.rank, "size":world.size, "cells":cells, "width":width,
                 "qualification":"nonconstant periodic full-y strips; composite flux and nonlinear restriction",
                 "initial_temperature":{"T0":[.15, .02, "cos(2*pi*x)"], "T1":[.25, .015, "sin(2*pi*x)"]},
