@@ -37,6 +37,37 @@ def pivot_inverse(block):
     return inverse
 
 
+def pivot_lu(matrix):
+    """Finite partial-pivot LU; no size/model/positivity-specific branch."""
+    lu = np.array(matrix, dtype=float, copy=True)
+    if lu.ndim != 2 or lu.shape[0] != lu.shape[1] or not np.isfinite(lu).all():
+        raise ValueError("finite square Jacobian required")
+    order = np.arange(len(lu))
+    for k in range(len(lu)):
+        pivot = k + int(np.argmax(np.abs(lu[k:, k])))
+        if lu[pivot, k] == 0:
+            raise ValueError("singular full residual Jacobian")
+        lu[[k, pivot]] = lu[[pivot, k]]
+        order[[k, pivot]] = order[[pivot, k]]
+        lu[k + 1 :, k] /= lu[k, k]
+        lu[k + 1 :, k + 1 :] -= np.outer(lu[k + 1 :, k], lu[k, k + 1 :])
+        if not np.isfinite(lu).all():
+            raise ValueError("full residual LU overflow")
+    return lu, order
+
+
+def apply_lu(factors, value):
+    lu, order = factors
+    result = np.asarray(value)[order].copy()
+    for row in range(len(lu)):
+        result[row] -= lu[row, :row] @ result[:row]
+    for row in reversed(range(len(lu))):
+        result[row] = (result[row] - lu[row, row + 1 :] @ result[row + 1 :]) / lu[row, row]
+    if not np.isfinite(result).all():
+        raise ValueError("full residual triangular solve overflow")
+    return result
+
+
 def scalar_composite_image(values, cells):
     """Independent flux construction for the actual 1D partial-refinement witness."""
     active = list(range(cells // 4)) + list(range(3 * cells // 4, cells))
@@ -194,7 +225,21 @@ def run(source, cells, permutation, mode, preconditioner):
         if norm(defect) <= stop:
             break
         J = A + np.diag(3 * cubic * q * q)
-        if preconditioner == "full_cell_block":
+        if preconditioner == "full_basis_lu":
+            # Always build the preconditioner from actual full original-F basis probes,
+            # including when the independent JVP used by GMRES is analytic.
+            full = np.zeros_like(J)
+            for column in range(len(q)):
+                direction = np.zeros_like(q)
+                direction[column] = 1
+                h = 1e-5 * (1 + norm(q)) / norm(direction)
+                full[:, column] = 0.5 / h * F(q + h * direction) - 0.5 / h * F(q - h * direction)
+            factors = pivot_lu(full)
+            preparation_evaluations = 2 * len(q)
+
+            def apply_right(v, frozen_factors=factors):
+                return apply_lu(frozen_factors, v)
+        elif preconditioner == "full_cell_block":
             # Full residual block, including every local reaction derivative.
             if mode == "analytic":
                 blocks = [J[i : i + width, i : i + width] for i in range(0, len(q), width)]
@@ -276,6 +321,7 @@ def run(source, cells, permutation, mode, preconditioner):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--full-basis-lu", action="store_true")
     args = parser.parse_args()
     paths = (
         "tests/cpp/unit/elliptic/amr_original_field_residual.inc",
@@ -299,6 +345,37 @@ def main():
         pass
     else:
         raise AssertionError("singular block accepted")
+    signed = np.array([[0.0, 2.0, -1.0], [-3.0, 0.5, 4.0], [1.0, -2.0, 0.0]])
+    v = np.array([1.0, -0.3, 0.7])
+    assert np.max(np.abs(signed @ apply_lu(pivot_lu(signed), v) - v)) < 1e-14
+    try:
+        pivot_lu([[1.0, 2.0], [2.0, 4.0]])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("singular full Jacobian accepted")
+    if args.full_basis_lu:
+        profiles = [
+            run(args.source, 32, perm, mode, "full_basis_lu")
+            for perm in ((0, 1, 2), (2, 0, 1))
+            for mode in ("analytic", "central_fd")
+        ]
+        verified = all(p["solved"] for p in profiles)
+        print(
+            json.dumps(
+                dict(
+                    scope="offline source/math; no native qualification",
+                    pins=pins,
+                    verdict="full original-F basis LU probe",
+                    strict_math_pass=verified,
+                    profiles=profiles,
+                ),
+                indent=2,
+            )
+        )
+        if not verified:
+            raise SystemExit(1)
+        return
     profiles = [
         run(args.source, n, perm, mode, "full_cell_block")
         for n in (16, 32)

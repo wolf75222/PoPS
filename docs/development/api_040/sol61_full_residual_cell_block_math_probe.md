@@ -34,3 +34,22 @@ rtk proxy env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 \
 ```
 
 Exit0 means the **expected negative classification** was received (four N16 successes, four N32 failures and the failed spatial-diagonal control), not native success. The JSON includes every cycle/stop, controls, source pins and full original final residual. Receipt SHA256 for this run: `50e2b80bc446de7976c387b0a65fe941dd88d359434749dad87876aee6da6fda`. Root owns any subsequent native qualification.
+
+## Separate full-basis LU experiment
+
+Root authorized one further bounded mathematical probe after the cell-block failure. With `--full-basis-lu`, the script constructs **every column of the complete original Jacobian** from two original-F central-FD evaluations at the current Newton iterate. Even the profile with analytic JVP builds its preconditioner this way. Partial-pivot LU factors that entire matrix; triangular solves supply the stationary right-preconditioner to the same GMRES. They do not replace GMRES or its complete-correction JVP check. Factors are rebuilt at each Newton, never reused from the seed. All seven controls and the original equation remain unchanged.
+
+|N32/order|GMRES JVP|Newton steps / columns each|Final original norm|Max target error|
+|---|---|---|---|---|
+|012|analytic|4 /1|`3.184859e-12`|`9.254819e-13`|
+|012|central FD|4 /1|`2.442288e-12`|`7.525092e-13`|
+|201|analytic|4 /1|`2.633823e-12`|`6.683543e-13`|
+|201|central FD|4 /1|`2.933323e-12`|`8.203438e-13`|
+
+All four pass the unchanged original threshold `1.750457e-8`. The last full-correction JVP residuals are `1.24e-14`–`8.78e-14`, below their actual linear thresholds around `4.60e-11`. For this witness there are144 active DOFs, so assembly requires288 full F evaluations per Newton. The final original F is re-evaluated independently. A generic signed nonsymmetric matrix requiring pivoting is also checked against its original equation, and an exactly singular matrix is refused. This finite mathematical result is independent of the author's first-Jacobian helper, but is not a native reproduction or evidence of distributed LU implementation.
+
+The positive math result permits proposing an **explicit, nondefault** `FullResidualBasisLU@1` realization. Its resource contract must enumerate the exact active-owned Krylov DOFs (level, layout, owner, cell, component), not include projected covered/EB-zero rows that would make the factorization spuriously singular. Every full-tower basis response must evaluate the original residual including restriction, halos, fluxes, reactions and candidate-dependent coefficients when supported. Assembly costs `2*Nactive` complete F evaluations per Newton, matrix/factor storage `O(Nactive²)`, and pivoted factorization `O(Nactive³)`. Full stored towers still cost scratch memory and every F evaluation's native work. These costs must be explicit and uncapped; this is an optional expensive reference realization, with no scalable-HPC or universal-convergence promise.
+
+Production would need to authenticate captures and coefficient/state generations, exact point/phase, attempt lease, prepared lane, topology, layout/owner mapping and component order before basis evaluation. Matrix row distribution, collective assembly, allocation/finite/pivot failures and rollback must be explicit all-rank protocols. Factors must be immutable within GMRES and revoked/rebuilt on the next Newton iterate; no seed-frozen or secretly cached derivative qualifies. Signed/nonsymmetric finite matrices are permitted, while singular/nonfinite factors fail closed. The original full JVP and original F guards remain mandatory before outcome acceptance/publication. D(candidate) @3 and these authorities remain unreceived.
+
+Replay uses the preceding command with `--full-basis-lu` and output `/tmp/sol61-full-basis-lu-probe.json`. Exit0 for that selection means four strict **math** successes, not native acceptance. Receipt SHA256: `8690b6047dda247c5bfb1d11d3ca1872c2abcd2a8e7865340ef31a12ac23e6c7`. The default cell-block selection remains negative and byte-identical to its previous receipt.
