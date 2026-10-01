@@ -98,3 +98,28 @@ These are read-only preparatory checks without ROOT approval seals, not a full
 receive() or scientific qualification. Source-only inventory fixtures explicitly
 stub IR/CPP/history admissions and cannot serve as evidence. Actual retained
 archive tests skip explicitly when those external immutable files are absent.
+
+
+Actual Run provenance digest and end-to-end read-only admission
+--------------------------------------------------------------
+
+Source RunManifest._identity_payload (`runtime/_run_manifest.py:82`) projects
+time values to binary64 hex, keeps integer step controls, and encodes bind and
+continuation references through Identity.to_data (`identity/digest.py:62`).
+These references contain `digest` as raw32 bytes, not `hexdigest` text. The
+historical reader reconstructed the latter, causing a real closed-gate refusal.
+Reader @3 now uses exact domain/version1 references and a dedicated deterministic
+CBOR encoder with byte strings (major2), retaining the historical encoder intact.
+No scalar wrapper or numerical coercion is introduced. StepTransaction FixedDt
+controls and output_mode are checked exactly before digest reconstruction.
+
+Twelve actual Run manifests (four serial cases, accepted/continuous/replay) pass
+and historical @2 continues to reject them. Fifty-six mutations refuse altered
+identity/lineage, numeric types/values, request shape, versions and controls.
+With already-issued immutable ROOT owner/approval seals, the full @3 receive
+has been executed read-only and passed all four cases, including full inventories,
+metadata/diagnostic/replay equality, run authority and final raw JUnit gates.
+Private author stdout/stderr are distinct from ROOT failure evidence. This
+prepares the author gel for independent review and ROOT's authoritative rerun;
+it does not mint, replace or reinterpret any external seal or archive. MPI
+reception remains outside this serial test.

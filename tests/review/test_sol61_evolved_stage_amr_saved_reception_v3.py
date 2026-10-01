@@ -239,3 +239,53 @@ def test_actual_registry_and_geometry_refusals(actual_serial_case,attack):
             a["distribution_mode_0"]=r.np.array("partitioned")
             a["dmap_0"]=r.np.array([0],dtype="int64")
         with pytest.raises(ValueError):r.complete_carrier_geometry(a)
+
+
+@pytest.mark.parametrize("phase",("accepted","continuous","replay"))
+def test_actual_run_digest_all_serial_phases(actual_serial_case,phase):
+    receipt,*_=actual_serial_case
+    manifest=receipt["checkpoint_equivalence"]["provenance"][phase]["run_manifest"]
+    assert r.run_identity(manifest)["run_identity"]==receipt["checkpoint_equivalence"]["provenance"][phase]["run"]
+    with pytest.raises(ValueError):r.v2.run_identity(manifest)
+
+
+@pytest.mark.parametrize("attack",("binddigest","continuation","timebool","timeint","stepbool","maxbool","time_delta","steps_delta","output","strategy_dt","strategy_shape","extra","runversion","bindversion"))
+def test_actual_run_manifest_refuses_mutations(actual_serial_case,attack):
+    receipt,*_=actual_serial_case
+    envelope=deepcopy(receipt["checkpoint_equivalence"]["provenance"]["replay"]["run_manifest"])
+    row=envelope["payload"]
+    if attack=="binddigest":row["bind_identity"]=row["bind_identity"][:-1]+("0" if row["bind_identity"][-1]!="0" else "1")
+    elif attack=="continuation":row["continuation_identity"]=None
+    elif attack=="timebool":row["start_time"]=True
+    elif attack=="timeint":row["start_time"]=0
+    elif attack=="stepbool":row["start_macro_step"]=True
+    elif attack=="maxbool":row["controls"]["max_steps"]=True
+    elif attack=="time_delta":row["controls"]["t_end"]+=r.DT
+    elif attack=="steps_delta":row["controls"]["max_steps"]=2
+    elif attack=="output":row["controls"]["output_mode"]="foreign"
+    elif attack=="strategy_dt":row["controls"]["step_transaction"]["strategy"]["dt"]["value"]=(2*r.DT).hex()
+    elif attack=="strategy_shape":row["controls"]["step_transaction"]=row["controls"]["step_transaction"]["strategy"]
+    elif attack=="extra":row["controls"]["extra"]=True
+    elif attack=="runversion":envelope["schema_version"]=2
+    else:row["bind_identity"]=row["bind_identity"].replace(".v1:",".v2:")
+    with pytest.raises(ValueError):r.run_identity(envelope)
+
+
+def test_run_cbor_raw_digest_bytes_and_historical_wire_unchanged():
+    token="pops.bind.v1:sha256:"+"ab"*32
+    value=r.token_data(token,"bind")
+    assert value==dict(domain="bind",schema_version=1,algorithm="sha256",digest=bytes.fromhex("ab"*32))
+    assert r.run_cbor(value["digest"])==b"\x58\x20"+bytes.fromhex("ab"*32)
+    assert r.v2.token_data(token,"bind")["hexdigest"]=="ab"*32
+    with pytest.raises(ValueError):r.wire.cbor(value)
+    for primitive in (None,True,1,-1,"text",[1,"text"],{"z":1,"a":False}):
+        assert r.run_cbor(primitive)==r.wire.cbor(primitive)
+
+
+def test_actual_external_root_seals_full_serial_receive_read_only():
+    path=Path("/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/external-seals.json")
+    if not path.is_file():pytest.skip("actual external ROOT seals unavailable")
+    seals=r.strict_json(path.read_bytes())
+    result=r.receive(seals["owner"]["path"],seals["owner"]["sha256"],seals["approval"]["path"],seals["approval"]["sha256"])
+    assert result["status"]=="received" and result["cases_qualified"]==4 and result["mode"]=="serial"
+    assert "pops" not in sys.modules

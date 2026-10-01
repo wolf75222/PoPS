@@ -24,12 +24,73 @@ envelope = v2.envelope
 history_point, rank_images, diagnostic_image, empty_exchange = v2.history_point, v2.rank_images, v2.diagnostic_image, v2.empty_exchange
 DT, TOL, CONTROLS, PHASES, STEPS, CASES = v2.DT, v2.TOL, v2.CONTROLS, v2.PHASES, v2.STEPS, v2.CASES
 exact, typed, same = v2.exact, v2.typed, v2.same
-science, declared_source, run_identity = v2.science, v2.declared_source, v2.run_identity
+science, declared_source = v2.science, v2.declared_source
 QUALIFICATION = "homogeneous-original-composite-Q-tag-selection@3"
 TAG_SELECTION = [["pops.amr.tag-selection@1","1"],["tag-buffer","0","0"],
                  ["parent-coverage","0","2","2","1","2","2","1"]]
 CONTRACT_KEYS = {"schema_version","guarantee","program_state","ledger","interface_ledger","clocks",
     "temporal_partition","synchronization","history_qualifications","level_relations","transfer_routes","field_providers","tag_selection"}
+
+
+def run_cbor(value):
+    """Independent narrow deterministic CBOR, sufficient for checkpoint envelopes."""
+    def head(major, number):
+        need(0 <= number <= (1 << 64) - 1, "CBOR length/integer overflow")
+        if number < 24:
+            return bytes([major * 32 + number])
+        for width, marker in ((1, 24), (2, 25), (4, 26), (8, 27)):
+            if number < 1 << (8 * width):
+                return bytes([major * 32 + marker]) + number.to_bytes(width, "big")
+        raise ValueError("CBOR overflow")
+
+    if value is None:
+        return b"\xf6"
+    if type(value) is bool:
+        return b"\xf5" if value else b"\xf4"
+    if type(value) is int:
+        need(-(1 << 63) <= value < (1 << 63), "CBOR integer outside int64")
+        return head(0, value) if value >= 0 else head(1, -1 - value)
+    if type(value) is bytes:
+        return head(2,len(value))+value
+    if type(value) is str:
+        raw = value.encode("utf-8")
+        return head(3, len(raw)) + raw
+    if type(value) is list:
+        return head(4, len(value)) + b"".join(run_cbor(item) for item in value)
+    if type(value) is dict:
+        need(all(type(key) is str for key in value), "CBOR keys must be strings")
+        rows = sorted(((run_cbor(key), run_cbor(item)) for key, item in value.items()),
+                      key=lambda row: (len(row[0]), row[0]))
+        return head(5, len(rows)) + b"".join(key + item for key, item in rows)
+    raise ValueError("unsupported CBOR type; binary64 must use canonical hex strings")
+
+
+def token_data(token,domain):
+    # Identity.to_data carries raw 32-byte digest, never its printable hex text.
+    match=re.fullmatch(r"pops\."+domain+r"\.v1:sha256:([0-9a-f]{64})",token)
+    need(match is not None,"current Run identity reference domain/version differs")
+    return dict(domain=domain,schema_version=1,algorithm="sha256",digest=bytes.fromhex(match[1]))
+
+
+def run_identity(envelope):
+    exact(envelope,("protocol","kind","schema_version","payload"),"run envelope")
+    need(envelope["protocol"] == "pops.manifest" and envelope["kind"] == "run"
+         and type(envelope["schema_version"]) is int and envelope["schema_version"] == 3,"run schema differs")
+    row = envelope["payload"]
+    exact(row,("bind_identity","continuation_identity","start_time","start_macro_step","controls","run_identity"),"run payload")
+    exact(row["controls"],("t_end","step_transaction","max_steps","output_mode"),"run controls")
+    for value in (row["start_time"],row["controls"]["t_end"]):
+        need(type(value) is float and math.isfinite(value),"run time is not finite binary64")
+    need(type(row["start_macro_step"]) is int and type(row["controls"]["max_steps"]) is int,"run step type differs")
+    need(typed(row["controls"]["step_transaction"],dict(controls={},strategy=dict(kind="fixed_dt",dt=dict(kind="binary64",value=DT.hex()))))
+         and row["controls"]["output_mode"]=="current-directory", "original Run execution controls differ")
+    value = dict(schema_version=3,bind_identity=token_data(row["bind_identity"],"bind"),
+                 continuation_identity=None if row["continuation_identity"] is None else token_data(row["continuation_identity"],"run"),
+                 start_time=row["start_time"].hex(),start_macro_step=row["start_macro_step"],
+                 controls={**row["controls"],"t_end":row["controls"]["t_end"].hex()})
+    expected = "pops.run.v1:sha256:"+digest(run_cbor(dict(protocol="pops.identity",domain="run",schema_version=1,payload=value)))
+    need(row["run_identity"] == expected,"run request digest differs")
+    return row
 
 
 def program_image(ir, cpp, expected_version, program_hash, width):
