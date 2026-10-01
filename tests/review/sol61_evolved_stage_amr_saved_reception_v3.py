@@ -1,6 +1,7 @@
 """@3 NativeABI6/schema8 TagSelection receipt; historical @1/@2 immutable."""
 from __future__ import annotations
 import argparse
+from copy import deepcopy
 import importlib.util
 import json
 from pathlib import Path
@@ -22,12 +23,45 @@ wire, carriers = v2.wire, v2.carriers
 envelope = v2.envelope
 DT, TOL, CONTROLS, PHASES, STEPS, CASES = v2.DT, v2.TOL, v2.CONTROLS, v2.PHASES, v2.STEPS, v2.CASES
 exact, typed, same = v2.exact, v2.typed, v2.same
-science, program_image, declared_source, run_identity = v2.science, v2.program_image, v2.declared_source, v2.run_identity
+science, declared_source, run_identity = v2.science, v2.declared_source, v2.run_identity
 QUALIFICATION = "homogeneous-original-composite-Q-tag-selection@3"
 TAG_SELECTION = [["pops.amr.tag-selection@1","1"],["tag-buffer","0","0"],
                  ["parent-coverage","0","2","2","1","2","2","1"]]
 CONTRACT_KEYS = {"schema_version","guarantee","program_state","ledger","interface_ledger","clocks",
     "temporal_partition","synchronization","history_qualifications","level_relations","transfer_routes","field_providers","tag_selection"}
+
+
+def program_image(ir, cpp, expected_version, program_hash, width):
+    need(type(ir) is dict and type(ir.get("version")) is int and ir["version"] == expected_version
+         and expected_version in (16, 17), "qualified Program IR version differs")
+    projection = deepcopy(ir)
+    def nodes(values):
+        for node in values:
+            node.pop("provenance", None)
+            for key in ("nodes", "residual_block"):
+                if key in node.get("attrs", {}):
+                    nodes(node["attrs"][key])
+    nodes(projection["nodes"])
+    actual = digest(json.dumps(projection, sort_keys=True, separators=(",", ":")).encode())
+    need(actual == program_hash, "actual saved IR hash differs")
+    matches = re.findall(r'pops_program_hash\(\)\s*\{\s*return\s*"([0-9a-f]{64})";', cpp)
+    need(matches == [actual], "saved CPP Program hash differs from saved IR")
+    text = json.dumps(ir)
+    need("pops.program.global-field-history-storage@1" in text and "field_evolved_state" in text
+         and "pops.amr.full-residual-basis-lu@1" in text and "store_global_field_history(" in cpp,
+         "original Stage/history/realization qualification missing")
+    solves = [node for node in ir["nodes"] if node["op"] == "solve_spatial_field"]
+    need(len(solves) == 1,"original full-product spatial solve missing/duplicated")
+    attrs = solves[0]["attrs"]
+    expected_controls = {key:dict(scalar=dict(kind="integer",value=str(value))) if type(value) is int else dict(kind="binary64",value=value.hex()) for key,value in CONTROLS.items()}
+    need(typed(attrs["newton_controls"],expected_controls) and attrs["finite_difference_step"] == dict(kind="binary64",value=(1e-6).hex())
+         and type(attrs["ncomp"]) is int and attrs["ncomp"] == width+(width == 2)
+         and attrs["right_preconditioner"] == "pops.amr.full-residual-basis-lu@1"
+         and typed(attrs["right_preconditioner_resources"],dict(version=1,max_dense_bytes=dict(uint64_hex="0000000010000000"),
+             scope="per_rank_dense_arrays_active_map_and_numeric_towers"))
+         and attrs["source_contract"].get("temporal_tau") is not None and attrs["source_contract"].get("evolved_stage") is not None,
+         "actual IR original seven controls/duration/product/realization differ")
+    return actual
 
 
 TRANSFER_DESCRIPTIONS = {

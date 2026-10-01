@@ -134,3 +134,49 @@ def test_expected_subject_registry_is_from_ir_not_observed_routes():
     for attack in ({"commits":[]},{"commits":[{"state":{"kind":"field","qualified_id":next(iter(expected))}}]},
                    {"commits":[ir["commits"][0],ir["commits"][0]]}):
         with pytest.raises(ValueError):r.program_transfer_subjects(attack)
+
+
+@pytest.fixture
+def retained_native_program():
+    # Read-only actual bb416 archive; never fabricate Native evidence or import PoPS.
+    folder = Path("/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr")
+    if not folder.is_dir():
+        pytest.skip("actual retained bb416 archive unavailable")
+    return r.strict_json((folder/"program-2.ir.json").read_bytes()), (folder/"program-2.cpp").read_text()
+
+
+def retained_hash(ir):
+    projected=deepcopy(ir)
+    def strip(nodes):
+        for node in nodes:
+            node.pop("provenance",None)
+            for key in ("nodes","residual_block"):
+                if key in node.get("attrs",{}):strip(node["attrs"][key])
+    strip(projected["nodes"])
+    return r.digest(json.dumps(projected,sort_keys=True,separators=(",",":")).encode())
+
+
+def test_actual_retained_ir_canonical_integer_controls(retained_native_program):
+    ir,cpp=retained_native_program
+    assert r.program_image(ir,cpp,ir["version"],retained_hash(ir),1)==retained_hash(ir)
+    with pytest.raises(ValueError):r.v2.program_image(ir,cpp,ir["version"],retained_hash(ir),1)
+    assert "pops" not in sys.modules
+
+
+@pytest.mark.parametrize("control",("linear_max_iterations","max_iterations","restart"))
+@pytest.mark.parametrize("attack",("rawint","bool","delta","leadingzero","dtype","extra","floatvalue"))
+def test_actual_retained_ir_integer_control_mutations(retained_native_program,control,attack):
+    ir,cpp=retained_native_program
+    ir=deepcopy(ir)
+    controls=next(n for n in ir["nodes"] if n["op"]=="solve_spatial_field")["attrs"]["newton_controls"]
+    value=r.CONTROLS[control]
+    replacements={"rawint":value,"bool":True,"delta":{"scalar":{"kind":"integer","value":str(value+1)}},
+        "leadingzero":{"scalar":{"kind":"integer","value":"0"+str(value)}},
+        "dtype":{"scalar":{"kind":"binary64","value":float(value).hex()}},
+        "extra":{"scalar":{"kind":"integer","value":str(value),"target":"int"}},
+        "floatvalue":{"scalar":{"kind":"integer","value":float(value)}}}
+    controls[control]=replacements[attack]
+    # Rehash both images so the actual semantic-control guard, not the hash guard, refuses.
+    cpp=cpp.replace(retained_hash(retained_native_program[0]),retained_hash(ir))
+    with pytest.raises(ValueError,match="seven controls"):
+        r.program_image(ir,cpp,ir["version"],retained_hash(ir),1)

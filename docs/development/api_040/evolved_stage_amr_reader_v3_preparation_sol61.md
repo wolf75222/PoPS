@@ -36,3 +36,26 @@ The authored provider handle identity is recomputed independently from source `A
 Source norm cross-check: an older real sdk5ec immutable archived accepted checkpoint was read offline only to inspect wire metadata. Its8 native provider handle identities independently match the derived identity formula. That old schema7 archive is not received as @3 or promoted to current native science. No package import, JIT or runtime execution occurred during that read.
 
 Corrected verification: **176 PASS,1.44s**. New independent adversaries over2/3/4 subjects cover missing restriction, order downgrade, foreign representation/space/centering/storage, unequal operation key, wrong halo for each operation, provider-hash mutation, absent whole subject group and injected subject. Missing/duplicated/foreign-kind IR registries fail. Historical @1/@2 and the previous inventory reader tests remain unchanged. Candidate@3 also derives and rehashes its expected subject registry from the actual retained IR before accepting any checkpoint profile. No Native acceptance, approval or external seal is minted.
+
+
+Actual retained IR integer controls correction
+--------------------------------------------
+
+The installed bb416 serial archive exposed a historical reader assumption: the
+three integer Newton controls were expected as raw Python integers. Current
+`time/canonical_data.py::strict_data` wraps integers in `scalar`, and
+`identity/scalar.py::ScalarLiteral.to_data` emits kind `integer` with canonical
+decimal text. Reader @3 has its own readable program_image admission; all other
+hash, C++, Stage/history, binary64, resource, component-width and duration guards
+are retained exactly. It admits only the complete original seven-control table,
+with 240/20/60 encoded as closed scalar/integer objects. Historical @1/@2 are
+unchanged. The candidate @3 private inventory already calls reader @3, so this
+admission is used there too, without changing historical module globals.
+
+The read-only actual retained bb416 program-2.ir.json and program-2.cpp are used
+by the positive test. Twenty-one independently rehashed mutations cover each
+integer control with raw int, bool, changed value, leading-zero decimal, foreign
+scalar kind, extra scalar metadata and float payload. Those tests explicitly
+skip if the external authentic archive is unavailable; they do not embed or
+fabricate Native evidence. Passing the offline admission does not qualify the
+scientific dataset or produce either ROOT seal.
