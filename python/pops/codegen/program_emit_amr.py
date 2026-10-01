@@ -373,6 +373,13 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
         state_identity = (
             state_ref.qualified_id if state_ref is not None else "scalar-history:" + name
         )
+        # Match the exact IR16 storage authority registered by the live prelude.
+        # The scalar observation keeps its own space; its storage owner is not
+        # permission to replace it by that owner's physical State identity.
+        from pops.time._program.global_history_storage import descriptor
+        storage_descriptor = descriptor(program, name)
+        if storage_descriptor is not None:
+            state_identity = storage_descriptor
         from pops.codegen.program_history_identity import history_space_identity
         space_identity = history_space_identity(program, name)
         row = history_manifest[name]
