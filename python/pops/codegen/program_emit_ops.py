@@ -1423,8 +1423,17 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = "s%d" % v.id
         kind = v.attrs["kind"]
         if v.block is None:
-            from pops.codegen.program_emit_field_problem import field_observation_reduction
-            reduction = field_observation_reduction(v, var, target=target)
+            source = v.inputs[0]
+            if source.op == "spatial_interaction" and source.attrs.get("contract") == "pops.spatial-interaction@3":
+                from pops.time._program.spatial_interaction import interaction_contract
+                interaction_contract(source)
+                component = v.attrs.get("comp", 0)
+                if target != "amr_system" or kind not in ("sum", "abs_sum", "max", "min") or type(component) is not int or component != 0:
+                    raise NotImplementedError("closed original interaction reduction requires the realized scalar composite sum/abs_sum/min/max port")
+                reduction = 'ctx.reduce_closed_original_interaction(%d, 0, "%s")' % (source.id, kind)
+            else:
+                from pops.codegen.program_emit_field_problem import field_observation_reduction
+                reduction = field_observation_reduction(v, var, target=target)
             lines.append("const pops::Real %s = %s;" % (var[v.id], reduction))
             return
         owner = _required_block_index(block_idx, v.block, "reduce value %r" % v.name)

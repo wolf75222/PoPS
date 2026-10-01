@@ -140,6 +140,8 @@ def validate_storage_node(program: Any, node: Any) -> dict[str, Any]:
 
 def validate_issuances(program: Any) -> None:
     """Authenticate source declarations before cloning, detaching or freezing any projections."""
+    from .spatial_interaction import validate_closed_issuances
+    validate_closed_issuances(program)
     if not getattr(program, "_global_field_history_issuance", None):
         return
     from pops.codegen.program_field_plan import _nodes
@@ -154,6 +156,8 @@ def validate_issuances(program: Any) -> None:
 
 def transfer_issuances(source: Any, target: Any, remap_metadata: Any, history_names: Any) -> None:
     """Transfer only the already authenticated, original immutable declarations."""
+    from .spatial_interaction import transfer_closed_issuances
+    transfer_closed_issuances(source, target, remap_metadata)
     issued = getattr(source, "_global_field_history_issuance", {})
     if issued:
         object.__setattr__(target, "_global_field_history_issuance", MappingProxyType({

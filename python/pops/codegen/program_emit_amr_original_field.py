@@ -206,6 +206,24 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
               "auto %s = %s_provider->stage_original_field_candidate_collectively(std::move(%s), %s_candidate, %d, ctx.prepared_execution_lane(), %s_provider, std::move(%s_validate), std::move(%s_synchronize));" %
               (outcome, stem, report, stem, options["max_iterations"], stem, stem, stem)]
     _append_solve_report_guard(program, value, outcome, lines, label="original_amr_field_residual", phase="solve")
+    closed_sources = [node for node in program._values if node.op == "spatial_interaction"
+                      and node.attrs.get("contract") == "pops.spatial-interaction@3"]
+    closed_sources = [node for node in closed_sources if node.inputs[0].inputs[0].inputs[0].inputs[0] is value]
+    if closed_sources:
+        snapshot_budget = min(int(node.attrs["max_workspace_bytes"]["uint64_hex"], 16) for node in closed_sources)
+        from pops.codegen.program_emit_spatial_interaction import closed_interaction_identity
+        closed_bindings = ", ".join("{%d, %d, %d, %d, %s}" % (node.id, node.inputs[0].id,
+            node.inputs[0].attrs["component"], block_indices[node.attrs["closed_field_source"]["owner_block"]],
+            json.dumps(closed_interaction_identity(node))) for node in closed_sources)
+        lines += ["std::vector<std::tuple<std::int64_t, std::int64_t, int, int, std::string>> %s_closed_bindings;" % stem,
+                  "ctx.prepare_spatial_collectively([&] { %s_closed_bindings = {%s}; });" % (stem, closed_bindings)]
+        lines += ["std::function<pops::runtime::program::AmrFieldResidualAuthority()> %s_closed_authority;" % stem,
+                  "ctx.prepare_spatial_collectively([&] {",
+                  "  %s_closed_authority = [&, %s_invocation = %s_invocation] {" % (stem, stem, stem),
+                  "    return ctx.original_hierarchy_field_authority(%s);" % authority_args,
+                  "  };", "});",
+                  "ctx.seal_original_field_source(%d, %s_provider, %s_core, %s_closed_authority, %s_closed_bindings, %s, %dULL);" %
+                  (value.id, stem, stem, stem, stem, json.dumps(value.attrs["field_problem_identity"]), snapshot_budget)]
     for member in ("residual_norm", "reference_residual_norm", "rel_residual"):
         lines.append("ctx.record_scalar(%s, %s.report().%s);" % (json.dumps(stem + "." + member), outcome, member))
     lines += ["ctx.record_scalar(%s, static_cast<pops::Real>(%s_core->residual_evaluations()));" %

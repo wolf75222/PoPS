@@ -304,6 +304,24 @@ public:
     std::vector<HierarchyTensorLevelBoundary> boundaries;
   };
 
+  struct ClosedOriginalFieldSource {
+    std::shared_ptr<hierarchy_tensor_solver_type> provider;
+    std::function<const std::vector<field_type>&()> candidate;
+    std::uint64_t accepted_generation = 0;
+    std::string identity;
+    std::vector<field_type> image;
+    std::vector<field_type> active_image;
+    std::vector<Geometry<Dim>> geometries;
+    std::size_t retained_bytes = 0;
+    std::map<std::int64_t, std::tuple<std::int64_t, int, int, std::string>> bindings;
+  };
+  struct ClosedInteractionTower {
+    std::shared_ptr<const ClosedOriginalFieldSource> source;
+    std::vector<field_type> output;
+    int storage_owner = -1;
+    std::string identity;
+  };
+
   struct HierarchyFieldResource {
     HierarchyTensorSelection selection;
     std::string field_identity;
@@ -495,6 +513,8 @@ public:
   std::shared_ptr<const hierarchy_tensor_registry_type> hierarchy_tensor_solver_registry_;
   mutable std::optional<HierarchyTensorSelection> hierarchy_tensor_selection_;
   mutable std::map<std::int64_t, HierarchyFieldResource> hierarchy_field_resources_;
+  mutable std::map<std::int64_t, std::shared_ptr<const ClosedOriginalFieldSource>> closed_original_sources_;
+  mutable std::map<std::int64_t, std::shared_ptr<const ClosedInteractionTower>> closed_interactions_;
   mutable std::map<std::string, std::vector<ProgramFieldLevel>> staged_field_publications_;
   mutable std::unique_ptr<hierarchy_tensor_solver_type> hierarchy_tensor_solver_;
   mutable std::vector<HierarchyTensorLevelBoundary> hierarchy_tensor_boundaries_;

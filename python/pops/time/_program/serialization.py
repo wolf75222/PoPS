@@ -292,7 +292,7 @@ class _ProgramSerialization(_ProgramBase):
                 continue
             seen.add(id(node))
             if node.op == "spatial_interaction":
-                result["version"] = max(result["version"], 18 if node.attrs.get("contract") == "pops.spatial-interaction@2" else 17)
+                result["version"] = max(result["version"], 19 if node.attrs.get("contract") == "pops.spatial-interaction@3" else 18 if node.attrs.get("contract") == "pops.spatial-interaction@2" else 17)
             if node.op in ("solve_spatial_field", "integral_candidate"):
                 result["version"] = max(result["version"],
                     13 if node.op == "solve_spatial_field" and node.attrs.get("right_preconditioner") == "pops.amr.full-residual-basis-lu@1" else
@@ -348,6 +348,15 @@ class _ProgramSerialization(_ProgramBase):
         validate_issuances(self)
         for name in sorted(getattr(self, "_global_field_history_issuance", {})):
             owner = self._history_blocks[name]
+            if owner not in order:
+                order[owner] = len(order)
+        # IR19 storage-only TimeStates retain an explicit route even without a
+        # physical State.n read. The private issue proof, not mutable node attrs,
+        # supplies this allocation authority; no input is added to the solve.
+        from .spatial_interaction import validate_closed_issuances
+        validate_closed_issuances(self)
+        for _node, issued in getattr(self, "_closed_field_interaction_issuance", {}).values():
+            owner = issued.metadata["owner_block"]
             if owner not in order:
                 order[owner] = len(order)
         return order

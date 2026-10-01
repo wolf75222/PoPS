@@ -333,6 +333,7 @@ class PreparedHierarchyTensorSolver {
             [](void* context) noexcept {
               auto* prepared = static_cast<PreparedHierarchyTensorSolver*>(context);
               prepared->restore_or_terminate_(prepared->candidate_publication_);
+              prepared->original_accepted_candidate_ = nullptr;
             },
             nullptr,
             [](void* context) noexcept {
@@ -370,18 +371,25 @@ class PreparedHierarchyTensorSolver {
     if (!consensus.agrees(report, execution_lane))
       throw std::invalid_argument("original field publication reports differ between ranks");
     validate_authority();  // This authority callback owns its own collective protocol.
+    // A subsequent original invocation supersedes its old source receipt even
+    // when the same core/candidate address is reused and then rejected/discarded.
+    // Only this invocation's Accept hook can issue a new completed receipt.
+    original_accepted_candidate_ = nullptr;
     if (!report.solved_value_available())
       return SolveOutcome::collective_lane(std::move(report), execution_lane);
 
     struct Publication {
       std::shared_ptr<PreparedHierarchyTensorSolver> owner;
       std::function<void()> validate;
+      const std::vector<field_type>* candidate;
     };
     std::shared_ptr<Publication> publication;
     error = {};
     try {
       publication = std::make_shared<Publication>(
-          Publication{std::move(owner), std::move(validate_authority)});
+          Publication{std::move(owner), std::move(validate_authority), candidate});
+      if (original_acceptance_generation_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("original field acceptance generation exhausted");
       if (!candidate || candidate->size() != candidate_publication_.size())
         throw std::invalid_argument("original field publication candidate depth differs");
       for (std::size_t level = 0; level < candidate->size(); ++level) {
@@ -425,6 +433,8 @@ class PreparedHierarchyTensorSolver {
             [](void* context) noexcept {
               auto* staged = static_cast<Publication*>(context);
               staged->owner->restore_or_terminate_(staged->owner->candidate_publication_);
+              staged->owner->original_accepted_candidate_ = staged->candidate;
+              ++staged->owner->original_acceptance_generation_;
             },
             nullptr,
             [](void* context) noexcept {
@@ -444,6 +454,16 @@ class PreparedHierarchyTensorSolver {
                                              "original field publication pre-Accept");
               staged->validate();
             }});
+  }
+
+  // This stamp is minted only by the original Outcome Accept hook. A solved
+  // report, reservation, rejected candidate or a generic solve cannot mint it.
+  std::uint64_t accepted_original_candidate_generation(
+      const std::vector<field_type>* candidate, const ExecutionLane& lane) const {
+    if (&lane != prepared_lane_ || publication_active_ || !candidate ||
+        candidate != original_accepted_candidate_ || original_acceptance_generation_ == 0)
+      throw std::invalid_argument("original field source has no completed Accept receipt");
+    return original_acceptance_generation_;
   }
 
  protected:
@@ -514,6 +534,8 @@ class PreparedHierarchyTensorSolver {
   std::optional<ExecutionLane::ImmutableBorrow> prepared_lane_borrow_;
   bool preparation_sealed_ = false;
   bool publication_active_ = false;
+  const std::vector<field_type>* original_accepted_candidate_ = nullptr;
+  std::uint64_t original_acceptance_generation_ = 0;
 };
 
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>

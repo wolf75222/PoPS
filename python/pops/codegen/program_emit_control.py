@@ -784,7 +784,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             if phase == "gather":
                 keep = index < split or (bool(spatial or original) and index == split)
             elif phase == "solve":
-                keep = index == split or (index < split and value.op in binding_ops)
+                keep = index == split or (index < split and value.op in binding_ops) or (value.op == "spatial_interaction" and value.attrs.get("contract") == "pops.spatial-interaction@3")
             elif phase == "observe":
                 keep = (split < index <= observation_end) or (bool(original) and index == split) or (index < split and value.op in binding_ops)
             else:

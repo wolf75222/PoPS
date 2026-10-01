@@ -5,10 +5,41 @@ from pops.time._program.spatial_interaction import interaction_contract
 from pops.time._program.serialization import _json_ready
 
 
+
+def closed_interaction_identity(value):
+    return json.dumps({"attrs":_json_ready(value.attrs), "space":_json_ready(value.space),
+                       "point":_json_ready(value.point), "source":value.inputs[0].id},
+                      sort_keys=True, separators=(",", ":"))
+
 def emit_spatial_interaction(value, variables, lines, *, block_indices, target):
     source, dimension, kernel, budget, components = interaction_contract(value)
     if target not in ("system", "amr_system"):
         raise NotImplementedError("spatial interaction requires a native Uniform/AMR field provider")
+    if value.attrs["contract"] == "pops.spatial-interaction@3":
+        if target != "amr_system":
+            raise NotImplementedError("completed original source snapshot @1 is realized on the composite AMR provider; Uniform needs its own Accept snapshot port")
+        from pops.fields._observation_contract import validate_field_observation
+        _width, component, solve = validate_field_observation(source)
+        owner = value.attrs["closed_field_source"]["owner_block"]
+        if owner not in block_indices:
+            raise ValueError("closed interaction storage TimeState has no exact emitted block index")
+        phase = variables.get(("original_field_hierarchy_phase",))
+        name = "closed_interaction_%d" % value.id
+        variables[value.id] = name
+        if phase == "gather":
+            return
+        if phase == "solve":
+            identity = closed_interaction_identity(value)
+            lines += ["static_assert(pops::kNativeDimension == %d, \"closed interaction dimension differs from native geometry\");" % dimension,
+                      "const std::array<int, 1> closed_components_%d{%d};" % (value.id, component),
+                      "ctx.prepare_closed_original_interaction(%d, %d, %d, %d, closed_components_%d, %dULL, %s," %
+                      (value.id, solve.id, source.id, block_indices[owner], value.id, budget, json.dumps(identity)),
+                      "  [=] POPS_HD(const pops::RealVector<pops::kNativeDimension>& x, const pops::RealVector<pops::kNativeDimension>& y) -> pops::Real { return %s; });" % kernel]
+        elif phase in (None, "observe", "publish"):
+            lines.append("const auto& %s = ctx.closed_original_interaction(%d);" % (name, value.id))
+        else:
+            raise NotImplementedError("unknown closed original source scheduling phase")
+        return
     if value.block not in block_indices:
         raise ValueError("spatial interaction has no exact Program block route")
     from pops.time._evaluation_point import evaluation_stage_fraction

@@ -74,16 +74,77 @@ def _source_point(source):
         pending.extend(node.prog._subblock_value_refs(node))
 
 
+
+def _closed_source_contract(program, source, owner, output):
+    from .global_history_storage import storage_contract
+    from pops.fields._observation_contract import validate_field_observation
+    width, selected, solve = validate_field_observation(source)
+    if solve.op != "solve_spatial_field":
+        raise NotImplementedError("closed composite source requires the original full-residual provider")
+    metadata = storage_contract(program, source, owner)
+    witness = next(value for value in solve.inputs if value.block == metadata["layout_witness"] and value.space is not None)
+    if type(output) is not FieldSpace or len(output.components) != 1 or output.value_shape != (1,) or output.sampling != "cell_center":
+        raise ValueError("closed original interaction requires one explicit cell_center output FieldSpace")
+    for attr in ("layout", "centering", "frame", "clock", "support"):
+        if getattr(output, attr) != getattr(witness.space, attr):
+            raise ValueError("closed original interaction output changes solved " + attr)
+    # Field unknown units are not encoded by the current physical FieldProblem.
+    # The storage State's units are never an authority for the global unknown.
+    if any(unit is not None for unit in output.units):
+        raise ValueError("closed original interaction output units cannot be inferred from unknown field units")
+    return {**metadata, "contract":"pops.completed-original-field-source@1",
+            "tuple_width":width, "tuple_component":selected, "source_value_id":source.id, "solve_value_id":solve.id}
+
+
+def validate_closed_issuances(program):
+    from .global_history_storage import _equal_metadata
+    records = getattr(program, "_closed_field_interaction_issuance", {})
+    nodes = {value.id:value for value in program._values}
+    for consumer in program._values:
+        if any(item.id in records for item in consumer.inputs) and consumer.op != "reduce":
+            raise NotImplementedError("completed interaction @1 exposes read-only full towers and scalar reductions; gradient/field/history consumers need their own authenticated tower/ghost port")
+    for key, (_original, issued) in records.items():
+        node = nodes.get(key)
+        if node is None or node.op != "spatial_interaction" or node.attrs.get("contract") != "pops.spatial-interaction@3":
+            raise ValueError("closed interaction lost its originally issued source snapshot contract")
+        metadata = node.attrs.get("closed_field_source")
+        expected = _closed_source_contract(program, node.inputs[0], issued.metadata["owner_block"], node.space)
+        if not _equal_metadata(metadata, issued.metadata) or not _equal_metadata(expected, issued.metadata):
+            raise ValueError("closed interaction changed its originally issued source/storage authority")
+        if node.block is not None or node.state_ref is not None or node.point != node.inputs[0].point:
+            raise ValueError("closed interaction cannot borrow physical State ownership")
+
+
+def transfer_closed_issuances(source, target, remap):
+    from types import MappingProxyType
+    from .global_history_storage import _IssuedStorage, _ISSUER
+    current = {}
+    for _key, (node, issued) in getattr(source, "_closed_field_interaction_issuance", {}).items():
+        mapped = remap({"value":node, "clock":issued.metadata["clock"],
+                        "point":issued.metadata["point"], "region":issued.metadata["region"]})["value"]
+        metadata = remap(issued.metadata)
+        metadata["source_value_id"] = mapped.inputs[0].id
+        metadata["solve_value_id"] = mapped.inputs[0].inputs[0].inputs[0].inputs[0].id
+        attrs = dict(mapped.attrs)
+        attrs["closed_field_source"] = metadata
+        mapped = target._replace_value(mapped, attrs=attrs)
+        current[mapped.id] = (mapped, _IssuedStorage(metadata, issuer=_ISSUER))
+    if current:
+        object.__setattr__(target, "_closed_field_interaction_issuance", MappingProxyType(current))
+
 def interaction_contract(value):
     from pops.fields.spatial_interaction import kernel_cpp
     if value.op != "spatial_interaction" or value.vtype != "scalar_field" or len(value.inputs) != 1:
         raise ValueError("invalid spatial interaction SSA contract")
     attrs = value.attrs
     required = {"contract", "kernel", "measure", "quadrature", "realization", "max_workspace_bytes", "components", "ncomp", "source_scope"}
+    closed_v3 = attrs.get("contract") == "pops.spatial-interaction@3"
+    if closed_v3:
+        required.add("closed_field_source")
     history_v2 = attrs.get("contract") == "pops.spatial-interaction@2"
     if history_v2:
         required.add("history_source")
-    if set(attrs) != required or attrs["contract"] not in ("pops.spatial-interaction@1", "pops.spatial-interaction@2"):
+    if set(attrs) != required or attrs["contract"] not in ("pops.spatial-interaction@1", "pops.spatial-interaction@2", "pops.spatial-interaction@3"):
         raise ValueError("invalid spatial interaction contract/version")
     kernel = attrs["kernel"]
     if set(kernel) != {"contract", "dimension", "tree", "units"} or kernel["contract"] != "pops.spatial-interaction-kernel@1":
@@ -105,6 +166,15 @@ def interaction_contract(value):
     if len(raw) != 16 or any(c not in "0123456789abcdef" for c in raw) or int(raw, 16) == 0:
         raise ValueError("invalid spatial interaction budget")
     source = value.inputs[0]
+    if closed_v3:
+        validate_closed_issuances(value.prog)
+        if attrs["source_scope"] != "completed_original" or tuple(attrs["components"]) != (0,) or any(type(component) is not int for component in attrs["components"]) or type(attrs["ncomp"]) is not int or attrs["ncomp"] != 1:
+            raise ValueError("closed original source component/scope changed")
+        _dimension(kernel["units"])
+        tuple(_dimension(unit, allow_unknown=False) for unit in measure["coordinate_units"])
+        if measure["coordinate_units"] and len(measure["coordinate_units"]) != dimension:
+            raise ValueError("closed interaction coordinate units differ from kernel dimension")
+        return source, dimension, cpp, int(raw, 16), (0,)
     if history_v2:
         from .spatial_history_source import history_source_contract, exact_image
         if source.op != "history" or exact_image(attrs["history_source"]) != exact_image(history_source_contract(source)):
@@ -132,7 +202,7 @@ def interaction_contract(value):
 
 class _ProgramSpatialInteraction:
     @atomic_authoring
-    def spatial_interaction(self, state, kernel, *, output_space, measure, quadrature, realization, components=None, source_scope="issued", name=None):
+    def spatial_interaction(self, state, kernel, *, output_space, measure, quadrature, realization, components=None, source_scope="issued", name=None, owner_block=None):
         """I_c(x)=sum_y W(x,y) rho_c(y) kappa_y volume_y, without commit.
 
         The result is an owner-qualified scalar field, not a physical State with
@@ -143,6 +213,30 @@ class _ProgramSpatialInteraction:
             SpatialInteractionKernel, CellVolumeMeasure, CellMidpoint, DirectSpatialInteraction,
         )
         state = _resolve_handle(state)
+        if isinstance(state, ProgramValue) and state.op == "field_component" and (source_scope == "completed_original" or owner_block is not None):
+            require_top_level(self, state, "closed original spatial interaction")
+            selected = (0,) if components is None else tuple(components)
+            if source_scope != "completed_original" or selected != (0,) or any(type(component) is not int for component in selected):
+                raise ValueError("global field interaction requires explicit completed_original scope and scalar selection")
+            if (type(kernel) is not SpatialInteractionKernel or type(measure) is not CellVolumeMeasure
+                    or type(quadrature) is not CellMidpoint or type(realization) is not DirectSpatialInteraction):
+                raise TypeError("closed interaction requires explicit kernel/measure/quadrature/realization")
+            metadata = _closed_source_contract(self, state, owner_block, output_space)
+            attrs = {"contract":"pops.spatial-interaction@3", "kernel":kernel.to_data(),
+                "measure":measure.to_data(), "quadrature":"pops.cell-midpoint@1",
+                "realization":"pops.direct-spatial-interaction@1", "ncomp":1, "components":(0,),
+                "source_scope":"completed_original", "max_workspace_bytes":{"uint64_hex":"%016x" % realization.max_workspace_bytes},
+                "closed_field_source":metadata}
+            value = self._new("scalar_field", "spatial_interaction", (state,), attrs,
+                              name, None, point=state.point, space=output_space)
+            from types import MappingProxyType
+            from .global_history_storage import _IssuedStorage, _ISSUER
+            records = dict(getattr(self, "_closed_field_interaction_issuance", {}))
+            records[value.id] = (value, _IssuedStorage(metadata, issuer=_ISSUER))
+            object.__setattr__(self, "_closed_field_interaction_issuance", MappingProxyType(records))
+            return value
+        if owner_block is not None:
+            raise ValueError("owner_block is storage-only for a completed global original field")
         if not isinstance(state, ProgramValue) or state.vtype != "state" or state.space is None:
             raise TypeError("spatial interaction requires a typed State")
         require_top_level(self, state, "spatial interaction")

@@ -205,3 +205,254 @@ field_type& spatial_interaction_history_owned(std::int64_t value_id, int program
   auto issued = scratches_.insert(staged.extract(staged.begin()));
   return issued.position->second;
 }
+
+template <class Function>
+void closed_interaction_phase_(Function&& function) const {
+  std::exception_ptr error;
+  try { function(); Kokkos::fence(); } catch (...) { error = std::current_exception(); }
+  if (error) { try { Kokkos::fence(); } catch (...) {} }
+  collectively_rethrow_exception(error, prepared_execution_lane(), "closed original field interaction local phase");
+}
+
+// IR19: completed original-field source, separate from accepted State/history.
+// The private receipt is issued only after the original SolveOutcome Accept.
+void seal_original_field_source(std::int64_t solve_id,
+    const std::shared_ptr<hierarchy_tensor_solver_type>& provider,
+    const std::shared_ptr<PreparedAmrFieldResidual<Dim>>& core,
+    const std::function<AmrFieldResidualAuthority()>& current_authority,
+    const std::vector<std::tuple<std::int64_t, std::int64_t, int, int, std::string>>& bindings,
+    std::string_view identity, std::uint64_t max_bytes) const {
+  const auto& lane = prepared_execution_lane();
+  closed_interaction_phase_([&] {
+    if (!provider || !core || !current_authority || identity.empty() || solve_id < 0 ||
+        hierarchy_field_resources_.at(solve_id).solver != provider)
+      throw std::invalid_argument("closed original source has a foreign provider/identity");
+  });
+  // This callback authenticates all live level envelopes on the prepared lane.
+  const auto& tower = core->candidate(current_authority(), lane);
+  std::vector<Geometry<Dim>> geometries;
+  closed_interaction_phase_([&] { geometries.reserve(tower.size()); });
+  for (int level = 0; level < nlev(); ++level) {
+    const auto geometry = facade_->prepared_amr_level_geometry(level);
+    closed_interaction_phase_([&] { geometries.push_back(geometry); });
+  }
+  (void)core->candidate(current_authority(), lane);
+  std::map<std::int64_t, std::shared_ptr<const ClosedOriginalFieldSource>> staged;
+  closed_interaction_phase_([&] {
+    const auto stamp = provider->accepted_original_candidate_generation(&tower, lane);
+    if (tower.empty() || tower.size() != static_cast<std::size_t>(nlev()))
+      throw std::invalid_argument("closed original source is not a complete tower");
+    auto issued = std::make_shared<ClosedOriginalFieldSource>();
+    issued->provider = provider;
+    issued->candidate = [this, core, current_authority]() -> const std::vector<field_type>& {
+      return core->candidate(current_authority(), prepared_execution_lane());
+    };
+    issued->accepted_generation = stamp;
+    issued->identity = identity;
+    std::size_t binding_bytes = interaction_add(sizeof(ClosedOriginalFieldSource), identity.size());
+    for (const auto& binding : bindings)
+      binding_bytes = interaction_add(binding_bytes, interaction_add(sizeof(binding), std::get<4>(binding).size()));
+    if (!max_bytes || binding_bytes >= max_bytes)
+      throw std::length_error("closed original source binding metadata exceeds its budget");
+    if (bindings.empty()) throw std::invalid_argument("closed original source has no issued source/result bindings");
+    for (const auto& [result, source, component, storage, token] : bindings) {
+      if (result < 0 || source < 0 || storage < 0 || token.empty() || component < 0 ||
+          component >= tower.front().ncomp() || !issued->bindings.emplace(result,
+              std::make_tuple(source, component, storage, token)).second)
+        throw std::invalid_argument("closed original source has invalid/duplicate tuple bindings");
+    }
+    std::size_t bytes = interaction_add(binding_bytes, interaction_product(tower.size(), 2 * sizeof(field_type) + sizeof(Geometry<Dim>)));
+    for (int level = 0; level < nlev(); ++level) {
+      const auto& field = provider->solution(level);
+      const auto& original = tower.at(level);
+      if (field.layout() != original.layout() || field.distribution() != original.distribution() ||
+          field.local_rank() != original.local_rank() || field.ncomp() != original.ncomp())
+        throw std::invalid_argument("accepted original source tuple layout/width changed");
+      bytes = interaction_add(bytes, interaction_product(field.layout().size(),
+          2 * sizeof(Box<Dim>) + sizeof(Index<Dim>) + sizeof(std::size_t)));
+      bytes = interaction_add(bytes, interaction_product(field.local_size(),
+          sizeof(typename field_type::fab_type) + sizeof(std::size_t)));
+      for (std::size_t patch = 0; patch < field.local_size(); ++patch)
+        bytes = interaction_add(bytes, interaction_product(interaction_product(
+            field.fab(patch).grown_box().numPts(), field.ncomp()), sizeof(Real)));
+      const auto& mask = provider->active_cell_mask(level);
+      if (mask.layout() != field.layout() || mask.distribution() != field.distribution() ||
+          mask.local_rank() != field.local_rank() || mask.ncomp() != 1)
+        throw std::invalid_argument("closed original source active quotient layout differs");
+      bytes = interaction_add(bytes, interaction_product(mask.layout().size(),
+          2 * sizeof(Box<Dim>) + sizeof(Index<Dim>) + sizeof(std::size_t)));
+      bytes = interaction_add(bytes, interaction_product(mask.local_size(),
+          sizeof(typename field_type::fab_type) + sizeof(std::size_t)));
+      for (std::size_t patch = 0; patch < mask.local_size(); ++patch)
+        bytes = interaction_add(bytes, interaction_product(mask.fab(patch).grown_box().numPts(), sizeof(Real)));
+    }
+    if (!max_bytes || bytes >= max_bytes)
+      throw std::length_error("closed original source snapshot exceeds its explicit budget");
+    issued->retained_bytes = bytes;
+    issued->image.reserve(tower.size());
+    issued->active_image.reserve(tower.size());
+    issued->geometries = std::move(geometries);
+    for (int level = 0; level < nlev(); ++level) {
+      issued->image.emplace_back(provider->solution(level));
+      issued->active_image.emplace_back(provider->active_cell_mask(level));
+    }
+    Kokkos::fence();
+    staged.emplace(solve_id, std::move(issued));
+  });
+  auto existing = closed_original_sources_.find(solve_id);
+  if (existing == closed_original_sources_.end())
+    closed_original_sources_.insert(staged.extract(staged.begin()));
+  else existing->second = std::move(staged.begin()->second);
+}
+
+// Prepare all output levels once, after Accept, before observing any level.
+// storage_block selects only an allocation witness, never the physical source.
+template <class Kernel>
+void prepare_closed_original_interaction(std::int64_t result_id, std::int64_t solve_id, std::int64_t source_id,
+    int storage_block, std::span<const int> components, std::uint64_t max_bytes,
+    std::string_view identity, Kernel kernel) const {
+  const auto& lane = prepared_execution_lane();
+  std::shared_ptr<const ClosedOriginalFieldSource> source;
+  closed_interaction_phase_([&] {
+    if (result_id < 0 || components.empty() || identity.empty() || !max_bytes)
+      throw std::invalid_argument("closed interaction has incomplete authority");
+    source = closed_original_sources_.at(solve_id);
+    const auto& [issued_source, issued_component, issued_storage, issued_identity] = source->bindings.at(result_id);
+    if (source_id != issued_source || components.size() != 1 || components.front() != issued_component ||
+        storage_block != issued_storage || identity != issued_identity)
+      throw std::invalid_argument("closed interaction changed its immutable source/storage binding");
+  });
+  const auto& candidate = source->candidate();
+  std::shared_ptr<ClosedInteractionTower> result;
+  std::vector<InteractionLevelView<Dim, MemorySpace>> levels;
+  std::size_t retained = 0;
+  closed_interaction_phase_([&] {
+    if (source->provider->accepted_original_candidate_generation(&candidate, lane) !=
+        source->accepted_generation || candidate.size() != static_cast<std::size_t>(nlev()))
+      throw std::logic_error("closed original source Accept receipt was superseded");
+    result = std::make_shared<ClosedInteractionTower>();
+    result->source = source;
+    result->storage_owner = sys_block(storage_block);
+    result->identity = identity;
+    retained = interaction_add(interaction_add(source->retained_bytes,
+        interaction_add(sizeof(ClosedInteractionTower), identity.size())), interaction_product(candidate.size(),
+        sizeof(field_type) + sizeof(InteractionLevelView<Dim, MemorySpace>)));
+    // Reserve bytes for the deep source and the entire output, including ghosts
+    // in the source image. Direct quadrature separately accounts its workspace.
+    for (const auto& field : candidate) {
+      for (std::size_t patch = 0; patch < field.local_size(); ++patch) {
+        retained = interaction_add(retained, interaction_product(
+            interaction_product(field.box(patch).numPts(), components.size()), sizeof(Real)));
+      }
+      retained = interaction_add(retained, interaction_product(field.layout().size(),
+          2 * sizeof(Box<Dim>) + sizeof(Index<Dim>) + sizeof(std::size_t)));
+      retained = interaction_add(retained, interaction_product(field.local_size(),
+          sizeof(typename field_type::fab_type) + sizeof(std::size_t)));
+    }
+    if (retained >= max_bytes)
+      throw std::length_error("closed interaction retained tower exceeds its explicit budget");
+    result->output.reserve(candidate.size());
+    levels.reserve(candidate.size());
+    Kokkos::fence();
+  });
+  for (int level = 0; level < nlev(); ++level) {
+    const auto& storage = facade_->prepared_amr_block_state(result->storage_owner, level);
+    closed_interaction_phase_([&] {
+      const auto& field = source->image.at(level);
+      if (field.layout() != storage.layout() || field.distribution() != storage.distribution() ||
+          field.local_rank() != storage.local_rank())
+        throw std::invalid_argument("closed interaction storage changes original source geometry/ownership");
+      const auto& active = source->active_image.at(level);
+      levels.push_back({&field, &active, nullptr, nullptr, source->geometries.at(level)});
+    });
+  }
+  std::uint64_t reserved = retained;
+  // Broadcast integer words exactly; no float conversion of a uint64 budget.
+  for (int rank = 0; rank < lane.size(); ++rank) {
+    std::uint64_t words = 0;
+    for (unsigned shift = 0; shift < 64; shift += 16)
+      words |= static_cast<std::uint64_t>(all_reduce_sum(lane.rank() == rank ?
+          static_cast<long>((static_cast<std::uint64_t>(retained) >> shift) & 0xffffU) : 0L, lane)) << shift;
+    reserved = std::max(reserved, words);
+  }
+  std::string exact;
+  closed_interaction_phase_([&] {
+    ExactContractBuilder builder;
+    builder.text("pops.completed-original-field-interaction@1").text(identity)
+        .text(source->identity).scalar(source->accepted_generation).scalar(solve_id)
+        .scalar(result_id).scalar(storage_block).scalar(max_bytes);
+    exact = std::move(builder).release();
+  });
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"closed-original-interaction", exact}}, lane))
+    throw std::invalid_argument("closed original interaction authority differs between ranks");
+  // retained is rank-local memory, so it is not a physical authority token.
+  // Each direct invocation authenticates its own full layout/point contract.
+  for (std::size_t level = 0; level < levels.size(); ++level) {
+    auto output = direct_spatial_interaction<Dim, MemorySpace>(levels, level, components,
+        max_bytes - reserved, identity, lane, kernel);
+    closed_interaction_phase_([&] { result->output.push_back(std::move(output)); });
+  }
+  (void)source->candidate();
+  std::map<std::int64_t, std::shared_ptr<const ClosedInteractionTower>> staged;
+  closed_interaction_phase_([&] {
+    if (source->provider->accepted_original_candidate_generation(&candidate, lane) != source->accepted_generation)
+      throw std::logic_error("closed interaction source publication was revoked");
+    staged.emplace(result_id, std::move(result));
+  });
+  auto existing = closed_interactions_.find(result_id);
+  if (existing == closed_interactions_.end())
+    closed_interactions_.insert(staged.extract(staged.begin()));
+  else existing->second = std::move(staged.begin()->second);
+}
+
+const ClosedInteractionTower& require_closed_interaction_(std::int64_t result_id) const {
+  const auto& lane = prepared_execution_lane();
+  std::shared_ptr<const ClosedInteractionTower> result;
+  closed_interaction_phase_([&] { result = closed_interactions_.at(result_id); });
+  const auto& candidate = result->source->candidate();
+  closed_interaction_phase_([&] {
+    if (result->source->provider->accepted_original_candidate_generation(&candidate, lane) !=
+        result->source->accepted_generation || result->output.size() != candidate.size())
+      throw std::logic_error("closed interaction is stale or incomplete");
+  });
+  return *result;
+}
+
+const field_type& closed_original_interaction(std::int64_t result_id) const {
+  const auto& result = require_closed_interaction_(result_id);
+  closed_interaction_phase_([&] {
+    if (active_level_ < 0 || active_level_ >= static_cast<int>(result.output.size()))
+      throw std::invalid_argument("closed interaction selected a foreign level");
+  });
+  return result.output.at(active_level_);
+}
+
+Real reduce_closed_original_interaction(std::int64_t result_id, int component,
+    std::string_view kind) const {
+  const auto& result = require_closed_interaction_(result_id);
+  const auto& lane = prepared_execution_lane();
+  const bool maximum = kind == "max", minimum = kind == "min";
+  Real local = maximum ? -std::numeric_limits<Real>::infinity() :
+      minimum ? std::numeric_limits<Real>::infinity() : Real(0);
+  closed_interaction_phase_([&] {
+    if (kind != "sum" && kind != "abs_sum" && !maximum && !minimum)
+      throw std::invalid_argument("unknown closed interaction reduction");
+    for (std::size_t level = 0; level < result.output.size(); ++level) {
+      const auto& field = result.output[level];
+      const auto& active = result.source->active_image.at(level);
+      if (component < 0 || component >= field.ncomp())
+        throw std::invalid_argument("closed interaction reduction component is invalid");
+      if (field.distribution().replicated() && lane.rank() != 0) continue;
+      if (kind == "sum") local += pops::reduce_active_sum_local(field, component, &active);
+      else if (kind == "abs_sum") local += pops::reduce_active_abs_sum_local(field, component, &active);
+      else if (pops::reduce_masked_max_local(field, component, &active).has_active) {
+        if (maximum) local = std::max(local, pops::reduce_active_max_local(field, component, &active));
+        else local = std::min(local, pops::reduce_active_min_local(field, component, &active));
+      }
+    }
+    Kokkos::fence();
+  });
+  if (maximum) return static_cast<Real>(all_reduce_max(static_cast<double>(local), lane));
+  if (minimum) return static_cast<Real>(all_reduce_min(static_cast<double>(local), lane));
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
+}
