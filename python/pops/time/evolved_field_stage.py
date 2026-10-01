@@ -122,8 +122,9 @@ class EvolvedOriginalFieldRate:
         from pops.fields._references import collect_references
         from pops.math import elliptic_terms
 
-        if not elliptic_terms(self.spatial):
-            raise TypeError("original field rate requires explicit spatial terms")
+        if self.spatial is not None and not elliptic_terms(self.spatial):
+            if type(self.spatial) is bool or scalar_literal(self.spatial).to_python() != 0:
+                raise TypeError("original field rate requires spatial terms or explicit zero/None")
         if not isinstance(self.additive, Expr):
             object.__setattr__(self, "additive", Const(self.additive))
         if any(row.kind != "state" for row in collect_references(self.additive)):
