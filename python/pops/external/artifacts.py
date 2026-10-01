@@ -459,6 +459,17 @@ class InstalledComponent:
         loaded.verify()
         return loaded
 
+    def bind_identity_data(self) -> dict[str, Any]:
+        """Authenticate installed content independently of its rank-local residence.
+
+        Installation and ``verify`` authenticate the file at ``path``. That realization path
+        remains in ``to_data`` for provenance, while collective bind/checkpoint identities
+        describe the same installed component in independent content-addressed stores.
+        """
+        data = self.to_data()
+        del data["path"]
+        return {"schema_version": 2, "component": data}
+
     def to_data(self) -> dict[str, Any]:
         return {
             "component_id": self.component_id,

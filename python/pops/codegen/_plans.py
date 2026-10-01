@@ -135,6 +135,14 @@ def _evidence(value: Any, *, where: str) -> Any:
         rows = [_evidence(item, where=where) for item in value]
         return {"set": sorted(rows, key=canonical_bytes)}
 
+    from pops.external.artifacts import InstalledComponent
+
+    if type(value) is InstalledComponent:
+        return {
+            "type": "%s.%s" % (type(value).__module__, type(value).__qualname__),
+            "value": _evidence(value.bind_identity_data(), where=where),
+        }
+
     for name in ("artifact_data", "to_data", "to_manifest", "to_dict",
                  "canonical_identity", "options"):
         hook = getattr(value, name, None)
