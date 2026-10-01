@@ -84,8 +84,10 @@ def capture(world, runtime, cells, width, *, step, first_solution=None):
                             sample, tuple(value.tobytes() for value in slots)))
     with collective_check(world):
         states["solution"] = np.stack(fields)
-    carriers = collective_call(world, lambda: tuple(tuple(row) for row in
-        runtime._executor.checkpoint_rank_local_carrier_manifest()))
+    # Uniform exposes the sealed POPSAUX2 accepted image; the rank-local
+    # carrier manifest accessor belongs to the AMR engine.
+    carriers = collective_call(world, lambda: bytes(
+        runtime._executor.capture_auxiliary_checkpoint_accepted_state()))
     diagnostics = collective_call(world, lambda: tuple(sorted(runtime._executor.program_diagnostics().items())))
     lifecycle = collective_call(world, lambda: (runtime.time(), runtime.macro_step()))
     return states, (carriers, diagnostics, tuple(history), lifecycle)
