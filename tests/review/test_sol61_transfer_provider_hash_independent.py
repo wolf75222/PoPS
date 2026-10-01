@@ -42,3 +42,22 @@ def test_original_counterreview_attacks_now_refused(attack):
     elif attack=="injected":routes[0][0]="pops.handle.v1::case:foreign/block:other::state::slot"
     else:routes[0][9]="restriction"
     with pytest.raises(ValueError):m.r.accepted_contract(row,1,m.source_subjects())
+
+@pytest.mark.parametrize("attack",["producer","representation","sampling"])
+def test_real_native_history_provenance_independent(attack):
+    import json
+    root=Path("/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr")
+    assert root.is_dir(), "this receipt requires actual retained bb416 files"
+    receipt=m.r.strict_json((root/"receipt.json").read_bytes())
+    ir=m.r.strict_json((root/"program-2.ir.json").read_bytes())
+    arrays=m.r.wire.archive(Path(receipt["checkpoints"]["accepted"]["path"]).read_bytes())
+    contract=m.r.strict_json(str(arrays["amr_accepted_contract"].item()))
+    registry=m.r.program_history_registry(ir)
+    m.r.original_history_contract(contract,1,registry)
+    row=contract["history_qualifications"][0]
+    if attack=="producer":row[1]="program.block.1"
+    else:
+        descriptor=m.r.strict_json(row[2]);descriptor[attack]="foreign"
+        row[2]=json.dumps(descriptor,sort_keys=True,separators=(",",":"))
+    with pytest.raises(ValueError,match="original history provenance"):
+        m.r.original_history_contract(contract,1,registry)
