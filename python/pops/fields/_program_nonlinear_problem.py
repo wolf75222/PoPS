@@ -126,6 +126,10 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
     from ._evolved_stage_contract import stage_projection, validate_encoded_tau
     projection = stage_projection(problem, program, at)
     temporal_tau = None if projection is None else projection.tau.to_data()
+    if projection is not None and projection.to_data()["schema_version"] == 2:
+        from ._evolved_stage_contract import validate_additive_capture_reads
+
+        validate_additive_capture_reads(captures)
     if projection is not None:
         for previous in projection.previous:
             witnesses = [value for value in captures if _identity(value.state_ref) == _identity(previous.handle)]
@@ -323,6 +327,10 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
             or (seed_index is not None and (type(seed_index) is not int or seed_index != 2 + count)):
         raise SolveRequestError("equation_identity_drift", "field capture/seed input slots changed")
     captures = token.inputs[2:2 + count]
+    if source.get("evolved_stage", {}).get("schema_version") == 2:
+        from ._evolved_stage_contract import validate_additive_capture_reads
+
+        validate_additive_capture_reads(captures)
     unknown_handles = tuple(Handle.from_canonical_identity(_json_ready(item)) for item in source["unknown_components"])
     diffusion_dependencies = field_expression_dependencies(source["diffusion"], captures, unknowns=unknown_handles if candidate_policy else ())
     expected_coefficient_inputs = captures if diffusion_dependencies else ()

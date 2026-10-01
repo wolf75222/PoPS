@@ -82,6 +82,21 @@ def validate_encoded_tau(expressions: Any, authority: Any) -> None:
         visit(expression)
 
 
+def validate_additive_capture_reads(captures: Any) -> None:
+    """A current State read cannot impersonate a future computed candidate."""
+    from pops.time.points import TimePoint
+
+    pending, seen = list(captures), set()
+    while pending:
+        value = pending.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        if value.op == "state" and value.point != TimePoint(value.clock, 0):
+            raise ValueError("additive source State read changed its accepted endpoint")
+        pending.extend(value.inputs)
+
+
 def emit_issued_duration(
     authority: Any, program: Any, point: Any, name: str, lines: list
 ) -> str | None:
