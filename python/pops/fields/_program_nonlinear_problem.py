@@ -129,15 +129,17 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
     from ._evolved_stage_contract import stage_projection, validate_encoded_tau
     projection = stage_projection(problem, program, at)
     temporal_tau = None if projection is None else projection.tau.to_data()
-    if projection is not None and projection.to_data()["schema_version"] == 2:
+    if projection is not None and projection.to_data()["schema_version"] in (2, 3):
         from ._evolved_stage_contract import validate_additive_capture_reads
 
         validate_additive_capture_reads(captures)
     if projection is not None:
         for previous in projection.previous:
             witnesses = [value for value in captures if _identity(value.state_ref) == _identity(previous.handle)]
-            if len(witnesses) != 1 or witnesses[0].point != TimePoint(program.clock, 0):
+            if len(witnesses) != 1:
                 raise FieldProblemError("field.evolution.previous", "original evolution requires the exact accepted previous frame endpoint")
+            from ._evolved_stage_contract import validate_previous_capture, issued_previous
+            validate_previous_capture(program, witnesses[0], point=at, issued=issued_previous(projection.to_data()))
     from ._original_field_interaction import compile_interactions
     interactions = compile_interactions(problem, method_data.get("interaction_realization"))
     diffusion, local = compile_equations(problem, captures, per_candidate=candidate_policy is not None)
@@ -340,10 +342,18 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
             or (seed_index is not None and (type(seed_index) is not int or seed_index != 2 + count)):
         raise SolveRequestError("equation_identity_drift", "field capture/seed input slots changed")
     captures = token.inputs[2:2 + count]
-    if source.get("evolved_stage", {}).get("schema_version") == 2:
+    if source.get("evolved_stage", {}).get("schema_version") in (2, 3):
         from ._evolved_stage_contract import validate_additive_capture_reads
 
         validate_additive_capture_reads(captures)
+    if source.get("evolved_stage") is not None:
+        from ._evolved_stage_contract import issued_previous, validate_previous_capture
+        stage = _json_ready(source["evolved_stage"])
+        for previous in stage["previous"]:
+            witnesses = [value for value in captures if _identity(value.state_ref) == _identity(Handle.from_canonical_identity(previous["handle"]))]
+            if len(witnesses) != 1:
+                raise SolveRequestError("equation_identity_drift", "original previous capture owner changed")
+            validate_previous_capture(program, witnesses[0], point=token.point, issued=issued_previous(stage))
     unknown_handles = tuple(Handle.from_canonical_identity(_json_ready(item)) for item in source["unknown_components"])
     diffusion_dependencies = field_expression_dependencies(source["diffusion"], captures, unknowns=unknown_handles if candidate_policy else ())
     expected_coefficient_inputs = captures if diffusion_dependencies else ()
@@ -415,7 +425,8 @@ def same_stage_tau(stage: Any, tau: Any, source: Any) -> bool:
     data = _json_ready(stage)
     additive = any(isinstance(row, dict) and row.get("contract") ==
                    "pops.evolved-field-rate.spatial-additive@1" for row in data.get("spatial_rhs", ()))
-    return (type(data.get("schema_version")) is int and data.get("schema_version") == (2 if additive else 1)
+    from ._evolved_stage_contract import issued_previous
+    return (type(data.get("schema_version")) is int and data.get("schema_version") == (3 if issued_previous(stage) else 2 if additive else 1)
             and data.get("tau") == _json_ready(tau)
             and data.get("unknowns") == _json_ready(source["unknown_components"])
             and data in _json_ready(source["field_problem"])["outputs"])

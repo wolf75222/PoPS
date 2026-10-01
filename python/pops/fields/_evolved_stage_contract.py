@@ -97,6 +97,40 @@ def validate_additive_capture_reads(captures: Any) -> None:
         pending.extend(value.inputs)
 
 
+def validate_previous_capture(program: Any, value: Any, *, point: Any, issued: bool) -> None:
+    """An issued predecessor is a computed SSA field, never a relabeled State read.
+
+    Its complete expression/StateSpace/owner/point is sealed by the original
+    SolveRequest capture equation identity before the native residual runs.
+    """
+    from pops.time.points import TimePoint
+
+    if not issued:
+        if value.point != TimePoint(program.clock, 0):
+            raise ValueError("original accumulation requires the previous accepted frame endpoint")
+        return
+    if point != TimePoint(program.clock, step=1) or value.point != point:
+        raise ValueError("issued original predecessor requires the exact next frame endpoint")
+    if value.op == "state" or not value.inputs:
+        raise ValueError("issued original predecessor must be a computed Program State value")
+    if program._issued_values.get(id(value)) is not value or program._canonical_value(value) is not value:
+        raise ValueError("issued original predecessor is not the current Program-issued value")
+    validate_additive_capture_reads((value,))
+
+
+def issued_previous(stage: Any) -> bool:
+    """Interpret only the immutable, versioned physical projection declaration."""
+    data = _json_ready(stage)
+    if data.get("schema_version") != 3:
+        if "previous_scope" in data or "previous_authority" in data:
+            raise ValueError("original predecessor invented an unversioned scope")
+        return False
+    if type(data["schema_version"]) is not int or data.get("previous_scope") != "issued" or \
+            data.get("previous_authority") != "pops.evolved-original-field-issued-previous@1":
+        raise ValueError("issued original predecessor lost its versioned authority")
+    return True
+
+
 def emit_issued_duration(
     authority: Any, program: Any, point: Any, name: str, lines: list, *, operation_id: int
 ) -> str | None:
@@ -152,7 +186,7 @@ def build_evolved_state(solution: Any, *, target: Any) -> Any:
             "field_evolved_state",
             (solution.packed, *captures),
             {
-                "projection_contract": "pops.evolved-original-field-stage@2" if partitioned else "pops.evolved-original-field-stage@1",
+                "projection_contract": "pops.evolved-original-field-stage@3" if issued_previous(stage) else "pops.evolved-original-field-stage@2" if partitioned else "pops.evolved-original-field-stage@1",
                 "ncomp": len(target.space.components),
                 "previous_capture_index": next(
                     index for index, row in enumerate(captures) if row is previous
@@ -182,7 +216,7 @@ def validate_evolved_state(value: Any) -> Any:
         value.op != "field_evolved_state"
         or len(value.inputs) < 2
         or value.attrs.get("projection_contract") not in (
-            "pops.evolved-original-field-stage@1", "pops.evolved-original-field-stage@2")
+            "pops.evolved-original-field-stage@1", "pops.evolved-original-field-stage@2", "pops.evolved-original-field-stage@3")
     ):
         raise ValueError("original accumulation publication lost its versioned contract")
     packed = value.inputs[0]
@@ -200,14 +234,11 @@ def validate_evolved_state(value: Any) -> Any:
     if type(slot) is not int or not 0 <= slot < len(captures):
         raise ValueError("original accumulation lost its previous State slot")
     previous = captures[slot]
-    from pops.time.points import TimePoint
-
-    if previous.point != TimePoint(value.prog.clock, 0):
-        raise ValueError("original accumulation requires the previous accepted frame endpoint")
     stage = _json_ready(source.get("evolved_stage"))
+    validate_previous_capture(value.prog, previous, point=packed.point, issued=issued_previous(stage))
     indices = _projection_indices(stage, previous)
     partitioned = indices != tuple(range(len(stage["previous"])))
-    expected_contract = "pops.evolved-original-field-stage@2" if partitioned else "pops.evolved-original-field-stage@1"
+    expected_contract = "pops.evolved-original-field-stage@3" if issued_previous(stage) else "pops.evolved-original-field-stage@2" if partitioned else "pops.evolved-original-field-stage@1"
     expressions = tuple(source["accumulation"][index] for index in indices)
     declared_indices = _json_ready(value.attrs.get("component_indices"))
     if value.attrs["projection_contract"] != expected_contract or (
@@ -276,7 +307,7 @@ def validate_evolved_partitions(program: Any) -> None:
     """Every partition of one solved stage is committed exactly once together."""
     groups = {}
     for value in program._values:
-        if value.op == "field_evolved_state" and value.attrs.get("projection_contract") == "pops.evolved-original-field-stage@2":
+        if value.op == "field_evolved_state" and (value.attrs.get("projection_contract") == "pops.evolved-original-field-stage@2" or "component_indices" in value.attrs):
             solve = validate_evolved_state(value)
             groups.setdefault(solve.id, (solve, []))[1].append(value)
     for solve, values in groups.values():

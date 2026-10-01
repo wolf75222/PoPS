@@ -309,6 +309,10 @@ class _ProgramSerialization(_ProgramBase):
                      node.attrs.get("source_contract", {}).get("evolved_stage", {}))
             if stage.get("schema_version") == 2:
                 result["version"] = max(result["version"], 14)
+            if stage.get("schema_version") == 3:
+                from pops.fields._evolved_stage_contract import issued_previous
+                issued_previous(stage)
+                result["version"] = max(result["version"], 21)
             if node.op == "field_evolved_state" and node.attrs.get("projection_contract") == "pops.evolved-original-field-stage@2":
                 result["version"] = max(result["version"], 15)
             if node.op == "store_history" and "global_field_storage" in node.attrs:

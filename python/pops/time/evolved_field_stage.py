@@ -168,12 +168,15 @@ class EvolvedOriginalFieldProjection:
     constraints: tuple
     previous: tuple
     tau: TemporalTau
+    previous_scope: str = "accepted"
 
     def to_data(self) -> dict[str, Any]:
         from pops.fields._identity import strict_field_data
 
-        return {
-            "schema_version": 2 if any(type(row) is EvolvedOriginalFieldRate
+        if type(self.previous_scope) is not str or self.previous_scope not in ("accepted", "issued"):
+            raise ValueError("original projection previous_scope must be accepted or issued")
+        result = {
+            "schema_version": 3 if self.previous_scope == "issued" else 2 if any(type(row) is EvolvedOriginalFieldRate
                                        for row in self.spatial_rhs) else 1,
             "kind": "evolved_original_field_accumulation",
             "representation": "piecewise_constant_cell",
@@ -190,6 +193,10 @@ class EvolvedOriginalFieldProjection:
             "previous": [strict_field_data(row) for row in self.previous],
             "tau": self.tau.to_data(),
         }
+        if self.previous_scope == "issued":
+            result["previous_scope"] = "issued"
+            result["previous_authority"] = "pops.evolved-original-field-issued-previous@1"
+        return result
 
     def resolve_references(self, resolver: Any) -> EvolvedOriginalFieldProjection:
         from dataclasses import replace
@@ -256,6 +263,7 @@ class EvolvedOriginalFieldStage:
         spatial_rhs: tuple,
         previous: tuple,
         tau: TemporalTau,
+        previous_scope: str = "accepted",
         constraints: Mapping | None = None,
         boundaries: tuple = (),
     ) -> None:
@@ -302,6 +310,8 @@ class EvolvedOriginalFieldStage:
         if set(constraints) != auxiliary:
             raise ValueError("original stage requires exact equations for every auxiliary unknown")
 
+        if type(previous_scope) is not str or previous_scope not in ("accepted", "issued"):
+            raise ValueError("original stage previous_scope must be accepted or issued")
         equations = dict(constraints)
         for unknown, q, rate, old in zip(
             evolved_unknowns, accumulation, spatial_rhs, previous, strict=True
@@ -330,6 +340,7 @@ class EvolvedOriginalFieldStage:
             tuple((row, constraints[row]) for row in unknowns if row in constraints),
             previous,
             tau,
+            previous_scope,
         )
         object.__setattr__(
             self,
