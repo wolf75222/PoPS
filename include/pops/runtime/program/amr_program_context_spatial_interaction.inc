@@ -73,12 +73,19 @@ field_type& spatial_interaction_owned(std::int64_t value_id, int program_block, 
         !attempt.visible() || !attempt.same_attempt(resource_attempt()) || point != boundary_evaluation_point(0))
       throw std::logic_error("direct interaction source hierarchy/attempt was revoked");
   });
-  field_type* issued = nullptr;
-  interaction_phase(lane, [&] {
-    const ScratchKey key{ScratchKind::Scalar, active_level_, owner, value_id, 0};
-    auto [entry, inserted] = scratches_.insert_or_assign(key, std::move(result));
-    (void)inserted;
-    issued = &entry->second;
-  });
-  return *issued;
+  // Allocate a detached registry node before the final vote. No successful
+  // rank mutates its issued scratch if another rank cannot allocate its node.
+  const ScratchKey key{ScratchKind::Scalar, active_level_, owner, value_id, 0};
+  std::map<ScratchKey, field_type> staged;
+  interaction_phase(lane, [&] { staged.emplace(key, std::move(result)); });
+  static_assert(std::is_nothrow_move_assignable_v<field_type>);
+  auto existing = scratches_.find(key);
+  if (existing != scratches_.end()) {
+    existing->second = std::move(staged.begin()->second);
+    return existing->second;
+  }
+  // Node transfer uses the same allocator and the built-in integral tuple key;
+  // it allocates no storage and invokes no user comparator after the vote.
+  auto issued = scratches_.insert(staged.extract(staged.begin()));
+  return issued.position->second;
 }

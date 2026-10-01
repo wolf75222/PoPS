@@ -106,6 +106,9 @@ class _ProgramSerialization(_ProgramBase):
 
     @staticmethod
     def _serialize_node(value: Any, *, include_provenance: bool = True) -> dict[str, Any]:
+        if value.op == "spatial_interaction":
+            from .spatial_interaction import interaction_contract
+            interaction_contract(value)
         attrs = dict(value.attrs)
         if "schedule" in attrs:
             attrs["schedule"] = _serialize_schedule(attrs["schedule"])

@@ -42,6 +42,12 @@ def _spaces(source, output, components):
             raise ValueError("spatial interaction output changes " + attr)
 
 
+def _source_point(source):
+    from pops.time.points import TimePoint
+    if source.op == "state" and source.point != TimePoint(source.clock, 0):
+        raise ValueError("spatial interaction State.n cannot be relabelled to another point")
+
+
 def interaction_contract(value):
     from pops.fields.spatial_interaction import kernel_cpp
     if value.op != "spatial_interaction" or value.vtype != "scalar_field" or len(value.inputs) != 1:
@@ -70,6 +76,11 @@ def interaction_contract(value):
     if len(raw) != 16 or any(c not in "0123456789abcdef" for c in raw) or int(raw, 16) == 0:
         raise ValueError("invalid spatial interaction budget")
     source = value.inputs[0]
+    _source_point(source)
+    canonical = source.prog._canonical_value(source)
+    _source_point(canonical)
+    if canonical.point != source.point or canonical.space != source.space or canonical.block != source.block:
+        raise ValueError("spatial interaction source authority changed after issue")
     if attrs["source_scope"] not in ("issued", "accepted") or (attrs["source_scope"] == "accepted" and source.op != "state"):
         raise ValueError("accepted composite interaction requires the issued State.n carrier")
     if source.op == "history" and "history_contract" not in source.attrs:
@@ -102,6 +113,7 @@ class _ProgramSpatialInteraction:
         if not isinstance(state, ProgramValue) or state.vtype != "state" or state.space is None:
             raise TypeError("spatial interaction requires a typed State")
         require_top_level(self, state, "spatial interaction")
+        _source_point(state)
         if (type(kernel) is not SpatialInteractionKernel or type(measure) is not CellVolumeMeasure
                 or type(quadrature) is not CellMidpoint or type(realization) is not DirectSpatialInteraction):
             raise TypeError("spatial interaction requires explicit physical kernel/measure/quadrature/direct realization")
