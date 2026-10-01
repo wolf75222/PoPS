@@ -215,7 +215,8 @@ historical programs more directly than an unconditional source-text assertion.
 Validation receipts: source/math initial 45 PASS, plus the two additional guard
 and exact-host schedule checks PASS; final source replay at 482 passed 47 tests in 412.91 seconds. Five targeted
 TrueCorrectionResidual/guard checks PASS after the follow-up; final whole-suite
-51-test replay on 539 is pending at note creation. Ruff, nine Python ASTs and diff-check PASS. Actual Dim2 syntax
+51-test replay on 539 PASS in 414.43 seconds (external JUnit receipt
+`/tmp/sol61-candidate-freeze-5394fda5-source.xml`). Ruff, nine Python ASTs and diff-check PASS. Actual Dim2 syntax
 PASS covers native Uniform primitives/workspace and actual AMR templates/three
 fixtures. A separate real Uniform @3 emitted CPP syntax check also PASS. The
 source/headers checked by syntax matched all sixteen frozen Git blobs.
