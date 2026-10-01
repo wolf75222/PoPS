@@ -146,3 +146,9 @@ existing contract rows. The JSON preserves the literal external owner/receipt
 hashes, false aggregate binding, false historical M04 closure and pending
 native source-only records. This consistency check and `git diff --check` pass;
 they are metadata validation, not an additional scientific/native or CI run.
+
+## Later exact reception window — SDK7 and candidate diffusion
+
+The preceding six entries and their status text are retained as their earlier window. The added m19_sdk7_finite_product_received entry receives actual Serial6/MPI2 six-per-rank original saved states and exact replay, with independent ROOT seals and12 genuine offline copied/resealed refusals per backend. Earlier M19 compile/bind/initial-save reds remain historical evidence. See m19_sdk7_native_reception.json; C05/C15/C39/C40 links describe only the finite reduction/extension chain.
+
+The added candidate_diffusion_v3_ir11 entry records163 ROOT coherent source checks, four candidate MMS fixture checks, PerCandidate@1 D(q) and true-correction realization. Original@1/@2 equations/default routes retain their own identities. Native D(q) and full scientific families remain pending. Current captured-D native@2 campaigns are red on diagnostic restart persistence, and C++234 reception is red on the exact unchanged N32 convergence budget and one corrected test expectation. No older source-only or native-sibling proof is promoted to current acceptance.

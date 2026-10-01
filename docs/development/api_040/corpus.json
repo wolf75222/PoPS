@@ -1273,7 +1273,11 @@
         "python_port": "433f0d3f511b102d9c09076e57bc332838f0c6df",
         "historical_source_review": "c880644af0cc73c6144b18786bbbee93dadcdc7d",
         "historical_source_review_scope": "Ten source/math/extracted-controller checks passed without public Case/validate/resolve admission; unsupported LT tag was missed. Not integrated or qualified as admissible.",
-        "subsequent_root_source_counts": {"passed": 162, "failed": 5, "seconds": 653.75},
+        "subsequent_root_source_counts": {
+          "passed": 162,
+          "failed": 5,
+          "seconds": 653.75
+        },
         "corrected_fixture_commit": "b943dd6627550364337d41743cb4efe2f7b33480",
         "corrected_fixture_public_resolve_reception": "pending independent source replay",
         "realization": "SpatialBasisJacobi@1",
@@ -1431,6 +1435,108 @@
             "scoped_relation": "Finite composite/child restart remains pending the full six-case Serial/MPI replay."
           }
         }
+      },
+      "m19_sdk7_finite_product_received": {
+        "status": "scoped_native_scientific_received",
+        "related_models": [
+          "M19"
+        ],
+        "evidence": {
+          "path": "docs/development/api_040/m19_sdk7_native_reception.json",
+          "sha256": "f417d0ab40b30dcf567ef3e0efa34d90d3ceab1502584786c1625754156276ba"
+        },
+        "native_passes": {
+          "serial": 6,
+          "mpi2_per_rank": 6
+        },
+        "countermodels_per_backend": 12,
+        "max_original_error": 2.842170943040401e-14,
+        "later_build_requalified": false,
+        "contract_links": {
+          "C05": {
+            "title_as_in_spec": "Identité, type et coordonnées",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 3,
+            "scoped_relation": "SDK7 actual finite-product Serial/MPI2 saved states, ownership, original reduction/extension and exact replay received; whole contract remains open."
+          },
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "SDK7 actual finite-product Serial/MPI2 saved states, ownership, original reduction/extension and exact replay received; whole contract remains open."
+          },
+          "C39": {
+            "title_as_in_spec": "Propriétés du transfert",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 133,
+            "scoped_relation": "SDK7 actual finite-product Serial/MPI2 saved states, ownership, original reduction/extension and exact replay received; whole contract remains open."
+          },
+          "C40": {
+            "title_as_in_spec": "Reprise",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 135,
+            "scoped_relation": "SDK7 actual finite-product Serial/MPI2 saved states, ownership, original reduction/extension and exact replay received; whole contract remains open."
+          }
+        },
+        "limits": [
+          "No full M19 kinetic family, arbitrary support, AMR/GPU/OpenMPI/ROMEO qualification",
+          "System-generated CPP absent; retained Program CPP does not prove CPP-to-System-DSO compile graph",
+          "Original resolved-plan payload absent; actual artifact aggregate recomputed, CompiledPlanRecord ROOT-attested",
+          "Later source/header changes do not inherit SDK7 qualification; a rebuilt package needs a fresh campaign"
+        ]
+      },
+      "candidate_diffusion_v3_ir11": {
+        "status": "source_received_native_pending",
+        "related_models": [
+          "M06",
+          "M13",
+          "M22",
+          "M26",
+          "M27"
+        ],
+        "source_tests": 163,
+        "native_executed": false,
+        "evidence": {
+          "path": "docs/development/api_040/candidate_diffusion_root_source_reception.json",
+          "sha256": "506277a28cd37d20c16185d8f6c1186bae5faa9fd225a8a8ce8ccef62745825c"
+        },
+        "contract_links": {
+          "C14": {
+            "title_as_in_spec": "Diffusion, flux joints et ordre supérieur",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 57,
+            "scoped_relation": "PerCandidate@1 D(q) full original residual/JVP/authentication source reception; native and complete family acceptance pending."
+          },
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "PerCandidate@1 D(q) full original residual/JVP/authentication source reception; native and complete family acceptance pending."
+          },
+          "C16": {
+            "title_as_in_spec": "Région de résidu fermée",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 65,
+            "scoped_relation": "PerCandidate@1 D(q) full original residual/JVP/authentication source reception; native and complete family acceptance pending."
+          },
+          "C25": {
+            "title_as_in_spec": "Compilation de corps inspectables",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 115,
+            "scoped_relation": "PerCandidate@1 D(q) full original residual/JVP/authentication source reception; native and complete family acceptance pending."
+          },
+          "C31": {
+            "title_as_in_spec": "Version et validité",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 34,
+            "scoped_relation": "PerCandidate@1 D(q) full original residual/JVP/authentication source reception; native and complete family acceptance pending."
+          }
+        },
+        "limits": [
+          "Original D(q) Native acceptance pending coherent rebuild",
+          "FullResidualBasisLU and EvolvedStage are separate pending extensions",
+          "No whole M06/M13/M22/M26/M27 qualification from source checks"
+        ]
       }
     },
     "limits": [

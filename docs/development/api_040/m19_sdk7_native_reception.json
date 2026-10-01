@@ -1,0 +1,223 @@
+{
+  "archived_origins": {
+    "archive_reader": "sol61.m19-owner-pins@2 requires a separately ROOT-approved backing; portable ROOT reception pending",
+    "mpi2": {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-m19-mpi2-offline-pending-20261001/actual-origins-snapshot.zip",
+      "sha256": "ce8010b4b5c11c4d6e7a3d6fac4bd31309726d0917bd6653eedf1d053d1adc83"
+    },
+    "serial": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk7-archive/backing-files.json",
+      "sha256": "348e29dd1ef59c3dbdabbb2733d5bff40045d0829a7a389d24c8e97585364d6b"
+    }
+  },
+  "backend": "Apple arm64 CPU; LLVM21; Kokkos5.2.0 OpenMP/Serial; MPICH4.1.2; Dim2; one thread/rank",
+  "countermodels": {
+    "mpi2": {
+      "all_refused": true,
+      "controls": 12,
+      "report": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-real-copied-resealed-countermodels/report.json",
+        "sha256": "08e81c33d4cd337dcdd91b7bf4b416d4e2302c478728a65a6940b36254e4d6c5"
+      }
+    },
+    "new_native_failure_injection": false,
+    "scope": "real copied-and-resealed offline state/protocol guards; original donors rehashed unchanged",
+    "serial": {
+      "all_refused": true,
+      "controls": 12,
+      "report": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-real-copied-resealed-countermodels/report.json",
+        "sha256": "13fcbce8310051df9339996f5a28c579a02463be7265d33998e5b6a7b81cfe2b"
+      }
+    }
+  },
+  "date": "2026-10-01",
+  "historical_mpi_red": {
+    "corrective_contract": "InstalledComponent.bind_identity_data schema2: content retained, physical path excluded only from bind projection",
+    "reason": "capture plans differ across ranks due to rank-local InstalledComponent path in bind identity",
+    "result": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-product-mpi2-dim2/result.json",
+      "sha256": "61da03de5c35c2626ca9fa63db514e0a5bdf431345f925b286fbecc240e185ef"
+    }
+  },
+  "limits": [
+    "No full M19 kinetic family, arbitrary support, AMR/GPU/OpenMPI/ROMEO qualification",
+    "System-generated CPP absent; retained Program CPP does not prove CPP-to-System-DSO compile graph",
+    "Original resolved-plan payload absent; actual artifact aggregate recomputed, CompiledPlanRecord ROOT-attested",
+    "Later source/header changes do not inherit SDK7 qualification; a rebuilt package needs a fresh campaign"
+  ],
+  "native": {
+    "mpi2": {
+      "errors": 0,
+      "failures": 0,
+      "rank_junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-product-bind-content-mpi2-dim2/rank0.xml",
+          "sha256": "11f3247ff3f8f6bc047dde787d9c7b5c466a80c8ab3762bc1cc0885f36dda5d5"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-product-bind-content-mpi2-dim2/rank1.xml",
+          "sha256": "dbd084a7086c62347856ee9f10daf2ec3568c7cccc79ecc85c015301a37d7809"
+        }
+      ],
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-product-bind-content-mpi2-dim2/result.json",
+        "sha256": "49f24af0afae5feb61930c17b081dd38e67f4ac330aa38fe55b53aeeb5df9bd4"
+      },
+      "skipped": 0,
+      "tests_per_rank": 6
+    },
+    "serial": {
+      "errors": 0,
+      "failures": 0,
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-product-serial-dim2/result.json",
+        "sha256": "20357b2166f897ddbcc4f7d599eea6441c8eb3abdb58d9d7de8e791cb5f39a5d"
+      },
+      "skipped": 0,
+      "tests": 6
+    }
+  },
+  "native_binary_reused_for_python_bind_fix": true,
+  "native_cpp_build_source_embedded": false,
+  "native_sha256": "358dcd87f70d22305dd97865c78550bd59e74fda592e06ebfe291f496279aa91",
+  "parameters": [
+    {
+      "components": 3,
+      "nv": 3,
+      "nx": 4,
+      "reverse_maps": false
+    },
+    {
+      "components": 1,
+      "nv": 5,
+      "nx": 2,
+      "reverse_maps": false
+    },
+    {
+      "components": 5,
+      "nv": 3,
+      "nx": 7,
+      "reverse_maps": false
+    },
+    {
+      "components": 3,
+      "nv": 3,
+      "nx": 4,
+      "reverse_maps": true
+    },
+    {
+      "components": 1,
+      "nv": 5,
+      "nx": 2,
+      "reverse_maps": true
+    },
+    {
+      "components": 5,
+      "nv": 3,
+      "nx": 7,
+      "reverse_maps": true
+    }
+  ],
+  "physical_scope": "Finite velocity reduction with signed weights (-1)^j*(j+1), measure 4/nv, and constant extension; no Vlasov/BGK/Poisson evolution.",
+  "python_bind_rebuild": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/python-bind-content-native-reception.json",
+    "sha256": "875914ebfc7e942941c93bc09c1f14fcbcce638d556c00497a008a2249c0adc5"
+  },
+  "qualification": "finite_product_reduction_and_extension_saved_state_witness",
+  "schema": "pops.api040.m19-sdk7-native-reception@1",
+  "scientific": {
+    "mpi2": {
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-scientific-root-owner/root-approval.json",
+        "sha256": "1f55f196485c22aae6d5a65178f8ecf68618df5b1c8f6da9a16c2b03fcbcfb2a"
+      },
+      "cases": 6,
+      "closure_command_first_failure": "report has no mode key; original reader reception passed; preexisting external seals reused",
+      "closure_command_first_returncode": 1,
+      "embedded_native_build_source_commit": false,
+      "external_cpp_build": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/build-reception-dim2.json",
+        "sha256": "fddf53da2573792d3debb3d1133f655029640fcab21c81154633d289bfda0b60"
+      },
+      "external_python_rebuild": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/python-bind-content-native-reception.json",
+        "sha256": "875914ebfc7e942941c93bc09c1f14fcbcce638d556c00497a008a2249c0adc5"
+      },
+      "limitations": [
+        "CPP-to-DSO build linkage not stored; filenames never used as link proof",
+        "original ResolvedSimulationPlan payload absent; actual CompiledPlanRecord is ROOT-owner-attested",
+        "source b310 Python rebuild and bfae C++ build are distinct",
+        "snapshot backing map pending versioned reader admission and external ROOT approval"
+      ],
+      "max_original_error": 2.842170943040401e-14,
+      "native_binary_reused": true,
+      "native_cpp_build_source_attested_by_root": "bfae73f34174079bc6f2d8f4d50aa11d08eca5b5",
+      "native_execution": "previous closed authentic MPI2 run; no execution here",
+      "native_sha256": "358dcd87f70d22305dd97865c78550bd59e74fda592e06ebfe291f496279aa91",
+      "owner_pins": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-scientific-root-owner/owner-pins.json",
+        "sha256": "045203abb2065a0c661e46de6078ea9fac644e53bd7b523e15bb7eba8e264097"
+      },
+      "pending_input": {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-m19-mpi2-offline-pending-20261001/pending-inputs.json",
+        "sha256": "c05332d28b39f623e53767e0b96236cd3654b466c30594d97548385d674ff729"
+      },
+      "qualification": "real-native-finite-product-saved-state-witness-only",
+      "reader_no_pops_import": true,
+      "report": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-scientific-root-owner/scientific-reception.json",
+        "sha256": "10ef34d49d1070754b62644af88687e1fa0537b0f842433d06a8e88c1a99602d"
+      },
+      "schema": "root.api040-m19-mpi2-scientific-reception@1",
+      "sdk_signature": "7eaf05f5cb619437050668d71d7d41d3b39939ddd84c21c9adf4322e889f9849",
+      "source_commit_observed_by_native_run": "b3108c73dd6cf928cc703a410e5310806727cf4b",
+      "strong_cpp_dso_link_qualified": false
+    },
+    "serial": {
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-scientific-root-owner/root-approval.json",
+        "sha256": "5309d181a4424e1f6330fb24dc15aff131dc423d010106a192a48550a4be5152"
+      },
+      "cases": 6,
+      "embedded_native_build_source_commit": false,
+      "external_build_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/build-reception-dim2.json",
+        "sha256": "fddf53da2573792d3debb3d1133f655029640fcab21c81154633d289bfda0b60"
+      },
+      "limitations": [
+        "build-source commit receipt absent: null",
+        "retained CPP bytes cannot establish System/Program source-to-DSO mapping",
+        "linkcmd/build receipts absent: cpp_dso_links null",
+        "original resolved-plan payload absent: actual artifact aggregate checked, compiled plan ROOT-owner-attested",
+        "no BGK/Vlasov/nonlocal/whole-family qualification"
+      ],
+      "max_original_error": 2.842170943040401e-14,
+      "native_build_source_commit_attested_by_root": "bfae73f34174079bc6f2d8f4d50aa11d08eca5b5",
+      "native_execution": "previous closed authentic Serial run, no execution here",
+      "native_sha256": "358dcd87f70d22305dd97865c78550bd59e74fda592e06ebfe291f496279aa91",
+      "owner_pins": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-scientific-root-owner/owner-pins.json",
+        "sha256": "202437e1ff84ed93cbdc9377aec124b7c45ade75c14a5c05841a6de48a096970"
+      },
+      "pending_input": {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-m19-serial-offline-pending-20261001/pending-inputs.json",
+        "sha256": "67b0112bdfb40c8fef7a04e57cfdf1d6e3813cb6a5e8675861984be904805e03"
+      },
+      "qualification": "real-native-finite-product-saved-state-witness-only",
+      "reader_no_pops_import": true,
+      "report": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-scientific-root-owner/scientific-reception.json",
+        "sha256": "263e8fc9c4c544e795e05bd96b862b7c7a862ccc88c4302c980cfa418dcabc41"
+      },
+      "schema": "root.api040-m19-serial-scientific-reception@1",
+      "sdk_signature": "7eaf05f5cb619437050668d71d7d41d3b39939ddd84c21c9adf4322e889f9849",
+      "source_commit_observed_by_native_run": "bfae73f34174079bc6f2d8f4d50aa11d08eca5b5",
+      "strong_cpp_dso_link_qualified": false
+    }
+  },
+  "sdk_signature": "7eaf05f5cb619437050668d71d7d41d3b39939ddd84c21c9adf4322e889f9849",
+  "source_cpp_build": "bfae73f34174079bc6f2d8f4d50aa11d08eca5b5",
+  "source_python_mpi2": "b3108c73dd6cf928cc703a410e5310806727cf4b",
+  "source_python_serial": "bfae73f34174079bc6f2d8f4d50aa11d08eca5b5"
+}

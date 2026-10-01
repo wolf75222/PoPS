@@ -1,0 +1,54 @@
+{
+  "fixture": {
+    "controls": "unchanged from captured-D witness",
+    "junit": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/root-candidate-d-native-fixture-source-final.xml",
+      "sha256": "7e0bba43e27a61185b413ca407dd97cb6682fef0097107ba0d84f04cdbcf95ca"
+    },
+    "kind": "scalar and signed nonsymmetric singular 3-field unknown-dependent arithmetic-face D MMS; reaction closes whole equation",
+    "main_commit": "cbf77b06",
+    "native_commit": "b0733c0c",
+    "native_status": "not_executed",
+    "physical_coefficient": "D_rc(q)=D_rc*(1+alpha)*(1+3*q_column^2)",
+    "source_seconds": 29.37,
+    "source_tests": 4
+  },
+  "gpu_executed": false,
+  "historical_document_checkout_source_attempt": {
+    "cause": "ROOT SIGINT after imports blocked with CPU0/log0; no test result",
+    "log": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/root-integrated-candidate-d-source.log",
+      "sha256": "6234700e1a792983ca9ac1d4a6e4a2db4d2fb650a445cacf9bebcc94e83d6e64"
+    },
+    "returncode": 2
+  },
+  "host_controller_scope": "Extracted actual C++ GMRES control with explicit host storage substitutes is part of source tests; not a native backend execution",
+  "limits": [
+    "Original D(q) Native acceptance pending coherent rebuild",
+    "FullResidualBasisLU and EvolvedStage are separate pending extensions",
+    "No whole M06/M13/M22/M26/M27 qualification from source checks"
+  ],
+  "native_cpp_executed": false,
+  "native_mpi_executed": false,
+  "production_author": "5394fda54aaf9623f784a74703da69635f4d2dae",
+  "production_contract": "pops.spatial-field-residual@3",
+  "program_ir": 11,
+  "ruff": "passed",
+  "schema": "root.api040-candidate-diffusion-source-reception@1",
+  "source_main": "54eb57b1 (production)+eac6eb14 (tests/docs); Frozen guard correction later integrated as c2387545",
+  "source_native_parent": "cabd98a523989d459415367d8807b22371e9982f",
+  "source_tests": {
+    "failed": 0,
+    "junit": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/root-integrated-candidate-d-source-devtmp.xml",
+      "sha256": "64794fcbea10c220ff52eb8df8e47a6910f0f0dfe428a96b2f589dfbc8b048d3"
+    },
+    "log": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/root-integrated-candidate-d-source-devtmp.log",
+      "sha256": "42e7098c5c33a696badab044a2e21650c6cf9fb5143c6843ed3cda3c1e7eca29"
+    },
+    "passed": 163,
+    "seconds": 755.6,
+    "skipped": 0
+  }
+}

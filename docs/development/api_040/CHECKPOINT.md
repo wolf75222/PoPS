@@ -1,5 +1,31 @@
 # Integration checkpoint — 2026-10-01
 
+Migration remains in progress. Latest installed runtime is Dim2 SDK7eaf/native358d, C++ bfae73f3 and Python b3108c73; 1114 installed Python/header files authenticated. CPU arm64/LLVM21/Kokkos5.2.0/MPICH4.1.2. Dim1/Dim3 sibling packages are older and are not qualified on this SDK.
+
+M19 finite-product Serial6 and MPI2 six/rank pass; independent ROOT saved-state receptions and twelve offline real copied/resealed refusals per backend are closed. See m19_sdk7_native_reception.json. This is reduction/extension scope, not full M19 kinetics. Original six-case MPI plan mismatch remains preserved; content-bind projection schema2 corrects the actual path-only mismatch without weakening collective equality.
+
+Captured-D Uniform remains RED on SDK7: three distinct real two-case campaigns exposed history-depth fixture assumptions, AMR-only manifest accessor, then actual loss of program diagnostics across restart. Fixture history/accessor corrections are integrated; diagnostics persistence requires a genuine Uniform+AMR native codec and a live-owner configurable capacity, now being implemented by Sol6.1.
+
+Latest C++ native Dim1 MPICH reception is RED: 234 cases, 226 pass, three fail, five known Serial MPI-only skips. Two failures are the genuine N32 original AMR Newton/240-column convergence failure (Serial and MPI aggregate); the other is a wrong expected normalized foreign-lane error string, corrected in source but not yet rerun in C++. Preserve cpp-dim1-retry1 raw XML/logs.
+
+PerCandidate D(q) contract3/IR11 with true full-correction JVP checking is integrated, with 163 coherent ROOT source passes plus four MMS fixture checks. This source does not inherit SDK7 native acceptance. Native scalar/signed3-field MMS and candidate AMR C++ witnesses await a coherent package rebuild. Source receipt: candidate_diffusion_root_source_reception.json.
+
+Active real Sol6.1/high workers:
+- sol61_ale: FullResidualBasisLU@1 AMR active-quotient/Jacobian provider, explicit uint64 resource capacity, IR13; latest uint64 identity boundary correction is in progress.
+- sol61_coverage_review: independent FullLU source/math/authority review; authored frozen EvolvedStage e9fce614 with59 source passes, native reception pending.
+- sol61_frontier: archived M19 reader@2 closed with87 checks; independently reviews EvolvedStage and candidate-D MMS.
+- sol61_m26_review: native rank-owned diagnostics codec and transactional Uniform/AMR checkpoint/restart with configurable live capacity; no ENV/native execution by author.
+- Primary: integration, package/native builds, root seals, reproduction, real backend/failure campaigns and final review.
+
+No migration PR has been published; live head-branch PR lookup is empty. No GitHub CI, GPU, ROMEO or official OpenMPI/Kokkos4.4 proof is claimed. Working native checkout is /Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001; evidence is /Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001. Source integration checkout work/PoPS preserves the original handoff and untracked outputs. Root package ENV is pops-api040; original pops ENV remains preserved.
+
+Next action: finish independent reviews and diagnostics gel, integrate conflicts, rebuild all configured native dimensions through scripts/build_python.sh, authenticate real installed files, run new original-F/Q/diagnostic tests, then the C++ inventory, real one-rank failures and relevant old scientific/non-regression cases. scripts/setup_env.sh was already attempted once in native checkout; Conda solve refused before transaction. Do not repeat setup or substitute prototype imports.
+
+## Historical checkpoint retained below
+
+The following SDK375f/e49 sections are historical receipts and earlier pending statuses. They do not describe the current environment or requalify later code.
+
+
 The requested migration is **in progress**. Source implementation, native
 reception, scientific witnesses and backend qualification are recorded separately.
 
