@@ -71,6 +71,9 @@ namespace pops::runtime::program {
 
 /// Frozen codegen capability: a width-one, two-slot scalar ring with no Program reader.
 inline constexpr std::string_view kScalarOutputHistorySpace = "scalar-output-field-v1";
+/// Artifact-issued store-only rings, including global observations and arbitrary typed depths.
+inline constexpr std::string_view kOutputHistoryProjectionSpace =
+    "pops.program.scalar-output-history-projection@2";
 
 enum class AmrProgramHistoryRemapSource : std::uint8_t {
   RetainedChild = 1,
@@ -981,6 +984,34 @@ struct ProgramRuntimeState {
     restart_regrid_ = std::move(regrid);
     restart_resync_ = std::move(resync);
     accepted_context_snapshot_ = std::move(accepted_context_snapshot);
+  }
+
+  /// Authenticate every field against the installed DSO shape, before preparing a transfer.
+  /// The private space URI is not the physical observation space or its allocation State.
+  const ProgramCheckpointHistoryMetadata& require_frozen_output_history_projection(
+      const std::string& name, int runtime_owner, const std::string& state,
+      const std::string& space, const std::string& clock, const std::string& interpolation,
+      int depth, int components, int program_owner = -1) const {
+    if (!artifact_backed_ || installed_hash_.empty() || space != kOutputHistoryProjectionSpace ||
+        name.empty() || state.empty() || clock.empty() || interpolation.empty() ||
+        depth < 2 || components < 1 || runtime_owner < 0)
+      throw std::invalid_argument("AMR output history projection lacks its frozen artifact capability");
+    const ProgramCheckpointHistoryMetadata* issued = nullptr;
+    for (const auto& row : checkpoint_metadata_.histories)
+      if (row.name == name) {
+        if (issued != nullptr)
+          throw std::invalid_argument("AMR output history projection has duplicate frozen metadata");
+        issued = &row;
+      }
+    if (issued == nullptr || issued->program_owner < 0 ||
+        static_cast<std::size_t>(issued->program_owner) >= block_map_.size() ||
+        block_map_[static_cast<std::size_t>(issued->program_owner)] != runtime_owner ||
+        (program_owner >= 0 && issued->program_owner != program_owner) ||
+        issued->state_identity != state || issued->space_identity != space ||
+        issued->clock_identity != clock || issued->interpolation_identity != interpolation ||
+        issued->depth != depth || issued->components != components)
+      throw std::invalid_argument("AMR output history projection differs from its frozen DSO tuple");
+    return *issued;
   }
 
   std::unique_ptr<AcceptedProgramContextSnapshot> capture_accepted_context_snapshot(

@@ -181,10 +181,17 @@ void store_global_field_history(
             manager.owner.at(key) != sys_block(program_owner) ||
             manager.state_identity.at(key) != descriptor ||
             (manager.space_identity.at(key) != "scalar-output-field-v1" &&
+             manager.space_identity.at(key) != kOutputHistoryProjectionSpace &&
              manager.space_identity.at(key) != "scalar-field") ||
             manager.clock_identity.at(key) != point.clock || manager.depth.at(key) < 1 ||
             static_cast<int>(found->second.size()) != manager.depth.at(key))
           throw std::invalid_argument("global solved-field history has foreign storage authority");
+        if (manager.space_identity.at(key) == kOutputHistoryProjectionSpace)
+          runtime_state().require_frozen_output_history_projection(
+              name, sys_block(program_owner), manager.state_identity.at(key),
+              manager.space_identity.at(key), manager.clock_identity.at(key),
+              manager.interpolation_identity.at(key), manager.depth.at(key),
+              found->second.front().ncomp(), program_owner);
         const auto& prototype = facade_->prepared_amr_block_state(sys_block(program_owner), active_level_);
         require_same_layout_(prototype, value, "global solved-field history storage");
         require_same_field_contract_(found->second.front(), value, "global solved-field history storage");

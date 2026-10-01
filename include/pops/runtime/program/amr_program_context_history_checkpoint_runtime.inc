@@ -843,6 +843,26 @@ void refresh_resources_after_accepted_history_remap_(
           const auto decoded = decode_history_key_(key);
           if (!decoded)
             throw std::runtime_error("AMR Program history flux remap has a malformed ring key");
+          const auto& manager = runtime_state().hist_;
+          if (manager.space_identity.at(key) == kOutputHistoryProjectionSpace) {
+            if (ring.empty())
+              throw std::runtime_error("AMR output history projection has an empty typed ring");
+            runtime_state().require_frozen_output_history_projection(
+                decoded->second, manager.owner.at(key), manager.state_identity.at(key),
+                manager.space_identity.at(key), manager.clock_identity.at(key),
+                manager.interpolation_identity.at(key), manager.depth.at(key), ring.front().ncomp());
+            if (manager.slot_sample.at(key).size() != ring.size())
+              throw std::runtime_error("AMR output history projection lacks exact sample metadata");
+            for (std::size_t slot = 0; slot < ring.size(); ++slot) {
+              if (ring[slot].ncomp() != ring.front().ncomp())
+                throw std::runtime_error("AMR output history projection changed its component width");
+              validate_history_sample_provenance(manager.slot_sample.at(key)[slot],
+                                                manager.initialized.at(key),
+                                                manager.slot_dt.at(key).at(slot));
+              if (!manager.slot_sample.at(key)[slot].authenticated())
+                throw std::runtime_error("AMR output history projection has an unauthenticated sample");
+            }
+          }
           const auto planned = plan.find(key);
           if (decoded->first == descriptor.child_level && descriptor.child_published &&
               planned == plan.end())
@@ -900,13 +920,18 @@ void refresh_resources_after_accepted_history_remap_(
               if (scalar_output) {
                 const auto& manager = runtime_state().hist_;
                 const std::string& parent_key = planned->second->parent_key;
-                if (ring.size() != 2 || manager.depth.at(key) != 2 ||
-                    manager.depth.at(parent_key) != 2 ||
+                const bool legacy = manager.space_identity.at(key) == kScalarOutputHistorySpace;
+                const bool issued = manager.space_identity.at(key) == kOutputHistoryProjectionSpace;
+                const std::size_t slots = ring.size();
+                const int components = ring.front().ncomp();
+                if ((!legacy && !issued) ||
+                    (legacy && (slots != 2 || components != 1 ||
+                                manager.state_identity.at(key) != "scalar-history:" + decoded->second)) ||
+                    manager.depth.at(key) != static_cast<int>(slots) ||
+                    manager.depth.at(parent_key) != static_cast<int>(slots) ||
                     !manager.initialized.at(key) || !manager.initialized.at(parent_key) ||
                     manager.store_pending.at(key) || manager.store_pending.at(parent_key) ||
-                    manager.space_identity.at(key) != kScalarOutputHistorySpace ||
-                    manager.space_identity.at(parent_key) != kScalarOutputHistorySpace ||
-                    manager.state_identity.at(key) != "scalar-history:" + decoded->second ||
+                    manager.space_identity.at(parent_key) != manager.space_identity.at(key) ||
                     manager.state_identity.at(parent_key) != manager.state_identity.at(key) ||
                     manager.owner.at(parent_key) != manager.owner.at(key) ||
                     manager.clock_identity.at(parent_key) != manager.clock_identity.at(key) ||
@@ -915,15 +940,15 @@ void refresh_resources_after_accepted_history_remap_(
                     manager.slot_dt.at(parent_key) != manager.slot_dt.at(key) ||
                     manager.slot_sample.at(parent_key) != manager.slot_sample.at(key) ||
                     manager.fill_count.at(parent_key) != manager.fill_count.at(key) ||
-                    manager.slot_dt.at(key).size() != 2 ||
+                    manager.slot_dt.at(key).size() != slots ||
                     !std::all_of(manager.slot_dt.at(key).begin(), manager.slot_dt.at(key).end(),
                                  [](Real dt) { return std::isfinite(dt) && dt > Real(0); }) ||
-                    manager.slot_sample.at(key).size() != 2 ||
+                    manager.slot_sample.at(key).size() != slots ||
                     !std::all_of(manager.slot_sample.at(key).begin(),
                                  manager.slot_sample.at(key).end(),
                                  [](const auto& sample) { return sample.authenticated(); }) ||
                     !std::all_of(ring.begin(), ring.end(),
-                                 [](const auto& slot) { return slot.ncomp() == 1; }))
+                                 [components](const auto& slot) { return slot.ncomp() == components; }))
                   throw std::runtime_error(
                       "AMR scalar output history remap lacks its exact parent capability");
               }

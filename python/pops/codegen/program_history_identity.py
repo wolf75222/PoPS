@@ -6,10 +6,11 @@ from typing import Any
 
 
 SCALAR_OUTPUT_HISTORY_SPACE = "scalar-output-field-v1"
+OUTPUT_HISTORY_PROJECTION_SPACE = "pops.program.scalar-output-history-projection@2"
 
 
 def history_space_identity(program: Any, name: str) -> str:
-    """Qualify only a width-one, two-slot ring with stores and no Program reads.
+    """Qualify a typed store-only ring; preserve the legacy width-one/two-slot profile.
 
     This is a native transfer capability, so follow aliases, expression inputs and
     every recorded subblock exactly as Program liveness does. A consumer hidden in
@@ -19,9 +20,10 @@ def history_space_identity(program: Any, name: str) -> str:
     if space is not None:
         return json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
     owner = getattr(program, "_history_blocks", {}).get(name)
+    width = getattr(program, "_histories_ncomp", {}).get(name)
+    lag = program._histories.get(name)
     if (owner is None or getattr(program, "_history_state_refs", {}).get(name) is not None
-            or getattr(program, "_histories_ncomp", {}).get(name) != 1
-            or program._histories.get(name) != 1):
+            or type(width) is not int or width < 1 or type(lag) is not int or lag < 1):
         return "scalar-field"
 
     seen: set[int] = set()
@@ -39,4 +41,14 @@ def history_space_identity(program: Any, name: str) -> str:
             stored = True
         stack.extend(value.inputs)
         stack.extend(program._subblock_value_refs(value))
-    return SCALAR_OUTPUT_HISTORY_SPACE if stored else "scalar-field"
+    if not stored:
+        return "scalar-field"
+    # IR16 stores authenticate the physical observation independently of their
+    # allocation State. Keep that exact descriptor in state_identity; this URI
+    # qualifies only its spatial transfer, never a State/Q-to-observation copy.
+    from pops.time._program.global_history_storage import descriptor
+
+    storage = descriptor(program, name)
+    if width == 1 and lag == 1 and storage is None:
+        return SCALAR_OUTPUT_HISTORY_SPACE
+    return OUTPUT_HISTORY_PROJECTION_SPACE

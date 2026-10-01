@@ -418,7 +418,8 @@ field_type& history_slot_(const std::string& name, int lag, bool zero_start, int
   const auto found = manager.histories.find(key);
   if (found == manager.histories.end() || lag < 0 || lag >= manager.depth.at(key))
     throw std::out_of_range("AMR Program history slot is absent");
-  if (manager.space_identity.at(key) == kScalarOutputHistorySpace)
+  if (manager.space_identity.at(key) == kScalarOutputHistorySpace ||
+      manager.space_identity.at(key) == kOutputHistoryProjectionSpace)
     throw std::invalid_argument(
         "AMR scalar output history permits inspection/export, not Program reads");
   field_type& result = found->second[static_cast<std::size_t>(lag)];

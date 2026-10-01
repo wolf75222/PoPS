@@ -8949,6 +8949,15 @@ struct AmrSystem<Dim>::Impl {
     try {
       remap_plan.clear();
       descriptors = history_descriptors();
+      // Validate the complete artifact-issued tuple even for cold rings, retained children,
+      // and removed levels. No transfer/allocation may mint authority from live metadata.
+      for (const auto& descriptor : descriptors)
+        if (descriptor.space_identity == runtime::program::kOutputHistoryProjectionSpace)
+          program.require_frozen_output_history_projection(
+              descriptor.name, program.block_map_.at(static_cast<std::size_t>(descriptor.program_owner)),
+              descriptor.state_identity, descriptor.space_identity, descriptor.clock_identity,
+              descriptor.interpolation_identity, descriptor.depth, descriptor.components,
+              descriptor.program_owner);
       ExactContractBuilder exact;
       exact.text("pops.amr-program.history-regrid")
           .scalar(std::uint32_t{1})
@@ -9030,13 +9039,60 @@ struct AmrSystem<Dim>::Impl {
           auto source = retained_coverage
                             ? runtime::program::AmrProgramHistoryRemapSource::RetainedChild
                             : runtime::program::AmrProgramHistoryRemapSource::ParentDeferred;
-          const bool scalar_output =
+          const bool legacy_scalar_output =
               descriptor.space_identity == runtime::program::kScalarOutputHistorySpace;
-          if (scalar_output &&
+          const bool scalar_output = legacy_scalar_output ||
+              descriptor.space_identity == runtime::program::kOutputHistoryProjectionSpace;
+          if (legacy_scalar_output &&
               (descriptor.depth != 2 || descriptor.components != 1 ||
                descriptor.state_identity != "scalar-history:" + descriptor.name))
             throw std::invalid_argument(
                 "AMR scalar output history projection has an invalid frozen capability");
+          if (descriptor.space_identity == runtime::program::kOutputHistoryProjectionSpace) {
+            if (static_cast<std::size_t>(parent_level) >= temporal_relations.size())
+              throw std::invalid_argument("AMR output history projection lacks its exact clock relation");
+            const auto& relation = temporal_relations[static_cast<std::size_t>(parent_level)];
+            const auto ratio = relation.temporal_ratio();
+            if (relation.parent_level() != parent_level || relation.child_level() != child_level ||
+                ratio.numerator != 1 || ratio.denominator != 1 ||
+                relation.remainder_policy() != ::pops::amr::RemainderPolicy::IntegralOnly ||
+                program.hist_.store_pending.at(parent_key))
+              throw std::invalid_argument(
+                  "AMR output history projection supports exact aligned 1:1 spatial remap only");
+            const auto& dts = program.hist_.slot_dt.at(parent_key);
+            const auto& samples = program.hist_.slot_sample.at(parent_key);
+            const bool initialized = program.hist_.initialized.at(parent_key);
+            const int fill = program.hist_.fill_count.at(parent_key);
+            if (fill < 0 || fill > descriptor.depth || initialized != (fill > 0) ||
+                dts.size() != parent->second.size() || samples.size() != parent->second.size())
+              throw std::invalid_argument("AMR output history projection has invalid parent metadata");
+            for (std::size_t slot = 0; slot < parent->second.size(); ++slot) {
+              if (parent->second[slot].ncomp() != descriptor.components ||
+                  !std::isfinite(dts[slot]) || (initialized ? !(dts[slot] > Real(0)) : dts[slot] != Real(0)) ||
+                  !samples[slot].authenticated())
+                throw std::invalid_argument("AMR output history projection lacks exact typed parent samples");
+              runtime::program::validate_history_sample_provenance(samples[slot], initialized, dts[slot]);
+            }
+            const auto exact_dts = [&](const auto& prior) {
+              return prior.size() == dts.size() &&
+                  std::equal(prior.begin(), prior.end(), dts.begin(), [](Real a, Real b) {
+                    return std::bit_cast<std::array<std::byte, sizeof(Real)>>(a) ==
+                           std::bit_cast<std::array<std::byte, sizeof(Real)>>(b);
+                  });
+            };
+            if (previous != nullptr &&
+                (previous->depth != descriptor.depth || previous->initialized != initialized ||
+                 previous->store_pending || previous->fill_count != fill || !exact_dts(previous->slot_dt) ||
+                 previous->slot_sample != samples || previous->owner != program.hist_.owner.at(parent_key) ||
+                 previous->state_identity != descriptor.state_identity ||
+                 previous->space_identity != descriptor.space_identity ||
+                 previous->clock_identity != descriptor.clock_identity ||
+                 previous->interpolation_identity != descriptor.interpolation_identity ||
+                 !std::all_of(previous->slots.begin(), previous->slots.end(), [&](const auto& slot) {
+                   return slot.image.components == descriptor.components;
+                 })))
+              throw std::invalid_argument("AMR output history projection has unaligned retained child metadata");
+          }
           const bool initialized_projection =
               source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred &&
               program.hist_.initialized.at(parent_key);
