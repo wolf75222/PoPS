@@ -1625,6 +1625,45 @@
           "stage_generated_compile_failed": 8
         },
         "scientific_saved_state_owner_seals_pending": true
+      },
+      "sdk2e4_diffusion_stage_followup": {
+        "status": "scoped_native_diffusion_stage_and_diffusion_science_received",
+        "evidence": {
+          "path": "docs/development/api_040/sdk2e4_diffusion_stage_followup.json",
+          "sha256": "5ca56f261b57f6871d5c2457c38a93233c2ed5595954fe51d1987de9c728de86"
+        },
+        "migration_complete": false,
+        "historical_baseline_requalified": false,
+        "sdk_signature": "2e4d69fd3574933f4b83cf014ad2d0159902fea6197d74623bee4b4ee6cf1675",
+        "native_stage_uniform": {
+          "serial_cases": 8,
+          "mpi2_cases_per_rank": 8,
+          "failed": 0,
+          "skipped": 0,
+          "scientific_root_seals_pending": false
+        },
+        "diffusion_scientific_receptions": {
+          "families": [
+            "frozen@3",
+            "candidate@2"
+          ],
+          "backends": [
+            "Serial",
+            "MPI2"
+          ],
+          "cases_per_family_and_backend": 2,
+          "mpi_archives_shared": true,
+          "original_F_relative_l2_max": 1.1978305400827463e-11,
+          "guard": 3e-08,
+          "cpp_to_dso_graph_proof": false,
+          "compound_semantic_payload_recomputed": false,
+          "cryptographic_aggregate_binding": false
+        },
+        "native_diagnostics": {
+          "uniform_and_amr_mpi2_cases_per_rank": 4,
+          "failed": 0
+        },
+        "remaining_port": "explicit global-field history storage owner for AMR; implementation and independent reception pending"
       }
     },
     "limits": [
