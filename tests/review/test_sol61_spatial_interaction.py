@@ -359,3 +359,19 @@ def test_calculated_candidate_does_not_hide_relabelled_state_n_leaves(replace_af
         realization=DirectSpatialInteraction(4096), components=(2, 0))
     interaction_contract(result)
     assert valid._serialize()["version"] == 17
+
+
+def test_equal_excluded_measure_does_not_authenticate_replica_geometry_masks():
+    # A real quotient ambiguity: distinct valid EB kappas yield the same zero
+    # measure when covered, but are distinct physical-geometry authorities.
+    import struct
+    kappa_left, kappa_right = .25, .75
+    assert 0 * kappa_left == 0 * kappa_right
+    assert struct.pack("d", kappa_left) != struct.pack("d", kappa_right)
+    header = (ROOT / "include/pops/runtime/program/spatial_direct_interaction.hpp").read_text()
+    owner_check = header.index("if (owners != 1)")
+    geometry_check = header.index("direct interaction replicated geometry masks differ")
+    consumer = header.index("if (measure > 0) consumer")
+    assert owner_check < geometry_check < consumer
+    assert "for (const Field* mask : {level.active, level.coverage, level.kappa})" in header[owner_check:geometry_check]
+    assert "interaction_cell_value<Dim>(mask->fab_global(global).view(), cell, 0)" in header

@@ -194,6 +194,23 @@ MultiFab<Dim, MemorySpace> direct_spatial_interaction(
           interaction_phase(lane, [&] {
             if (owners != 1) throw std::invalid_argument("direct interaction physical cell has missing/duplicate owner");
           });
+          // Authenticate every replicated geometry mask independently. Equal
+          // products (especially an excluded cell's zero measure) do not prove
+          // equal kappa/coverage/active carriers.
+          if (field.distribution().replicated()) {
+            for (const Field* mask : {level.active, level.coverage, level.kappa}) {
+              if (!mask) continue;
+              Real local_mask = 0;
+              interaction_phase(lane, [&] {
+                local_mask = interaction_cell_value<Dim>(mask->fab_global(global).view(), cell, 0);
+              });
+              const Real owner_mask = interaction_owner_value(local_mask, owner, lane);
+              interaction_phase(lane, [&] {
+                if (std::bit_cast<std::uint64_t>(local_mask) != std::bit_cast<std::uint64_t>(owner_mask))
+                  throw std::invalid_argument("direct interaction replicated geometry masks differ");
+              });
+            }
+          }
           const Real local_measure = measure;
           measure = interaction_owner_value(measure, owner, lane);
           interaction_phase(lane, [&] {
