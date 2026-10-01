@@ -1029,7 +1029,9 @@ class ProgramContext {
     const int owner = resolve_pointwise_program_block_(program_block, lane);
     const auto* kappa = system_->prepared_program_block_volume_fraction_(owner, source, lane);
     const auto geom = geometry();
+    const field_type* output_prototype = nullptr;
     interaction_phase(lane, [&] {
+      output_prototype = &system_->block_state(owner);
       if (!runtime_state().moving_interval_geometry_.empty())
         throw std::invalid_argument("direct cell-midpoint interaction requires a prepared Cartesian physical map");
     });
@@ -1043,7 +1045,7 @@ class ProgramContext {
       authority = std::move(exact).release();
     });
     auto result = direct_spatial_interaction<Dim, typename field_type::memory_space>(
-        levels, 0, components, max_bytes, authority, lane, kernel);
+        levels, 0, components, max_bytes, authority, lane, kernel, output_prototype);
     interaction_phase(lane, [&] {
       if (!attempt.visible() || !attempt.same_attempt(resource_attempt()) || point != boundary_evaluation_point(0))
         throw std::logic_error("direct interaction source attempt/frame was revoked");

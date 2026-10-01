@@ -94,10 +94,12 @@ template <int Dim, class MemorySpace, class Kernel>
 MultiFab<Dim, MemorySpace> direct_spatial_interaction(
     std::span<const InteractionLevelView<Dim, MemorySpace>> levels, std::size_t target_level,
     std::span<const int> components, std::uint64_t max_bytes, std::string_view identity,
-    const ExecutionLane& lane, Kernel kernel) {
+    const ExecutionLane& lane, Kernel kernel,
+    const MultiFab<Dim, MemorySpace>* output_prototype = nullptr) {
   using Field = MultiFab<Dim, MemorySpace>;
   using Snapshot = Kokkos::View<Real**, Kokkos::LayoutRight, MemorySpace>;
   std::string contract;
+  Extent<Dim> output_ghosts{};
   interaction_phase(lane, [&] {
     if (levels.empty() || target_level >= levels.size() || components.empty() ||
         components.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
@@ -143,6 +145,20 @@ MultiFab<Dim, MemorySpace> direct_spatial_interaction(
                      mask->distribution() != field.distribution() || mask->local_rank() != field.local_rank()))
           throw std::invalid_argument("direct interaction mask has foreign topology/ownership");
       }
+    }
+    const auto& target = *levels[target_level].field;
+    if (output_prototype) {
+      if (output_prototype->layout() != target.layout() ||
+          output_prototype->distribution() != target.distribution() ||
+          output_prototype->local_rank() != target.local_rank())
+        throw std::invalid_argument("direct interaction output owner has foreign ranked topology");
+      output_ghosts = output_prototype->ghosts();
+      exact.text("pops.direct-spatial-interaction-output-owner@1");
+    }
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (output_ghosts[axis] < 0)
+        throw std::invalid_argument("direct interaction output owner has negative ghosts");
+      if (output_prototype) exact.scalar(output_ghosts[axis]);
     }
     contract = std::move(exact).release();
   });
@@ -243,8 +259,12 @@ MultiFab<Dim, MemorySpace> direct_spatial_interaction(
     bytes = interaction_add(bytes, interaction_product(components.size(), sizeof(int)));
     bytes = interaction_add(bytes, interaction_product(prototype.layout().size(), sizeof(std::size_t) + 2 * sizeof(Box<Dim>) + sizeof(Index<Dim>)));
     bytes = interaction_add(bytes, interaction_product(prototype.local_size(), sizeof(typename Field::fab_type) + sizeof(std::size_t)));
-    for (std::size_t local = 0; local < prototype.local_size(); ++local)
-      bytes = interaction_add(bytes, interaction_product(interaction_product(static_cast<std::size_t>(prototype.box(local).numPts()), components.size()), sizeof(Real)));
+    for (std::size_t local = 0; local < prototype.local_size(); ++local) {
+      auto allocated_box = prototype.box(local);
+      for (int axis = 0; axis < Dim; ++axis)
+        allocated_box = allocated_box.grow(axis, output_ghosts[axis]);
+      bytes = interaction_add(bytes, interaction_product(interaction_product(static_cast<std::size_t>(allocated_box.numPts()), components.size()), sizeof(Real)));
+    }
     if (bytes > max_bytes) throw std::length_error("direct spatial interaction workspace budget exceeded");
   });
   Snapshot snapshot;
@@ -253,7 +273,10 @@ MultiFab<Dim, MemorySpace> direct_spatial_interaction(
   interaction_phase(lane, [&] {
     snapshot = Snapshot(Kokkos::view_alloc(Kokkos::WithoutInitializing, "spatial interaction source"), count, columns);
     host = Kokkos::create_mirror(snapshot);
-    output = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(), static_cast<int>(components.size()), Extent<Dim>{});
+    output = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(), static_cast<int>(components.size()), output_ghosts);
+    // The issued owner contract includes grown storage; only valid cells are
+    // quadrature targets. Initialize unobserved ghosts deterministically.
+    output.set_val(Real(0));
   });
   std::size_t row = 0;
   visit([&](const auto& level, std::size_t global, const auto& cell, bool owner, Real measure) {

@@ -65,9 +65,13 @@ field_type& spatial_interaction_owned(std::int64_t value_id, int program_block, 
     }
     authority = std::move(exact).release();
   });
+  const field_type* output_prototype = nullptr;
+  interaction_phase(lane, [&] {
+    output_prototype = &facade_->prepared_amr_block_state(owner, active_level_);
+  });
   auto result = direct_spatial_interaction<Dim, MemorySpace>(
       levels, static_cast<std::size_t>(active_level_), components, max_bytes, authority,
-      lane, kernel);
+      lane, kernel, output_prototype);
   interaction_phase(lane, [&] {
     if (epoch != runtime_->topology_epoch() || generation != runtime_->materialization_generation() ||
         !attempt.visible() || !attempt.same_attempt(resource_attempt()) || point != boundary_evaluation_point(0))
@@ -179,9 +183,13 @@ field_type& spatial_interaction_history_owned(std::int64_t value_id, int program
     exact.text("pops.spatial-interaction-history-source@1").text(history_snapshot);
     authority = std::move(exact).release();
   });
+  const field_type* output_prototype = nullptr;
+  interaction_phase(lane, [&] {
+    output_prototype = &facade_->prepared_amr_block_state(owner, active_level_);
+  });
   auto result = direct_spatial_interaction<Dim, MemorySpace>(
       levels, static_cast<std::size_t>(active_level_), components, max_bytes, authority,
-      lane, kernel);
+      lane, kernel, output_prototype);
   interaction_phase(lane, [&] {
     if (history_snapshot != history_authority())
       throw std::logic_error("interaction selected history lifecycle changed during snapshot");
