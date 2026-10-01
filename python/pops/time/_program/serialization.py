@@ -300,6 +300,10 @@ class _ProgramSerialization(_ProgramBase):
                 result["version"] = max(result["version"], 14)
             if node.op == "field_evolved_state" and node.attrs.get("projection_contract") == "pops.evolved-original-field-stage@2":
                 result["version"] = max(result["version"], 15)
+            if node.op == "store_history" and "global_field_storage" in node.attrs:
+                from .global_history_storage import validate_storage_node
+                validate_storage_node(self, node)
+                result["version"] = max(result["version"], 16)
             elif node.op == "reduce" and node.attrs.get("kind") == "dot_all":
                 result["version"] = max(result["version"], 7)
             for key in ("cond_block", "body_block", "true_block", "false_block",
