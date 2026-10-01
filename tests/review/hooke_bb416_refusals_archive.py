@@ -9,6 +9,15 @@ def doubles(b):
  start=10 if b[6]==1 else 12;n=struct.unpack('<H' if start==10 else '<I',b[8:start])[0];h=ast.literal_eval(b[start:start+n].decode());assert h['descr']=='<f8';return b[start+n:]
 for suffix,size in ([('serial',1)] if len(sys.argv)<3 else [(sys.argv[2],1 if sys.argv[2]=='serial' else 2)]):
  directory=BASE/f'installed-sdkbb416-amr12-refusals-{suffix}-dim2'
+ result=json.loads((directory/'result.json').read_text());assert result['status']=='passed' and result['returncode']==0
+ if size==2:
+  assert not result['timeout'] and result['ranks']==2
+  for rr in result['rank_results']:
+   assert rr['counts']==dict(tests=1,failures=0,errors=0,skipped=0)
+   for name,key in [(f"rank{rr['rank']}.xml",'xml_sha256'),(f"rank{rr['rank']}.log",'log_sha256')]:assert sha(directory/name)==rr[key]
+ else:
+  assert result['counts']==dict(tests=1,failures=0,errors=0,skipped=0)
+  for name,key in [('identity.json','identity_sha256'),('pytest.log','log_sha256')]:assert sha(directory/name)==result[key]
  before=directory/('identity.json' if size==1 else 'before/identity.json');a=json.loads(before.read_text());b=json.loads((directory/'after/identity.json').read_text())
  for key in ('source_commit','source_diff_sha256','native_file','native_sha256','abi_key','verified_source_files','source_files_sha256'):assert a[key]==b[key],key
  assert a['schema_version']==2 and a['verified_source_files']==1132 and a['native_sha256']==DSO
