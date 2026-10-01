@@ -131,8 +131,9 @@ def validate_storage_node(program: Any, node: Any) -> dict[str, Any]:
     if not _equal_metadata(node.attrs.get("global_field_storage"), issued.metadata) \
             or node.point != node.inputs[0].point or node.state_ref is not None or node.space is not None:
         raise ValueError("global field history storage changed its immutable authority")
+    width = program._histories_ncomp.get(node.attrs["history"])
     if program._history_blocks.get(node.attrs["history"]) is not node.block \
-            or program._histories_ncomp.get(node.attrs["history"]) != 1:
+            or type(width) is not int or width != 1:
         raise ValueError("global field history registration changed its owner or width")
     return expected
 
