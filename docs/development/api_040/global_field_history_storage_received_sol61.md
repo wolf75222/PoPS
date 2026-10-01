@@ -87,7 +87,33 @@ the two linear profiles, the nonlinear StagePoint profile, coherent owner
 reseal, and removal of the contract discriminant. The scalar nonlinear
 TimePoint profile succeeds.
 
-The ordinary option-omitted source/IR/C++ parity and the author's nine images
-still need a separate fresh independent comparison. Native reception requires
+## Fresh comparison with the option omitted
+
+The separate parent worktree is exactly
+`a0f92caad8da3c5c1e6bd99b58aff7cf07573e5b`. Two fresh interpreters load the **same
+absolute helper path and callsites**, one against that parent's Python source
+and one against the first candidate. The helper's `__main__` emits the complete
+resolved Program payload (including provenance), full C++ string, IR hash and
+three Module hashes for linear CG and original-field Newton. Both have a legacy
+unowned global history and real public Uniform resolve/emission, without the new
+option. There is no provenance normalization, helper relocation or omitted CPP.
+
+The complete JSON files are byte-identical by `cmp`, both SHA256
+`d7f10e2d73fd2aa8825cc3a4d78290c3c94095fa604ae56407d7069de0b0cd1d`.
+They are retained as `parent-default.json` and `candidate-default.json` beside
+the first-gel log. This receives two independently authored legacy profiles;
+it does not requalify the author's nine other profiles or a compiled artifact.
+
+```
+rtk proxy env PYTHONPATH=/Users/romaindespoulain/dev/tmp/PoPS-sol61-history-storage-parent/python PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python /Users/romaindespoulain/dev/tmp/PoPS-sol61-history-storage-review/tests/review/sol61_history_storage_witness.py
+rtk proxy env PYTHONPATH=python PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python /Users/romaindespoulain/dev/tmp/PoPS-sol61-history-storage-review/tests/review/sol61_history_storage_witness.py
+```
+
+The initial parity helper's import spelling and direct State alias were corrected
+before comparison: preserving a State uses a fresh `1*current` expression at its
+next point, without retiming the original capture. Those setup failures were
+not attributed to the new production code.
+
+Native reception requires
 the newly changed SDK header rebuilt and authenticated by ROOT. No previous
 native history or Stage dataset qualifies this new port.
