@@ -113,7 +113,8 @@ void original_nonlinear_native_profile(AmrFieldRightPreconditioner realization,
   auto lane = ExecutionLane::duplicate_world_collectively("original-amr-field-witness");
   ::testing::Test::RecordProperty("realization",
       realization == AmrFieldRightPreconditioner::kIdentity ? "identity"
-          : "pops.amr.original-spatial-jacobi.basis-response@1");
+          : (realization == AmrFieldRightPreconditioner::kFullResidualBasisLU ? FullResidualBasisLU::identity
+             : "pops.amr.original-spatial-jacobi.basis-response@1"));
   ::testing::Test::RecordProperty("linear_budget", original_controls().linear_max_iterations);
   ::testing::Test::RecordProperty("restart", original_controls().restart);
   for (int cells : {16, 32})
@@ -152,7 +153,9 @@ void original_nonlinear_native_profile(AmrFieldRightPreconditioner realization,
       auto authority = original_authority(provider.get(), cache.begin_attempt(lane));
       const std::array<const Solver::hierarchy_type*, 1> inputs{&forcing};
       auto prepared = OriginalResidual::prepare(provider, authority, inputs, original_controls(),
-                                                Real(1e-5), lane, realization);
+                                                Real(1e-5), lane, realization,
+                                                AmrFieldCoefficientEvaluation::kFrozen,
+                                                realization == AmrFieldRightPreconditioner::kFullResidualBasisLU ? std::uint64_t{64 * 1024 * 1024} : 0);
       if (realization == AmrFieldRightPreconditioner::kSpatialBasisJacobi) {
         EXPECT_EQ(prepared->invocation_identity(), OriginalResidual::preconditioned_identity);
         std::size_t applications = 1;
@@ -162,6 +165,9 @@ void original_nonlinear_native_profile(AmrFieldRightPreconditioner realization,
             applications += static_cast<std::size_t>(layout[global].numPts()) * 3;
         }
         EXPECT_EQ(prepared->spatial_jacobi_applications(), applications);
+      } else if (realization == AmrFieldRightPreconditioner::kFullResidualBasisLU) {
+        EXPECT_EQ(prepared->invocation_identity(), OriginalResidual::full_lu_identity);
+        EXPECT_EQ(prepared->full_lu_columns(), std::size_t(0));
       } else {
         EXPECT_EQ(prepared->invocation_identity(), OriginalResidual::identity);
         EXPECT_EQ(prepared->spatial_jacobi_applications(), std::size_t(0));
@@ -178,9 +184,10 @@ void original_nonlinear_native_profile(AmrFieldRightPreconditioner realization,
         EXPECT_FALSE(accepted.solved());
         EXPECT_EQ(accepted.status, SolveStatus::kBreakdown);
         EXPECT_EQ(accepted.action, SolveAction::kRejectAttempt);
-        EXPECT_EQ(accepted.iters, 0);
+        const int rejected_iteration = realization == AmrFieldRightPreconditioner::kSpatialBasisJacobi ? 1 : 0;
+        EXPECT_EQ(accepted.iters, rejected_iteration);
         EXPECT_EQ(accepted.reason.find(
-            "amr_field_newton_gmres_breakdown:iteration_limit:newton=0:columns=240:"), std::size_t(0));
+            "amr_field_newton_gmres_breakdown:iteration_limit:newton=" + std::to_string(rejected_iteration) + ":columns=240:"), std::size_t(0));
         EXPECT_EQ(original_controls().linear_max_iterations, 240);
         EXPECT_EQ(original_controls().restart, 80);
         EXPECT_THROW(prepared->candidate(authority, lane), std::exception);
@@ -192,6 +199,23 @@ void original_nonlinear_native_profile(AmrFieldRightPreconditioner realization,
       const auto& solved = prepared->candidate(authority, lane);
       EXPECT_GT(prepared->residual_evaluations(), 1);
       EXPECT_GT(prepared->derivative_evaluations(), 0);
+      if (realization == AmrFieldRightPreconditioner::kFullResidualBasisLU) {
+        EXPECT_GT(prepared->full_lu_factorizations(), std::size_t(0));
+        EXPECT_EQ(prepared->full_lu_columns(), prepared->full_lu_factorizations() * prepared->full_lu_active_dofs());
+        const auto active = prepared->full_lu_active_dofs();
+        ::testing::Test::RecordProperty("full_lu_N" + std::to_string(cells) + "_p" +
+            std::to_string(permutation[0]) + std::to_string(permutation[1]) + std::to_string(permutation[2]),
+            "active_dofs=" + std::to_string(active) + ":dense_matrix_bytes_per_rank=" +
+            std::to_string(FullResidualBasisLU::checked_product(FullResidualBasisLU::checked_product(active, active), sizeof(Real))) +
+            ":columns=" + std::to_string(prepared->full_lu_columns()) + ":factorizations=" +
+            std::to_string(prepared->full_lu_factorizations()) + ":actual_original_F_evaluations=" +
+            std::to_string(prepared->residual_evaluations()));
+        std::size_t stored = 0;
+        for (int level = 0; level < provider->level_count(); ++level)
+          for (std::size_t global = 0; global < provider->original_field_layout(level).layout().size(); ++global)
+            stored += static_cast<std::size_t>(provider->original_field_layout(level).layout()[global].numPts()) * 3;
+        EXPECT_LT(prepared->full_lu_active_dofs(), stored); // covered coarse rows are absent
+      }
       for (int level = 0; level < 2; ++level)
         lincomb(defect[level], Real(1), solved[level], Real(-1), exact[level]);
       EXPECT_LT(std::sqrt(provider->original_field_dot(defect, defect)), Real(3e-7));
@@ -230,11 +254,52 @@ void original_nonlinear_native_profile(AmrFieldRightPreconditioner realization,
 }
 
 TEST(CompositeGeneralField, OriginalAmrNonlinearResidualTwoResolutionsAndPermutation) {
-  original_nonlinear_native_profile(AmrFieldRightPreconditioner::kSpatialBasisJacobi);
+  original_nonlinear_native_profile(AmrFieldRightPreconditioner::kFullResidualBasisLU);
 }
 
 TEST(CompositeGeneralField, OriginalAmrNonlinearIdentityBudgetRejectsWithoutPublication) {
   original_nonlinear_native_profile(AmrFieldRightPreconditioner::kIdentity, true);
+}
+
+TEST(CompositeGeneralField, OriginalAmrNonlinearJacobiBudgetRejectsWithoutPublication) {
+  original_nonlinear_native_profile(AmrFieldRightPreconditioner::kSpatialBasisJacobi, true);
+}
+
+TEST(CompositeGeneralField, FullResidualBasisLuBudgetAndSingularityCannotPublish) {
+  auto lane = ExecutionLane::duplicate_world_collectively("full-original-lu-resource-refusals");
+  auto provider = original_field_provider(lane, 16, {0, 1, 2});
+  auto forcing = original_tower(*provider);
+  for (auto& level : forcing) level.set_val(Real(1));
+  PreparedResourceCache cache;
+  auto authority = original_authority(provider.get(), cache.begin_attempt(lane));
+  const std::array<const Solver::hierarchy_type*, 1> inputs{&forcing};
+  EXPECT_THROW(OriginalResidual::prepare(provider, authority, inputs, original_controls(), Real(1e-5), lane,
+      AmrFieldRightPreconditioner::kFullResidualBasisLU), std::exception);
+  auto prepared = OriginalResidual::prepare(provider, authority, inputs, original_controls(), Real(1e-5), lane,
+      AmrFieldRightPreconditioner::kFullResidualBasisLU, AmrFieldCoefficientEvaluation::kFrozen, 1);
+  for (int level = 0; level < provider->level_count(); ++level) provider->solution(level).set_val(Real(9));
+  EXPECT_THROW(prepared->solve(authority, nullptr, original_local_body({0, 1, 2}), lane), std::exception);
+  EXPECT_EQ(prepared->full_lu_columns(), std::size_t(0));
+  EXPECT_THROW(prepared->candidate(authority, lane), std::exception);
+  for (int level = 0; level < provider->level_count(); ++level)
+    EXPECT_EQ(norm_inf(provider->solution(level), 0), Real(9));
+  for (int level = 0; level < provider->level_count(); ++level)
+    provider->assembly_target("pops.general-field.coefficients", level).set_val(Real(0));
+  authority.original_equation_identity = "witness.zero-diffusion-plus-captured-constant-residual@1";
+  prepared = OriginalResidual::prepare(provider, authority, inputs, original_controls(), Real(1e-5), lane,
+      AmrFieldRightPreconditioner::kFullResidualBasisLU, AmrFieldCoefficientEvaluation::kFrozen, 64 * 1024 * 1024);
+  // Original F=zero diffusion + frozen nonzero capture, without overwriting A(q).
+  auto constant_body = [](const auto&, const auto& captures, auto& result, int) {
+    for (std::size_t level = 0; level < result.size(); ++level)
+      saxpy(result[level], Real(1), captures[0][level]);
+  };
+  EXPECT_THROW(prepared->solve(authority, nullptr, constant_body, lane), std::exception);
+  EXPECT_GT(prepared->full_lu_columns(), std::size_t(0));
+  EXPECT_THROW(prepared->candidate(authority, lane), std::exception);
+  for (int level = 0; level < provider->level_count(); ++level)
+    EXPECT_EQ(norm_inf(provider->solution(level), 0), Real(9));
+  cache.reject_attempt();
+  EXPECT_THROW(prepared->require_authority(authority, lane), std::exception);
 }
 
 TEST(CompositeGeneralField, OriginalSpatialJacobiRejectsMissingDiagonalAndStaleAuthority) {
@@ -808,7 +873,7 @@ auto candidate_diffusion_body(std::array<int, 3> permutation) {
   };
 }
 
-TEST(CompositeGeneralField, CandidateDiffusionReevaluatesFullFJvpAndRecheck) {
+void candidate_diffusion_native_profile(AmrFieldRightPreconditioner realization) {
   auto lane=ExecutionLane::duplicate_world_collectively("candidate-diffusion-full-F");
   ::testing::Test::RecordProperty("coefficient_evaluation","pops.field.coefficients.per-candidate@1");
   ::testing::Test::RecordProperty("linear_residual_verification","pops.field.linear.true-correction-residual@1");
@@ -844,7 +909,8 @@ TEST(CompositeGeneralField, CandidateDiffusionReevaluatesFullFJvpAndRecheck) {
     authority.original_equation_identity="witness.original-nonlinear-D-plus-cubic-coupled-reaction@1";
     const std::array<const Solver::hierarchy_type*,1> inputs{&forcing};
     auto prepared=OriginalResidual::prepare(provider,authority,inputs,original_controls(),Real(1e-5),lane,
-      AmrFieldRightPreconditioner::kIdentity,AmrFieldCoefficientEvaluation::kPerCandidate);
+      realization,AmrFieldCoefficientEvaluation::kPerCandidate,
+      realization == AmrFieldRightPreconditioner::kFullResidualBasisLU ? std::uint64_t{64 * 1024 * 1024} : 0);
     int coefficient_calls=0;
     auto report=prepared->solve_candidate(authority,&seed,local,
       [&](const auto& q,const auto& captures,auto& output,int evaluation_id) {
@@ -854,6 +920,10 @@ TEST(CompositeGeneralField, CandidateDiffusionReevaluatesFullFJvpAndRecheck) {
     ASSERT_TRUE(report.solved_value_available())<<report.reason;
     EXPECT_GT(prepared->derivative_evaluations(),0);
     EXPECT_EQ(coefficient_calls,prepared->residual_evaluations());
+    if (realization == AmrFieldRightPreconditioner::kFullResidualBasisLU) {
+      EXPECT_GT(prepared->full_lu_factorizations(), std::size_t(0));
+      EXPECT_EQ(prepared->full_lu_columns(), prepared->full_lu_factorizations()*prepared->full_lu_active_dofs());
+    }
     const auto& candidate=prepared->candidate(authority,lane);
     for(int level=0;level<2;++level) {
       lincomb(error[level],Real(1),candidate[level],Real(-1),target[level]);
@@ -881,6 +951,14 @@ TEST(CompositeGeneralField, CandidateDiffusionReevaluatesFullFJvpAndRecheck) {
     EXPECT_LE(std::sqrt(provider->original_field_dot(error,error)),
               original_controls().tolerance*std::max(Real(1),report.reference_residual_norm));
   }
+}
+
+TEST(CompositeGeneralField, CandidateDiffusionReevaluatesFullFJvpAndRecheck) {
+  candidate_diffusion_native_profile(AmrFieldRightPreconditioner::kIdentity);
+}
+
+TEST(CompositeGeneralField, FullResidualBasisLuRebuildsCandidateDiffusionAndKeepsOriginalAcceptance) {
+  candidate_diffusion_native_profile(AmrFieldRightPreconditioner::kFullResidualBasisLU);
 }
 
 TEST(CompositeGeneralField, CandidateCoefficientLocalFailureVotesAndCannotPublish) {
