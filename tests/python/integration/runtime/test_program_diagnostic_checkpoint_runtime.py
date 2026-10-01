@@ -4,6 +4,8 @@ Only the admission tests run source-only. All marked cases compile/bind/run real
 Uniform or AMR providers; no monkeypatch substitutes a DSO, rank or collective.
 """
 from pathlib import Path
+import ast
+import inspect
 import json
 import sys
 
@@ -14,7 +16,7 @@ import pytest
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
 from tests.python.support.program_diagnostic_native_receipts import (
     DT, RAW_BITS, bind, build, decoded, prepare, rank, record_raw, resealed_fault,
-    same_images, save, size, snapshot,
+    same_images, save, size, snapshot, snapshot_geometry,
 )
 
 
@@ -94,6 +96,33 @@ def test_diagnostic_fixture_source_admission(amr):
     assert 'ctx.record_scalar("global-energy"' in cpp
     assert "dot_all" in cpp and "accepted-fluid" in cpp
     assert "updated" in cpp
+
+
+def test_diagnostic_geometry_routes_match_real_native_provider_bindings():
+    """Source admission of the real APIs, without substituting a runtime object."""
+    from pops.runtime._runtime_instance import RuntimeInstance
+
+    function = ast.parse(inspect.getsource(snapshot_geometry)).body[0]
+    branch = function.body[0]
+    assert isinstance(branch, ast.If) and isinstance(branch.test, ast.Name)
+    assert branch.test.id == "amr" and not branch.orelse
+
+    def runtime_methods(nodes):
+        return {(node.attr, isinstance(node.ctx, ast.Load))
+                for root in nodes for node in ast.walk(root)
+                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id == "runtime"}
+
+    assert runtime_methods(branch.body) == {("patch_boxes", True)}
+    assert runtime_methods(function.body[1:]) == {("spatial_shape", True), ("local_boxes", True)}
+    uniform = "\n".join(inspect.getsource(getattr(RuntimeInstance, name))
+                        for name in ("spatial_shape", "local_boxes"))
+    assert "patch_boxes" not in uniform
+    root = Path(__file__).resolve().parents[4]
+    native = (root / "python/bindings/core/init/init_system.cpp").read_text()
+    assert '.def("spatial_shape"' in native
+    assert '"local_boxes"' in native and "system.local_boxes(name)" in native
+    assert '.def("patch_boxes"' not in native
 
 
 @pytest.mark.compiler

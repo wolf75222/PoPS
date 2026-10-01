@@ -136,6 +136,14 @@ def record_raw(world, runtime):
         assert values["rank-local"] == struct.unpack("<Q", struct.pack("<d", rank(world) + .125))[0]
 
 
+def snapshot_geometry(world, runtime, amr):
+    if amr:
+        return collective_call(world, lambda: tuple(runtime.patch_boxes()))
+    shape = collective_call(world, runtime.spatial_shape)
+    boxes = collective_call(world, lambda: runtime.local_boxes("fluid"))
+    return ("uniform", tuple(shape), tuple(boxes))
+
+
 def snapshot(world, runtime, amr):
     native = runtime._executor._s
     levels = collective_call(world, runtime.n_levels) if amr else 1
@@ -166,7 +174,9 @@ def snapshot(world, runtime, amr):
                     arrays["history_%s_l%d_s%d" % (name, level, slot)] = np.asarray(value).copy()
                     history.append((name, level, slot, float(duration).hex()))
     diagnostics = collective_call(world, native._checkpoint_program_diagnostics)
-    lifecycle = collective_call(world, lambda: (float(runtime.time()).hex(), runtime.macro_step(), tuple(runtime.patch_boxes())))
+    geometry = snapshot_geometry(world, runtime, amr)
+    clock = collective_call(world, lambda: (float(runtime.time()).hex(), runtime.macro_step()))
+    lifecycle = (*clock, geometry)
     return {"arrays": arrays, "history": tuple(history), "diagnostics": diagnostics, "lifecycle": lifecycle}
 
 

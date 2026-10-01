@@ -92,3 +92,33 @@ For MPI, use the established ROOT per-rank pytest runner and its separate rank J
 not let two ranks write one XML. Preserve receipts even when a test is red. A source admission
 pass is not Native Kokkos/MPI qualification, and this fixture does not receive AMR solver
 convergence, GPU execution, rank-count-changing restart, or a complete scientific corpus model.
+
+## Installed SDK2e4 failure and Uniform observation repair
+
+ROOT's real Serial Dim2 run under
+`/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-and-diagnostics-serial-dim2-corrected-selection`
+closed eight cases: four diffusion cases and both AMR diagnostic cases passed; both Uniform
+diagnostic cases failed before the first saved snapshot. `pytest.log` identifies the helper's
+unconditional `runtime.patch_boxes()` lookup as an `AttributeError` on the actual native System.
+The receipt reports no skips/errors, two failures, Native Dim2 DSO SHA
+`b8a5166c3ebe0a64e370be233bb2e987cbd7324f2b64dfac782718ead03f234b`,
+identity SHA `1d6f7b42e4e3506ed575dd2f0c5a78cd7c42b1b7b2b2fc3b7bde33148079613d`
+and log SHA `c9ac4f7e15fdd484463a0b22e5b886b589550a109ca792281d3199f84fd86f4f`.
+This is an observed ROOT reception, not a native run performed in this private checkout.
+
+The fixture-only correction selects geometry explicitly. AMR retains the identical patch-box
+tuple. Uniform records `("uniform", spatial_shape, local_boxes("fluid"))` from the actual public
+RuntimeInstance APIs. The shape comes from the owning System, and the boxes retain their exact
+half-open rank-owned bounds as returned, including an empty owner rank; no synthetic global box,
+AMR method fallback or invented shape replaces them. The geometry remains in the exact lifecycle
+comparison and every phase's JSON sidecar. Clock/step, NPZ states/history and all diagnostic-bit
+comparisons are unchanged.
+
+The other family-specific calls were audited: `n_levels`, level state gathers and composite masks
+are taken only for AMR; native history initialization/fill/sample/duration/gather arguments use
+the existing Uniform versus AMR signatures explicitly. The new source admission test checks the
+helper's family branches against RuntimeInstance APIs and the real System binding declarations.
+It does not construct a stub runtime or qualify a fake native positive. Final source selection
+after this repair: **3 PASS, 4 Native cases deselected**, Ruff and diff checks passed. No production,
+installed environment, ROOT artifact or native build was changed. ROOT must replay both Uniform
+Native node IDs; a source pass does not convert their historical red receipt into a pass.
