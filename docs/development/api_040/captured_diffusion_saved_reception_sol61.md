@@ -246,3 +246,127 @@ seals; neither native execution nor a physical positive archive is produced here
 Version-2 local receipt: 80 synthetic source/protocol tests PASS (18.11s),
 Ruff PASS, `git diff --check` PASS and standalone CLI `--help` PASS.
 No installed PoPS import, native build/run, JIT or environment mutation.
+
+## Explicit Frozen version 3 archive reception (2026-10-01)
+
+This is a separate `saved-states-original-residual@3` qualification for fixture
+`pops.captured-diffusion-native-fixture@3` from ROOT gel `766f078`
+(Native source `457e0700`). The default assemble path and historical @2
+qualification, receipts, gap list and 80 existing protocol/math tests remain.
+No @2 receipt is promoted to @3. Candidate fixture @2 is outside this Frozen
+reader's scientific qualification.
+
+The fixture's accepted/continuous/replay checkpoint paths are distinct from one
+another and from all saved observation paths. ROOT's source hashes each actual
+checkpoint immediately after its capture, then rechecks those hashes when
+publishing the receipt. This prevents subsequent observation NPZ writes from
+silently replacing the checkpoint. The same compiled Program component exports
+both its retained CPP and `dump_ir` image; it does not rebuild a second Program.
+The @3 reader requires the CLOSED eleven-file inventory, including that one
+actual IR, and refuses path aliasing or extra files.
+
+The reader recomputes the carried IR10 Program hash using the actual serialization
+projection: only node provenance is excluded, recursively for the declared node
+regions and dt-bound nodes. Semantic attributes named provenance are retained.
+It requires the same hash in the one actual CPP `pops_program_hash` export, the
+IR receipt, and all three actual checkpoints. Program block order comes from
+carried IR block handles and the CPP block-name registry; the observed order is
+forcing/material/response. It is not rewritten to the old @2 literal order.
+This is a Program IR/CPP/checkpoint link, **not** a reconstructed artifact
+aggregate identity or proof of CPP-to-DSO compilation/linking.
+
+Every @3 checkpoint must have actual Uniform payload version 8, the sealed
+state/history/exchange/auxiliary images, and POPSDIA1 Program diagnostics. The
+codec validates exact uint8 storage, signed-int64 rank offsets, width64, rank
+ordinal/size, name lengths/order/uniqueness and no trailing bytes. Opaque names
+and binary64 bits are retained independently for each rank; no artificial
+rank-value equality is imposed. The five field diagnostics must be the names
+emitted by the retained CPP, with finite nonnegative norms and integer counters.
+Zero finite-difference JVPs is legitimate when the current solve already meets
+the original residual guard. The optional native frontier-duration record is
+accepted separately. Continuous/replay diagnostic images, like all continuation
+payloads except the two run-origin envelope members, must agree in bytes.
+
+The carried IR also authenticates the one macro clock and maximum lag1 history
+registry. Logical history cursors contain clock/newest_tick/oldest_tick/valid_lags,
+initialized/cold_start_extended; they do not contain a fabricated phase field.
+The two physical ring slots remain distinct from logical lag1. The reader
+checks exact schedule, controller, accepted clock, history lags, transaction
+counts and absence of queued events for these two-step FixedDt witnesses.
+Fully resealed cursor mutations still fail those semantic checks.
+
+### Required ROOT pins and authentic full JUnit
+
+`assemble --fixture-version 3` creates pending metadata only. The owner object
+remains `sol61.captured-d-execution-owner@2` with the exact source/package/SDK/
+native/binary fields documented above; `cpp_dso_links` remains null. ROOT must
+independently authenticate its source commits, executed fixture/helper bytes,
+loaded package/extension/SDK and execution association. No agent-created approval
+is accepted as an owner seal.
+
+New pending schema: `sol61.captured-d-owner-pins@3`. Exact keys:
+
+```
+schema, qualification, archive_root, file_roots, mode, ranks, owner,
+junit, cases, other_junit_cases
+```
+
+`qualification` is `saved-states-original-residual@3`; `cases` has exactly
+scalar1 and coupled3-201. Each case keeps directory/artifact/receipt/initial/
+phases/checkpoints/sources and adds `program_irs` with the actual IR path/hash.
+The receipt also records its actual compiled component and Program hash.
+`other_junit_cases` is ROOT's explicit exact list of non-Frozen test names in the
+FULL authentic per-rank XML, not a filtered or synthesized XML. Each rank must
+contain exactly the two Frozen witnesses plus that complete list. Any global
+failure/error/skip, count disagreement, duplicated/unlisted name or incomplete
+rank-specific Frozen properties refuses the batch. Additional clean cases do
+not become Frozen scientific qualification. Serial and MPI2 owner inventories
+may have different explicit lists.
+
+ROOT separately supplies this exact approval and both file hashes out of band:
+
+```json
+{"schema":"sol61.captured-d-root-approval@3","approved_by":"ROOT",
+ "pins_sha256":"EXTERNAL_64_LOWERCASE_HEX",
+ "qualification":"saved-states-original-residual@3"}
+```
+
+Use the existing assemble command with `--fixture-version 3` and one repeated
+`--other-junit-case 'EXACT_NAME'` argument per additional case. Receive takes the
+same four external pins/approval path/hash arguments. No seal is minted here.
+
+### Independent checks and exact limits
+
+131 source/protocol/math tests passed (80 preserved @2 tests plus 51 @3 tests),
+Ruff passed, and the standalone checker imported no PoPS. New synthetic attacks
+cover actual IR/body/input/point/version/CPP/receipt hash linkage, semantic
+provenance, block order, rank-owned diagnostic offsets/rank/body/name/bits,
+fully resealed lag/ring/clock/controller/event/counter metadata, closed11-file
+inventory, and full mixed-JUnit failures/duplicates/omissions. All temporary
+inputs are labelled synthetic; no positive native archive or owner approval is
+manufactured.
+
+Read-only **unsealed format/math admission**, not native qualification, was
+performed against ROOT's two actual Serial archives under:
+
+```
+/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/
+ installed-sdk2e4-diffusion-archive-and-uniform-diagnostics-serial-dim2/
+ pytest-tmp/test_public_captured_diffusion{0,1}/captured-D-MMS
+```
+
+Both closed eleven-file inventories, actual IR10/CPP/checkpoint hashes,
+Uniform8/POPSDIA1 five diagnostics, physical histories/logical cursors and exact
+continuous/replay payloads passed. Maximum original relative L2 residuals were
+2.9075324825715963e-15 (scalar1) and 1.883688360197054e-15 (coupled3-201).
+The authentic full Serial XML admitted seven clean names: two Frozen, two
+Candidate, two Uniform diagnostic tests and one geometry source admission. This
+was a parser admission using the supplied files, not reception via `receive`;
+ROOT's external execution-owner pins and approval were not yet consumed.
+
+The @3 result explicitly retains gaps: original artifact aggregate payload,
+block compiler CPP, independently reloaded checkpoint, separately saved
+in-memory comparison images, private capture lease/point image, CPP-to-DSO
+linking, and AMR/GPU/convergence/arbitrary-D/empty-rank qualification. No native
+execution, install, JIT, environment mutation or production change occurred in
+this review. Native Serial/MPI results belong to ROOT's authenticated campaigns.

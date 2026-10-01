@@ -43,7 +43,117 @@ DT, TOL = .01, 3e-8
 CONTROLS = dict(tolerance=1e-10, max_iterations=20, linear_tolerance=1e-8,
                 linear_max_iterations=240, restart=60, armijo=1e-4, minimum_step=1/1024)
 QUALIFICATION = "saved-states-original-residual@2"
+QUALIFICATION_V3 = "saved-states-original-residual@3"
 MAX_BINARY_BYTES = 1024*1024*1024  # offline DSO hashing budget, not a runtime limit
+
+
+def scope(version):
+    need(type(version) is int and version in (2, 3), "explicit Frozen fixture scope must be 2 or 3")
+    return QUALIFICATION if version == 2 else QUALIFICATION_V3
+
+
+def program_identity(raw, cpp, declared_hash):
+    """Actual dump_ir projection, not an invented artifact/semantic aggregate."""
+    ir = strict_json(raw)
+    need(type(ir) is dict and type(ir.get("version")) is int and ir["version"] == 10
+         and type(ir.get("nodes")) is list, "Frozen@3 actual Program IR10 absent")
+
+    def project(node):
+        need(type(node) is dict and {"id", "name", "vtype", "op", "attrs", "inputs", "point"} <= set(node),
+             "actual Program node is malformed")
+        result = {key: value for key, value in node.items() if key != "provenance"}
+        attrs = dict(result["attrs"])
+        regions = {"while": ("cond_block", "body_block"), "range": ("body_block",),
+                   "subcycle": ("body_block",), "post_synchronization": ("body_block",),
+                   "branch": ("true_block", "false_block"), "matrix_free_operator": ("apply_block",),
+                   "solve_local_nonlinear": ("residual_block",), "solve_spatial_nonlinear": ("residual_block",),
+                   "solve_coupled_implicit": ("residual_block",)}
+        for key in regions.get(node["op"], ()):
+            if key in attrs and attrs[key] is not None:
+                need(type(attrs[key]) is list, "actual Program region is malformed")
+                attrs[key] = [project(value) for value in attrs[key]]
+        result["attrs"] = attrs
+        return result
+
+    projected = dict(ir, nodes=[project(node) for node in ir["nodes"]])
+    if "dt_bound" in projected:
+        projected["dt_bound"] = dict(projected["dt_bound"], nodes=[project(node) for node in ir["dt_bound"]["nodes"]])
+    hashed = digest(json.dumps(projected, sort_keys=True, separators=(",", ":")).encode())
+    literal = re.findall(r'extern\s+"C"\s+const\s+char\s*\*\s*pops_program_hash\s*\(\s*\)\s*\{\s*return\s*"([0-9a-f]{64})"\s*;\s*\}', cpp)
+    need(type(declared_hash) is str and re.fullmatch("[0-9a-f]{64}", declared_hash) is not None
+         and literal == [hashed] and declared_hash == hashed, "actual Program IR/CPP/receipt hash link differs")
+    return hashed
+
+
+def diagnostic_images(arrays, ranks, cpp):
+    """Rank-owned POPSDIA1: opaque names and float bits, no rank equality assumption."""
+    need({"program_diagnostics_state", "program_diagnostics_offsets"} <= set(arrays),
+         "Frozen@3 durable Program diagnostic images absent")
+    raw, offsets = arrays["program_diagnostics_state"], arrays["program_diagnostics_offsets"]
+    need(raw.dtype == np.dtype("uint8") and raw.ndim == 1 and offsets.dtype == np.dtype("int64")
+         and offsets.ndim == 1 and len(offsets) == ranks+1 and offsets[0] == 0
+         and offsets[-1] == len(raw) and np.all(offsets[1:] > offsets[:-1]), "diagnostic rank offsets/geometry differ")
+    names = re.findall(r'ctx\.record_scalar\(\s*("(?:[^"\\]|\\.)*")\s*,', cpp)
+    names = {json.loads(name).encode() for name in names}
+    suffixes = {b"residual_norm", b"reference_residual_norm", b"rel_residual",
+                b"full_residual_evaluations", b"finite_difference_jvps"}
+    need(len(names) == 5 and {name.rsplit(b".", 1)[-1] for name in names} == suffixes,
+         "actual CPP original field diagnostic inventory differs")
+    reports = []
+    for rank, (lo, hi) in enumerate(zip(offsets[:-1], offsets[1:], strict=True)):
+        image = raw[int(lo):int(hi)].tobytes()
+        need(len(image) >= 40 and image[:8] == b"POPSDIA1", "diagnostic @1 header absent")
+        width, owner, count_ranks, count = struct.unpack_from("<QQQQ", image, 8)
+        need((width, owner, count_ranks) == (64, rank, ranks) and count <= (len(image)-40)//16,
+             "diagnostic width/rank/count authority differs")
+        position, records, previous = 40, {}, None
+        for _ in range(count):
+            need(position+8 <= len(image), "diagnostic name length truncated")
+            length, = struct.unpack_from("<Q", image, position)
+            position += 8
+            need(length <= len(image)-position-8, "diagnostic name/body exceeds actual bytes")
+            name = image[position:position+length]
+            position += length
+            bits, = struct.unpack_from("<Q", image, position)
+            position += 8
+            need((previous is None or previous < name) and not name.startswith(b"pops.balance-term"),
+                 "diagnostic duplicate/unordered/reserved name")
+            records[name] = bits
+            previous = name
+        need(position == len(image), "diagnostic trailing bytes")
+        need(names <= set(records) <= names | {b"pops.frontier.duration"}, "diagnostic inventory differs from actual compiled source")
+        for name, bits in records.items():
+            value, = struct.unpack("<d", struct.pack("<Q", bits))
+            need(math.isfinite(value) and value >= 0, "original field diagnostic is nonfinite/negative")
+            if name.endswith((b"full_residual_evaluations", b"finite_difference_jvps")):
+                need(value.is_integer() and (value > 0 or not name.endswith(b"full_residual_evaluations")),
+                     "field evaluation counter is not an admissible integer")
+        reports.append({name.hex(): "%016x" % bits for name, bits in records.items()})
+    return reports
+
+
+def program_blocks(raw, cpp):
+    ir = strict_json(raw)
+    rows = ir.get("block_order")
+    need(type(rows) is list and len(rows) == 3 and all(type(row) is dict for row in rows), "actual Program block order absent")
+    names = [row.get("local_id") for row in rows]
+    need(all(type(name) is str for name in names) and len(set(names)) == 3
+         and set(names) == {"response", "forcing", "material"}, "actual Program block owners differ")
+    body = re.findall(r'extern\s+"C"\s+const\s+char\s*\*\s*pops_program_block_name\s*\(int\s+i\)\s*\{(.*?)\n\}', cpp, re.S)
+    need(len(body) == 1, "actual CPP block registry export absent/duplicated")
+    exports = re.findall(r'case\s+([0-9]+)\s*:\s*return\s*("(?:[^"\\]|\\.)*")\s*;', body[0])
+    need([(int(index), json.loads(name)) for index, name in exports] == list(enumerate(names)),
+         "actual IR/CPP block registry order differs")
+    return names
+
+
+def checkpoint_v3(arrays, ranks, cpp, program_hash):
+    need("pops_checkpoint_version" in arrays and protocol.scalar(arrays["pops_checkpoint_version"], "int") == 8,
+         "Frozen@3 requires actual Uniform checkpoint payload8")
+    need("program_hash" in arrays and arrays["program_hash"].shape == ()
+         and arrays["program_hash"].dtype.kind == "U" and arrays["program_hash"].item() == program_hash,
+         "checkpoint installed Program hash differs from actual IR/CPP")
+    return diagnostic_images(arrays, ranks, cpp)
 
 
 def matrices(width):
@@ -216,7 +326,52 @@ def history_point(raw, name, step):
              "stale captured/history publication point slot %d" % slot)
 
 
-def checkpoint(raw, phase, saved, artifact, abi, *, first_accepted):
+def temporal_v3(temporal, time, step, ir, width):
+    """Exact declared lag cursors; history rings have no synthetic phase field."""
+    clock = ir["clock"]
+    exact(clock, ("schema_version", "name", "owner"), "carried Program clock")
+    clock_id = "pops.clock.v1::sha256:" + digest(
+        json.dumps(clock, sort_keys=True, separators=(",", ":")).encode())
+    histories = ir["histories"]
+    names = [f"q{i}" for i in range(width)]
+    need(histories == [dict(lag=1, name=name, ncomp=1, state=None) for name in names]
+         and all(type(row["lag"]) is int and type(row["ncomp"]) is int for row in histories),
+         "carried Program history lag/registry differs")
+    policies = ir["history_persistence"]
+    policy = dict(kind="history-persistence", payload=dict(policy="dense"),
+                  protocol="pops.manifest", schema_version=1)
+    need(policies == [dict(depth=2, name=name, policy=policy) for name in names]
+         and all(type(row["depth"]) is int for row in policies),
+         "carried Program history persistence differs")
+    expected_histories = [dict(name=name, depth=1, ring_slots=2, ncomp=1,
+                               clock=clock_id, checkpoint_policy=policy,
+                               interpolation=dict(dense_output=False, provider="exact", schema_version=1),
+                               owner=None, space=dict(kind="scalar_field"),
+                               state=dict(kind="scalar_history", qualified_id="scalar-history:"+name),
+                               validity=dict(domain="accepted_clock_ticks", newest_lag=0, oldest_lag=1))
+                          for name in names]
+    schedule = dict(schema_version=1, kind="pops.temporal-program-schedule", primary_clock=clock_id,
+                    clocks=[dict(descriptor=clock, id=clock_id, ticks_per_macro=1)],
+                    histories=expected_histories, schedules=[], subcycles=[], synchronizations=[])
+    cursors = {name: dict(clock=clock_id, newest_tick=step, oldest_tick=max(0, step-1),
+                          valid_lags=1, cold_start_extended=False, initialized=True) for name in names}
+    expected = dict(schema_version=2, clock=dict(time=time.hex(), macro_step=step),
+                    status="accepted", synchronized=True,
+                    strategy=dict(controls={}, strategy=dict(kind="fixed_dt", dt=dict(kind="binary64", value=DT.hex()))),
+                    controller_state=dict(last_accepted_dt=DT.hex(), fixed_dt_grid=dict(schema_version=1,
+                        origin=0..hex(), macro_step=step, steps=step, time=time.hex())),
+                    program_schedule=schedule,
+                    clock_cursors={clock_id: dict(time=time.hex(), tick=step, phase="accepted")},
+                    schedule_cursors=dict(macro_step=dict(macro_step=step, phase="accepted")),
+                    synchronization_cursors={}, history_cursors=cursors, cache_cursors={}, event_queue=[],
+                    transaction_stats=dict(accepted=step, failed=0, rejected=0))
+    # Canonical JSON comparison also discriminates bool/int and extra metadata.
+    need(json.dumps(temporal, sort_keys=True, separators=(",", ":"))
+         == json.dumps(expected, sort_keys=True, separators=(",", ":")),
+         "Frozen@3 declared clock/schedule/history cursors or controller differs")
+
+
+def checkpoint(raw, phase, saved, artifact, abi, *, first_accepted, block_order=None, program_ir=None):
     arrays, manifest = wire.envelope(raw, "accepted", abi, artifact=artifact)
     need(manifest["runtime_kind"] == "uniform", "foreign checkpoint runtime")
     time, step = CLOCKS[phase]
@@ -240,7 +395,8 @@ def checkpoint(raw, phase, saved, artifact, abi, *, first_accepted):
          and protocol.scalar(first_accepted["step"], "int") == 1, "first accepted history anchor differs")
     width = saved["solution"].shape[0]
     need(first_accepted["solution"].shape == saved["solution"].shape, "first accepted history geometry differs")
-    need(list(arrays["blocks"]) == ["response", "forcing", "material"], "checkpoint block order differs")
+    need(list(arrays["blocks"]) == (["response", "forcing", "material"] if block_order is None else block_order),
+         "checkpoint block order differs")
     for block, names in (("response", [f"u{i}" for i in range(width)]),
                          ("forcing", [f"f{i}" for i in range(width)]), ("material", ["alpha"])):
         need(list(arrays["names_"+block]) == names and protocol.scalar(arrays["ncomp_"+block], "int") == len(names), "component ordering differs")
@@ -269,18 +425,21 @@ def checkpoint(raw, phase, saved, artifact, abi, *, first_accepted):
     need(temporal["clock"] == dict(time=time.hex(), macro_step=step) and temporal["status"] == "accepted"
          and temporal["synchronized"] is True and temporal["controller_state"]["last_accepted_dt"] == DT.hex(),
          "temporal accepted boundary/window differs")
-    for key in ("clock_cursors", "schedule_cursors", "synchronization_cursors", "history_cursors", "cache_cursors"):
-        need(type(temporal[key]) is dict, "temporal cursor map absent")
-        for cursor in temporal[key].values():
-            need(type(cursor) is dict and cursor.get("phase") == "accepted", "temporal cursor not accepted")
-            if "time" in cursor:
-                need(cursor["time"] == time.hex(), "temporal cursor point differs")
-            if "macro_step" in cursor:
-                need(cursor["macro_step"] == step, "temporal cursor step differs")
+    if program_ir is not None:
+        temporal_v3(temporal, time, step, program_ir, width)
+    else:
+        for key in ("clock_cursors", "schedule_cursors", "synchronization_cursors", "history_cursors", "cache_cursors"):
+            need(type(temporal[key]) is dict, "temporal cursor map absent")
+            for cursor in temporal[key].values():
+                need(type(cursor) is dict and cursor.get("phase") == "accepted", "temporal cursor not accepted")
+                if "time" in cursor:
+                    need(cursor["time"] == time.hex(), "temporal cursor point differs")
+                if "macro_step" in cursor:
+                    need(cursor["macro_step"] == step, "temporal cursor step differs")
     return arrays
 
 
-def junit(raw, rank, size, cases):
+def junit(raw, rank, size, cases, *, other_cases=()):
     root = ET.fromstring(raw)
     need(not root.findall(".//failure") and not root.findall(".//error") and not root.findall(".//skipped"), "JUnit failure/error/skip")
     for suite in root.iter("testsuite"):
@@ -290,7 +449,15 @@ def junit(raw, rank, size, cases):
         if "tests" in suite.attrib:
             need(suite.attrib["tests"] == str(len(suite.findall("testcase"))), "JUnit declared test count differs")
     tests = root.findall(".//testcase")
-    need(len(tests) == 2, "JUnit requires two actual cases per rank")
+    need(type(other_cases) in (list, tuple) and all(type(name) is str and name for name in other_cases)
+         and len(set(other_cases)) == len(other_cases)
+         and not any(name.startswith("test_public_captured_diffusion_nonconstant_saved_and_exact_replay") for name in other_cases),
+         "explicit non-Frozen JUnit case list differs")
+    need(len(tests) == 2+len(other_cases), "JUnit requires two actual Frozen cases and exact other case inventory")
+    extras = [test for test in tests if test.get("name") in other_cases]
+    need(len(extras) == len(other_cases) and {test.get("name") for test in extras} == set(other_cases),
+         "JUnit other case inventory is duplicated/incomplete")
+    tests = [test for test in tests if test.get("name") not in other_cases]
     seen = set()
     for test in tests:
         need(test.get("classname", "").endswith("test_public_captured_diffusion"), "foreign JUnit class")
@@ -309,7 +476,8 @@ def junit(raw, rank, size, cases):
     need(seen == set(CASES), "JUnit incomplete")
 
 
-def case_inventory(directory):
+def case_inventory(directory, *, fixture_version=2):
+    scope(fixture_version)
     directory = wire.canonical(directory)
     receipt = strict_json(read(directory/"receipt.json")[1])
     files = {directory/"receipt.json"}
@@ -334,10 +502,23 @@ def case_inventory(directory):
     sources = [leaf(row["path"]) for row in receipt["sources"]]
     need(len(sources) == 1 and sources[0]["sha256"] == receipt["sources"][0]["sha256"], "retained Program CPP absent")
     files.update(Path(row["path"]) for row in sources)
-    need(len(files) == 10 and all(p.parent == directory for p in files) and set(directory.iterdir()) == files,
+    irs = []
+    if fixture_version == 3:
+        need(receipt.get("fixture_schema") == "pops.captured-diffusion-native-fixture@3", "explicit Frozen@3 fixture receipt absent")
+        need(type(receipt.get("program_irs")) is list and len(receipt["program_irs"]) == 1, "actual compiled Program IR export absent")
+        row = receipt["program_irs"][0]
+        exact(row, ("component", "path", "sha256", "program_hash"), "compiled Program IR receipt")
+        irs = [leaf(row["path"])]
+        need(irs[0]["sha256"] == row["sha256"] and row["component"] == receipt["sources"][0]["component"],
+             "actual Program IR receipt/source component differs")
+        files.update(Path(row["path"]) for row in irs)
+    need(len(files) == (11 if fixture_version == 3 else 10) and all(p.parent == directory for p in files) and set(directory.iterdir()) == files,
          "closed captured-D case inventory differs")
-    return dict(directory=str(directory), artifact=receipt["artifact"], receipt=leaf(directory/"receipt.json"),
-                initial=initial, phases=phases, checkpoints=cps, sources=sources)
+    result = dict(directory=str(directory), artifact=receipt["artifact"], receipt=leaf(directory/"receipt.json"),
+                  initial=initial, phases=phases, checkpoints=cps, sources=sources)
+    if fixture_version == 3:
+        result["program_irs"] = irs
+    return result
 
 
 def origins(value, roots):
@@ -355,14 +536,16 @@ def origins(value, roots):
     need(value["cpp_dso_links"] is None, "unreviewed CPP-to-DSO link format cannot certify linking")
 
 
-def assemble(root, directories, junits, owner, roots):
+def assemble(root, directories, junits, owner, roots, *, fixture_version=2, other_junit_cases=()):
+    qualification = scope(fixture_version)
+    need(fixture_version == 3 or not other_junit_cases, "legacy @2 has no mixed JUnit scope")
     root = wire.canonical(root)
     need(len(directories) == 2 and len(junits) in (1, 2), "two cases and Serial/MPI2 required")
     need(type(roots) is list and len(roots) == len(set(roots)) and str(root) in roots, "approved roots differ")
     origins(owner, roots)
     cases = {}
     for directory in directories:
-        case = case_inventory(directory)
+        case = case_inventory(directory, fixture_version=fixture_version)
         need(Path(case["directory"]).is_relative_to(root), "case escapes archive")
         receipt = strict_json(pinned(case["receipt"], roots)[1])
         key = next((k for k, (w, o) in CASES.items() if (receipt["width"], receipt["order"]) == (w, o)), None)
@@ -371,20 +554,26 @@ def assemble(root, directories, junits, owner, roots):
     need(set(cases) == set(CASES), "incomplete case coverage")
     junit_pins = [leaf(p) for p in junits]
     for rank, row in enumerate(junit_pins):
-        junit(pinned(row, roots)[1], rank, len(junits), cases)
-    return dict(schema="sol61.captured-d-owner-pins@2", qualification=QUALIFICATION, archive_root=str(root), file_roots=roots,
-                mode="serial" if len(junits) == 1 else "mpi2", ranks=len(junits), owner=owner, junit=junit_pins, cases=cases)
+        junit(pinned(row, roots)[1], rank, len(junits), cases, other_cases=other_junit_cases)
+    result = dict(schema="sol61.captured-d-owner-pins@%d" % fixture_version, qualification=qualification, archive_root=str(root), file_roots=roots,
+                  mode="serial" if len(junits) == 1 else "mpi2", ranks=len(junits), owner=owner, junit=junit_pins, cases=cases)
+    if fixture_version == 3:
+        result["other_junit_cases"] = list(other_junit_cases)
+    return result
 
 
 def receive(pins_path, pins_sha, approval_path, approval_sha):
     raw, approved = read(pins_path)[1], read(approval_path)[1]
     need(digest(raw) == pins_sha and digest(approved) == approval_sha, "external seal differs")
+    pins = strict_json(raw)
+    version = 3 if pins.get("schema") == "sol61.captured-d-owner-pins@3" else 2
+    qualification = scope(version)
     approval = strict_json(approved)
     exact(approval, ("schema", "approved_by", "pins_sha256", "qualification"), "approval")
-    need(approval == dict(schema="sol61.captured-d-root-approval@2", approved_by="ROOT", pins_sha256=pins_sha, qualification=QUALIFICATION), "ROOT approval scope differs")
-    pins = strict_json(raw)
-    exact(pins, ("schema", "qualification", "archive_root", "file_roots", "mode", "ranks", "owner", "junit", "cases"), "pins")
-    need(pins["schema"] == "sol61.captured-d-owner-pins@2" and pins["qualification"] == QUALIFICATION
+    need(approval == dict(schema="sol61.captured-d-root-approval@%d" % version, approved_by="ROOT", pins_sha256=pins_sha, qualification=qualification), "ROOT approval scope differs")
+    pin_keys = ("schema", "qualification", "archive_root", "file_roots", "mode", "ranks", "owner", "junit", "cases")
+    exact(pins, (*pin_keys, "other_junit_cases") if version == 3 else pin_keys, "pins")
+    need(pins["schema"] == "sol61.captured-d-owner-pins@%d" % version and pins["qualification"] == qualification
          and type(pins["ranks"]) is int and pins["ranks"] in (1, 2)
          and pins["mode"] == ("serial" if pins["ranks"] == 1 else "mpi2"), "owner scope differs")
     roots = pins["file_roots"]
@@ -393,17 +582,18 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
     exact(pins["cases"], CASES, "sealed cases")
     need(len(pins["junit"]) == pins["ranks"] and len({r["path"] for r in pins["junit"]}) == pins["ranks"], "JUnit rank inventory differs")
     for rank, row in enumerate(pins["junit"]):
-        junit(pinned(row, roots)[1], rank, pins["ranks"], pins["cases"])
+        junit(pinned(row, roots)[1], rank, pins["ranks"], pins["cases"], other_cases=pins.get("other_junit_cases", ()))
     reports = {}
     for key, case in pins["cases"].items():
         need(Path(case["directory"]).is_relative_to(wire.canonical(pins["archive_root"])), "case outside archive root")
-        need(case_inventory(case["directory"]) == case, "sealed case inventory differs")
+        need(case_inventory(case["directory"], fixture_version=version) == case, "sealed case inventory differs")
         receipt = strict_json(pinned(case["receipt"], roots)[1])
-        exact(receipt, ("kind", "fixture_schema", "artifact", "dimension", "rank", "size", "cells", "width", "order", "face_policy", "newton", "fd_step",
+        receipt_keys = ("kind", "fixture_schema", "artifact", "dimension", "rank", "size", "cells", "width", "order", "face_policy", "newton", "fd_step",
                         "solution_tolerance", "residual_tolerance", "native", "platform", "binaries", "sources", "initial_npz", "initial_sha256",
-                        "phases", "checkpoints", "exact_restart_and_replay"), "receipt")
+                        "phases", "checkpoints", "exact_restart_and_replay")
+        exact(receipt, (*receipt_keys, "program_irs") if version == 3 else receipt_keys, "receipt")
         width, order = CASES[key]
-        need(receipt["fixture_schema"] == "pops.captured-diffusion-native-fixture@2", "fixture history semantics version differs")
+        need(receipt["fixture_schema"] == "pops.captured-diffusion-native-fixture@%d" % version, "fixture history semantics version differs")
         need(receipt["kind"] == "actual-native-captured-D-original-MMS" and receipt["dimension"] == 2 and receipt["cells"] == 16
              and receipt["width"] == width and receipt["order"] == order and receipt["rank"] == 0 and receipt["size"] == pins["ranks"], "receipt case differs")
         need(all(type(receipt[k]) is int for k in ("dimension", "cells", "width", "rank", "size")), "receipt exact integer types differ")
@@ -423,6 +613,15 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         need(source["component"].startswith("program-") and source["component"] in {r["component"] for r in receipt["binaries"]},
              "compiler source component owner differs")
         cpp = pinned(case["sources"][0], roots)[1].decode("utf-8")
+        linked_hash = None
+        linked_blocks = None
+        linked_ir = None
+        if version == 3:
+            carried_ir = pinned(case["program_irs"][0], roots)[1]
+            linked_hash = program_identity(carried_ir, cpp,
+                                           receipt["program_irs"][0]["program_hash"])
+            linked_blocks = program_blocks(carried_ir, cpp)
+            linked_ir = strict_json(carried_ir)
         signature = r"apply_general_field\s*<\s*pops::kNativeDimension\s*,\s*%d\s*,\s*%d\s*,\s*true\s*>" % (width, width**2)
         need(re.search(signature, cpp) is not None and "nonfinite_original_field_residual" in cpp
              and "field expression inputs require exact layout/distribution identity" in cpp,
@@ -430,15 +629,21 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         initial = protocol.archive(pinned(case["initial"], roots)[1])
         states = {phase: protocol.archive(pinned(row, roots)[1]) for phase, row in case["phases"].items()}
         reports[key] = science(initial, states, width)
-        images = {phase: checkpoint(pinned(row, roots)[1], phase, states[phase], receipt["artifact"], pins["owner"]["abi_key"], first_accepted=states["accepted"])
+        images = {phase: checkpoint(pinned(row, roots)[1], phase, states[phase], receipt["artifact"], pins["owner"]["abi_key"], first_accepted=states["accepted"], block_order=linked_blocks, program_ir=linked_ir)
                   for phase, row in case["checkpoints"].items()}
-        checkpoint(pinned(case["checkpoints"]["accepted"], roots)[1], "reloaded", states["reloaded"], receipt["artifact"], pins["owner"]["abi_key"], first_accepted=states["accepted"])
+        if version == 3:
+            reports[key]["actual_program_hash"] = linked_hash
+            reports[key]["checkpoint_diagnostics_by_rank_bits"] = {
+                phase: checkpoint_v3(image, pins["ranks"], cpp, linked_hash)
+                for phase, image in images.items()}
+        checkpoint(pinned(case["checkpoints"]["accepted"], roots)[1], "reloaded", states["reloaded"], receipt["artifact"], pins["owner"]["abi_key"], first_accepted=states["accepted"], block_order=linked_blocks, program_ir=linked_ir)
         skip = {"pops_checkpoint_manifest", "pops_restart_identity"}
         need(set(images["continuous"]) == set(images["replay"]), "replay checkpoint inventory differs")
         for name in set(images["continuous"])-skip:
             same(images["continuous"][name], images["replay"][name], "replay continuation "+name)
-    return dict(qualification=QUALIFICATION, cases=reports, cpp_dso_link_qualified=False,
-                gaps=["original artifact/Program aggregate payload absent", "block compiler CPP absent",
+    return dict(qualification=qualification, cases=reports, cpp_dso_link_qualified=False,
+                gaps=["original artifact/Program aggregate payload absent" if version == 2 else "original artifact aggregate payload absent; carried Program IR hash is linked",
+                      "block compiler CPP absent",
                       "independent restored checkpoint absent", "in-memory carrier/diagnostic comparison images absent",
                       "private PreparedFieldCapture owner/lease/point image not persisted; history point is checked separately",
                       "no convergence/AMR/arbitrary-D solvability/SPD/empty-MPI partition qualification"]
@@ -454,12 +659,15 @@ def main(argv=None):
         a.add_argument("--"+name, required=True)
     for name in ("case", "junit", "file-root"):
         a.add_argument("--"+name, action="append", required=True)
+    a.add_argument("--fixture-version", type=int, choices=(2, 3), default=2)
+    a.add_argument("--other-junit-case", action="append", default=[])
     r = sub.add_parser("receive")
     for name in ("pins", "pins-sha256", "approval", "approval-sha256"):
         r.add_argument("--"+name, required=True)
     args = parser.parse_args(argv)
     if args.command == "assemble":
-        data = assemble(args.archive_root, args.case, args.junit, strict_json(read(args.owner)[1]), args.file_root)
+        data = assemble(args.archive_root, args.case, args.junit, strict_json(read(args.owner)[1]), args.file_root,
+                        fixture_version=args.fixture_version, other_junit_cases=args.other_junit_case)
         encoded = json.dumps(data, sort_keys=True, indent=2, allow_nan=False)+"\n"
         target = Path(args.output)
         need(not target.exists() or target.read_text() == encoded, "existing pending inventory differs")

@@ -497,3 +497,251 @@ def test_old_reception_scope_not_implicitly_upcast():
     with pytest.raises(ValueError, match="history initialization/storage"):
         r.checkpoint(reseal_checkpoint(old), "accepted", states["accepted"],
             "pops.artifact.v1:sha256:"+"a"*64, "synthetic-ABI-only", first_accepted=states["accepted"])
+
+
+DIAGNOSTIC_NAMES = ["field_residual_4."+suffix for suffix in (
+    "residual_norm", "reference_residual_norm", "rel_residual", "full_residual_evaluations", "finite_difference_jvps")]
+DIAGNOSTIC_CPP = "\n".join('ctx.record_scalar('+json.dumps(name)+', value);' for name in DIAGNOSTIC_NAMES)
+
+
+def synthetic_diagnostics(ranks=2):
+    chunks = []
+    for rank in range(ranks):
+        values = {name.encode(): float(rank+1) for name in DIAGNOSTIC_NAMES}
+        chunks.append(b"POPSDIA1"+struct.pack("<QQQQ", 64, rank, ranks, len(values))+
+                      b"".join(struct.pack("<Q", len(name))+name+struct.pack("<d", value)
+                               for name, value in sorted(values.items())))
+    return dict(program_diagnostics_state=np.frombuffer(b"".join(chunks), dtype=np.uint8).copy(),
+                program_diagnostics_offsets=np.array([0, *np.cumsum(list(map(len, chunks)))], dtype=np.int64))
+
+
+@pytest.mark.parametrize("ranks", (1, 2))
+def test_v3_actual_format_synthetic_rank_bits_and_payload8(ranks):
+    arrays = dict(synthetic_diagnostics(ranks), pops_checkpoint_version=np.array(8), program_hash=np.array("b"*64))
+    reports = r.checkpoint_v3(arrays, ranks, DIAGNOSTIC_CPP, "b"*64)
+    assert len(reports) == ranks and (ranks == 1 or reports[0] != reports[1])
+    assert r.QUALIFICATION == "saved-states-original-residual@2"
+    assert r.scope(3) == "saved-states-original-residual@3"
+
+
+@pytest.mark.parametrize("attack", ("absent", "dtype", "offset", "rankdup", "truncated", "count", "trailing",
+                                  "nameorder", "nonfinite", "negative", "counter", "version", "programhash"))
+def test_v3_resealed_diagnostics_or_payload_refusals(attack):
+    arrays = dict(synthetic_diagnostics(), pops_checkpoint_version=np.array(8), program_hash=np.array("b"*64))
+    raw = arrays["program_diagnostics_state"]
+    if attack == "absent":
+        del arrays["program_diagnostics_state"]
+    elif attack == "dtype":
+        arrays["program_diagnostics_offsets"] = arrays["program_diagnostics_offsets"].astype(np.uint64)
+    elif attack == "offset":
+        arrays["program_diagnostics_offsets"][1] += 1
+    elif attack == "rankdup":
+        start = arrays["program_diagnostics_offsets"][1]
+        raw[start+16:start+24] = 0
+    elif attack == "truncated":
+        arrays["program_diagnostics_state"] = raw[:39].copy()
+        arrays["program_diagnostics_offsets"] = np.array([0, 39], dtype=np.int64)
+    elif attack == "count":
+        raw[32:40] = 255
+    elif attack == "trailing":
+        arrays["program_diagnostics_state"] = np.concatenate((raw, np.array([0], dtype=np.uint8)))
+        arrays["program_diagnostics_offsets"][-1] += 1
+    elif attack == "nameorder":
+        raw[48] = 255
+    elif attack in ("nonfinite", "negative", "counter"):
+        name_length = int.from_bytes(raw[40:48].tobytes(), "little")
+        value = {"nonfinite": math.nan, "negative": -1., "counter": .5}[attack]
+        raw[48+name_length:56+name_length] = np.frombuffer(struct.pack("<d", value), dtype=np.uint8)
+    elif attack == "version":
+        arrays["pops_checkpoint_version"] = np.array(7)
+    else:
+        arrays["program_hash"] = np.array("c"*64)
+    with pytest.raises(ValueError):
+        r.checkpoint_v3(arrays, 1 if attack == "truncated" else 2, DIAGNOSTIC_CPP, "b"*64)
+
+
+def synthetic_ir_and_cpp():
+    node = dict(id=0, name="synthetic-only", vtype="state", op="post_synchronization", attrs={"body_block": [
+        dict(id=1, name="nested", vtype="scalar", op="scalar_op", attrs={"provenance": "semantic-attribute-kept"},
+             inputs=[], point=None, provenance={"file": "synthetic/nested.py"})]},
+        inputs=[], point=None, provenance={"file": "synthetic/caller.py"})
+    ir = dict(version=10, nodes=[node])
+    projected = copy.deepcopy(ir)
+    del projected["nodes"][0]["provenance"], projected["nodes"][0]["attrs"]["body_block"][0]["provenance"]
+    hashed = r.digest(json.dumps(projected, sort_keys=True, separators=(",", ":")).encode())
+    cpp = 'extern "C" const char* pops_program_hash() { return "'+hashed+'"; }'
+    return ir, cpp, hashed
+
+
+def test_v3_program_projection_only_excludes_node_provenance():
+    ir, cpp, hashed = synthetic_ir_and_cpp()
+    assert r.program_identity(json.dumps(ir), cpp, hashed) == hashed
+    ir["nodes"][0]["provenance"]["file"] = "different/synthetic-residence.py"
+    assert r.program_identity(json.dumps(ir), cpp, hashed) == hashed
+    ir["nodes"][0]["attrs"]["body_block"][0]["attrs"]["provenance"] = "changed-semantic-attribute"
+    with pytest.raises(ValueError, match="hash link"):
+        r.program_identity(json.dumps(ir), cpp, hashed)
+
+
+@pytest.mark.parametrize("attack", ("body", "input", "point", "version", "cpp", "receipt", "doubleliteral"))
+def test_v3_program_links_refuse_resealed_leaf_mutations(attack):
+    ir, cpp, hashed = synthetic_ir_and_cpp()
+    if attack == "body":
+        ir["nodes"][0]["attrs"]["body_block"][0]["op"] = "different_body"
+    elif attack == "input":
+        ir["nodes"][0]["inputs"] = [99]
+    elif attack == "point":
+        ir["nodes"][0]["point"] = {"stage": "stale"}
+    elif attack == "version":
+        ir["version"] = 11
+    elif attack == "cpp":
+        cpp = cpp.replace(hashed, "c"*64)
+    elif attack == "receipt":
+        hashed = "c"*64
+    else:
+        cpp += "\n"+cpp
+    with pytest.raises(ValueError):
+        r.program_identity(json.dumps(ir), cpp, hashed)
+
+
+@pytest.mark.parametrize("attack", (None, "unlisted", "failure", "skip", "duplicate"))
+def test_v3_authentic_full_junit_scope_protocol(attack):
+    root, cases = junit_image(0, 1)
+    suite = root.find("testsuite")
+    extra = ET.SubElement(suite, "testcase", name="synthetic-other-passed-test")
+    names = [extra.get("name")]
+    if attack == "failure":
+        ET.SubElement(extra, "failure")
+    elif attack == "skip":
+        ET.SubElement(extra, "skipped")
+    elif attack == "duplicate":
+        ET.SubElement(suite, "testcase", name=extra.get("name"))
+    elif attack == "unlisted":
+        names = []
+    if attack is None:
+        r.junit(ET.tostring(root), 0, 1, cases, other_cases=names)
+    else:
+        with pytest.raises(ValueError):
+            r.junit(ET.tostring(root), 0, 1, cases, other_cases=names)
+
+
+def test_v3_closed_inventory_adds_real_ir_and_keeps_legacy_scope(tmp_path):
+    directory, path, receipt = synthetic_case_directory(tmp_path)
+    receipt["fixture_schema"] = "pops.captured-diffusion-native-fixture@3"
+    ir_path = directory/"synthetic-program.ir.json"
+    ir_path.write_text("synthetic unopened IR placeholder")
+    receipt["program_irs"] = [dict(component="synthetic-program", program_hash="b"*64, **r.leaf(ir_path))]
+    path.write_text(json.dumps(receipt))
+    assert len(list(directory.iterdir())) == 11
+    assert r.case_inventory(directory, fixture_version=3)["program_irs"] == [r.leaf(ir_path)]
+    with pytest.raises(ValueError, match="inventory"):
+        r.case_inventory(directory)
+    receipt["checkpoints"]["accepted"] = receipt["phases"]["accepted"]
+    path.write_text(json.dumps(receipt))
+    with pytest.raises((ValueError, KeyError)):
+        r.case_inventory(directory, fixture_version=3)
+
+
+def synthetic_v3_temporal(width, step):
+    # Protocol-only witness: an independent explicit lag/ring descriptor.
+    clock = dict(schema_version=1, name="synthetic-macro", owner=None)
+    identity = "pops.clock.v1::sha256:"+r.digest(json.dumps(clock, sort_keys=True, separators=(",", ":")).encode())
+    policy = dict(kind="history-persistence", payload=dict(policy="dense"), protocol="pops.manifest", schema_version=1)
+    names = [f"q{i}" for i in range(width)]
+    ir = dict(clock=clock, histories=[dict(name=n, lag=1, ncomp=1, state=None) for n in names],
+              history_persistence=[dict(name=n, depth=2, policy=policy) for n in names])
+    time = .01 if step == 1 else .02
+    schedule = dict(kind="pops.temporal-program-schedule", schema_version=1, primary_clock=identity,
+                    clocks=[dict(descriptor=clock, id=identity, ticks_per_macro=1)], schedules=[],
+                    synchronizations=[], subcycles=[], histories=[])
+    cursors = {}
+    for n in names:
+        schedule["histories"].append(dict(name=n, depth=1, ring_slots=2, ncomp=1, clock=identity,
+            owner=None, checkpoint_policy=policy, space=dict(kind="scalar_field"),
+            state=dict(kind="scalar_history", qualified_id="scalar-history:"+n),
+            validity=dict(domain="accepted_clock_ticks", newest_lag=0, oldest_lag=1),
+            interpolation=dict(schema_version=1, dense_output=False, provider="exact")))
+        cursors[n] = dict(clock=identity, newest_tick=step, oldest_tick=step-1, valid_lags=1,
+                          cold_start_extended=False, initialized=True)
+    temporal = dict(schema_version=2, clock=dict(time=time.hex(), macro_step=step), status="accepted", synchronized=True,
+        strategy=dict(strategy=dict(kind="fixed_dt", dt=dict(kind="binary64", value=.01.hex())), controls={}),
+        controller_state=dict(last_accepted_dt=.01.hex(), fixed_dt_grid=dict(schema_version=1,
+            origin=0..hex(), macro_step=step, steps=step, time=time.hex())), event_queue=[], program_schedule=schedule,
+        clock_cursors={identity:dict(time=time.hex(), tick=step, phase="accepted")},
+        schedule_cursors=dict(macro_step=dict(macro_step=step, phase="accepted")), synchronization_cursors={},
+        cache_cursors={}, history_cursors=cursors, transaction_stats=dict(accepted=step, rejected=0, failed=0))
+    return ir, temporal
+
+
+@pytest.mark.parametrize("width,phase", [(1,"accepted"),(3,"accepted"),(1,"continuous"),(3,"continuous")])
+def test_v3_resealed_history_lags_are_linked_to_ir_without_false_phase(width, phase):
+    _, states = independent_initial(width)
+    ir, temporal = synthetic_v3_temporal(width, r.CLOCKS[phase][1])
+    arrays = synthetic_checkpoint(states[phase], states["accepted"])
+    arrays["blocks"] = np.array(["forcing","material","response"])
+    arrays["temporal_restart_state"] = np.array(json.dumps(temporal))
+    assert "phase" not in temporal["history_cursors"]["q0"]
+    r.checkpoint(reseal_checkpoint(arrays), phase, states[phase], "pops.artifact.v1:sha256:"+"a"*64,
+                 "synthetic-ABI-only", first_accepted=states["accepted"],
+                 block_order=["forcing","material","response"], program_ir=ir)
+
+
+@pytest.mark.parametrize("attack", ["wronglag", "wrongring", "staleoldest", "stalenewest", "foreignclock",
+    "missinghistory", "fakephase", "booltick", "clockbody", "clocktime", "schedule", "controller", "queue", "stats"])
+def test_v3_fully_resealed_clock_lag_controller_mutants_refuse(attack):
+    _, states = independent_initial(3)
+    ir, temporal = synthetic_v3_temporal(3,2)
+    if attack == "wronglag":
+        temporal["history_cursors"]["q0"]["valid_lags"] = 2
+    elif attack == "wrongring":
+        temporal["program_schedule"]["histories"][0]["ring_slots"] = 1
+    elif attack == "staleoldest":
+        temporal["history_cursors"]["q0"]["oldest_tick"] = 0
+    elif attack == "stalenewest":
+        temporal["history_cursors"]["q0"]["newest_tick"] = 1
+    elif attack == "foreignclock":
+        temporal["history_cursors"]["q0"]["clock"] = "synthetic-foreign-clock"
+    elif attack == "missinghistory":
+        del temporal["history_cursors"]["q2"]
+    elif attack == "fakephase":
+        temporal["history_cursors"]["q0"]["phase"] = "accepted"
+    elif attack == "booltick":
+        temporal["history_cursors"]["q0"]["oldest_tick"] = True
+    elif attack == "clockbody":
+        temporal["program_schedule"]["clocks"][0]["descriptor"] = dict(ir["clock"], name="foreign")
+    elif attack == "clocktime":
+        next(iter(temporal["clock_cursors"].values()))["time"] = .01.hex()
+    elif attack == "schedule":
+        temporal["schedule_cursors"]["macro_step"]["macro_step"] = 1
+    elif attack == "controller":
+        temporal["controller_state"]["fixed_dt_grid"]["origin"] = .01.hex()
+    elif attack == "queue":
+        temporal["event_queue"] = [{"synthetic_pending": True}]
+    else:
+        temporal["transaction_stats"]["accepted"] = 1
+    arrays = synthetic_checkpoint(states["continuous"], states["accepted"])
+    arrays["blocks"] = np.array(["forcing","material","response"])
+    arrays["temporal_restart_state"] = np.array(json.dumps(temporal))
+    with pytest.raises(ValueError):
+        r.checkpoint(reseal_checkpoint(arrays), "continuous", states["continuous"], "pops.artifact.v1:sha256:"+"a"*64,
+                     "synthetic-ABI-only", first_accepted=states["accepted"],
+                     block_order=["forcing","material","response"], program_ir=ir)
+
+
+@pytest.mark.parametrize("attack", [None,"reorder", "foreign", "duplicateexport"])
+def test_v3_block_order_linked_to_actual_cpp_not_old_literal(attack):
+    names = ["forcing","material","response"]
+    ir = dict(block_order=[dict(local_id=name) for name in names])
+    cpp = 'extern "C" const char* pops_program_block_name(int i) {\n switch(i) {\n'+"\n".join(
+        'case %d: return "%s";'%(index,name) for index,name in enumerate(names))+'\n default:return "";\n }\n}'
+    if attack == "reorder":
+        ir["block_order"].reverse()
+    elif attack == "foreign":
+        ir["block_order"][0]["local_id"] = "foreign"
+    elif attack == "duplicateexport":
+        cpp += "\n"+cpp
+    if attack is None:
+        assert r.program_blocks(json.dumps(ir),cpp) == names
+    else:
+        with pytest.raises(ValueError):
+            r.program_blocks(json.dumps(ir),cpp)
