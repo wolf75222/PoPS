@@ -446,15 +446,12 @@ def test_missing_external_approval_refuses_before_any_data_access():
 def test_reviewed_source_fingerprints_and_old_reader_unchanged():
     root = PATH.resolve().parents[2]
     for role, (relative, sha) in r.SOURCE_FINGERPRINTS.items():
-        data = (
-            subprocess.check_output(["git", "show", "a1eb496f:" + relative], cwd=root)
-            if role == "request_contract"
-            else (root / relative).read_bytes()
-        )
+        revision = "a1eb496f" if role == "request_contract" else r.SOURCE
+        data = subprocess.check_output(["git", "show", revision + ":" + relative], cwd=root)
         assert r.digest(data) == sha
     relative = "tests/review/sol61_captured_diffusion_saved_reception.py"
     parent = subprocess.check_output(["git", "show", r.SOURCE + ":" + relative], cwd=root)
-    assert (root / relative).read_bytes() == parent
+    assert r.digest(parent) == "c3a4c261430a27550f258c7df13b736607317a955022600b5441d78d5e7a3145"
 
 
 def test_offline_reader_has_no_pops_import_in_fresh_isolated_process(tmp_path):
@@ -574,3 +571,257 @@ def test_retained_cpp_controls_cannot_be_changed_without_ir(field, value):
     altered = re.sub(r"\." + field + r" = [^,}]+", "." + field + " = " + value, body)
     with pytest.raises(ValueError, match="controls differ"):
         r.cpp_contract(altered.encode(), 3, require_ir=False)
+
+
+# Explicit synthetic protocol-only positives for prospective checkpoint @2.
+c = r.load("candidate_checkpoint_v2_test", "sol61_candidate_diffusion_checkpoint_reception.py")
+
+
+def synthetic_temporal_pair():
+    clock = dict(schema_version=1, name="synthetic-unit-only", owner=None)
+    strategy = dict(kind="fixed_dt", dt=dict(kind="binary64", value=r.DT.hex()))
+    ir = dict(
+        clock=clock,
+        step_transaction=dict(strategy=strategy),
+        histories=[dict(lag=1, name="q0", ncomp=1, state=None)],
+    )
+    token = "pops.clock.v1::sha256:" + r.digest(
+        json.dumps(clock, sort_keys=True, separators=(",", ":")).encode()
+    )
+    policy = dict(
+        kind="history-persistence",
+        payload=dict(policy="dense"),
+        protocol="pops.manifest",
+        schema_version=1,
+    )
+    schedule = dict(
+        kind="pops.temporal-program-schedule",
+        schema_version=1,
+        primary_clock=token,
+        clocks=[dict(id=token, descriptor=clock, ticks_per_macro=1)],
+        histories=[
+            dict(
+                checkpoint_policy=policy,
+                clock=token,
+                depth=1,
+                interpolation=dict(dense_output=False, provider="exact", schema_version=1),
+                name="q0",
+                ncomp=1,
+                owner=None,
+                ring_slots=2,
+                space=dict(kind="scalar_field"),
+                state=dict(kind="scalar_history", qualified_id="scalar-history:q0"),
+                validity=dict(domain="accepted_clock_ticks", newest_lag=0, oldest_lag=1),
+            )
+        ],
+        schedules=[],
+        subcycles=[],
+        synchronizations=[],
+    )
+    temporal = dict(
+        schema_version=2,
+        clock=dict(time=r.DT.hex(), macro_step=1),
+        status="accepted",
+        synchronized=True,
+        controller_state=dict(
+            last_accepted_dt=r.DT.hex(),
+            fixed_dt_grid=dict(
+                schema_version=1, origin=(0.0).hex(), steps=1, macro_step=1, time=r.DT.hex()
+            ),
+        ),
+        event_queue=[],
+        clock_cursors={token: dict(phase="accepted", tick=1, time=r.DT.hex())},
+        schedule_cursors={"macro_step": dict(phase="accepted", macro_step=1)},
+        synchronization_cursors={},
+        history_cursors={
+            "q0": dict(
+                clock=token,
+                cold_start_extended=False,
+                initialized=True,
+                newest_tick=1,
+                oldest_tick=0,
+                valid_lags=1,
+            )
+        },
+        cache_cursors={},
+        program_schedule=schedule,
+        strategy=dict(strategy=strategy, controls={}),
+        transaction_stats=dict(accepted=1, failed=0, rejected=0),
+    )
+    return temporal, ir
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        None,
+        "time",
+        "boolstep",
+        "sourceclock",
+        "controller",
+        "history",
+        "validity",
+        "transaction",
+        "schedule",
+        "schema",
+        "queue",
+    ],
+)
+def test_synthetic_checkpoint_temporal_v2_closed_authorities(attack):
+    t, ir = synthetic_temporal_pair()
+    if attack is None:
+        c.temporal_contract(t, "accepted", 1, ir)
+        return
+    if attack == "time":
+        t["clock"]["time"] = (np.nextafter(r.DT, 0)).hex()
+    elif attack == "boolstep":
+        t["clock"]["macro_step"] = True
+    elif attack == "sourceclock":
+        ir["clock"]["name"] = "foreign"
+    elif attack == "controller":
+        t["controller_state"]["last_accepted_dt"] = (2 * r.DT).hex()
+    elif attack == "history":
+        t["history_cursors"]["q0"]["oldest_tick"] = 1
+    elif attack == "validity":
+        t["program_schedule"]["histories"][0]["validity"]["oldest_lag"] = 2
+    elif attack == "transaction":
+        t["transaction_stats"]["rejected"] = 1
+    elif attack == "schedule":
+        t["schedule_cursors"]["macro_step"]["macro_step"] = 2
+    elif attack == "schema":
+        t["schema_version"] = True
+    else:
+        t["event_queue"] = [{"pending": "anything"}]
+    with pytest.raises(ValueError):
+        c.temporal_contract(t, "accepted", 1, ir)
+
+
+@pytest.mark.parametrize("attack", [None, "digest", "beta", "point_bool", "cpp_hash"])
+def test_synthetic_separately_carried_ir_digest_and_polynomial(attack):
+    ir, body = r.components.ir_from_cpp(synthetic_cpp().decode())
+    fingerprint = r.digest(json.dumps(ir, sort_keys=True, separators=(",", ":")).encode())
+    cpp = (
+        body + '\nextern "C" const char* pops_program_hash() { return "' + fingerprint + '"; }'
+    ).encode()
+    if attack == "digest":
+        fingerprint = "f" * 64
+    elif attack == "beta":
+        ir["nodes"][2]["attrs"]["source_contract"]["diffusion"][1][2][2][2][1][1]["value"] = (
+            2.0
+        ).hex()
+    elif attack == "point_bool":
+        ir["nodes"][0]["point"]["step"] = False
+    elif attack == "cpp_hash":
+        cpp = cpp.replace(fingerprint.encode(), b"0" * 64)
+    if attack is None:
+        names, _ = c.ir_contract(json.dumps(ir).encode(), cpp, 3, fingerprint)
+        assert len(names) == 5
+    else:
+        with pytest.raises(ValueError):
+            c.ir_contract(json.dumps(ir).encode(), cpp, 3, fingerprint)
+
+
+def test_checkpoint_v2_never_accepts_states_v1_or_missing_external_approval(tmp_path):
+    with pytest.raises(ValueError, match="two external seals"):
+        c.receive("must-not-be-opened", None, None, None)
+    (tmp_path / "receipt.json").write_text(
+        json.dumps(dict(fixture_schema="pops.candidate-diffusion-native-fixture@1"))
+    )
+    with pytest.raises(ValueError, match="historical fixture"):
+        c.case_inventory(tmp_path)
+
+
+def test_checkpoint_v2_refuses_overwritten_cp_alias_before_body_read(tmp_path):
+    for name in ["initial", *r.PHASES]:
+        (tmp_path / (name + ".npz")).write_bytes(b"SYNTHETIC_PROTOCOL_NOT_NATIVE")
+    phases = {
+        p: dict(
+            npz=str(tmp_path / (p + ".npz")),
+            sha256=r.digest(b"SYNTHETIC_PROTOCOL_NOT_NATIVE"),
+            checks={},
+        )
+        for p in r.PHASES
+    }
+    receipt = dict(
+        fixture_schema="pops.candidate-diffusion-native-fixture@2",
+        initial_npz=str(tmp_path / "initial.npz"),
+        initial_sha256=r.digest(b"SYNTHETIC_PROTOCOL_NOT_NATIVE"),
+        phases=phases,
+        checkpoints={
+            p: r.leaf(tmp_path / (p + ".npz")) for p in ("accepted", "continuous", "replay")
+        },
+    )
+    (tmp_path / "receipt.json").write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="paths must be distinct before reading"):
+        c.case_inventory(tmp_path)
+
+
+def test_checkpoint_v2_complete_raw_junit_must_pass():
+    with pytest.raises(ValueError, match="complete raw Native batch"):
+        c.junit(
+            b'<testsuite tests="1" failures="1"><testcase><failure/></testcase></testsuite>',
+            0,
+            1,
+            {},
+        )
+
+
+def test_checkpoint_source_fingerprints_are_exact_reviewed_blobs():
+    root = PATH.resolve().parents[2]
+    for key, (relative, sha) in c.SOURCE_FINGERPRINTS.items():
+        revision = (
+            c.FIXTURE_REVISION
+            if key == "fixture"
+            else ("a1eb496f" if key == "request_contract" else r.SOURCE)
+        )
+        actual = subprocess.check_output(["git", "show", revision + ":" + relative], cwd=root)
+        assert r.digest(actual) == sha
+    emitted = subprocess.check_output(
+        ["git", "show", "e154:python/pops/codegen/program_emit_nonlinear_field.py"], cwd=root
+    )
+    assert r.digest(emitted) in c.EMITTER_FINGERPRINTS
+
+
+def test_checkpoint_wrapper_pops_free_in_isolated_subprocess(tmp_path):
+    code = """import importlib.abc,runpy,sys
+class Guard(importlib.abc.MetaPathFinder):
+    def find_spec(self,fullname,path=None,target=None):
+        if fullname=='pops' or fullname.startswith('pops.'):raise RuntimeError('forbidden PoPS import')
+sys.meta_path.insert(0,Guard());sys.argv=[sys.argv[1],'--help'];runpy.run_path(sys.argv[0],run_name='__main__')
+"""
+    subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            code,
+            str(PATH.with_name("sol61_candidate_diffusion_checkpoint_reception.py").resolve()),
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize("where", ["tick", "grid", "ring"])
+def test_synthetic_temporal_integer_bool_is_not_a_clock_authority(where):
+    t, ir = synthetic_temporal_pair()
+    if where == "tick":
+        next(iter(t["clock_cursors"].values()))["tick"] = True
+    elif where == "grid":
+        t["controller_state"]["fixed_dt_grid"]["schema_version"] = True
+    else:
+        t["program_schedule"]["histories"][0]["ncomp"] = True
+    with pytest.raises(ValueError, match="integer authority"):
+        c.temporal_contract(t, "accepted", 1, ir)
+
+
+def test_checkpoint_v2_other_junit_inventory_is_explicit_and_unique():
+    raw = (
+        b'<testsuite tests="1"><testcase classname="synthetic.only" name="other-pass"/></testsuite>'
+    )
+    assert c.junit_others(raw) == [dict(classname="synthetic.only", name="other-pass")]
+    duplicate = b'<testsuite><testcase classname="synthetic.only" name="other-pass"/><testcase classname="synthetic.only" name="other-pass"/></testsuite>'
+    with pytest.raises(ValueError, match="duplicates"):
+        c.junit_others(duplicate)

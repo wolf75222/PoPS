@@ -155,3 +155,88 @@ attached detached Program `_serialize()`; it must be retained during the true
 run, not recreated from a builder or inserted into old CPP. Current archived
 states-only @1 can never silently acquire these claims. Fresh Native campaigns
 and exact new fixture source fingerprints remain ROOT's responsibility.
+
+## Prospective strict checkpoint @2 follow-up
+
+New wrapper `tests/review/sol61_candidate_diffusion_checkpoint_reception.py`
+imports the independent @1 mathematical/identity predicates, never the author's
+physical helper or PoPS. The @1 reader blob remains unchanged. Combined source,
+math and protocol suite: **87 PASS, 2.36s**, including strict integer/bool clock
+authorities and explicit all-rank other-JUnit inventory. The
+historical-source test authenticates exact Git blobs instead of rejecting
+legitimate subsequent fixture/Frozen reader extensions. No Native science is
+claimed by these tests.
+
+Reviewed fixture is ROOT `766f078fd63e484c1814fe09b7ed37cee291f19f`, whose exact
+file hash is `d9e2ed69d84b0a63f3e01f270a17d8bb07879bc4f79d5958e7fd340ecffb5844`.
+Both actual carried scalar/coupled IRs and archive inventories were inspected
+read-only as protocol: eleven files each, real separate CP and IR, IR11
+polynomial contracts exact. All six CP TemporalV2 metadata records matched
+the independently stated clock/grid/history/schedule contract (RO metadata
+check only, not an approved scientific reception).
+No invocation of scientific `receive()` occurred without ROOT authorization.
+The CPP Program digest equals SHA256 of the real serialized IR with documentary
+`provenance` keys removed, matching the actual source `_ir_hash()` algorithm.
+The same digest is checked in receipt, CPP export, actual Program component
+sidecar and every checkpoint. This authenticates the retained documentary
+Program; it still does not certify the absent aggregate payload or a compiler
+graph from CPP to binary.
+
+The @2 schemas are distinct:
+
+- Pins `sol61.candidate-d-owner-pins@2`.
+- Qualification `saved-candidate-d-checkpoint-original-residual@2`.
+- Owner `sol61.candidate-d-execution-owner@2`.
+- Approval `sol61.candidate-d-root-approval@2` with approved_by ROOT, exact
+  pins_sha256 and that qualification.
+- Candidate fixture `pops.candidate-diffusion-native-fixture@2`.
+
+Owner fields and ROOT-attested component association shape are the same
+explicit structures listed above, with @2 schema tokens. Pins additionally
+require `junit_others`: one ordered list per rank of exact `{classname,name}`
+rows for all noncandidate tests, externally ROOT-sealed. Assembly derives
+these as pending inventory; receipt compares them exactly with raw XML.
+Duplicate/unnamed others are refused; @1 approval,
+owner or historical phase aliases cannot be substituted. Cases have real ir
+pins. Receipt adds exact `program_irs`, containing one
+`{component,path,sha256,program_hash}` from the same compiled component as CPP.
+Three CP names are accepted-checkpoint.npz, continuous-checkpoint.npz and
+replay-checkpoint.npz; paths must be distinct from all five observations before
+reading any checkpoint body, and original capture hashes must still match.
+Inventory is closed to exactly eleven files per case (22 total).
+
+Source helper and request hashes above remain exact. The emitter admits only
+two reviewed full-file hashes: native e01's
+`729f161c996c9712341241e1f01cb02e3fc479cf4fe447c0062587bcc07decc3`, and Stage e154's
+`61add876ccaed3838d4229e528c831bf471eee0cebda40637453c822bf743576`. Their exact
+two-line diff adds operation_id to temporalTau and checks the issued point's
+duration in the Stage-only guard; candidate lowering is unchanged. Owner pins
+must hash the file actually installed for that run; an unreviewed version is
+refused, not relabeled with an older hash. Source/build commit IDs remain
+distinct.
+
+@2 whole raw JUnit must have no failure, error or skip, including other batch
+cases. The two selected candidate cases/properties/receipt associations remain
+exact. Whole batch counters are reported. Unlike narrow historical @1, @2
+therefore cannot receive the old eight-case/two-failure batch.
+
+CPUniform8 checks exact geometry, alphabetic physical block order
+forcing/material/response, component arrays and accepted observations; POPSDIA1
+rank offsets, opaque name/value bits and five original-solver scientific
+diagnostics; empty accepted exchange records; exact selective-history values
+and sample intervals; and TemporalV2 closed schema. Temporal history cursors
+use actual valid_lags/newest_tick/oldest_tick, not invented phase fields. Clock
+authority is independently recomputed from exact IR clock JSON; controller
+grid, accepted/rejected/failed counts, history schedule, synchronization and
+events are exact. Full continuation/replay CP arrays are byte-equal except the
+manifest/restart-envelope identity fields, which each receive independent
+manifest verification. Re-loaded state NPZ is anchored to the accepted CP; no
+separate reloaded CP was saved. Native auxiliary bytes are authenticated and
+replay-compared, but private candidate lease images remain unobserved.
+
+ROOT assembly recipe is the same CLI options as @1, replacing only the script
+with `sol61_candidate_diffusion_checkpoint_reception.py` and supplying the new
+owner@2/fresh eleven-file directories/all-rank raw JUnits. Assembly validates
+provenance/inventory/CPP/IR, emits pending pins only and never creates approval.
+Scientific receive uses external pins/approval SHA256 arguments as above, with
+the @2 script. Future real serial/MPI reception still belongs to ROOT.
