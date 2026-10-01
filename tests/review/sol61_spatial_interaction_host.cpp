@@ -1,3 +1,4 @@
+#include <climits>
 // Host protocol substitutes only; the consumer body is appended unchanged by pytest.
 #include <algorithm>
 #include <array>
@@ -43,6 +44,7 @@ template<int D> struct Box {
   size_t numPts()const{size_t n=1;for(int a=0;a<D;++a)n*=std::max(0,length(a));return n;}
   bool empty()const{return numPts()==0;}
   Box intersect(const Box& b)const{Box v=*this;for(int a=0;a<D;++a){v.lo[a]=std::max(lo[a],b.lo[a]);v.hi[a]=std::min(hi[a],b.hi[a]);}return v;}
+  Box grow(int axis,int amount)const{Box b=*this;long long low=static_cast<long long>(b.lo[axis])-amount, high=static_cast<long long>(b.hi[axis])+amount;if(low<INT_MIN||high>INT_MAX)throw std::overflow_error("host grown box overflow");b.lo[axis]=int(low);b.hi[axis]=int(high);return b;}
   bool operator==(const Box&) const=default;
 };
 template<int D> struct Geometry {
@@ -60,10 +62,11 @@ template<int D> struct Distribution {bool replica=false; bool replicated()const{
 template<int D,class M=Kokkos::HostSpace> struct MultiFab {
   struct Fab {FieldView<const Real,D> values; auto view()const{return values;}};
   using fab_type=Fab;
-  std::vector<Box<D>> boxes; Distribution<D> dist; Index<D> rank{}; int width=0;std::vector<Fab> fabs;
+  std::vector<Box<D>> boxes; Distribution<D> dist; Index<D> rank{}; int width=0; Extent<D> halo{};std::vector<Fab> fabs;
   MultiFab()=default;
-  MultiFab(std::vector<Box<D>> b,Distribution<D> d,Index<D> r,int w,Extent<D>):boxes(b),dist(d),rank(r),width(w){for(auto box:b)fabs.push_back({{std::make_shared<std::vector<HostReal>>(box.numPts()*w),box,w}});}
+  MultiFab(std::vector<Box<D>> b,Distribution<D> d,Index<D> r,int w,Extent<D> ghosts):boxes(b),dist(d),rank(r),width(w),halo(ghosts){for(auto box:b){for(int axis=0;axis<D;++axis)box=box.grow(axis,ghosts[axis]);fabs.push_back({{std::make_shared<std::vector<HostReal>>(box.numPts()*w),box,w}});}}
   const auto& layout()const{return boxes;}const auto& distribution()const{return dist;}auto local_rank()const{return rank;}
+  const auto& ghosts()const{return halo;}void set_val(Real value){for(auto& fab:fabs)std::fill(fab.values.data->begin(),fab.values.data->end(),value);}
   int ncomp()const{return width;}size_t local_size()const{return fabs.size();}bool contains_local(size_t i)const{return i<fabs.size();}
   const auto& fab_global(size_t i)const{return fabs.at(i);}const auto& fab(size_t i)const{return fabs.at(i);}auto box(size_t i)const{return boxes.at(i);}
 };
