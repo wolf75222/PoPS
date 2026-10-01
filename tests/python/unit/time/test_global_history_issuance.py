@@ -103,3 +103,22 @@ def test_original_issuance_cannot_be_reassigned_deleted_or_mutated():
     with pytest.raises(TypeError):
         program._global_field_history_issuance["temperature"] = None
     validate_issuances(program)
+
+
+@pytest.mark.parametrize("key,replacement", (("ncomp", True), ("ncomp", 1.0), ("region", False)))
+def test_issued_storage_metadata_preserves_exact_scalar_types(key, replacement):
+    program, _, _ = authored(True)
+    node = next(node for node in program._values if node.op == "store_history")
+    attrs = dict(node.attrs)
+    attrs["global_field_storage"] = dict(attrs["global_field_storage"], **{key: replacement})
+    object.__setattr__(node, "attrs", attrs)
+    with pytest.raises(ValueError, match="immutable authority"):
+        program._serialize()
+
+
+@pytest.mark.parametrize("width", (True, 1.0))
+def test_issued_storage_registered_width_is_an_exact_integer(width):
+    program, _, _ = authored(True)
+    program._histories_ncomp["temperature"] = width
+    with pytest.raises(ValueError, match="registration changed"):
+        program._serialize()

@@ -189,3 +189,32 @@ snapshot/immutable-origin checks, 29 existing emission/history checks and the
 Ruff and diff whitespace checks pass. The regenerated two-carrier C++ also
 passes the same real Dim2 clang++ syntax command above, with input
 `/tmp/sol61-history-origin-amr.cpp`; no linking, JIT or native execution occurs.
+
+## Follow-up: exact metadata and registration scalar types
+
+Independent reception closed the original five failures, then found a distinct
+P2: Python dict equality identifies `True`, `1` and `1.0`, and `False` with `0`.
+Thus an altered ncomp/region descriptor could pass the original proof comparison.
+The native descriptor was rebuilt from the correct expected image, so no false
+numerical publication was demonstrated; acceptance of a forged IR contract was
+nevertheless a concrete defect.
+
+`b0a16ec` compares sorted, compact JSON token images after `_json_ready`, without
+scalar normalization and with nonfinite JSON numbers forbidden. The canonical
+container projection permits genuine frozen tuple/list and MappingProxy/dict
+representations while retaining bool/int/float distinctions. A second projection
+of the same issue existed in the registered ring width table. `7fa9877` requires
+an exact `int` width of one in this new global-storage port only; historical ring
+APIs are unchanged.
+
+The final author replay receives 59 passes in 73.62 seconds: 16 author tests and
+43 currently independently authored probes, including the same critical typed
+metadata and registered-width mutations. JUnit:
+`/tmp/sol61-history-typed-registration-source.xml`. An additional 29 historical
+AMR emission/history-policy checks pass with four native cases deselected (124.20
+seconds). These author replays do not substitute for the independent reviewer's
+fresh reception of the final commit. There is no new ABI, wire, contract URI or
+IR version; this is a strict validation fix of the existing contract.
+Fresh reruns on the final production source preserve both complete historical
+parity images exactly: Stage `4f5ef2ecd4d118b44b0a5f52bac93c3b9e932b77a1f839df30dcdbb47b455504`
+and six-profile `dc254843124ffc15378c267cde4cadcc1a50b2b86c157d52d2b42d19889687ec`.
