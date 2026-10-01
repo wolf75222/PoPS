@@ -16,6 +16,8 @@ def prepared(tmp_path,monkeypatch):
     # Inventory test admissions remain explicit stubs, not false source/CPP receipts.
     monkeypatch.setattr(a.reader,"declared_source",lambda *args:None)
     monkeypatch.setattr(a.reader,"program_image",lambda *args:None)
+    monkeypatch.setattr(a.reader,"program_history_registry",lambda *args:{"SOURCE_ONLY":[]})
+    monkeypatch.setattr(a.reader,"original_history_contract",lambda *args:None)
     value["native_abi_version"]=6
     identity=json.loads(Path(value["identity_before"]).read_text())
     abi=profile.source_abi();abi["native"]=identity["native"]
@@ -31,6 +33,8 @@ def prepared(tmp_path,monkeypatch):
         for phase,row in receipt["checkpoints"].items():
             with np.load(row["path"],allow_pickle=False) as archive:
                 arrays={name:archive[name].copy() for name in archive.files if name not in ("pops_checkpoint_manifest","pops_restart_identity")}
+            arrays["field_provider_slots"]=np.array([],dtype=str)
+            arrays["field_provider_manifest"]=np.array("[]")
             arrays["amr_accepted_contract"]=np.array(json.dumps(profile.source_contract(a.reader.STEPS[phase],subject_count)))
             np.savez(row["path"],**historical.source_only_envelope(arrays))
             row["sha256"]=a.reader.digest(Path(row["path"]).read_bytes())

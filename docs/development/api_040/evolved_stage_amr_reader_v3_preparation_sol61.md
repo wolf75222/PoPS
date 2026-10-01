@@ -6,7 +6,7 @@ New `sol61_evolved_stage_amr_saved_reception_v3.py` uses owner pins @3 and ROOT 
 
 Norms read: native checkpoint_tag_selection_contract and checkpoint_transfer_routes, Python accepted-contract schema8, public StateTransfer route capabilities and authored original fixture. The expected transfer subjects come from the actual retained, hash-authenticated Program IR committed-state handles, independently of observed native routes. Each expected subject must have exactly the complete Cartesian product of four operations. Every operation has an exact descriptor: prolongation conservative_linear/order2/halo1,1; restriction volume_average/order1/halo0,0; coarse_fine_fill conservative_coarse_fine/order2/halo2,2; temporal_interpolation linear_time_interpolation/order2/halo0,0. All rows require cell space, cell centering, conservative representation, dense storage, dimension2, ratio2,2 and equal operation key/native operation. Duplicates, foreign subjects and missing entire subject groups are refused. This replaces the insufficient global maximum ghost/order check. Original Q/T/aux field-provider identity/depth provenance is mandatory. Accepted ledgers and rational clocks retain the previous strict checks. Missing/mutated tags, absent provenance and schema7 are refused.
 
-Checkpoint math/CP12/full-carrier wire validation reuses the exact @2 checkpoint code object through a new FunctionType with a copy of its globals. The only differing binding is accepted_contract, now a strict @3 callback bound to that case's independent IR subject registry. No historical module, function or wire global is patched. Tests check function/code-object bijection, distinct namespaces, exactly one changed binding and historical acceptance/refusal separately. The scientific receive orchestration is static @3 code with distinct seals; shared mathematical and binary-codec helpers remain immutable imports. This avoids copying the entire600-line reader while keeping @1/@2 semantics unchanged.
+The current checkpoint admission is a readable @3 function preserving the historical envelope, state/history bits, diagnostics and carrier codec checks. Actual Native evidence exposed distinct current topology and temporal wire forms, so @3 explicitly validates them rather than rewriting archived bytes or patching historical globals. The immutable math/wire helpers are imported; @1/@2 functions remain unchanged. Candidate inventory still uses a private FunctionType namespace to select the @3 reader without modifying the historical assembler.
 
 NativeABI6 is explicit exact-int owner-pins field native_abi_version. A mandatory pin native_abi_receipt authenticates ROOT's actual runtime observation JSON with exact keys schema,native,header_signature,module_abi_version,capability_abi_version,release_native_abi_version. Schema is root.api040.native-abi@1; native is the exact DSO path+sha256 from owner pins; header_signature is a nonempty actual ROOT header-origin string; each of the three versions must be exact int6. Package manifest remains an authenticated opaque file, without a guessed schema. Header signature/source-to-DSO authenticity remains ROOT-attested, not cryptographically reconstructed here. Old actual DSO ABI5 cannot enter @3. This work supplies no NativeABI runtime receipt.
 
@@ -59,3 +59,42 @@ scalar kind, extra scalar metadata and float payload. Those tests explicitly
 skip if the external authentic archive is unavailable; they do not embed or
 fabricate Native evidence. Passing the offline admission does not qualify the
 scientific dataset or produce either ROOT seal.
+
+
+Actual empty component registry and complete checkpoint profile
+-------------------------------------------------------------
+
+Native `field_provider_checkpoint_manifest` (amr_system.cpp16274) iterates
+`field_plans`, the separately installed component-provider services. The Original
+coupled solve instead uses generated original residual/stage machinery. Therefore
+this fixture requires exact empty field_providers, empty field_provider_slots and
+literal field_provider_manifest `[]`; injected dummy services are refused.
+
+Global histories carry the actual field authority. program_history_registry
+traces each retained store_history through its field_component to the original
+solve, matches field_problem_identity/field_unknown, full point/clock, owner,
+layout and allocation-State witness, and derives the exact canonical storage
+JSON and clock hash. Native program_accepted_state_manifest (CPP22273) emits
+13 columns; @3 compares the entire ordered subject×level×slot registry, depth,
+outgoing-dt bits, initialization and accepted fill count. No physical field name
+is used to infer service ownership.
+
+Current Native patch_boxes holds refinement-level boxes only. Full POPSCAR1
+contains every base and fine box. @3 requires complete consecutive indices,
+identical geometry across all physical blocks, exact owner/dmap authority and
+exact fine-box agreement with patch_boxes, then runs the unchanged composite
+mask oracle with these authenticated full boxes. No saved NPZ data is rewritten.
+
+Current temporal strategy is the closed `{controls:{},strategy:{kind,dt}}` image.
+The accepted boundary history cursor has newest/oldest ticks, valid_lags,
+initialization and cold-start fields rather than a phase member. @3 checks all
+five complete cursor tables and fixed-dt controller grid exactly, with the
+single clock from the authenticated global history registry; numerical values
+and accepted boundary requirements are unchanged.
+
+All four authentic retained Serial cases, all three checkpoint phases and full
+carrier rank registries now pass the complete offline checkpoint/science bodies.
+These are read-only preparatory checks without ROOT approval seals, not a full
+receive() or scientific qualification. Source-only inventory fixtures explicitly
+stub IR/CPP/history admissions and cannot serve as evidence. Actual retained
+archive tests skip explicitly when those external immutable files are absent.

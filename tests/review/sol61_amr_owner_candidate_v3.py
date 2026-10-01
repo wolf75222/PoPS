@@ -37,13 +37,18 @@ def assemble(spec):
         ir_pin = programs[0]["ir.json"]
         raw_ir = Path(ir_pin["path"]).read_bytes()
         reader.need(reader.digest(raw_ir)==case["files"][ir_pin["path"]],"Program registry changed during candidate validation")
-        subjects = reader.program_transfer_subjects(reader.strict_json(raw_ir))
+        ir=reader.strict_json(raw_ir)
+        subjects = reader.program_transfer_subjects(ir)
+        histories = reader.program_history_registry(ir)
         for phase in ("accepted","continuous","replay"):
             row=receipt["checkpoints"][phase]
             raw=Path(row["path"]).read_bytes()
             reader.need(reader.digest(raw)==case["files"][row["path"]],"checkpoint changed during candidate profile validation")
             arrays=reader.wire.archive(raw)
-            reader.accepted_contract(reader.strict_json(str(arrays["amr_accepted_contract"].item())),reader.STEPS[phase],subjects)
+            contract=reader.strict_json(str(arrays["amr_accepted_contract"].item()))
+            reader.accepted_contract(contract,reader.STEPS[phase],subjects)
+            reader.original_history_contract(contract,reader.STEPS[phase],histories)
+            reader.empty_component_registry(arrays)
     pins.update(schema="sol61.evolved-stage-amr.owner-pins@3",qualification=reader.QUALIFICATION,native_abi_version=6,native_abi_receipt=abi_pin)
     result.update(profile="NativeABI6-accepted8-TagSelection1@3")
     return result

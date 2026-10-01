@@ -4,12 +4,12 @@ import argparse
 from copy import deepcopy
 import importlib.util
 import json
+import math
 from pathlib import Path
 import re
 import struct
 import sys
 import xml.etree.ElementTree as ET
-from types import FunctionType
 from urllib.parse import quote
 import numpy as np
 
@@ -21,6 +21,7 @@ _spec.loader.exec_module(v2)
 need, digest, strict_json = v2.need, v2.digest, v2.strict_json
 wire, carriers = v2.wire, v2.carriers
 envelope = v2.envelope
+history_point, rank_images, diagnostic_image, empty_exchange = v2.history_point, v2.rank_images, v2.diagnostic_image, v2.empty_exchange
 DT, TOL, CONTROLS, PHASES, STEPS, CASES = v2.DT, v2.TOL, v2.CONTROLS, v2.PHASES, v2.STEPS, v2.CASES
 exact, typed, same = v2.exact, v2.typed, v2.same
 science, declared_source, run_identity = v2.science, v2.declared_source, v2.run_identity
@@ -103,12 +104,7 @@ def accepted_contract(contract, step, transfer_subjects):
          and contract["guarantee"] == "bit_identical_accepted_state" and contract["program_state"] == "compiled",
          "NativeABI6 requires accepted schema8")
     need(typed(contract["tag_selection"],TAG_SELECTION),"authored Buffer0 TagSelection@1/ranked parent coverage differs")
-    providers = contract["field_providers"]
-    need(type(providers) is list and bool(providers),"original Q/T/aux field provider provenance missing")
-    for row in providers:
-        need(type(row) is list and len(row) >= 11 and all(type(v) is str for v in row)
-             and row[0] == "pops.amr.field-provider-checkpoint-manifest@1" and row[2] == "2"
-             and all(row[index] for index in (1,3,4,5,6,7,8)), "original field provider identities/depth differ")
+    need(typed(contract["field_providers"],[]),"original compiled residual has no component-provider services")
     need(type(transfer_subjects) is frozenset and bool(transfer_subjects), "authenticated Program transfer registry required")
     expected = {(subject, operation) for subject in transfer_subjects for operation in TRANSFER_DESCRIPTIONS}
     routes = contract["transfer_routes"]
@@ -139,18 +135,181 @@ def accepted_contract(contract, step, transfer_subjects):
          and len(contract["clocks"]) == 3,"native AMR logical clock publication differs")
 
 
-# Bind each checkpoint to the independent committed-state registry from its retained IR.
-# This creates a private function object; no historical globals are modified.
-def checkpoint_profile(transfer_subjects):
-    private = dict(v2.checkpoint.__globals__)
-    def accepted(contract, step):
-        return accepted_contract(contract, step, transfer_subjects)
-    private["accepted_contract"] = accepted
-    return FunctionType(v2.checkpoint.__code__,private,"checkpoint",v2.checkpoint.__defaults__,v2.checkpoint.__closure__)
+def program_history_registry(ir):
+    """Derive compiled global observation storage; never borrow component services."""
+    nodes={node["id"]:node for node in ir["nodes"]}
+    subjects=program_transfer_subjects(ir)
+    histories={row["name"]:row for row in ir["histories"]}
+    need(len(histories)==len(ir["histories"]) and bool(histories),"complete original history registry missing")
+    registry={}
+    for node in nodes.values():
+        if node["op"] != "store_history":continue
+        attrs=node["attrs"];name=attrs["history"];storage=attrs.get("global_field_storage")
+        need(name in histories and name not in registry and type(storage) is dict,"original history storage missing/duplicate")
+        exact(storage,("contract","owner_block","clock","point","region","layout_witness","storage_state_witness","field_problem_identity","field_unknown","ncomp","sampling","representation"),"global history storage")
+        need(storage["contract"]=="pops.program.global-field-history-storage@1" and storage["sampling"]=="cell"
+             and storage["representation"]=="valid_cell_copy" and type(storage["ncomp"]) is int and storage["ncomp"]==1
+             and attrs["state"] is None and len(node["inputs"])==1,"original observation storage type differs")
+        observation=nodes[node["inputs"][0]]
+        need(observation["op"]=="field_component" and typed(storage["field_unknown"],observation["attrs"]["field_unknown"])
+             and storage["field_problem_identity"]==observation["attrs"]["field_problem_identity"],"history original field authority differs")
+        reachable=set();pending=list(observation["inputs"])
+        while pending:
+            key=pending.pop()
+            if key in reachable:continue
+            reachable.add(key);pending.extend(nodes[key]["inputs"])
+        solves=[nodes[key] for key in reachable if nodes[key]["op"]=="solve_spatial_field"]
+        need(len(solves)==1 and solves[0]["attrs"]["field_problem_identity"]==storage["field_problem_identity"]
+             and solves[0]["attrs"]["source_contract"].get("evolved_stage") is not None,"history must consume original evolved solve")
+        allocation=next((nodes[key]["block"] for key in solves[0]["inputs"] if nodes[key].get("block") is not None),None)
+        need(typed(storage["layout_witness"]["handle"],allocation)
+             and typed(storage["storage_state_witness"]["handle"]["block_ref"],node["block"]),"history solved allocation scope differs")
+        need(typed(storage["point"],node["point"]) and typed(node["point"],observation["point"])
+             and typed(storage["clock"],ir["clock"]) and typed(storage["point"]["clock"],ir["clock"])
+             and typed(storage["owner_block"]["handle"],node["block"])
+             and storage["storage_state_witness"]["handle"]["qualified_id"] in subjects
+             and storage["layout_witness"]["handle"] in ir["block_order"],"history point/clock/layout/state scope differs")
+        owner=ir["block_order"].index(node["block"])
+        history=histories[name]
+        need(type(history["lag"]) is int and history["lag"]==1 and type(history["ncomp"]) is int
+             and history["ncomp"]==1 and history["state"] is None,"original output history shape differs")
+        image=lambda value:json.dumps(value,sort_keys=True,separators=(",",":"),allow_nan=False)
+        registry[name]=[name,"program.block."+str(owner),image(storage),"pops.program.scalar-output-history-projection@2",
+            "pops.clock.v1::sha256:"+digest(image(ir["clock"]).encode()),
+            image(dict(dense_output=False,provider="exact",schema_version=1)),"2","2"]
+    need(set(registry)==set(histories),"complete original history storage coverage differs")
+    return registry
 
 
-def checkpoint(arrays, phase, images, n, width, ranks, identities, abi, *, transfer_subjects):
-    return checkpoint_profile(transfer_subjects)(arrays,phase,images,n,width,ranks,identities,abi)
+def original_history_contract(contract,step,registry):
+    need(type(registry) is dict and bool(registry),"authenticated original history registry required")
+    dt_bits=str(struct.unpack("<Q",struct.pack("<d",DT))[0])
+    expected=[prefix+[str(level),str(slot),dt_bits,"1",str(step)]
+              for name,prefix in sorted(registry.items()) for level in (0,1) for slot in (0,1)]
+    need(typed(contract["history_qualifications"],expected),"complete original history provenance/slots differs")
+
+
+def empty_component_registry(arrays):
+    need(arrays["field_provider_slots"].size==0 and str(arrays["field_provider_manifest"].item())=="[]",
+         "compiled original residual must not acquire component-provider services")
+
+
+def complete_carrier_geometry(arrays):
+    """Native patch_boxes records refinement; POPSCAR1 closes all base patches."""
+    archive=carriers.decode(arrays["state_carriers_checkpoint"])
+    by_block={}
+    for patch in archive["patches"]:
+        block,level,index=patch["key"]
+        by_block.setdefault(block,[]).append((level,index,patch["owner"],tuple(patch["axes"])))
+    need(set(by_block)==set(range(len(archive["blocks"]))) and all(rows==by_block[0] for rows in by_block.values()),
+         "full carrier geometry differs across physical blocks")
+    rows=[]
+    for level in range(archive["levels"]):
+        patches=[row for row in by_block[0] if row[0]==level]
+        need([row[1] for row in patches]==list(range(len(patches))) and bool(patches),"complete indexed carrier level required")
+        owners=arrays[f"dmap_{level}"];mode=str(arrays[f"distribution_mode_{level}"].item())
+        need(mode in ("replicated","partitioned") and (owners.size==0 if mode=="replicated" else owners.size==len(patches)),
+             "full carrier distribution count differs")
+        for _,index,owner,axes in patches:
+            need(owner==(-1 if mode=="replicated" else int(owners[index])),"full carrier owner differs")
+            rows.append([level,axes[0][0],axes[1][0],axes[0][1],axes[1][1]])
+    boxes=np.asarray(rows,dtype=np.int64)
+    saved=arrays["patch_boxes"]
+    need(saved.dtype==np.dtype("int64") and saved.ndim==2 and saved.shape[1]==5
+         and typed(saved.tolist(),boxes[boxes[:,0]>0].tolist()),"native refinement boxes differ from full carrier geometry")
+    return boxes
+
+
+def receive_carriers(arrays,*args):
+    view={**arrays,"patch_boxes":complete_carrier_geometry(arrays)}
+    return carriers.receive_carriers(view,*args)
+
+
+# Current typed checkpoint profile is explicit; historical @2 remains immutable.
+def checkpoint_current(arrays, phase, images, n, width, ranks, identities, abi, transfer_subjects, history_registry):
+    step = STEPS[phase]
+    manifest = envelope(arrays, *identities)
+    clock = dict(time=(step*DT).hex(), macro_step=step)
+    need(manifest["clock"] == clock and wire.scalar(arrays["t"], "real").hex() == clock["time"]
+         and wire.scalar(arrays["macro_step"], "int") == step, "checkpoint accepted clock differs")
+    need(wire.scalar(arrays["pops_amr_checkpoint_version"], "int") == 12
+         and str(arrays["abi_key"].item()) == abi and int(arrays["n_ranks"]) == ranks
+         and int(arrays["n_levels"]) == int(arrays["configured_n_levels"]) == 2, "AMR durable envelope differs")
+    need("state_carriers_checkpoint" in arrays, "CP12 full carrier image missing")
+    carrier_envelope = carriers.decode(arrays["state_carriers_checkpoint"])
+    need(carrier_envelope["dim"] == 2 and carrier_envelope["real"] == 64
+         and carrier_envelope["ranks"] == ranks and carrier_envelope["levels"] == 2
+         and carrier_envelope["shard"] == -1 and carrier_envelope["blocks"] == list(arrays["blocks"]), "CP12 carrier envelope differs")
+    geometry = strict_json(str(arrays["pops_spatial_contract"].item()))
+    exact(geometry,("schema_version","dimension","shape","lower","upper","periodicity",
+                    "refinement_ratios","native_layout_identity","identity"),"spatial contract")
+    need(type(geometry["schema_version"]) is int and geometry["schema_version"] == 1
+         and type(geometry["dimension"]) is int and geometry["dimension"] == 2
+         and geometry["shape"] == [n,n] and all(type(v) is int for v in geometry["shape"])
+         and geometry["lower"] == [0..hex()]*2 and geometry["upper"] == [1..hex()]*2
+         and geometry["periodicity"] == [True,True] and all(type(v) is bool for v in geometry["periodicity"])
+         and geometry["refinement_ratios"] == [[2,2]], "original unit-square AMR spatial geometry differs")
+    payload = {k:v for k,v in geometry.items() if k != "identity"}
+    need(geometry["identity"] == "pops.checkpoint-spatial-layout.v1:sha256:"+digest(wire.cbor(
+        dict(protocol="pops.identity",domain="checkpoint-spatial-layout",schema_version=1,payload=payload))),
+         "spatial contract identity differs")
+    names = [f"T{i}" for i in range(width)]+(["z"] if width == 2 else [])
+    need(list(arrays["blocks"]) == [*(f"Q{i}" for i in range(width)), "forcing"], "checkpoint block order differs")
+    need(list(arrays["history_names"]) == sorted(names), "checkpoint history registry differs")
+    masks = v2.topology(complete_carrier_geometry(arrays), n, ranks,
+                     [str(arrays[f"distribution_mode_{l}"].item()) for l in (0, 1)],
+                     [arrays[f"dmap_{l}"] for l in (0, 1)])
+    for level in (0, 1):
+        for name in [*(f"Q{i}" for i in range(width)), "forcing"]:
+            same(arrays[f"state_{name}_{level}"], images[phase][level][name], "checkpoint physical state "+name)
+        for name in names:
+            need(int(arrays["history_depth_"+name]) == 2 and int(arrays["history_ncomp_"+name]) == 1
+                 and list(arrays["history_levels_"+name]) == [0, 1]
+                 and list(arrays["history_stored_slots_"+name]) == [0, 1], "history depth/width/levels/storage differs")
+            need(arrays[f"history_init_{name}_level_{level}"].item() is True
+                 and int(arrays[f"history_fill_count_{name}_level_{level}"]) == step, "history fill/initialization differs")
+            same(arrays[f"history_slot_dt_{name}_level_{level}"], np.array([DT, DT]), "history durations")
+            history_point(arrays[f"history_sample_identity_{name}_level_{level}"].tobytes(), name, level, step)
+            same(arrays[f"history_sample_identity_{name}_level_{level}"],
+                 images[phase][level]["history_sample_identity_"+name],"saved/durable history publication identity")
+            for slot, key in ((0, name+"-previous"), (1, name)):
+                same(arrays[f"history_{name}_level_{level}_{slot}"], images[phase][level][key], "checkpoint physical history slot")
+        need(arrays[f"auxiliary_checkpoint_{level}"].dtype == np.dtype("uint8")
+             and arrays[f"auxiliary_checkpoint_{level}"].size > 0, "native accepted auxiliary image missing")
+    temporal = strict_json(str(arrays["temporal_restart_state"].item()))
+    need(temporal["clock"] == clock and temporal["status"] == "accepted" and temporal["synchronized"] is True
+         and typed(temporal["strategy"],dict(controls={},strategy=dict(kind="fixed_dt", dt=dict(kind="binary64", value=DT.hex()))))
+         and temporal["controller_state"]["last_accepted_dt"] == DT.hex(), "temporal strategy/boundary differs")
+    clock_ids={prefix[4] for prefix in history_registry.values()}
+    need(len(clock_ids)==1,"original single-clock history scope differs")
+    clock_id=next(iter(clock_ids))
+    expected_cursors=dict(clock_cursors={clock_id:dict(phase="accepted",tick=step,time=clock["time"])},
+        schedule_cursors=dict(macro_step=dict(macro_step=step,phase="accepted")),
+        synchronization_cursors={},cache_cursors={},
+        history_cursors={name:dict(clock=clock_id,newest_tick=step,oldest_tick=max(0,step-1),
+            valid_lags=1,cold_start_extended=False,initialized=True) for name in history_registry})
+    need(all(typed(temporal[key],value) for key,value in expected_cursors.items()),"exact original accepted temporal cursors differ")
+    need(typed(temporal["controller_state"],dict(last_accepted_dt=DT.hex(),fixed_dt_grid=dict(
+        schema_version=1,macro_step=step,origin=0..hex(),steps=step,time=clock["time"]))),"fixed-dt controller grid differs")
+    diagnostics = rank_images(arrays["program_diagnostics_state"], arrays["program_diagnostics_offsets"], ranks, "diagnostic")
+    parsed = [diagnostic_image(raw, rank, ranks) for rank, raw in enumerate(diagnostics)]
+    for row in parsed:
+        residual = [struct.unpack("<d", bits)[0] for name, bits in row.items() if name.endswith(b".rel_residual")]
+        need(len(residual) == 1 and math.isfinite(residual[0]) and 0 <= residual[0] <= CONTROLS["tolerance"], "native original-F diagnostic differs")
+    for raw in rank_images(arrays["program_exchange_state"], arrays["program_exchange_offsets"], ranks, "exchange"):
+        empty_exchange(raw)
+    contract = strict_json(str(arrays["amr_accepted_contract"].item()))
+    accepted_contract(contract,step,transfer_subjects)
+    original_history_contract(contract,step,history_registry)
+    need(arrays["program_accepted_state"].dtype == np.dtype("uint8") and arrays["program_accepted_state"].size
+         and arrays["program_accepted_state_source_authority"].dtype == np.dtype("uint8")
+         and arrays["program_accepted_state_source_authority"].size, "opaque native Program authority missing")
+    return manifest, masks, parsed
+
+
+def checkpoint(arrays, phase, images, n, width, ranks, identities, abi, *, transfer_subjects, history_registry):
+    empty_component_registry(arrays)
+    return checkpoint_current(arrays,phase,images,n,width,ranks,identities,abi,transfer_subjects,history_registry)
 
 
 def native_abi_receipt(receipt, native):
@@ -246,6 +405,7 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
             if component["component"].startswith("program-"):
                 program_ir = strict_json(row_file(component["ir.json"]))
                 transfer_subjects = program_transfer_subjects(program_ir)
+                history_registry = program_history_registry(program_ir)
                 program_hashes.append(program_image(program_ir,
                     row_file(component["cpp"]).decode(), pins["ir_version"], component["program_hash"],width))
         need(len(program_hashes) == 1, "this same-layout witness requires one actual Program IR")
@@ -253,12 +413,12 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         for phase in arrays:
             need(str(arrays[phase]["program_hash"].item()) == program_hashes[0], "checkpoint installed Program differs")
             manifests[phase], actual_masks, diagnostics[phase] = checkpoint(arrays[phase], phase, images, n,width,pins["ranks"],
-                (case["artifact"],case["bind"],case["semantic"]),pins["abi_key"],transfer_subjects=transfer_subjects)
+                (case["artifact"],case["bind"],case["semantic"]),pins["abi_key"],transfer_subjects=transfer_subjects,history_registry=history_registry)
             need("state_carriers_checkpoint" in arrays[phase], "CP12 full carrier image missing")
-            archive = carriers.receive_carriers(arrays[phase], registry["phases"][phase]["rows_by_rank"],
+            archive = receive_carriers(arrays[phase], registry["phases"][phase]["rows_by_rank"],
                 {**{f"Q{i}":1 for i in range(width)}, "forcing":width+1})
             if phase == "accepted":
-                carriers.receive_carriers(arrays[phase], registry["phases"]["reloaded"]["rows_by_rank"],
+                receive_carriers(arrays[phase], registry["phases"]["reloaded"]["rows_by_rank"],
                     {**{f"Q{i}":1 for i in range(width)}, "forcing":width+1})
             if masks is not None:
                 for a,b in zip(masks,actual_masks,strict=True):
