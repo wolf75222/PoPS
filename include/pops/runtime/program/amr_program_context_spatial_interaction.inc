@@ -365,24 +365,21 @@ void prepare_closed_original_interaction(std::int64_t result_id, std::int64_t so
   std::vector<InteractionLevelView<Dim, MemorySpace>> levels;
   std::vector<const field_type*> output_prototypes;
   std::size_t retained = 0;
+  int storage_owner = -1;
   closed_interaction_phase_([&] {
     if (source->provider->accepted_original_candidate_generation(&candidate, lane) !=
         source->accepted_generation || candidate.size() != static_cast<std::size_t>(nlev()))
       throw std::logic_error("closed original source Accept receipt was superseded");
-    result = std::make_shared<ClosedInteractionTower>();
-    result->source = source;
-    result->storage_owner = sys_block(storage_block);
-    result->identity = identity;
+    storage_owner = sys_block(storage_block);
     retained = interaction_add(interaction_add(source->retained_bytes,
         interaction_add(sizeof(ClosedInteractionTower), identity.size())), interaction_product(candidate.size(),
         sizeof(field_type) + sizeof(InteractionLevelView<Dim, MemorySpace>) + sizeof(field_type*)));
     // The source and allocation State have separate physical identities. The
     // output inherits only its owner's ranked topology and ghost storage; keep
     // that grown storage in the retained budget for every level of the tower.
-    output_prototypes.reserve(candidate.size());
     for (std::size_t level = 0; level < candidate.size(); ++level) {
       const auto& field = candidate.at(level);
-      const auto& storage = facade_->prepared_amr_block_state(result->storage_owner, level);
+      const auto& storage = facade_->prepared_amr_block_state(storage_owner, level);
       if (field.layout() != storage.layout() || field.distribution() != storage.distribution() ||
           field.local_rank() != storage.local_rank())
         throw std::invalid_argument("closed interaction storage changes original source geometry/ownership");
@@ -390,7 +387,6 @@ void prepare_closed_original_interaction(std::int64_t result_id, std::int64_t so
       for (int axis = 0; axis < Dim; ++axis)
         if (ghosts[axis] < 0)
           throw std::invalid_argument("closed interaction output owner has negative ghosts");
-      output_prototypes.push_back(&storage);
       for (std::size_t patch = 0; patch < field.local_size(); ++patch) {
         auto allocated_box = storage.box(patch);
         for (int axis = 0; axis < Dim; ++axis)
@@ -405,6 +401,13 @@ void prepare_closed_original_interaction(std::int64_t result_id, std::int64_t so
     }
     if (retained >= max_bytes)
       throw std::length_error("closed interaction retained tower exceeds its explicit budget");
+    result = std::make_shared<ClosedInteractionTower>();
+    result->source = source;
+    result->storage_owner = storage_owner;
+    result->identity = identity;
+    output_prototypes.reserve(candidate.size());
+    for (std::size_t level = 0; level < candidate.size(); ++level)
+      output_prototypes.push_back(&facade_->prepared_amr_block_state(storage_owner, level));
     result->output.reserve(candidate.size());
     levels.reserve(candidate.size());
     Kokkos::fence();
