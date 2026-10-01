@@ -30,7 +30,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
         from pops.codegen.program_emit_solve import _solve_stage_fraction
         stage = _solve_stage_fraction(value)
         lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
-    duration = emit_issued_duration(value.attrs["source_contract"].get("temporal_tau"), program, value.point, stem + "_issued_dt", lines)
+    duration = emit_issued_duration(value.attrs["source_contract"].get("temporal_tau"), program, value.point, stem + "_issued_dt", lines, operation_id=value.id)
     prototype, coefficients = (variables[part.id] for part in value.inputs[:2])
     coefficient_pointer = variables[("field_pointer", value.inputs[1].id)]
     captures = value.inputs[2:2 + value.attrs["capture_count"]]
@@ -117,7 +117,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
               "  (void)evaluation;"]
     if duration is not None:
         lines += ["  std::exception_ptr temporal_error;", "  try {",
-                  "    if (&ctx.prepared_execution_lane() != %s_lane || !%s_attempt.visible() || !%s_attempt.same_attempt(ctx.resource_attempt()) || %s_point != ctx.boundary_evaluation_point(%d) || ctx.step_dt() != %s)" % (stem, stem, stem, stem, value.id, duration),
+                  "    if (&ctx.prepared_execution_lane() != %s_lane || !%s_attempt.visible() || !%s_attempt.same_attempt(ctx.resource_attempt()) || %s_point != ctx.boundary_evaluation_point(%d) || ctx.boundary_evaluation_point(%d).dt != %s)" % (stem, stem, stem, stem, value.id, value.id, duration),
                   '      throw std::logic_error("original stage frame/point/attempt authority changed");',
                   "  } catch (...) { temporal_error = std::current_exception(); }",
                   '  pops::collectively_rethrow_exception(temporal_error, *%s_lane, "original stage frame authority");' % stem]

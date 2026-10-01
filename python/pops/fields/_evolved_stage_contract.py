@@ -98,7 +98,7 @@ def validate_additive_capture_reads(captures: Any) -> None:
 
 
 def emit_issued_duration(
-    authority: Any, program: Any, point: Any, name: str, lines: list
+    authority: Any, program: Any, point: Any, name: str, lines: list, *, operation_id: int
 ) -> str | None:
     if authority is None:
         return None
@@ -106,8 +106,8 @@ def emit_issued_duration(
     lines += [
         "pops::Real %s = 0;" % name,
         "std::exception_ptr %s_error;" % name,
-        'try { %s = ctx.step_dt(); if (!std::isfinite(%s) || %s <= 0) throw std::invalid_argument("original stage issued duration is invalid"); }'
-        % (name, name, name),
+        'try { %s = ctx.boundary_evaluation_point(%d).dt; if (!std::isfinite(%s) || %s <= 0) throw std::invalid_argument("original stage issued duration is invalid"); }'
+        % (name, operation_id, name, name),
         "catch (...) { %s_error = std::current_exception(); }" % name,
         'pops::collectively_rethrow_exception(%s_error, ctx.prepared_execution_lane(), "original stage issued duration");'
         % name,

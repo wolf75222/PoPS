@@ -37,6 +37,7 @@ def emit_evolved_state(value, variables, lines, prelude, *, target, block_indice
         ]
         output = "(*%s)" % stem
     variables[value.id] = output
+    publication_start = len(lines)
     lines += [
         "{",
         "const auto& evolved_candidate = %s;" % packed,
@@ -74,7 +75,7 @@ def emit_evolved_state(value, variables, lines, prelude, *, target, block_indice
         for row in solve.attrs["source_contract"]["unknown_components"]
     )
     # Add co-located frozen capture views to the same pointwise publication kernel.
-    offset = lines.index("  const auto output = evolved_output.fab(patch).view();") + 1
+    offset = lines.index("  const auto output = evolved_output.fab(patch).view();", publication_start) + 1
     for index, capture in enumerate(captures):
         lines.insert(
             offset + index,

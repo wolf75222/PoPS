@@ -135,7 +135,7 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
               "auto %s_core = %s_Core::prepare(%s_provider, %s_authority, %s_capture_views, %s, %s, ctx.prepared_execution_lane()%s);" %
               (stem, stem, stem, stem, stem, controls, scalar_cpp(spatial_scalar(value.attrs["finite_difference_step"])), policy_argument)]
     from pops.fields._evolved_stage_contract import emit_issued_duration
-    duration = emit_issued_duration(value.attrs["source_contract"].get("temporal_tau"), program, value.point, stem + "_issued_dt", lines)
+    duration = emit_issued_duration(value.attrs["source_contract"].get("temporal_tau"), program, value.point, stem + "_issued_dt", lines, operation_id=value.id)
     unknowns = tuple(Handle.from_canonical_identity(_json_ready(item))
                      for item in value.attrs["source_contract"]["unknown_components"])
     callback = stem + "_body"
@@ -152,7 +152,7 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
               "          bool finite = true;"]
     if duration is not None:
         start = next(index for index in range(len(lines)-1, -1, -1) if lines[index].startswith("auto %s =" % callback)) + 1
-        lines.insert(start, '  if (ctx.step_dt() != %s) throw std::logic_error("original stage issued frame duration changed");' % duration)
+        lines.insert(start, '  if (ctx.boundary_evaluation_point(%d).dt != %s) throw std::logic_error("original stage issued frame duration changed");' % (value.id, duration))
     for component, expression in enumerate(value.attrs["local_expressions"]):
         code, _ = field_expression_cpp(expression, captures,
             views=tuple("capture%d" % i for i in range(len(captures))), unknowns=unknowns, duration_name=duration)
@@ -171,7 +171,7 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
                   "      const auto output = coefficients[level]->fab(patch).view();"]
         if duration is not None:
             start = next(index for index in range(len(lines)-1, -1, -1) if lines[index].startswith("auto %s =" % coefficient_callback)) + 1
-            lines.insert(start, '  if (ctx.step_dt() != %s) throw std::logic_error("original stage issued frame duration changed");' % duration)
+            lines.insert(start, '  if (ctx.boundary_evaluation_point(%d).dt != %s) throw std::logic_error("original stage issued frame duration changed");' % (value.id, duration))
         for index in range(len(captures)):
             lines.append("      const auto capture%d = captured[%d][level].fab(patch).view();" % (index, index))
         lines += ["      invalid = std::max(invalid, pops::for_each_cell_reduce_max(coefficients[level]->box(patch),",
