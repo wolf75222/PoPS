@@ -611,6 +611,10 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
         else model
     )
     _validate_matrix_free_contract(v, node_model)
+    if v.op == "spatial_interaction":
+        from pops.time._program.spatial_interaction import interaction_contract
+        interaction_contract(v)
+        return
     if v.op in _MODEL_OPS:
         if model is None:
             raise NotImplementedError(

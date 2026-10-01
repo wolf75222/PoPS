@@ -13068,6 +13068,15 @@ const MultiFab<Dim>* AmrSystem<Dim>::prepared_amr_block_level_active_mask(int ru
 }
 
 template <int Dim>
+const MultiFab<Dim>* AmrSystem<Dim>::prepared_amr_block_level_volume_fraction(
+    int runtime_block, int level) const {
+  if (!prepared_amr_block_level_active_mask(runtime_block, level)) return nullptr;
+  return &p_->prepared_hierarchy->embedded_boundary[static_cast<std::size_t>(level)]->volume_fraction();
+}
+template const MultiFab<kNativeDimension>*
+AmrSystem<kNativeDimension>::prepared_amr_block_level_volume_fraction(int, int) const;
+
+template <int Dim>
 std::size_t AmrSystem<Dim>::interface_evaluation_count(const std::string& identity,
                                                        int level) const {
   if (!p_->multiblock_hierarchy)

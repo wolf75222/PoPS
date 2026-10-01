@@ -321,6 +321,7 @@ sdk-support pops/runtime/program/amr_program_context_spatial.inc
 sdk-support pops/runtime/program/amr_program_context_rhs_input_trace.inc
 sdk-support pops/runtime/program/amr_program_context_path_rhs.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations.inc
+sdk-support pops/runtime/program/amr_program_context_spatial_interaction.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations_services.inc
 sdk-support pops/runtime/program/amr_program_context_hierarchy_barriers.inc
 sdk-support pops/runtime/program/amr_program_context_mapping_continuation.inc
@@ -344,6 +345,7 @@ sdk-root pops/runtime/program/prepared_principal_flux.hpp
 sdk-support pops/runtime/program/prepared_resource_cache.hpp
 sdk-support pops/runtime/program/prepared_resource_lifetime.hpp
 sdk-support pops/runtime/program/prepared_integral_capture.hpp
+sdk-support pops/runtime/program/spatial_direct_interaction.hpp
 sdk-support pops/runtime/program/program_cadence_continuation.inc
 sdk-support pops/runtime/program/prepared_condensed_sampling.hpp
 sdk-support pops/runtime/program/prepared_scalar_boundary_session.hpp

@@ -30,6 +30,7 @@ from pops.time._program.time_handles import _ProgramTimeHandles
 from pops.time._program.physical_maps import _ProgramPhysicalMaps
 from pops.time._program.integrals import _ProgramIntegrals
 from pops.time._program.geometry import _ProgramGeometry
+from pops.time._program.spatial_interaction import _ProgramSpatialInteraction
 from pops.time.references import bind_program_block, block_name
 from pops.time._step.transaction import (
     ALL_PROVISIONAL_STORES,
@@ -50,6 +51,7 @@ class Program(
     _ProgramPhysicalMaps,
     _ProgramIntegrals,
     _ProgramGeometry,
+    _ProgramSpatialInteraction,
     _ProgramCore,
     _ProgramLocal,
     _ProgramCondensed,

@@ -1238,6 +1238,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(
             program, v, outcome, lines, label="local_nonlinear")
+    elif v.op == "spatial_interaction":
+        from pops.codegen.program_emit_spatial_interaction import emit_spatial_interaction
+        emit_spatial_interaction(v, var, lines, block_indices=block_idx, target=target)
     elif v.op == "field_gradient":
         from pops.codegen.program_emit_field_gradient import emit_field_gradient
         emit_field_gradient(v, var, lines, prelude, target=target)

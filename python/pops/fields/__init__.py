@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from .spatial_interaction import (SpatialInteractionKernel, CellVolumeMeasure,
+                                  CellMidpoint, DirectSpatialInteraction)
+
 from .context import (
     Accepted,
     FieldContext,

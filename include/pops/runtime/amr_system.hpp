@@ -1401,6 +1401,9 @@ class AmrSystem {
   /// exactly named block through the shared runtime and returns compact native valid-cell pieces
   /// without allocating a global level buffer.
   std::vector<OutputPiece<Dim>> output_state_local_pieces(const std::string& name, int k);
+  /// Prepared local measure lookup after collective hierarchy refresh.
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_amr_block_level_volume_fraction(
+      int runtime_block, int level) const;
   /// Exact per-level EB sidecars: pops_active, pops_phi, or pops_kappa.
   std::vector<OutputPiece<Dim>> output_embedded_boundary_local_pieces(const std::string& name,
                                                                       int k);

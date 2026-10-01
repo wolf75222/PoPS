@@ -19,6 +19,7 @@
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/prepared_resource_cache.hpp>
 #include <pops/runtime/program/prepared_integral_capture.hpp>
+#include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/source_mask.hpp>
 #include <pops/runtime/system.hpp>
@@ -968,6 +969,47 @@ class ProgramContext {
   /// enforce both physical activity and finest-owner coverage.
   const field_type* pointwise_exchange_coverage_mask(int, const field_type&) const noexcept {
     return nullptr;
+  }
+
+  template <class Kernel>
+  field_type spatial_interaction(int program_block, const field_type& source,
+                                std::span<const int> components, std::uint64_t max_bytes,
+                                std::string_view identity, std::string_view source_clock, bool accepted_composite, Kernel kernel) const {
+    const auto& lane = prepared_execution_lane();
+    PreparedResourceAttempt attempt;
+    runtime::multiblock::BoundaryEvaluationPoint point;
+    interaction_phase(lane, [&] {
+      point = boundary_evaluation_point(0);
+      if (point.clock != source_clock) throw std::invalid_argument("direct interaction source clock differs from its issued frame");
+      attempt = resource_attempt();
+      if (!attempt.visible()) throw std::logic_error("direct interaction requires a live Program attempt");
+      if (accepted_composite && &source != &state(program_block))
+        throw std::invalid_argument("accepted interaction source is not the accepted State carrier");
+    });
+    const auto* active = pointwise_active_mask(program_block, source);
+    const int owner = resolve_pointwise_program_block_(program_block, lane);
+    const auto* kappa = system_->prepared_program_block_volume_fraction_(owner, source, lane);
+    const auto geom = geometry();
+    interaction_phase(lane, [&] {
+      if (!runtime_state().moving_interval_geometry_.empty())
+        throw std::invalid_argument("direct cell-midpoint interaction requires a prepared Cartesian physical map");
+    });
+    const std::array<InteractionLevelView<Dim, typename field_type::memory_space>, 1> levels{
+        InteractionLevelView<Dim, typename field_type::memory_space>{&source, active, nullptr, kappa, geom}};
+    std::string authority;
+    interaction_phase(lane, [&] {
+      ExactContractBuilder exact;
+      exact.text(identity).scalar(attempt.ordinal());
+      interaction_append_point(exact, point);
+      authority = std::move(exact).release();
+    });
+    auto result = direct_spatial_interaction<Dim, typename field_type::memory_space>(
+        levels, 0, components, max_bytes, authority, lane, kernel);
+    interaction_phase(lane, [&] {
+      if (!attempt.visible() || !attempt.same_attempt(resource_attempt()) || point != boundary_evaluation_point(0))
+        throw std::logic_error("direct interaction source attempt/frame was revoked");
+    });
+    return result;
   }
 
   /// Reduce one generated per-cell status on the same authenticated lane and layout used by its
