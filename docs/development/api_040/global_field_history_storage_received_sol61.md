@@ -13,7 +13,7 @@ observation's physical width. No author fixture or manufactured-value helper is
 imported by these probes. Newton and CG are declaration descriptors here;
 neither solver is executed by the Python probes.
 
-## Open findings on the first production gel
+## Historical findings on the first production gel
 
 1. **P2 — the public linear route cannot decode its frozen field identity.**
    `storage_contract` reconstructs the handle from a `field_problem_load` node's
@@ -117,3 +117,75 @@ not attributed to the new production code.
 Native reception requires
 the newly changed SDK header rebuilt and authenticated by ROOT. No previous
 native history or Stage dataset qualifies this new port.
+
+## Follow-up reception
+
+Production `03b53a57cb297c60a0d9f811cdec764e6b261802` closes the original five
+red tests: the same 26 tests pass independently. The private original issuance
+is now separate from mutable projections, checked before serialization,
+descriptor emission, freeze and rebuild, then remapped from the authenticated
+record during detachment. Linear wire identities are thawed for their strict
+parser, and StagePoint clocks use the existing exact `point_clock` contract.
+
+Nine independent snapshot tests additionally receive actual freeze, no-drop
+rebuild, compiled detachment and `to_graph`; removal of the contract before
+each boundary refuses. IR/hash remain unchanged on the positive paths. The
+detached proof's owner and layout witness carry no live registry. Weakrefs prove
+collection of the real Case and four Models while the detached Program remains
+usable. The first harness call to rebuild lacked its required `keep` argument;
+that harness error was fixed and not counted as a production defect.
+
+Two further typed-projection problems were demonstrated and sent to the author.
+On `03b`, Python dictionary equality accepted descriptor `ncomp=True`,
+`ncomp=1.0`, and `region=False` against integers. `b0a16ec03d9a2aac225166398a3735faf62415a3`
+compares typed canonical JSON instead. Separately, registration-table widths
+True and 1.0 were accepted by comparison with 1;
+`7fa9877437f64ee77dca875013992f48a510201a` requires an exact integer width on the
+new port. These failures concern contract admissibility; no incorrect physical
+solution publication was asserted from them.
+
+The final selection also preserves foreign Case, detached port, absent
+TimeState, other clock, issued-observation alias, and ordinary ring-owner
+substitution refusals without authoring-table publication. It includes exact
+descriptor/version/sampling/representation/owner/State/layout/unknown/problem/
+point/clock mutations, coherent owner reseal, discriminant disappearance and
+typed width attacks. Legacy reduction, physical operator and solver controls
+are outside the production changes received here.
+
+## Final source reception of 7fa
+
+The final production received is
+`7fa9877437f64ee77dca875013992f48a510201a`, including the original issuance
+follow-up, typed JSON comparison and exact registration width. Independently,
+**43 tests passed in 67.15 s** before the additional public AMR admission.
+The retained raw log `outputs/sol61-history-storage-independent/7fa-final.log`
+has SHA256 `b631236ebe6b65d01d8bcc17b4458f3b1d6f8c2a5f6805466b9386cff9f13590`.
+The forty-one C++ host scenarios are contained in one of those tests, not
+multiplied into a native test count.
+
+The additional source admission performs genuine public Case validation,
+AMR resolution, detachment and `emit_cpp_program(..., target="amr_system")`.
+Three physical blocks supply the original three equations' captures; a fourth
+width-five block supplies only the already declared storage State. The emitted
+history remains scalar, qualified IR16, and uses `store_global_field_history`
+with the State witness. The source Program hash is unchanged by emission.
+The helper's StateHandle iteration, threshold declaration and explicit AMR
+tagging policies were corrected before this admission; none was attributed to
+a production defect. No AMR artifact was compiled or bound in this test.
+
+The two default legacy comparisons were rerun freshly after 7fa against the
+exact parent, with the same helper path/callsites. The complete payload,
+provenance, CPP and three Module hashes remain byte-identical, with the same
+`d7f10e2d73fd2aa8825cc3a4d78290c3c94095fa604ae56407d7069de0b0cd1d`
+JSON digest. The coherent final selection, including public AMR admission,
+is **44 passed in 89.12 s**; its retained raw log
+`outputs/sol61-history-storage-independent/7fa-final-with-amr.log` has SHA256
+`92db16e7e957f2fcba008dfb27782a05df07fe46b5b2f0fd8b74a20bd854a38e`.
+Ruff and whitespace checks pass. There is no current source
+blocker demonstrated by this bounded reception. ROOT still owns rebuilt,
+authenticated Kokkos/MPI runtime qualification, history publication and
+checkpoint/restart; the host publication counter receives none of those.
+
+```
+rtk proxy env PYTHONPATH=python PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python -m pytest tests/review/test_sol61_history_storage_owner_received.py -q -p no:cacheprovider
+```

@@ -129,7 +129,8 @@ def test_observation_alias_does_not_borrow_issued_storage_authority():
 
 
 @pytest.mark.parametrize("key,replacement", (
-    ("ncomp", 2), ("contract", "pops.program.global-field-history-storage@2"),
+    ("ncomp", 2), ("ncomp", True), ("ncomp", 1.0), ("region", False),
+    ("contract", "pops.program.global-field-history-storage@2"),
     ("representation", "other"), ("sampling", "face"),
     ("owner_block", None), ("storage_state_witness", None), ("layout_witness", None),
     ("field_unknown", None), ("field_problem_identity", None), ("point", None), ("clock", None),
@@ -139,6 +140,15 @@ def test_individual_storage_descriptor_mutations_are_refused(key, replacement):
     node = program.store_history("descriptor-mutation", value, depth=1, owner_block=owner)
     original = dict(node.attrs["global_field_storage"])
     object.__setattr__(node, "attrs", dict(node.attrs) | {"global_field_storage": original | {key: replacement}})
+    with pytest.raises(ValueError):
+        program._ir_hash()
+
+
+@pytest.mark.parametrize("width", (True, 1.0, 0, 2, None))
+def test_registered_component_width_remains_an_exact_integer(width):
+    _case, program, *_prefix, value, _field, _point, owner, _issued = _storage_only(3)
+    program.store_history("typed-width", value, depth=1, owner_block=owner)
+    program._histories_ncomp["typed-width"] = width
     with pytest.raises(ValueError):
         program._ir_hash()
 
@@ -178,6 +188,109 @@ def test_removing_storage_contract_cannot_downgrade_an_issued_ring_to_legacy():
                                      if key != "global_field_storage"})
     with pytest.raises(ValueError):
         program._serialize()
+
+
+@pytest.mark.parametrize("boundary", ("freeze", "rebuild", "detach", "graph"))
+def test_real_snapshot_boundaries_preserve_original_storage_qualification(boundary):
+    from pops.time._program.detach import detach_compiled_program
+    _case, program, *_prefix, value, _field, _point, owner, _issued = _storage_only(5)
+    program.store_history("snapshot-owner", value, depth=1, owner_block=owner)
+    before = program._ir_hash()
+    if boundary == "freeze":
+        assert program.freeze()._ir_hash() == before
+    elif boundary == "rebuild":
+        assert program._rebuild(lambda _value: True)._ir_hash() == before
+    elif boundary == "detach":
+        detached = detach_compiled_program(program)
+        assert detached._ir_hash() == before
+        record = detached._global_field_history_issuance["snapshot-owner"]
+        assert record.metadata["owner_block"]._instance_registry is None
+        assert record.metadata["layout_witness"]._instance_registry is None
+    else:
+        assert program.to_graph() is not None
+        assert program._ir_hash() == before
+
+
+@pytest.mark.parametrize("boundary", ("freeze", "rebuild", "detach", "graph"))
+def test_snapshot_boundary_cannot_remint_a_removed_contract(boundary):
+    from pops.time._program.detach import detach_compiled_program
+    _case, program, *_prefix, value, _field, _point, owner, _issued = _storage_only(3)
+    node = program.store_history("snapshot-refusal", value, depth=1, owner_block=owner)
+    object.__setattr__(node, "attrs", {key: item for key, item in node.attrs.items()
+                                     if key != "global_field_storage"})
+    operation = {"freeze": program.freeze, "rebuild": lambda: program._rebuild(lambda _value: True),
+                 "detach": lambda: detach_compiled_program(program), "graph": program.to_graph}[boundary]
+    with pytest.raises(ValueError):
+        operation()
+
+
+def test_detached_proof_does_not_retain_live_case_or_model_registries():
+    import gc
+    import weakref
+    from pops.time._program.detach import detach_compiled_program
+
+    def build_detached():
+        case, program, *_prefix, value, _field, _point, owner, _issued = _storage_only(5)
+        models = [info["model"] for info in owner._instance_registry._blocks.values()]
+        references = [weakref.ref(case), *(weakref.ref(model) for model in models)]
+        program.store_history("no-hidden-registry", value, depth=1, owner_block=owner)
+        return detach_compiled_program(program), references
+
+    detached, references = build_detached()
+    gc.collect()
+    assert all(reference() is None for reference in references)
+    assert detached._serialize()["version"] == 16
+
+
+def test_public_amr_resolution_and_emission_use_storage_only_scalar_ring():
+    import pops
+    from pops.amr import (AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer,
+                          Buffer, ConflictPolicy, EqualityPolicy, Hysteresis, Tag)
+    from pops.analytic import x
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_models import ProgramModelGraph
+    from pops.initial import InitialCondition
+    from pops.layouts import AMR
+    from pops.lib.amr import StateTransfer
+    from pops.lib.initial import Analytic
+    from pops.math import ValueExpr
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.params import RuntimeParam
+    from pops.projection import ConservativeCellAverage
+    from pops.time import FixedDt, every
+    case, program, blocks, states, _problem, value, _field, _point, owner, issued = _storage_only(5)
+    program.store_history("independent-global-ring", value, depth=1, owner_block=owner)
+    extra_state = issued.state.declaration_ref or issued.state
+    all_blocks, all_states = (*blocks, owner), (*states, extra_state)
+    transfer = AMRTransfer()
+    for index, (block, state) in enumerate(zip(all_blocks, all_states, strict=True)):
+        time = program.state(block[state])
+        program.commit(time.next, program.value("preserved-%d" % index, 1*time.n, at=time.next.point))
+        frame = block._instance_registry._blocks[block.local_id]["model"].frame
+        case.initials.add(InitialCondition(state=block[state],
+            value=Analytic(frame=frame, components=tuple(
+                0*x(frame) for _ in range(5 if block is owner else len(tuple(state))))),
+            projection=ConservativeCellAverage()))
+        transfer.state(block[state], StateTransfer())
+    program.step_strategy(FixedDt(.125))
+    case.program(program)
+    threshold = case.param(RuntimeParam("storage-refinement-threshold", default=.5))
+    layout = AMR(grid=CartesianGrid(frame=frame, cells=(3, 5), periodic=PeriodicAxes(frame.axes)),
+        hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(owner[extra_state])[0] > case.value(threshold)), Buffer(cells=0)),
+                           hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+                           conflict_policy=ConflictPolicy.REFINE_WINS),
+        regrid=AMRRegrid(schedule=every(1000, clock=program.clock)), transfer=transfer,
+        execution=AMRExecution.synchronous())
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    before = resolved.time._ir_hash()
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    cpp = emit_cpp_program(resolved.time, model=graph, target="amr_system")
+    assert resolved.time._serialize()["version"] == 16
+    assert "ctx.store_global_field_history(" in cpp
+    assert '"ncomp\\\":1' in cpp
+    assert '"storage_state_witness' in cpp
+    assert resolved.time._ir_hash() == before
 
 
 def _cpp_method(text, signature):
