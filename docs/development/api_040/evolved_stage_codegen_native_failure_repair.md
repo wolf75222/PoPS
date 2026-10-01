@@ -77,3 +77,30 @@ same eight native witnesses. This receipt does not assert native solves,
 original residuals, Q projection, checkpoint/replay bytes, MPI convergence or
 scientific qualification. No MAIN, reception worktree, SDK or ENV mutation was
 performed by the author. The independent reviewer receives e154 separately.
+
+The separate native-fixture follow-up uses receipt schema
+`pops.evolved-stage-native-fixture@2`. Schema @1 has no positive native
+reception: all eight installed witnesses failed generated-CPP compilation.
+Its checkpoint paths `accepted`, `continuous` and `replay` could also resolve
+to the same `.npz` files subsequently written as observations. Historical
+failed evidence remains unchanged.
+
+The fixture now requests `accepted-checkpoint`, `continuous-checkpoint` and
+`replay-checkpoint`, seals each returned native file immediately with the
+bounded reader before taking observations, and checks those hashes again
+after all archive writes. Resolved checkpoint and observation paths must be
+disjoint, including the initial image. The existing exact continuous/replay
+checkpoint comparison remains mandatory. Each actual compiled Program
+component also exports its carried IR through `dump_ir`, with file SHA256
+and the same component's `program_hash`; no new builder or emitter supplies
+that archive. The eight cases, original Q/source/diffusion equations, seven
+Newton controls and predeclared acceptance of 3e-8 are unchanged. This change
+prepares authentic future reception and asserts no new native result.
+
+Source-only validation collected exactly eight parametrized native nodes
+(`pytest --collect-only`, source Python path, no compilation). An AST probe
+checked all three native-call/seal/capture sequences and executed the actual
+final guard statements on a disjoint archive image, an overwritten hash and
+a colliding path: the valid structure passes and both corruptions refuse.
+Ruff and `git diff --check` pass. The source guard probe is an archive-policy
+check, not a substitute for ROOT's forthcoming native checkpoint reception.

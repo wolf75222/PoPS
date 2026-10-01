@@ -121,19 +121,26 @@ def test_public_evolved_original_stage_saved_and_exact_replay(
         with collective_check(world):
             np.testing.assert_array_equal(np.asarray(actual).reshape(expected.shape), expected)
     collective_call(world, lambda: pops.run(runtime, t_end=dt, max_steps=1, console=False))
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/"accepted-checkpoint"))
+    checkpoint_hashes = {"accepted": collective_call(world, lambda:
+        hashlib.sha256(bounded_bytes(checkpoint)).hexdigest())}
     accepted = capture(world, runtime, cells, width, dt, 1)
-    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/"accepted"))
     collective_call(world, lambda: pops.run(runtime, t_end=2*dt, max_steps=1, console=False))
+    continuous_checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/"continuous-checkpoint"))
+    checkpoint_hashes["continuous"] = collective_call(world, lambda:
+        hashlib.sha256(bounded_bytes(continuous_checkpoint)).hexdigest())
     continuous = capture(world, runtime, cells, width, dt, 2)
-    continuous_checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/"continuous"))
     restored = collective_call(world, bind)
     collective_call(world, lambda: restored.restart(checkpoint))
     reloaded = capture(world, restored, cells, width, dt, 1)
     with collective_check(world):
         same_images(reloaded, accepted)
     collective_call(world, lambda: pops.run(restored, t_end=2*dt, max_steps=1, console=False))
+    replay_checkpoint = collective_call(world, lambda: restored.checkpoint(directory/"replay-checkpoint"))
+    checkpoint_hashes["replay"] = collective_call(world, lambda:
+        hashlib.sha256(bounded_bytes(replay_checkpoint)).hexdigest())
     replay = capture(world, restored, cells, width, dt, 2)
-    replay_checkpoint = collective_call(world, lambda: restored.checkpoint(directory/"replay"))
+    checkpoint_files = (("accepted", checkpoint), ("continuous", continuous_checkpoint), ("replay", replay_checkpoint))
     with collective_check(world):
         same_images(replay, continuous)
         assert accepted[1][-1] == (dt, 1) and continuous[1][-1] == (2*dt, 2)
@@ -156,7 +163,7 @@ def test_public_evolved_original_stage_saved_and_exact_replay(
                     "diagnostics": dict(image[1][1])}
             components = [("block-"+row.name, row.model) for row in artifact.blocks]
             components += [("program-"+row.layout_id, row.program) for row in artifact.layout_programs]
-            binaries, sources = [], []
+            binaries, sources, program_irs = [], [], []
             for index, (name, component) in enumerate(components):
                 binary = Path(component.so_path)
                 binaries.append({"component": name, "path": str(binary),
@@ -172,7 +179,19 @@ def test_public_evolved_original_stage_saved_and_exact_replay(
                     assert component._generated_cpp is not None
                     source = Path(component.dump_cpp(directory/("program-%d.cpp" % index)))
                     sources.append({"path": str(source), "sha256": hashlib.sha256(bounded_bytes(source)).hexdigest()})
-            receipt = {"fixture_schema": "pops.evolved-stage-native-fixture@1",
+                    ir_path = Path(component.dump_ir(directory/("program-%d.ir.json" % index)))
+                    program_irs.append({"component": name, "path": str(ir_path),
+                        "sha256": hashlib.sha256(bounded_bytes(ir_path)).hexdigest(),
+                        "program_hash": component.program_hash})
+            checkpoints = {phase: {"path": str(path),
+                "sha256": hashlib.sha256(bounded_bytes(path)).hexdigest()} for phase, path in checkpoint_files}
+            assert all(row["sha256"] == checkpoint_hashes[phase] for phase, row in checkpoints.items()), \
+                "native checkpoint was overwritten"
+            checkpoint_paths = {Path(row["path"]).resolve() for row in checkpoints.values()}
+            observation_paths = {Path(row["path"]).resolve() for row in phases.values()}
+            observation_paths.add(initial_path.resolve())
+            assert checkpoint_paths.isdisjoint(observation_paths), "checkpoints and observations must use distinct files"
+            receipt = {"fixture_schema": "pops.evolved-stage-native-fixture@2",
                 "artifact": artifact.artifact_identity.token, "dimension": 2, "rank": world.rank,
                 "size": world.size, "cells": cells, "dt": dt, "evolved_states": width,
                 "unknowns": width+(width == 2), "candidate_diffusion": candidate,
@@ -180,10 +199,9 @@ def test_public_evolved_original_stage_saved_and_exact_replay(
                 "projection": "piecewise_constant_cell", "volume_sum": float(np.sum(volumes)),
                 "native": {"path": str(native.__file__), "sha256": hashlib.sha256(bounded_bytes(native.__file__)).hexdigest()},
                 "platform": artifact.platform_manifest.to_data(), "binaries": binaries, "sources": sources,
+                "program_irs": program_irs,
                 "initial": {"path": str(initial_path), "sha256": hashlib.sha256(bounded_bytes(initial_path)).hexdigest()},
-                "phases": phases, "checkpoints": {name: {"path": str(path),
-                    "sha256": hashlib.sha256(bounded_bytes(path)).hexdigest()} for name, path in
-                    (("accepted", checkpoint), ("continuous", continuous_checkpoint), ("replay", replay_checkpoint))},
+                "phases": phases, "checkpoints": checkpoints,
                 "exact_restart_and_replay": True}
             (directory/"receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True)+"\n")
         for name, value in (("artifact_identity", artifact.artifact_identity.token), ("dimension", 2),
