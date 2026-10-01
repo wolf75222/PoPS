@@ -784,3 +784,205 @@ TEST(CompositeGeneralField, OriginalAmrResidualRefusesNoncanonicalStageFractions
     EXPECT_NO_THROW(prepared->require_authority(authority, lane));
   }
 }
+
+// Mechanism witness for @3. The coefficient is a genuine nonlinear constitutive
+// body; the load below is manufactured with the real discrete composite operator.
+// Its continuum/independent-FV qualification belongs to a separate public receipt.
+auto candidate_diffusion_body(std::array<int, 3> permutation) {
+  constexpr std::array<Real,9> physical{.001,.0002,0,-.0001,.0015,0,.0003,0,0};
+  std::array<Real,9> matrix{};
+  for (int i=0;i<3;++i) for(int j=0;j<3;++j)
+    matrix[i*3+j]=physical[permutation[i]*3+permutation[j]];
+  return [matrix](const auto& q, const auto&, auto& coefficient, int) {
+    for (std::size_t level=0;level<coefficient.size();++level)
+      for(std::size_t patch=0;patch<coefficient[level]->local_size();++patch) {
+        const auto candidate=q[level].fab(patch).view();
+        const auto output=coefficient[level]->fab(patch).view();
+        for_each_cell(coefficient[level]->box(patch),[=] POPS_HD(const Index<1>& cell) {
+          for(int i=0;i<3;++i) for(int j=0;j<3;++j) {
+            const Real u=candidate(cell,j);
+            output(cell,i*3+j)=matrix[i*3+j]*(Real(1)+u*u);
+          }
+        });
+      }
+  };
+}
+
+TEST(CompositeGeneralField, CandidateDiffusionReevaluatesFullFJvpAndRecheck) {
+  auto lane=ExecutionLane::duplicate_world_collectively("candidate-diffusion-full-F");
+  ::testing::Test::RecordProperty("coefficient_evaluation","pops.field.coefficients.per-candidate@1");
+  ::testing::Test::RecordProperty("linear_residual_verification","pops.field.linear.true-correction-residual@1");
+  for(int cells : {8,16}) for(auto permutation : {std::array<int,3>{0,1,2}, std::array<int,3>{2,0,1}}) {
+    SCOPED_TRACE(::testing::Message()<<"cells="<<cells<<":permutation="<<permutation[0]<<permutation[1]<<permutation[2]);
+    auto provider=original_field_provider(lane,cells,permutation);
+    auto target=original_tower(*provider), forcing=original_tower(*provider), zero=original_tower(*provider),
+         seed=original_tower(*provider), error=original_tower(*provider);
+    fill_constant(zero,{0,0,0});
+    for(int level=0;level<2;++level) {
+      const Real dx=Real(1)/Real(cells*(level==0?1:2));
+      for(std::size_t patch=0;patch<target[level].local_size();++patch) {
+        const auto q=target[level].fab(patch).view();
+        for_each_cell(target[level].box(patch),[=] POPS_HD(const Index<1>& cell) {
+          const Real x=(Real(cell[0])+Real(.5))*dx;
+          for(int i=0;i<3;++i) q(cell,i)=Real(.15)+Real(.02)*(permutation[i]+1)*std::cos(Real(2)*std::acos(Real(-1))*x);
+        });
+      }
+    }
+    auto evaluation=provider->make_candidate_evaluation();
+    evaluation->synchronize_original_field_candidate(target);
+    std::vector<MultiFab<1>*> coefficients;
+    for(int level=0;level<2;++level) coefficients.push_back(&evaluation->candidate_coefficient_field(level));
+    auto coefficient_body=candidate_diffusion_body(permutation);
+    coefficient_body(std::as_const(target),std::vector<Solver::hierarchy_type>{},coefficients,0);
+    evaluation->prepare_original_field_operator();
+    evaluation->apply_original_field_operator(target,forcing);
+    auto local=original_local_body(permutation);
+    local(std::as_const(target),std::vector<Solver::hierarchy_type>{zero},forcing,0);
+    for(int level=0;level<2;++level) lincomb(seed[level],Real(.95),target[level],Real(0),target[level]);
+    PreparedResourceCache cache;
+    auto authority=original_authority(provider.get(),cache.begin_attempt(lane));
+    authority.original_equation_identity="witness.original-nonlinear-D-plus-cubic-coupled-reaction@1";
+    const std::array<const Solver::hierarchy_type*,1> inputs{&forcing};
+    auto prepared=OriginalResidual::prepare(provider,authority,inputs,original_controls(),Real(1e-5),lane,
+      AmrFieldRightPreconditioner::kIdentity,AmrFieldCoefficientEvaluation::kPerCandidate);
+    int coefficient_calls=0;
+    auto report=prepared->solve_candidate(authority,&seed,local,
+      [&](const auto& q,const auto& captures,auto& output,int evaluation_id) {
+        ++coefficient_calls;
+        coefficient_body(q,captures,output,evaluation_id);
+      },lane);
+    ASSERT_TRUE(report.solved_value_available())<<report.reason;
+    EXPECT_GT(prepared->derivative_evaluations(),0);
+    EXPECT_EQ(coefficient_calls,prepared->residual_evaluations());
+    const auto& candidate=prepared->candidate(authority,lane);
+    for(int level=0;level<2;++level) {
+      lincomb(error[level],Real(1),candidate[level],Real(-1),target[level]);
+      EXPECT_EQ(norm_inf(provider->solution(level),0),Real(0));
+    }
+    EXPECT_LT(std::sqrt(provider->original_field_dot(error,error)),Real(3e-8));
+    EXPECT_LE(report.residual_norm,original_controls().tolerance*std::max(Real(1),report.reference_residual_norm));
+    auto staged=provider->stage_original_field_candidate_collectively(report,&candidate,
+      original_controls().max_iterations,lane,provider,
+      [&,prepared]{prepared->require_authority(authority,lane);},
+      [&](auto& fields){provider->synchronize_original_field_candidate(fields);});
+    const auto original_points=authority.points;
+    if(lane.rank()==0) authority.points[1].dt+=Real(.01);
+    EXPECT_THROW((void)staged.consume(SolveConsumption::kAccept),std::exception);
+    for(int level=0;level<2;++level) EXPECT_EQ(norm_inf(provider->solution(level),0),Real(0));
+    authority.points=original_points;
+    EXPECT_TRUE(staged.consume(SolveConsumption::kAccept).solved_value_available());
+    for(int level=0;level<2;++level) lincomb(error[level],Real(1),provider->solution(level),Real(-1),target[level]);
+    EXPECT_LT(std::sqrt(provider->original_field_dot(error,error)),Real(3e-8));
+    // A distinct fresh evaluation must reproduce the complete original physical F.
+    coefficient_body(candidate,std::vector<Solver::hierarchy_type>{},coefficients,0);
+    evaluation->prepare_original_field_operator();
+    evaluation->apply_original_field_operator(candidate,error);
+    local(candidate,std::vector<Solver::hierarchy_type>{forcing},error,0);
+    EXPECT_LE(std::sqrt(provider->original_field_dot(error,error)),
+              original_controls().tolerance*std::max(Real(1),report.reference_residual_norm));
+  }
+}
+
+TEST(CompositeGeneralField, CandidateCoefficientLocalFailureVotesAndCannotPublish) {
+  auto lane=ExecutionLane::duplicate_world_collectively("candidate-coefficient-refusals");
+  auto provider=original_field_provider(lane,8,{0,1,2});
+  auto capture=original_tower(*provider);fill_constant(capture,{1,2,3});
+  PreparedResourceCache cache;
+  auto authority=original_authority(provider.get(),cache.begin_attempt(lane));
+  const std::array<const Solver::hierarchy_type*,1> inputs{&capture};
+  EXPECT_THROW(OriginalResidual::prepare(provider,authority,inputs,original_controls(),Real(1e-5),lane,
+    AmrFieldRightPreconditioner::kSpatialBasisJacobi,AmrFieldCoefficientEvaluation::kPerCandidate),std::exception);
+  auto prepared=OriginalResidual::prepare(provider,authority,inputs,original_controls(),Real(1e-5),lane,
+    AmrFieldRightPreconditioner::kIdentity,AmrFieldCoefficientEvaluation::kPerCandidate);
+  auto local=original_local_body({0,1,2});
+  auto coefficient_body=candidate_diffusion_body({0,1,2});
+  auto foreign_lane=ExecutionLane::world();
+  EXPECT_THROW(prepared->require_authority(authority,lane.rank()==0?foreign_lane:lane),std::exception);
+  EXPECT_NO_THROW(prepared->require_authority(authority,lane));
+  auto foreign=authority;
+  if(lane.rank()==0) ++foreign.topology_epoch;
+  EXPECT_THROW(prepared->require_authority(foreign,lane),std::exception);
+  EXPECT_THROW(prepared->solve_candidate(authority,nullptr,local,
+    [&](const auto& q,const auto& captured,auto& output,int evaluation) {
+      coefficient_body(q,captured,output,evaluation);
+      if(lane.rank()==0) output[0]=&provider->assembly_target("pops.general-field.coefficients",0);
+    },lane),std::exception);
+  // A pointer replacement invalidates this private resource; restart the attempt
+  // with a new prepared evaluation, never repair/relabel the foreign storage.
+  authority.attempt.reject();
+  authority=original_authority(provider.get(),cache.begin_attempt(lane));
+  prepared=OriginalResidual::prepare(provider,authority,inputs,original_controls(),Real(1e-5),lane,
+    AmrFieldRightPreconditioner::kIdentity,AmrFieldCoefficientEvaluation::kPerCandidate);
+  for(int phase=0;phase<3;++phase) {
+    int calls=0;
+    EXPECT_THROW(prepared->solve_candidate(authority,nullptr,local,
+      [&](const auto& q,const auto& captured,auto& output,int evaluation) {
+        ++calls;
+        if(lane.rank()==0) {
+          if(phase==0) throw std::runtime_error("injected coefficient allocation failure");
+          if(phase==1) throw std::runtime_error("injected coefficient launch failure");
+        }
+        coefficient_body(q,captured,output,evaluation);
+        if(lane.rank()==0 && phase==2)
+          output[0]->set_val(std::numeric_limits<Real>::quiet_NaN());
+      },lane),std::exception);
+    EXPECT_GT(all_reduce_min(static_cast<long>(calls),lane),0);
+    EXPECT_THROW(prepared->candidate(authority,lane),std::exception);
+    for(int level=0;level<2;++level) EXPECT_EQ(norm_inf(provider->solution(level),0),Real(0));
+    if(phase<2) EXPECT_NO_THROW(prepared->require_authority(authority,lane));
+  }
+  authority.attempt.reject();
+  EXPECT_THROW(prepared->require_authority(authority,lane),std::exception);
+  auto retry=original_authority(provider.get(),cache.begin_attempt(lane));
+  EXPECT_NO_THROW(OriginalResidual::prepare(provider,retry,inputs,original_controls(),Real(1e-5),lane,
+    AmrFieldRightPreconditioner::kIdentity,AmrFieldCoefficientEvaluation::kPerCandidate));
+}
+
+
+TEST(CompositeGeneralField, CandidateCoefficientsRestrictFineValuesBeforeHaloFlux) {
+  auto lane=ExecutionLane::duplicate_world_collectively("candidate-D-real-covered-restriction");
+  auto provider=original_field_provider(lane,8,{0,1,2});
+  auto q=original_tower(*provider);
+  fill_constant(q,{2,2,2});
+  for(std::size_t patch=0;patch<q[1].local_size();++patch) {
+    const auto value=q[1].fab(patch).view();
+    for_each_cell(q[1].box(patch),[=] POPS_HD(const Index<1>& cell) {
+      for(int component=0;component<3;++component) value(cell,component)=cell[0]%2==0?Real(1):Real(3);
+    });
+  }
+  auto evaluation=provider->make_candidate_evaluation();
+  evaluation->synchronize_original_field_candidate(q);
+  for(int level=0;level<2;++level) {
+    auto& d=evaluation->candidate_coefficient_field(level);
+    for(std::size_t patch=0;patch<d.local_size();++patch) {
+      const auto candidate=std::as_const(q[level]).fab(patch).view();
+      const auto value=d.fab(patch).view();
+      for_each_cell(d.box(patch),[=] POPS_HD(const Index<1>& cell) {
+        for(int component=0;component<9;++component) value(cell,component)=Real(0);
+        for(int component=0;component<3;++component) {
+          const Real u=candidate(cell,component);value(cell,component*3+component)=Real(1)+u*u;
+        }
+      });
+    }
+  }
+  long covered=0;
+  for(std::size_t patch=0;patch<q[0].local_size();++patch) {
+    const auto active=provider->original_field_active_cells(0).fab(patch).view();
+    const auto value=std::as_const(evaluation->candidate_coefficient_field(0)).fab(patch).view();
+    covered+=static_cast<long>(for_each_cell_reduce_sum(q[0].box(patch),[=] POPS_HD(const Index<1>& cell) {
+      return active(cell,0)<Real(.5) && value(cell,0)==Real(5)?Real(1):Real(0);
+    }));
+  }
+  EXPECT_GT(all_reduce_sum(covered,lane),0);
+  evaluation->prepare_original_field_operator();
+  Real incorrect=0;
+  for(std::size_t patch=0;patch<q[0].local_size();++patch) {
+    const auto active=provider->original_field_active_cells(0).fab(patch).view();
+    const auto value=std::as_const(evaluation->candidate_coefficient_field(0)).fab(patch).view();
+    incorrect+=for_each_cell_reduce_sum(q[0].box(patch),[=] POPS_HD(const Index<1>& cell) {
+      return active(cell,0)<Real(.5) && value(cell,0)!=Real(6)?Real(1):Real(0);
+    });
+  }
+  EXPECT_EQ(all_reduce_sum(incorrect,lane),Real(0));
+  EXPECT_EQ(evaluation->original_field_preparation_generation(),std::uint64_t{1});
+}
