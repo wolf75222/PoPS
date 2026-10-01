@@ -80,7 +80,10 @@ def interaction_contract(value):
         raise ValueError("invalid spatial interaction SSA contract")
     attrs = value.attrs
     required = {"contract", "kernel", "measure", "quadrature", "realization", "max_workspace_bytes", "components", "ncomp", "source_scope"}
-    if set(attrs) != required or attrs["contract"] != "pops.spatial-interaction@1":
+    history_v2 = attrs.get("contract") == "pops.spatial-interaction@2"
+    if history_v2:
+        required.add("history_source")
+    if set(attrs) != required or attrs["contract"] not in ("pops.spatial-interaction@1", "pops.spatial-interaction@2"):
         raise ValueError("invalid spatial interaction contract/version")
     kernel = attrs["kernel"]
     if set(kernel) != {"contract", "dimension", "tree", "units"} or kernel["contract"] != "pops.spatial-interaction-kernel@1":
@@ -102,6 +105,10 @@ def interaction_contract(value):
     if len(raw) != 16 or any(c not in "0123456789abcdef" for c in raw) or int(raw, 16) == 0:
         raise ValueError("invalid spatial interaction budget")
     source = value.inputs[0]
+    if history_v2:
+        from .spatial_history_source import history_source_contract, exact_image
+        if source.op != "history" or exact_image(attrs["history_source"]) != exact_image(history_source_contract(source)):
+            raise ValueError("nonlocal history seed closure changed its authority")
     _source_point(source)
     canonical = source.prog._canonical_value(source)
     _source_point(canonical)
@@ -153,9 +160,17 @@ class _ProgramSpatialInteraction:
             raise ValueError("spatial interaction component selection is invalid")
         _spaces(state, output_space, indices)
         _units(state, output_space, indices, kernel.units, measure.coordinate_units, kernel.dimension)
-        return self._new("scalar_field", "spatial_interaction", (state,), {
-            "contract": "pops.spatial-interaction@1", "kernel": kernel.to_data(),
+        history_source = None
+        if state.op == "history":
+            from .spatial_history_source import history_source_contract
+            history_source = history_source_contract(state)
+        attrs = {
+            "contract": "pops.spatial-interaction@2" if history_source else "pops.spatial-interaction@1", "kernel": kernel.to_data(),
             "measure": measure.to_data(), "quadrature": "pops.cell-midpoint@1",
             "realization": "pops.direct-spatial-interaction@1", "ncomp": len(indices),
             "components": indices, "source_scope": source_scope, "max_workspace_bytes": {"uint64_hex": "%016x" % realization.max_workspace_bytes},
-        }, name, state.block, point=state.point, space=output_space)
+        }
+        if history_source is not None:
+            attrs["history_source"] = history_source
+        return self._new("scalar_field", "spatial_interaction", (state,), attrs,
+                         name, state.block, point=state.point, space=output_space)

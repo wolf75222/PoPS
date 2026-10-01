@@ -346,6 +346,7 @@ sdk-support pops/runtime/program/prepared_resource_cache.hpp
 sdk-support pops/runtime/program/prepared_resource_lifetime.hpp
 sdk-support pops/runtime/program/prepared_integral_capture.hpp
 sdk-support pops/runtime/program/spatial_direct_interaction.hpp
+sdk-support pops/runtime/program/spatial_interaction_history_source.hpp
 sdk-support pops/runtime/program/program_cadence_continuation.inc
 sdk-support pops/runtime/program/prepared_condensed_sampling.hpp
 sdk-support pops/runtime/program/prepared_scalar_boundary_session.hpp

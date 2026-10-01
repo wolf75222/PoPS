@@ -21,6 +21,7 @@
 #include <pops/runtime/program/prepared_integral_capture.hpp>
 #include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/program/spatial_interaction_history_source.hpp>
 #include <pops/runtime/program/source_mask.hpp>
 #include <pops/runtime/system.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
@@ -969,6 +970,44 @@ class ProgramContext {
   /// enforce both physical activity and finest-owner coverage.
   const field_type* pointwise_exchange_coverage_mask(int, const field_type&) const noexcept {
     return nullptr;
+  }
+
+  /// IR18: retain lag >= 1 independently of a pending write to slot zero.
+  template <class Kernel>
+  field_type spatial_interaction_history(int program_block, const field_type& source,
+                                std::span<const int> components, std::uint64_t max_bytes,
+                                std::string_view identity, std::string_view source_clock, bool accepted_composite,
+                                const std::string& name, int lag, std::string_view seed_state,
+                                std::string_view seed_space, std::string_view interpolation, Kernel kernel) const {
+    const auto& lane = prepared_execution_lane();
+    const int owner = resolve_pointwise_program_block_(program_block, lane);
+    const auto& history = runtime_state().hist_;
+    const field_type* selected = nullptr;
+    std::string snapshot;
+    auto proof = [&] {
+      ExactContractBuilder exact;
+      const bool cold = interaction_history_selected(history, name, lag, owner, seed_state,
+          seed_space, source_clock, interpolation, exact);
+      if (accepted_composite || &source != &history.histories.at(name).at(lag))
+        throw std::invalid_argument("interaction History@2 has no exact issued keeper carrier");
+      selected = cold ? &state(program_block) : &source;
+      if (cold && history.initialized.at(name)) interaction_history_cold_equal(source, *selected);
+      return std::move(exact).release();
+    };
+    interaction_phase(lane, [&] { snapshot = proof(); });
+    std::string authority;
+    interaction_phase(lane, [&] {
+      ExactContractBuilder exact;
+      exact.text(identity).text("pops.spatial-interaction-history-source@1").text(snapshot);
+      authority = std::move(exact).release();
+    });
+    auto result = spatial_interaction(program_block, *selected, components, max_bytes,
+        authority, source_clock, false, kernel);
+    interaction_phase(lane, [&] {
+      if (snapshot != proof())
+        throw std::logic_error("interaction selected history lifecycle changed during snapshot");
+    });
+    return result;
   }
 
   template <class Kernel>

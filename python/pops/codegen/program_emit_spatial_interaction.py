@@ -27,10 +27,19 @@ def emit_spatial_interaction(value, variables, lines, *, block_indices, target):
     lines.append("const std::array<int, %d> spatial_components_%d{%s};" % (
         len(components), key, ", ".join(map(str, components))))
     method = "spatial_interaction_owned" if target == "amr_system" else "spatial_interaction"
+    history_arguments = ""
+    if value.attrs["contract"] == "pops.spatial-interaction@2":
+        from pops.codegen.program_history_identity import history_space_identity
+        seed = value.attrs["history_source"]
+        method = "spatial_interaction_history_owned" if target == "amr_system" else "spatial_interaction_history"
+        interpolation = json.dumps(_json_ready(source.attrs["history_contract"])["interpolation"],
+                                   sort_keys=True, separators=(",", ":"))
+        history_arguments = " %s, %d, %s, %s, %s," % (
+            json.dumps(seed["history"]), seed["lag"], json.dumps(seed["state"].qualified_id),
+            json.dumps(history_space_identity(value.prog, seed["history"])), json.dumps(interpolation))
     prefix = "auto&" if target == "amr_system" else "auto"
     argument = "%d, " % key if target == "amr_system" else ""
-    lines.append("%s %s = ctx.%s(%s%d, %s, spatial_components_%d, %dULL, %s, %s, %s," % (
+    lines.append("%s %s = ctx.%s(%s%d, %s, spatial_components_%d, %dULL, %s, %s, %s,%s" % (
         prefix, name, method, argument, block_indices[value.block], variables[source.id], key, budget,
-        json.dumps(identity), json.dumps(source.clock.qualified_id), "true" if value.attrs["source_scope"] == "accepted" else "false"))
+        json.dumps(identity), json.dumps(source.clock.qualified_id), "true" if value.attrs["source_scope"] == "accepted" else "false", history_arguments))
     lines.append("  [=] POPS_HD(const pops::RealVector<pops::kNativeDimension>& x, const pops::RealVector<pops::kNativeDimension>& y) -> pops::Real { return %s; });" % kernel)
-

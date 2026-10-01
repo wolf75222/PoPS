@@ -292,7 +292,7 @@ class _ProgramSerialization(_ProgramBase):
                 continue
             seen.add(id(node))
             if node.op == "spatial_interaction":
-                result["version"] = max(result["version"], 17)
+                result["version"] = max(result["version"], 18 if node.attrs.get("contract") == "pops.spatial-interaction@2" else 17)
             if node.op in ("solve_spatial_field", "integral_candidate"):
                 result["version"] = max(result["version"],
                     13 if node.op == "solve_spatial_field" and node.attrs.get("right_preconditioner") == "pops.amr.full-residual-basis-lu@1" else

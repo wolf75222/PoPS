@@ -33,6 +33,7 @@
 #include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/program/spatial_interaction_history_source.hpp>
 #include <pops/runtime/program/program_owner_field_identity.hpp>
 #include <pops/runtime/program/source_mask.hpp>
 #include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
