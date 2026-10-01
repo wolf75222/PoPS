@@ -23,3 +23,11 @@ FunctionType checkpoint reuse has a distinct globals dictionary with only accept
 `env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/python -m pytest -q --noconftest -p no:cacheprovider tests/review/test_sol61_evolved_stage_amr_saved_reception_v3.py tests/review/test_sol61_amr_owner_candidate_v3.py`
 
 Principles1.1/1.3/1.8 → authored interpolation semantics are authority → reader accepted_contract/CPP checkpoint_transfer_routes → three independently accepted corruptions above → pure source probe → BLOCKED for scientific reception until fixed. Principles1.6 → real native files plus external ROOT seals still required; SOURCE_ONLY admission is not runtime proof. Principle1.7 → no cost claim from this review.
+
+## Corrected freeze ccc77c9 — P1 CLOSED (SOURCE_ONLY)
+
+Independent rereview: expected subjects come from retained ProgramIR commits, read under external inventory hashes and subsequently checked by program_image against Program hash/generated CPP/body expectations. They are not learned from transfer rows. Expected subjects×four operations is complete, keys and per-operation descriptors/order/halo/rank/ratio are exact, provider qualified identity is independently reconstructed from canonical CBOR SHA256 and Handle URI semantics. Source authoring inspected at transfer.py474–524 and model/handles.py111. No physical field names enter this transfer registry.
+
+Replayed the exact reported five source suites: 176 PASS1.46s. Added separate pure independent CBOR encoder/hash checks for all four providers and the original three attacks plus missing whole subject, injected subject and operation-key mismatch:10 PASS0.13s. These tests produce no native/scientific data.
+
+Historical @1/@2 reader bytes compared against66e1885 and unchanged. Private checkpoint globals continue to replace only accepted_contract while retaining the historical code object; old approvals/schemas do not upcast. No new correctness blocker found in the bounded corrected gate. Full resolved-transfer graph hash is syntax/domain authenticated plus immutable ROOT inventory/seals, not independently reconstructed; this boundary is explicit and no stronger provenance claim is made. ROOT still owns real native reception/ABI attestation/external seals.
