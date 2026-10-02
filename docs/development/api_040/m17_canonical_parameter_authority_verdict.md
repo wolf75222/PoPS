@@ -1,0 +1,11 @@
+# Canonical parameter authority: bounded Source verdict
+
+The two homonymous clone probes are not equivalent authority claims.
+
+`model/ownership.py:3-6,231-235` explicitly distinguishes opaque live authoring authority from serializable canonical content. `model/registry.py:114-148` rejects a foreign live capability, even for identical definitions, but deliberately authenticates a canonical handle by its complete typed identity against the registry. `problem/_block_registry.py:290-337,357-397` reauthenticates declaration and block membership. `numerics/normalized_polynomial_path.py:87-94` routes the expression leaves through that resolver. `model/handles.py:163-227,259-269` documents canonical roundtrip authentication and canonical projection after authentication.
+
+Consequently, a live foreign authored parameter is forbidden at the registry boundary. The new test exercises the actual structural expression resolver and registry, and confirms rejection. A resolved clone with the same complete case/block/model/declaration identity is deliberately a detached content value; the roundtrip test confirms registry authentication. Its process-of-origin is no longer part of the canonical contract. Different content remains rejected by existing tests.
+
+`_qualified_param_identity` is an internal emission helper receiving an already-authenticated resolved program; its canonical comparison is not a substitute for authoring authentication. Galileo's isolated helper probe can bypass that precondition, but establishes no public pipeline authority violation. Calling `_resolved()` itself is explicitly not authentication. No production identity restriction or schema version change is justified by these probes. In particular, object identity would break the declared detached-value contract.
+
+Validation: new boundary tests plus unchanged parameter-phase tests, Source only, using `env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1` and pytest `--noconftest -p no:cacheprovider -o pythonpath=python`. No Native, restart execution, MPI, or SDK claim. The roundtrip test covers typed identity reconstruction, not an executed restart. This verdict does not authorize bypassing a public registry or manually forging a ResolvedProgram.
