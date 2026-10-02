@@ -785,6 +785,11 @@ class AmrSystem {
   void set_field_newton_plan(const std::string& provider_slot, double tolerance, int max_iterations,
                              double linear_tolerance, int linear_max_iterations, int restart,
                              double armijo, double minimum_step);
+  void set_field_newton_convergence_plan(const std::string& provider_slot, double tolerance,
+                                         int max_iterations, double linear_tolerance,
+                                         int linear_max_iterations, int restart, double armijo,
+                                         double minimum_step, int convergence_kind, double relative,
+                                         double absolute);
 
   /// Install one immutable analytic embedded-boundary definition.  The expression is sampled
   /// independently on every live AMR level whenever the hierarchy is materialized or regridded.

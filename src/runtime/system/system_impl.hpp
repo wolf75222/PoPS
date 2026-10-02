@@ -560,6 +560,10 @@ struct System<Dim>::Impl {
           .scalar(plan.newton->restart)
           .scalar(plan.newton->armijo)
           .scalar(plan.newton->minimum_step);
+    if (plan.newton && plan.newton->convergence.kind != FieldNewtonConvergenceKind::kLegacy)
+      contract.text("pops.newton.original-residual-convergence@1")
+          .scalar(static_cast<int>(plan.newton->convergence.kind))
+          .scalar(plan.newton->convergence.relative).scalar(plan.newton->convergence.absolute);
     return std::move(contract).release();
   }
 

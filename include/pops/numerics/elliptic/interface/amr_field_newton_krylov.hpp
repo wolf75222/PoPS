@@ -155,7 +155,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       return report;
     }
     const Real nonlinear_stop =
-        options_.tolerance * std::max(Real(1), report.reference_residual_norm);
+        field_newton_stop_tolerance(options_, report.reference_residual_norm);
     if (initial_norm <= nonlinear_stop) {
       report.rel_residual = Real(0);
       copy_to_external_(iterate_, destination);

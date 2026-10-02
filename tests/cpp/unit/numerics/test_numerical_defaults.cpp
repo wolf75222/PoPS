@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
 
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
@@ -51,4 +52,20 @@ TEST(test_numerical_defaults, mg_krylov_fac_amr_named_constants) {
       << "AMR disabled refinement threshold is named";
   EXPECT_EQ(kWenoEpsilon, Real(1e-40)) << "WENO epsilon is named";
   EXPECT_EQ(kEbCutFractionFloor, Real(1e-3)) << "EB cut fraction floor is named";
+}
+
+TEST(test_numerical_defaults, original_newton_typed_criterion_and_legacy_are_distinct) {
+  FieldNewtonOptions o;
+  o.tolerance = Real(1e-10);
+  EXPECT_EQ(field_newton_stop_tolerance(o, Real(.25)), Real(1e-10));
+  o.convergence = {FieldNewtonConvergenceKind::kRelative, Real(1e-10), Real(0)};
+  EXPECT_EQ(field_newton_stop_tolerance(o, Real(.25)), Real(2.5e-11));
+  EXPECT_EQ(field_newton_stop_tolerance(o, Real(0)), Real(0));
+  o.convergence.absolute = Real(1e-11);
+  EXPECT_EQ(field_newton_stop_tolerance(o, Real(0)), Real(1e-11));
+  o.convergence = {FieldNewtonConvergenceKind::kAbsolute, Real(0), Real(1e-11)};
+  EXPECT_EQ(field_newton_stop_tolerance(o, Real(4)), Real(1e-11));
+  EXPECT_THROW(field_newton_stop_tolerance(o, Real(-1)), std::invalid_argument);
+  o.convergence.kind = static_cast<FieldNewtonConvergenceKind>(99);
+  EXPECT_THROW(validate_field_newton_options(o), std::invalid_argument);
 }

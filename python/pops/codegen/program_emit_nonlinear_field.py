@@ -47,10 +47,14 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
     unknowns = tuple(Handle.from_canonical_identity(_json_ready(item))
                      for item in value.attrs["source_contract"]["unknown_components"])
     options = spatial_newton_options(value.attrs["newton_controls"])
+    convergence = value.attrs.get("convergence")
     controls = "pops::FieldNewtonOptions{" + ", ".join(".%s = %s" %
         (key, str(options[key]) if type(options[key]) is int else scalar_cpp(options[key]))
         for key in ("tolerance", "max_iterations", "linear_tolerance", "linear_max_iterations",
                     "restart", "armijo", "minimum_step")) + "}"
+    if convergence is not None:
+        from pops.solvers.nonlinear.convergence import convergence_cpp
+        controls = controls[:-1] + ", .convergence = " + convergence_cpp(convergence, scalar_cpp) + "}"
     workspace, trial, status, output, boundary, coefficient_boundary = (stem + suffix for suffix in
         ("_workspace", "_trial", "_status", "_output", "_boundary", "_coefficient_boundary"))
     prelude += [
@@ -198,6 +202,10 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
                                "  try { Kokkos::fence(); } catch (...) { if (!body_error) body_error = std::current_exception(); }",
                                '  pops::collectively_rethrow_exception(body_error, *%s_lane, "candidate original local body");' % stem]
         lines[offset + 4] = "  if (pops::all_reduce_max(body_invalid, *%s_lane) > 0)" % stem
+    if convergence is not None:
+        recheck_stop = "pops::field_newton_stop_tolerance(%s, %s_report.reference_residual_norm)" % (controls, stem)
+    else:
+        recheck_stop = "%s * std::max(pops::Real(1), %s_report.reference_residual_norm)" % (scalar_cpp(options["tolerance"]), stem)
     report, outcome = stem + "_report", stem + "_outcome"
     action_kind, _ = _consumed_solve_action(program, value)
     action = "pops::SolveAction::kRejectAttempt" if action_kind == "reject_attempt" else "pops::SolveAction::kFailRun"
@@ -207,8 +215,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
               "    ++%s_original_rechecks;" % stem,
               "    %s(%s->candidate(), *%s, 0);" % (callback, workspace, output),
               "    const pops::Real original_norm = std::sqrt(pops::all_reduce_sum(pops::dot_all_local(*%s, *%s), ctx.prepared_execution_lane()));" % (output, output),
-              "    if (!std::isfinite(original_norm) || original_norm > %s * std::max(pops::Real(1), %s.reference_residual_norm))"
-              % (scalar_cpp(options["tolerance"]), report),
+              "    if (!std::isfinite(original_norm) || original_norm > %s)" % recheck_stop,
               '      %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, %s, "original_field_residual_recheck_failed");' % (report, action),
               "    %s.residual_norm = original_norm;" % report,
               "    %s.rel_residual = original_norm / (%s.reference_residual_norm > pops::Real(0) ? %s.reference_residual_norm : pops::Real(1));" % (report, report, report), "  }",

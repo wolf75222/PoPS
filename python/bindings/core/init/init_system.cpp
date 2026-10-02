@@ -1102,6 +1102,10 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
            py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
            py::arg("minimum_step"))
+      .def("set_field_newton_convergence_plan", &System::set_field_newton_convergence_plan, py::arg("provider_slot"),
+           py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
+           py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
+           py::arg("minimum_step"), py::arg("convergence_kind"), py::arg("relative"), py::arg("absolute"))
       // Runtime-private lowering seam for every public analytic LevelSet.  The native System owns,
       // validates and materializes the scalar postfix program; no Python callback reaches a cell
       // kernel.  Active is the strict convention phi < 0.

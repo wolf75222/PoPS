@@ -349,6 +349,8 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
         if prepared.right_preconditioner == "pops.amr.original-spatial-jacobi.basis-response@1":
             raise SolveRequestError("unsupported_realization", "SpatialBasisJacobi@1 requires a frozen linear spatial operator; PerCandidate@1 needs a separately declared Jacobian preconditioner")
     prepared.__post_init__()
+    if prepared.convergence is not None:
+        attrs["convergence"] = prepared.convergence.to_data()
     if prepared.right_preconditioner is not None:
         attrs["right_preconditioner"] = prepared.right_preconditioner
     if prepared.max_dense_bytes is not None:
@@ -490,7 +492,7 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
         budget = validate_dense_resource_contract(token.attrs.get("right_preconditioner_resources"))
     elif "right_preconditioner_resources" in token.attrs:
         raise SolveRequestError("invalid_resource_budget", "dense budget belongs only to FullResidualBasisLU@1")
-    if token.attrs["solver_identity"] != spatial_solver_identity(controls, token.attrs.get("right_preconditioner"), budget).token:
+    if token.attrs["solver_identity"] != spatial_solver_identity(controls, token.attrs.get("right_preconditioner"), budget, token.attrs.get("convergence")).token:
         raise SolveRequestError("solver_identity_drift", "field Newton controls changed")
 
 

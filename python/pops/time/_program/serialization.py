@@ -294,6 +294,8 @@ class _ProgramSerialization(_ProgramBase):
             if id(node) in seen:
                 continue
             seen.add(id(node))
+            if node.op == "solve_spatial_field" and "convergence" in node.attrs:
+                result["version"] = max(result["version"], 22)
             if node.op == "spatial_interaction":
                 result["version"] = max(result["version"], 19 if node.attrs.get("contract") == "pops.spatial-interaction@3" else 18 if node.attrs.get("contract") == "pops.spatial-interaction@2" else 17)
             if node.op in ("solve_spatial_field", "integral_candidate"):

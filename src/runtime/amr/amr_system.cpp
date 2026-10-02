@@ -5280,6 +5280,10 @@ struct AmrSystem<Dim>::Impl {
           .scalar(plan.newton->restart)
           .scalar(plan.newton->armijo)
           .scalar(plan.newton->minimum_step);
+    if (plan.newton && plan.newton->convergence.kind != FieldNewtonConvergenceKind::kLegacy)
+      contract.text("pops.newton.original-residual-convergence@1")
+          .scalar(static_cast<int>(plan.newton->convergence.kind))
+          .scalar(plan.newton->convergence.relative).scalar(plan.newton->convergence.absolute);
     return std::move(contract).release();
   }
 
@@ -16435,6 +16439,29 @@ void AmrSystem<Dim>::set_field_newton_plan(const std::string& provider_slot, dou
 }
 
 template <int Dim>
+void AmrSystem<Dim>::set_field_newton_convergence_plan(
+    const std::string& provider_slot, double tolerance, int max_iterations, double linear_tolerance,
+    int linear_max_iterations, int restart, double armijo, double minimum_step,
+    int convergence_kind, double relative, double absolute) {
+  require_amr_assembling(p_->lifecycle, "set_field_newton_convergence_plan");
+  FieldNewtonOptions options{
+      static_cast<Real>(tolerance),   max_iterations, static_cast<Real>(linear_tolerance),
+      linear_max_iterations,          restart,        static_cast<Real>(armijo),
+      static_cast<Real>(minimum_step)};
+  options.convergence = {static_cast<FieldNewtonConvergenceKind>(convergence_kind),
+                         static_cast<Real>(relative), static_cast<Real>(absolute)};
+  if (options.convergence.kind == FieldNewtonConvergenceKind::kLegacy)
+    throw std::invalid_argument("explicit convergence install requires a typed policy");
+  validate_field_newton_options(options);
+  auto found = p_->field_plans.find(provider_slot);
+  if (found == p_->field_plans.end())
+    throw std::out_of_range("AMR field Newton plan names an unknown provider slot");
+  if (found->second.prepared_solver)
+    throw std::logic_error("AMR field Newton plan cannot change after solver materialization");
+  found->second.newton = options;
+}
+
+template <int Dim>
 void AmrSystem<Dim>::set_field_nullspace(const std::string& provider_slot,
                                          const std::string& nullspace_provider_identity,
                                          const PreparedProviderOptions& options) {
@@ -23508,6 +23535,8 @@ template void AmrSystem<kNativeDimension>::set_field_boundary_parameters(
     const std::string&, const std::vector<double>&);
 template void AmrSystem<kNativeDimension>::set_field_newton_plan(const std::string&, double, int,
                                                                  double, int, int, double, double);
+template void AmrSystem<kNativeDimension>::set_field_newton_convergence_plan(
+    const std::string&, double, int, double, int, int, double, double, int, double, double);
 template void AmrSystem<kNativeDimension>::set_field_nullspace(const std::string&,
                                                                const std::string&,
                                                                const PreparedProviderOptions&);

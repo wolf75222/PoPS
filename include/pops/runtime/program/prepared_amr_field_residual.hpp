@@ -170,6 +170,10 @@ class PreparedAmrFieldResidual final {
           .scalar(options_.minimum_step)
           .sequence(current.capture_identities,
                     [](ExactContractBuilder& out, const std::string& value) { out.text(value); });
+      if (options_.convergence.kind != FieldNewtonConvergenceKind::kLegacy)
+        exact.text("pops.newton.original-residual-convergence@1")
+            .scalar(static_cast<int>(options_.convergence.kind))
+            .scalar(options_.convergence.relative).scalar(options_.convergence.absolute);
       if (candidate_evaluation_)
         exact.text(PreparedHierarchyCandidateFieldOperator<Dim>::identity)
             .text("pops.field.linear.true-correction-residual@1")
@@ -436,7 +440,7 @@ class PreparedAmrFieldResidual final {
       const Real squared = op_->original_field_dot(recheck_, recheck_);
       const Real norm = std::sqrt(squared);
       if (!std::isfinite(norm) ||
-          norm > options_.tolerance * std::max(Real(1), report.reference_residual_norm))
+          norm > field_newton_stop_tolerance(options_, report.reference_residual_norm))
         report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                            "original_amr_field_residual_recheck_failed");
       report.residual_norm = norm;

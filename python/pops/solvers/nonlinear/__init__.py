@@ -51,10 +51,15 @@ class PreparedFieldNonlinear:
     options: Any
     capabilities: frozenset[str]
     identity: Identity
+    convergence: Any = None
 
     def __post_init__(self) -> None:
         if self.target not in ("system", "amr_system"):
             raise ValueError("PreparedFieldNonlinear target is unsupported")
+        if self.convergence is not None:
+            from .convergence import validate_convergence
+            validate_convergence(self.convergence)
+            object.__setattr__(self, "convergence", MappingProxyType({key: dict(value) if isinstance(value, Mapping) else value for key, value in self.convergence.items()}))
         options = MappingProxyType(dict(self.options))
         required = {
             "tolerance",
@@ -77,23 +82,33 @@ class PreparedFieldNonlinear:
             raise ValueError("PreparedFieldNonlinear identity is not canonical")
 
     def _payload(self) -> dict[str, Any]:
-        return {
-            "schema_version": 1,
+        data = {
+            "schema_version": 1 if self.convergence is None else 2,
             "target": self.target,
             "options": dict(self.options),
             "capabilities": sorted(self.capabilities),
         }
+        if self.convergence is not None:
+            data["convergence"] = {key: dict(value) if isinstance(value, Mapping) else value for key, value in self.convergence.items()}
+        return data
 
     def to_data(self) -> dict[str, Any]:
         return {**self._payload(), "identity": self.identity.token}
 
     def install(self, runtime: Any, provider_slot: str) -> None:
-        setter = getattr(runtime, "set_field_newton_plan", None)
+        self.__post_init__()
+        name = "set_field_newton_plan" if self.convergence is None else "set_field_newton_convergence_plan"
+        setter = getattr(runtime, name, None)
         if not callable(setter):
             raise TypeError(
                 "prepared nonlinear provider requires the field nonlinear install protocol"
             )
         o = self.options
+        extra = ()
+        if self.convergence is not None:
+            from .convergence import validate_convergence
+            relative, absolute = validate_convergence(self.convergence)
+            extra = (1 if self.convergence["kind"] == "relative" else 2, relative, absolute)
         setter(
             provider_slot,
             _runtime_number(o["tolerance"]),
@@ -103,6 +118,7 @@ class PreparedFieldNonlinear:
             o["restart"],
             _runtime_number(o["armijo"]),
             _runtime_number(o["minimum_step"]),
+            *extra,
         )
 
 
@@ -240,7 +256,9 @@ class Newton(Descriptor):
             raise ValueError("max_dense_bytes belongs only to FullResidualBasisLU@1")
         self._max_dense_bytes = max_dense_bytes
         self._right_preconditioner = right_preconditioner
-        self.tolerance = _positive_float(tolerance, "tolerance")
+        from .convergence import lower_tolerance
+        self._convergence = lower_tolerance(tolerance)
+        self.tolerance = 1.0e-8 if self._convergence is not None else _positive_float(tolerance, "tolerance")
         self.max_iterations = _positive_int(max_iterations, "max_iterations")
         self.linear_tolerance = _positive_float(linear_tolerance, "linear_tolerance")
         self.linear_max_iterations = _positive_int(linear_max_iterations, "linear_max_iterations")
@@ -270,6 +288,10 @@ class Newton(Descriptor):
             data["max_dense_bytes"] = _dense_bytes_identity_data(self.max_dense_bytes)
         return data
 
+    @property
+    def convergence(self):
+        return None if self._convergence is None else {key: dict(value) if isinstance(value, Mapping) else value for key, value in self._convergence.items()}
+
     def numerical_options(self) -> dict[str, Any]:
         """The seven unchanged Newton/GMRES numerical controls."""
         return {key: value for key, value in self.options().items()
@@ -295,6 +317,8 @@ class Newton(Descriptor):
 
     def to_data(self) -> dict[str, Any]:
         data = {"scheme": self.scheme, **self.options()}
+        if self.convergence is not None:
+            data["convergence"] = self.convergence
         if self.right_preconditioner is not None:
             data["right_preconditioner"] = self.right_preconditioner
         return data
@@ -342,13 +366,15 @@ class Newton(Descriptor):
             }
         )
         payload = {
-            "schema_version": 1,
+            "schema_version": 1 if self.convergence is None else 2,
             "target": target,
             "options": options,
             "capabilities": sorted(capabilities),
         }
+        if self.convergence is not None:
+            payload["convergence"] = self.convergence
         return PreparedFieldNonlinear(
-            target, options, capabilities, make_identity("prepared-field-nonlinear", payload)
+            target, options, capabilities, make_identity("prepared-field-nonlinear", payload), self.convergence
         )
 
 

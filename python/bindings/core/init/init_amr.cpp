@@ -759,6 +759,10 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
            py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
            py::arg("minimum_step"))
+      .def("set_field_newton_convergence_plan", &AmrSystem::set_field_newton_convergence_plan, py::arg("provider_slot"),
+           py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
+           py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
+           py::arg("minimum_step"), py::arg("convergence_kind"), py::arg("relative"), py::arg("absolute"))
       // Runtime-private lowering seam for the normalized analytic LevelSet.  The exact-ranked AMR
       // hierarchy owns compilation, collective validation, and per-level rematerialization; no
       // Python callback reaches a cell kernel.

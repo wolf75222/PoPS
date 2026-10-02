@@ -47,6 +47,7 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
     width, stem = value.attrs["ncomp"], "amr_original_field_%d" % value.id
     captures = value.inputs[2:2 + value.attrs["capture_count"]]
     options = spatial_newton_options(value.attrs["newton_controls"])
+    convergence = value.attrs.get("convergence")
     policy_argument = (", pops::runtime::program::AmrFieldRightPreconditioner::kSpatialBasisJacobi"
                        if value.attrs.get("right_preconditioner") is not None else "")
     per_candidate = value.attrs.get("coefficient_evaluation") is not None
@@ -63,6 +64,9 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
         (key, str(options[key]) if type(options[key]) is int else scalar_cpp(options[key]))
         for key in ("tolerance", "max_iterations", "linear_tolerance", "linear_max_iterations",
                     "restart", "armijo", "minimum_step")) + "}"
+    if convergence is not None:
+        from pops.solvers.nonlinear.convergence import convergence_cpp
+        controls = controls[:-1] + ", .convergence = " + convergence_cpp(convergence, scalar_cpp) + "}"
     equation = _json_ready(value.attrs["solve_request"])["equation_identity"]
     graph = program._ir_hash()
     identities = [make_identity("original-field-capture", _equation_value(program, source)).token for source in captures]

@@ -1,0 +1,17 @@
+{
+  "schema": "sol61.newton-typed-real-cpp-host@1",
+  "native_simulation": false,
+  "installed_artifacts_written": false,
+  "backend": "existing Kokkos CPU OpenMP test-main; actual repository gtest source",
+  "tests": 5,
+  "failures": 0,
+  "skips": 0,
+  "source_base": "5486e2d9",
+  "pins": {
+    "include/pops/numerics/elliptic/interface/field_nonlinear.hpp": "397b9bf485778a80a0c9effa7982500fc79ed6fb0aa9fdd3668822e789a9016a",
+    "tests/cpp/unit/numerics/test_numerical_defaults.cpp": "9a8eb5c05a4e2f2e584c7c5e69d4459695fe196c471f2a7287d5fa227720b2e3",
+    "build-newton-typed-host/test_numerical_defaults": "f438a5633c6de5c660979ef124496efc8bbb2054ebc28f5f3240d3743720c01b",
+    "build-newton-typed-host/results.xml": "b46015a1aeb97ff114cb100dc97bc66e9b149fb8527badcecefdfbd2624932d7",
+    "build-newton-typed-host/commands.txt": "4547e8739e89c8ac8eff42310a673a32ce3bac954d225e94fb18cf6e2a27aec5"
+  }
+}

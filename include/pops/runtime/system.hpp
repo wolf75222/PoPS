@@ -628,6 +628,11 @@ class System {
   void set_field_newton_plan(const std::string& provider_slot, double tolerance, int max_iterations,
                              double linear_tolerance, int linear_max_iterations, int restart,
                              double armijo, double minimum_step);
+  void set_field_newton_convergence_plan(const std::string& provider_slot, double tolerance,
+                                         int max_iterations, double linear_tolerance,
+                                         int linear_max_iterations, int restart, double armijo,
+                                         double minimum_step, int convergence_kind, double relative,
+                                         double absolute);
 
   /// Select one prepared nullspace provider. The schema and scalar values remain opaque to System;
   /// the selected provider validates them after the concrete operator/layout facts are available.
