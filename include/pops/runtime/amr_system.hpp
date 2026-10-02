@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/runtime/program/accepted_exchange.hpp>
+#include <pops/runtime/accepted_halo_test_failure.hpp>
 #include <pops/runtime/program/amr_history_flux_snapshot.hpp>
 #include <limits>
 
@@ -444,6 +445,9 @@ class AmrSystem {
       std::vector<std::vector<MultiFab<Dim>>>& candidates,
       const std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>>& points);
   POPS_EXPORT std::vector<std::vector<std::string>> checkpoint_accepted_halo_contract() const;
+  // Private diagnostic test seam. Arm collectively at an accepted, inspectable owner.
+  POPS_EXPORT void arm_accepted_halo_test_failure(const AcceptedHaloTestFailureRequest& request);
+  POPS_EXPORT AcceptedHaloTestFailureReceipt accepted_halo_test_failure_receipt() const;
 
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);

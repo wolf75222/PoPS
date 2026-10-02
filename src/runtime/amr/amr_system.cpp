@@ -3589,6 +3589,9 @@ struct AmrSystem<Dim>::Impl {
   mutable std::set<std::pair<std::string, int>> bootstrap_materialized_actions;
   mutable bool automatic_bootstrap_complete = false;
   bool accepted_transaction_active = false;
+  // Diagnostic-only state deliberately excluded from all physical rollback snapshots.
+  bool accepted_halo_test_failure_armed = false;
+  AcceptedHaloTestFailureReceipt accepted_halo_test_failure;
   const runtime::multiblock::BoundaryEvaluationPoint* active_accepted_halo_point = nullptr;
 
   struct AcceptedSnapshot {
@@ -13941,6 +13944,47 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_accepted_halo_c
 }
 
 template <int Dim>
+void AmrSystem<Dim>::arm_accepted_halo_test_failure(const AcceptedHaloTestFailureRequest& request) {
+  const ExecutionLane* lane = p_->multiblock_hierarchy ? &p_->multiblock_hierarchy->lane() : nullptr;
+  std::exception_ptr error;
+  std::string contract;
+  try {
+    if (!lane || !p_->prepared_hierarchy)
+      throw std::invalid_argument("accepted halo test failure requires a materialized hierarchy");
+    p_->require_inspectable_hierarchy();
+    if (!requests_accepted_halo_preparation() || p_->bootstrap_transaction ||
+        p_->accepted_transaction_active || step_transaction_depth() != 0 ||
+        p_->accepted_halo_test_failure_armed)
+      throw std::invalid_argument("accepted halo test failure requires an idle accepted Halo owner and no armed request");
+    validate_accepted_halo_test_failure_request(request, p_->blocks.size(),
+                                               p_->engine->hierarchy().num_levels(), lane->size());
+    ExactContractBuilder exact;
+    exact.text("pops.amr.accepted-halo-test-failure@1").scalar(request.version)
+        .scalar(static_cast<std::uint32_t>(request.phase)).scalar(std::int32_t{request.block})
+        .scalar(std::int32_t{request.level}).scalar(std::int32_t{request.rank})
+        .bytes(p_->prepared_hierarchy->collective_contract)
+        .bytes(p_->multiblock_hierarchy->collective_contract()).scalar(p_->macro_step)
+        .scalar(p_->engine->topology_epoch());
+    contract = std::move(exact).release();
+  } catch (...) { error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, lane, "accepted halo test failure arming preflight failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"accepted-halo-test-failure", contract}}, *lane))
+    throw std::invalid_argument("accepted halo test failure request differs between ranks");
+  p_->accepted_halo_test_failure = {};
+  p_->accepted_halo_test_failure.request = request;
+  p_->accepted_halo_test_failure.requested = true;
+  p_->accepted_halo_test_failure.armed_tick = p_->macro_step;
+  p_->accepted_halo_test_failure.topology_epoch = p_->engine->topology_epoch();
+  p_->accepted_halo_test_failure_armed = true;
+}
+
+template <int Dim>
+AcceptedHaloTestFailureReceipt AmrSystem<Dim>::accepted_halo_test_failure_receipt() const {
+  return p_->accepted_halo_test_failure;
+}
+
+template <int Dim>
 void AmrSystem<Dim>::prepare_accepted_halo_candidates(
     std::vector<std::vector<MultiFab<Dim>>>& candidates,
     const std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>>& points) {
@@ -13959,6 +14003,10 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
   std::exception_ptr error;
   try {
     levels = p_->engine->hierarchy().num_levels();
+    if (p_->accepted_halo_test_failure_armed &&
+        (p_->accepted_halo_test_failure.armed_tick != p_->macro_step ||
+         p_->accepted_halo_test_failure.topology_epoch != p_->engine->topology_epoch()))
+      throw std::invalid_argument("accepted halo test failure request no longer matches its armed accepted owner");
     if (!p_->bootstrap_transaction && !p_->accepted_transaction_active && step_transaction_depth() == 0)
       throw std::invalid_argument("accepted halo preparation requires its enclosing rollback transaction");
     if (candidates.size() != p_->blocks.size() || points.size() != candidates.size())
@@ -14128,6 +14176,28 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
         } catch (...) { error = std::current_exception(); }
         runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
             error, &lane, "accepted halo candidate preparation/copy/fence failed collectively");
+        // The preparation vote has succeeded on every rank before any one-shot state changes.
+        if (p_->accepted_halo_test_failure_armed &&
+            p_->accepted_halo_test_failure.request.block == static_cast<int>(block) &&
+            p_->accepted_halo_test_failure.request.level == static_cast<int>(level)) {
+          error = {};
+          try {
+            // Communication and preparation have completed; every rank consumes the same
+            // one-shot request before the collective injection vote. No Q has
+            // been published. Only the selected rank throws, under this voted try boundary.
+            auto& receipt = p_->accepted_halo_test_failure;
+            receipt.reached = receipt.consumed = receipt.before_publication = true;
+            receipt.local_error = receipt.request.rank == lane.rank();
+            receipt.tick = points[block][level].tick;
+            receipt.physical_time = points[block][level].physical_time;
+            receipt.dt = points[block][level].dt;
+            p_->accepted_halo_test_failure_armed = false;
+            if (receipt.local_error)
+              throw std::runtime_error("accepted halo test failure after block-level preparation fence");
+          } catch (...) { error = std::current_exception(); }
+          runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+              error, &lane, "accepted halo test failure after block-level preparation fence failed collectively");
+        }
       }
   } catch (...) {
     const auto preparation_error = std::current_exception();
@@ -23258,6 +23328,8 @@ AmrSystem<kNativeDimension>::prepare_prepared_amr_interface_sample_projection(
     const runtime::multiblock::InterfaceFluxSample&, int) const;
 template bool AmrSystem<kNativeDimension>::requests_accepted_halo_preparation() const noexcept;
 template std::vector<std::vector<std::string>> AmrSystem<kNativeDimension>::checkpoint_accepted_halo_contract() const;
+template void AmrSystem<kNativeDimension>::arm_accepted_halo_test_failure(const AcceptedHaloTestFailureRequest&);
+template AcceptedHaloTestFailureReceipt AmrSystem<kNativeDimension>::accepted_halo_test_failure_receipt() const;
 template void AmrSystem<kNativeDimension>::prepare_accepted_halo_candidates(
     std::vector<std::vector<MultiFab<kNativeDimension>>>&,
     const std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>>&);

@@ -1618,6 +1618,9 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("restore_checkpoint_counters", &AmrSystem::restore_checkpoint_counters,
            py::arg("regrid_count"), py::arg("topology_epoch"))
       .def("checkpoint_accepted_halo_contract", &AmrSystem::checkpoint_accepted_halo_contract)
+      .def("_arm_accepted_halo_test_failure", &AmrSystem::arm_accepted_halo_test_failure,
+           py::arg("request"))
+      .def("_accepted_halo_test_failure_receipt", &AmrSystem::accepted_halo_test_failure_receipt)
       .def("checkpoint_tag_selection_contract", &AmrSystem::checkpoint_tag_selection_contract)
       .def("checkpoint_temporal_relations", &AmrSystem::checkpoint_temporal_relations)
       .def("set_temporal_relations", &AmrSystem::set_temporal_relations, py::arg("numerators"),
@@ -1700,6 +1703,36 @@ void init_amr(py::module_& m) {
   // headers of PoPS; it is no longer exposed by the _pops module.
   using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;
   using NativeAmrSystemConfig = pops::AmrSystemConfig<pops::kNativeDimension>;
+  py::enum_<pops::AcceptedHaloTestFailurePhase>(m, "_AcceptedHaloTestFailurePhase")
+      .value("after_block_level_preparation", pops::AcceptedHaloTestFailurePhase::after_block_level_preparation);
+  py::class_<pops::AcceptedHaloTestFailureRequest>(m, "_AcceptedHaloTestFailureRequest", py::is_final())
+      .def(py::init([](const py::handle& version, pops::AcceptedHaloTestFailurePhase phase,
+                       const py::handle& block, const py::handle& level, const py::handle& rank) {
+        for (const auto value : {version, block, level, rank})
+          if (!PyLong_CheckExact(value.ptr()))
+            throw py::type_error("accepted halo test request integers must be exact Python int values");
+        return pops::AcceptedHaloTestFailureRequest{py::cast<std::uint32_t>(version), phase,
+            py::cast<int>(block), py::cast<int>(level), py::cast<int>(rank)};
+      }), py::kw_only(), py::arg("version") = 1,
+          py::arg("phase") = pops::AcceptedHaloTestFailurePhase::after_block_level_preparation,
+          py::arg("block"), py::arg("level"), py::arg("rank"))
+      .def_readonly("version", &pops::AcceptedHaloTestFailureRequest::version)
+      .def_readonly("phase", &pops::AcceptedHaloTestFailureRequest::phase)
+      .def_readonly("block", &pops::AcceptedHaloTestFailureRequest::block)
+      .def_readonly("level", &pops::AcceptedHaloTestFailureRequest::level)
+      .def_readonly("rank", &pops::AcceptedHaloTestFailureRequest::rank);
+  py::class_<pops::AcceptedHaloTestFailureReceipt>(m, "_AcceptedHaloTestFailureReceipt", py::is_final())
+      .def_readonly("request", &pops::AcceptedHaloTestFailureReceipt::request)
+      .def_readonly("requested", &pops::AcceptedHaloTestFailureReceipt::requested)
+      .def_readonly("reached", &pops::AcceptedHaloTestFailureReceipt::reached)
+      .def_readonly("consumed", &pops::AcceptedHaloTestFailureReceipt::consumed)
+      .def_readonly("before_publication", &pops::AcceptedHaloTestFailureReceipt::before_publication)
+      .def_readonly("local_error", &pops::AcceptedHaloTestFailureReceipt::local_error)
+      .def_readonly("tick", &pops::AcceptedHaloTestFailureReceipt::tick)
+      .def_readonly("armed_tick", &pops::AcceptedHaloTestFailureReceipt::armed_tick)
+      .def_readonly("topology_epoch", &pops::AcceptedHaloTestFailureReceipt::topology_epoch)
+      .def_readonly("physical_time", &pops::AcceptedHaloTestFailureReceipt::physical_time)
+      .def_readonly("dt", &pops::AcceptedHaloTestFailureReceipt::dt);
   py::class_<NativeAmrSystemConfig>(m, "AmrSystemConfig")
       .def(py::init<>())
       .def_property(
