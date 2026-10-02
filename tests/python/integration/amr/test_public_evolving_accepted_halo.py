@@ -110,8 +110,9 @@ def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache
                 np.testing.assert_array_equal(mask,oldmask)
                 current=current.reshape(2,*mask.shape);initial=initial.reshape(2,*mask.shape)
                 np.testing.assert_array_equal(current[1 if subcycled else 0][mask],np.ones(int(mask.sum())))
-                # At most six fine Euler additions across two macrosteps plus two
-                # four-term restriction averages: gamma14 bounds roundoff, not physics tolerance.
+                # Active cells exclude restricted covered coarse values: at most six
+                # Euler additions, six rational-clock arithmetic ops and two
+                # comparison subtractions across two macrosteps give gamma14.
                 eps=np.finfo(np.float64).eps;k=14;gamma=k*eps/(1-k*eps)
                 assert np.max(np.abs(current[0 if subcycled else 1][mask]-initial[0 if subcycled else 1][mask]-step*DT))<=gamma*(np.max(np.abs(initial[0 if subcycled else 1][mask]))+step*DT+1)
         if world.rank==0:
