@@ -29,3 +29,21 @@ def test_real_source_plan_authenticates_tighter_existing_relative_policy():
     assert FIELD_RELATIVE_TOL==options['solver_provider']['resolution']['native_contract']['options']['fac.rel_tol']
     assert options['solver_provider']['resolution']['native_contract']['options']['mg.rel_tol']==1e-8
     assert options['solver_provider']['resolution']['native_contract']['options']['fac.abs_tol']==0.
+
+
+def test_zero_iterate_reference_is_independent_of_qualified_warm_seeds():
+    ca=np.ones((8,8),dtype=bool);ca[:,2:6]=False
+    fa=np.repeat(np.repeat(~ca,2,0),2,1)
+    masks=(ca,fa)
+    for mvalue in (2.,2.*(1.+1./64)):
+        state=[np.full(mask.shape,mvalue) for mask in masks]
+        zero=[(np.zeros(mask.shape),mask) for mask in masks]
+        reference=max(np.max(np.abs(row[mask])) for row,mask in zip(residuals(zero,state),masks))
+        assert reference==8*mvalue and reference<=FIELD_FORCING_BOUND
+        for seed in (0.,2.,mvalue,mvalue+1e-12):
+            fields=[(np.full(mask.shape,seed),mask) for mask in masks]
+            initial=max(np.max(np.abs(row[mask])) for row,mask in zip(residuals(fields,state),masks))
+            # Warm residual may be tiny, but is not the static FAC reference.
+            assert np.isfinite(initial)
+            assert FIELD_RELATIVE_TOL*reference<=FIELD_RESIDUAL_BUDGET
+        assert FIELD_RELATIVE_TOL*reference>=1e-11
