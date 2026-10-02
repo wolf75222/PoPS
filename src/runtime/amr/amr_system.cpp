@@ -2643,6 +2643,10 @@ struct AmrSystem<Dim>::Impl {
     std::string field_identity;
     std::function<void(const field_type&, field_type&)> evaluate;
     Real coefficient = Real(1);
+    unsigned read_contract_version = 0;
+    std::array<unsigned, Dim> state_read_cells{};
+    std::string read_authority{};
+    std::string declared_input_identity{};
   };
 
   struct TaggingSpec {
@@ -5199,6 +5203,10 @@ struct AmrSystem<Dim>::Impl {
             .text(rhs.block_identity)
             .text(rhs.field_identity)
             .scalar(rhs.coefficient);
+      for (const PreparedFieldRhs& rhs : plan.rhs_by_block[block])
+        if (rhs.read_contract_version != 0)
+          contract.text("pops.PreparedFieldRhs.StateReadExtent").scalar(rhs.read_contract_version)
+              .sequence(rhs.state_read_cells).text(rhs.read_authority).text(rhs.declared_input_identity);
     }
     contract.presence(plan.has_reaction);
     if (plan.has_reaction)
@@ -9827,86 +9835,111 @@ struct AmrSystem<Dim>::Impl {
     return shards;
   }
 
+  std::set<std::string> accepted_halo_field_closure(const std::vector<std::string>& requested) const {
+    std::set<std::string> needed;
+    needed.insert(requested.begin(), requested.end());
+    // Close only the exact requested producer DAG; names are identities, not model selectors.
+    std::map<std::pair<std::string, std::string>, std::string> outputs;
+    std::map<std::string, std::string> provider_outputs;
+    const auto& registry = prepared_hierarchy->auxiliary_registries.front();
+    for (const auto& [slot, plan] : field_plans) {
+      outputs.emplace(std::make_pair(plan.output_block, plan.output_key), slot);
+      if (plan.output && !plan.output_keys.empty())
+        provider_outputs.emplace(registry.provider_for_key(plan.output_keys.front()).identity(), slot);
+    }
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      const auto prior = needed;
+      for (const auto& slot : prior) {
+        const auto& plan = field_plans.at(slot);
+        for (std::size_t index = 0; index < plan.boundary_field_blocks.size(); ++index) {
+          const auto found = outputs.find({plan.boundary_field_blocks[index], plan.boundary_field_keys[index]});
+          if (found == outputs.end())
+            throw std::invalid_argument("accepted halo Field producer dependency is unresolved");
+          changed = needed.insert(found->second).second || changed;
+        }
+        for (const auto& provider : plan.providers)
+          for (const auto& [identity, source] : provider_outputs) {
+            const auto downstream = registry.dependent_provider_identities({identity});
+            if (provider.identity == identity ||
+                std::find(downstream.begin(), downstream.end(), provider.identity) != downstream.end())
+              changed = needed.insert(source).second || changed;
+          }
+      }
+    }
+    return needed;
+  }
+
+  std::vector<std::string> accepted_halo_field_order(const std::vector<std::string>& requested) const {
+    std::vector<std::string> order;
+    const auto needed = accepted_halo_field_closure(requested);
+    std::map<std::pair<std::string, std::string>, std::string> outputs;
+    for (const auto& [slot, plan] : field_plans)
+      outputs.emplace(std::make_pair(plan.output_block, plan.output_key), slot);
+    std::set<std::string> published;
+    while (order.size() != needed.size()) {
+      const auto before = order.size();
+      for (const auto& slot : needed) {
+        if (published.contains(slot)) continue;
+        const auto& plan = field_plans.at(slot);
+        bool ready = true;
+        for (std::size_t i = 0; i < plan.boundary_field_blocks.size(); ++i)
+          ready = ready && published.contains(outputs.at(
+              {plan.boundary_field_blocks[i], plan.boundary_field_keys[i]}));
+        if (ready) { published.insert(slot); order.push_back(slot); }
+      }
+      if (order.size() == before)
+        throw std::invalid_argument("accepted halo required Field boundary DAG is cyclic; coupled method required");
+    }
+    return order;
+  }
+
+  void validate_accepted_halo_field_state_reads() const {
+    for (const auto& block : prepared_hierarchy->accepted_halo_boundary_fields)
+      for (const auto& requested : block)
+        for (const auto& slot : accepted_halo_field_order(requested)) {
+          const auto& plan = field_plans.at(slot);
+          if (plan.use_prepared_level_rhs || plan.rhs_by_block.empty())
+            throw std::invalid_argument("accepted halo Field RHS lacks PreparedFieldRhs StateReadExtent@1");
+          std::set<std::string> direct_inputs;
+          for (const auto& rhs_block : plan.rhs_by_block)
+            for (const auto& rhs : rhs_block) {
+              if (rhs.read_contract_version != 1 || rhs.read_authority.empty())
+                throw std::invalid_argument("accepted halo Field RHS has unknown StateReadExtent");
+              if (std::any_of(rhs.state_read_cells.begin(), rhs.state_read_cells.end(),
+                              [](unsigned cells) { return cells != 0; }))
+                throw std::invalid_argument("accepted halo Field RHS creates Q-halo/Field/Q-grown cycle; coupled method required");
+              direct_inputs.insert(rhs.declared_input_identity);
+            }
+          for (const auto& provider : plan.providers)
+            if (!direct_inputs.contains(provider.identity))
+              throw std::invalid_argument("accepted halo Field InputAux lacks causal StateReadExtent authority");
+        }
+  }
+
   void prepare_accepted_halo_field_dependencies(
       std::size_t block, std::size_t level,
       const runtime::multiblock::BoundaryEvaluationPoint& point) {
     const auto& requested = prepared_hierarchy->accepted_halo_boundary_fields.at(block).at(level);
     if (requested.empty()) return;
     const auto& lane = *prepared_hierarchy->lane;
-    struct ActivePoint {
-      const runtime::multiblock::BoundaryEvaluationPoint*& slot;
-      const runtime::multiblock::BoundaryEvaluationPoint* prior;
-      ActivePoint(decltype(slot) target, const runtime::multiblock::BoundaryEvaluationPoint& value)
-          : slot(target), prior(target) { slot = &value; }
-      ~ActivePoint() { slot = prior; }
-    } active(active_accepted_halo_point, point);
-    const auto order = facade->prepare_topology_field_order("accepted_halo_prepare", point);
-    std::set<std::string> needed;
-    std::set<std::string> field_output_providers;
+    std::vector<std::string> order;
     std::exception_ptr error;
     try {
-      needed.insert(requested.begin(), requested.end());
-      // Close only the exact requested producer DAG; names are identities, not model selectors.
-      std::map<std::pair<std::string, std::string>, std::string> outputs;
-      std::map<std::string, std::string> provider_outputs;
-      const auto& registry = prepared_hierarchy->auxiliary_registries.front();
-      for (const auto& [slot, plan] : field_plans) {
-        outputs.emplace(std::make_pair(plan.output_block, plan.output_key), slot);
-        if (plan.output && !plan.output_keys.empty())
-          provider_outputs.emplace(registry.provider_for_key(plan.output_keys.front()).identity(), slot);
-      }
-      for (const auto& [identity, source] : provider_outputs) field_output_providers.insert(identity);
-      bool changed = true;
-      while (changed) {
-        changed = false;
-        const auto prior = needed;
-        for (const auto& slot : prior) {
-          const auto& plan = field_plans.at(slot);
-          for (std::size_t index = 0; index < plan.boundary_field_blocks.size(); ++index) {
-            const auto found = outputs.find({plan.boundary_field_blocks[index], plan.boundary_field_keys[index]});
-            if (found == outputs.end())
-              throw std::invalid_argument("accepted halo Field producer dependency is unresolved");
-            changed = needed.insert(found->second).second || changed;
-          }
-          for (const auto& provider : plan.providers)
-            for (const auto& [identity, source] : provider_outputs) {
-              const auto downstream = registry.dependent_provider_identities({identity});
-              if (provider.identity == identity ||
-                  std::find(downstream.begin(), downstream.end(), provider.identity) != downstream.end())
-                changed = needed.insert(source).second || changed;
-            }
-        }
-      }
+      order = accepted_halo_field_order(requested);
     } catch (...) { error = std::current_exception(); }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         error, &lane, "accepted halo Field dependency closure failed collectively");
     for (const auto& slot : order) {
-      if (!needed.contains(slot)) continue;
       std::vector<const field_type*> states;
       error = {};
       try { states.resize(blocks.size(), nullptr); }
       catch (...) { error = std::current_exception(); }
       runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
           error, &lane, "accepted halo Field simultaneous source allocation failed collectively");
-      runtime::system::AuxiliaryEvaluationPoint input_point;
-      error = {};
-      try {
-        const auto& providers = field_plans.at(slot).providers;
-        dirty_auxiliary_providers.reserve(checked_size_sum(dirty_auxiliary_providers.size(),
-            providers.size(), "accepted halo Field input identity capacity exceeds size_t"));
-        for (const auto& provider : providers)
-          if (!field_output_providers.contains(provider.identity) &&
-              std::find(dirty_auxiliary_providers.begin(), dirty_auxiliary_providers.end(), provider.identity) ==
-                  dirty_auxiliary_providers.end()) dirty_auxiliary_providers.push_back(provider.identity);
-        input_point.clock = point.clock;
-        input_point.accepted_step = static_cast<std::uint64_t>(point.tick);
-        input_point.layout_generation = engine->materialization_generation();
-        input_point.level = point.level; input_point.substep = point.substep; input_point.stage = point.stage;
-        input_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
-      } catch (...) { error = std::current_exception(); }
-      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-          error, &lane, "accepted halo Field input authority allocation failed collectively");
-      if (!dirty_auxiliary_providers.empty()) facade->refresh_auxiliary_on_prepared_lane(input_point);
+      // Preflight certified every RHS binding as a direct valid-cell closure. No InputAux
+      // launcher participates in this route: its reach/physical-point effects are not inferred.
       auto outcome = facade->solve_program_field_from_blocks_on_prepared_lane(
           point, slot, static_cast<int>(level), states);
       if (!outcome.report().solved_value_available()) {
@@ -9957,20 +9990,7 @@ struct AmrSystem<Dim>::Impl {
       discard_candidate();
       runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
           error, &lane, "accepted halo Field temporary provenance failed collectively");
-      if (!dirty_auxiliary_providers.empty()) {
-        runtime::system::AuxiliaryEvaluationPoint auxiliary;
-        error = {};
-        try {
-          auxiliary.clock = point.clock;
-          auxiliary.accepted_step = static_cast<std::uint64_t>(point.tick);
-          auxiliary.layout_generation = engine->materialization_generation();
-          auxiliary.level = point.level; auxiliary.substep = point.substep; auxiliary.stage = point.stage;
-          auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::after_regrid;
-        } catch (...) { error = std::current_exception(); }
-        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-            error, &lane, "accepted halo Field auxiliary point allocation failed collectively");
-        facade->refresh_auxiliary_on_prepared_lane(auxiliary);
-      }
+
     }
   }
 
@@ -13050,6 +13070,14 @@ void AmrSystem<Dim>::install_prepared_native_amr_package(PreparedNativePackage p
     const bool default_slot = slot == p_->default_field_slot;
     const bool has_output = !attachment.output_keys.empty();
     const bool has_rhs = static_cast<bool>(attachment.rhs);
+    if (attachment.rhs_read_contract_version > 1 ||
+        (attachment.rhs_read_contract_version == 0 &&
+         (!attachment.rhs_read_authority.empty() || std::any_of(
+             attachment.rhs_state_read_cells.begin(), attachment.rhs_state_read_cells.end(),
+             [](unsigned cells) { return cells != 0; }))) ||
+        (attachment.rhs_read_contract_version == 1 &&
+         (!has_rhs || attachment.rhs_read_authority.empty())))
+      throw std::invalid_argument("native AMR PreparedFieldRhs StateReadExtent contract is malformed");
     if (default_slot) {
       if (!attachment.block_identity.empty() || !attachment.binding_identity.empty() ||
           !attachment.rhs_provider_key.empty() ||
@@ -13163,7 +13191,9 @@ void AmrSystem<Dim>::install_prepared_native_amr_package(PreparedNativePackage p
       plan.rhs_by_block.resize(p_->blocks.size());
       plan.rhs_by_block.at(block_index)
           .push_back({attachment.rhs_provider_identity, block_name, slot, std::move(attachment.rhs),
-                      prepared.coefficient});
+                      prepared.coefficient, attachment.rhs_read_contract_version,
+                      attachment.rhs_state_read_cells, attachment.rhs_read_authority,
+                      attachment.binding_identity});
     }
     touched_slots.insert(slot);
     package_contract.text(slot)
@@ -13974,6 +14004,7 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
     }
     for (const auto& block : p_->prepared_hierarchy->accepted_halo_boundary_fields)
       for (const auto& fields : block) has_field_dependencies = has_field_dependencies || !fields.empty();
+    if (has_field_dependencies) p_->validate_accepted_halo_field_state_reads();
     request_contract = std::move(exact).release();
   } catch (...) { error = std::current_exception(); }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(

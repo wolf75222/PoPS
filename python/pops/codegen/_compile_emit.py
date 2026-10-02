@@ -1150,6 +1150,11 @@ def emit_cpp_native_loader(
             "    attachment.rhs_provider_key = %s;\n"
             "    attachment.binding_ordinal = %d;\n"
             "    attachment.coefficient = %s;\n"
+            "    if constexpr (pops::poisson_rhs_read_contract_version<decltype(named_elliptic_model_%d)>() == 1) {\n"
+            "      attachment.rhs_read_contract_version = pops::poisson_rhs_read_contract_version<decltype(named_elliptic_model_%d)>();\n"
+            "      attachment.rhs_state_read_cells.fill(pops::poisson_rhs_state_read_cells<decltype(named_elliptic_model_%d)>());\n"
+            "      attachment.rhs_read_authority = \"compiler.cell-state-ast@1\";\n"
+            "    }\n"
             "    attachment.rhs = std::move(named_elliptic_rhs_%d);\n"
             "    package.elliptic_attachments.push_back(std::move(attachment));\n"
             "  }\n"
@@ -1161,7 +1166,7 @@ def emit_cpp_native_loader(
                 json.dumps(provider_key),
                 role["binding_ordinal"],
                 scalar_cpp(role["coefficient"]),
-                rhs_index,
+                rhs_index, rhs_index, rhs_index, rhs_index,
             )
         )
         rhs_index += 1

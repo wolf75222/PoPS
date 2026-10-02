@@ -1,0 +1,19 @@
+{
+  "scope": "SOURCE_ONLY; no native runtime qualification",
+  "parent": "cb8d71abaf0679b4a059fc82b6d74d0ed8450da9",
+  "source_tests": {
+    "passed": 45,
+    "seconds": 26.74
+  },
+  "read_guard_sha256": "0904c3045ef8c84c7a1d7d6b5765750909bd9f0a01f155d0ff6da4562f95e6fe",
+  "files": {
+    "python/pops/codegen/state_read_extent.py": "97035a487c0c6738b40b1cc7246fe950dee36f4cc1ea7d950fd41c58410a8dac",
+    "python/pops/codegen/module_codegen.py": "978a7aeb37f4d3f496b9066a0a0f07f74ec166040ba00e9e4682c571200095ae",
+    "python/pops/codegen/_compile_emit.py": "31c182bf786c679623e85146861b1300a9d044e72c87d116341c8ea9a53714b6",
+    "include/pops/runtime/builders/compiled/generated_amr_system_block.hpp": "b745c1a936ce254ebbb4d334b679d05ab851f0fc9a34e93f82742e14cf304328",
+    "include/pops/runtime/builders/compiled/generated_system_block.hpp": "8b67720ebc3ce9c4693f72c0115c9e6ec8710c0211fcbc7324d55d363961192d",
+    "src/runtime/amr/amr_system.cpp": "3c8593e95ccec81f672a28a095aeba942400d2aa04e0f8edaf9e9ff764fa9cd0",
+    "tests/python/unit/codegen/test_state_read_extent.py": "33a0a5ea774659c8168280b95498973de31a9472f046fbf662a32f45d992f30f",
+    "tests/review/sol61_field_rhs_state_extent_host.py": "e2d76ee43d041e1942bf765b3ceb9b24ba1e374b77a0f1e1046b044da9357b6f"
+  }
+}

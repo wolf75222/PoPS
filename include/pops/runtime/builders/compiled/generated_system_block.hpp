@@ -1451,6 +1451,19 @@ PreparedSystemBlock<Dim> select_reconstruction_with_face(Request request, Numeri
 /// Materialize the exact-ranked elliptic RHS closure owned by one bound generated model. Native
 /// System and AMR packages use the same typed closure; only the host field layout differs.
 template <class Model>
+constexpr unsigned poisson_rhs_read_contract_version() {
+  if constexpr (requires { Model::prepared_field_rhs_read_contract_version; })
+    return Model::prepared_field_rhs_read_contract_version;
+  return 0;
+}
+template <class Model>
+constexpr unsigned poisson_rhs_state_read_cells() {
+  if constexpr (requires { Model::prepared_field_rhs_state_read_cells; })
+    return Model::prepared_field_rhs_state_read_cells;
+  return 0; // Meaningful only when the explicit contract version is nonzero.
+}
+
+template <class Model>
   requires PhysicalEllipticRhsFor<Model, kNativeDimension>
 auto make_poisson_rhs(Model model) {
   return [model = std::move(model)](const MultiFab<kNativeDimension>& state,

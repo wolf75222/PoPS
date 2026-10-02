@@ -461,6 +461,8 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
     primitives), never the aux (enforced at declaration). Reuses _codegen_exprs / _prim_block so the
     formula lowers IDENTICALLY to the default elliptic brick."""
     spec = model._elliptic_fields[field]
+    from .state_read_extent import cell_state_read_extent
+    state_reach = cell_state_read_extent(model, spec["rhs"])
     rt_member = model._runtime_params_member()  # runtime indices BEFORE any to_cpp()
     out = ["#include <cmath>",
            "#include <pops/core/identity/prepared_provider.hpp>",
@@ -473,6 +475,9 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
             "  static constexpr int dimension = %d;" % len(_ranked_axes(model)),
             "  static constexpr int n_vars = %d;" % model.n_vars,
             "  using State = pops::StateVec<%d>;" % model.n_vars]
+    if state_reach is not None:
+        out.append("  static constexpr unsigned prepared_field_rhs_read_contract_version = 1;")
+        out.append("  static constexpr unsigned prepared_field_rhs_state_read_cells = 0;")
     if rt_member:
         out.append(rt_member.rstrip("\n"))
     out += _exact_brick_contract(

@@ -1014,6 +1014,10 @@ struct PreparedNativeAmrEllipticAttachment {
   std::string rhs_provider_key;
   std::size_t binding_ordinal = std::numeric_limits<std::size_t>::max();
   double coefficient = 0.0;
+  // PreparedFieldRhs@1: zero means an opaque legacy callback, never assumed cell-local.
+  unsigned rhs_read_contract_version = 0;
+  std::array<unsigned, Dim> rhs_state_read_cells{};
+  std::string rhs_read_authority{};
   std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
   int gradient_sign = 1;
   std::function<void(const MultiFab<Dim, MemorySpace>&, MultiFab<Dim, MemorySpace>&)> rhs;
