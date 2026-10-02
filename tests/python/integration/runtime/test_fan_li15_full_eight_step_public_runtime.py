@@ -7,7 +7,7 @@ import pytest
 from tests.python.support import m17_fan_li_public_native_case as support
 from tests.python.integration.runtime.test_fan_li15_public_composition_runtime import select_program,layout_program_json_identity
 from tests.python.support.atomic_native_capture import execute_captured_step,execute_captured_bind
-from tests.python.support.m16_explicit_native_capture import persisted_capture
+from tests.python.support.m16_explicit_native_capture import persisted_capture,dump_retained_program
 from tests.python.support.collective_checks import collective_call,collective_check
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -32,8 +32,8 @@ def retain_sources(artifact,resolved,native,directory):
         models.append({'block':block.name,'state_spaces':list(block.state_spaces),
             'binary':{'path':str(Path(block.model.so_path).resolve()),'sha256':digest(block.model.so_path)},
             'actual_source':evidence,'source_file':filename,'source_sha256':digest(directory/filename)})
-    # This is the actual verified compile wrapper, not an advanced regeneration handle.
-    row.program.dump_cpp(directory/'program.cpp');row.program.dump_ir(directory/'program.ir.json')
+    # Reject advanced handles without retained compiler text before public dumping.
+    dump_retained_program(row.program,directory)
     (directory/'compiled-manifest.json').write_text(json.dumps(artifact.manifest().to_dict(),sort_keys=True,allow_nan=False)+'\n')
     proof={'schema':'pops.fan-li15-full-uniform-provenance@1','package':str(Path(pops.__file__).resolve()),
         'native':{'path':str(Path(native.__file__).resolve()),'sha256':digest(native.__file__)},

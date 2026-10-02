@@ -60,3 +60,30 @@ def test_preparation_imports_only_this_source_checkout():
     checkout=Path(__file__).resolve().parents[2]
     assert Path(pops.__file__).resolve().is_relative_to(checkout/'python')
     assert not any(name=='_pops' or name.startswith('pops._pops') for name in sys.modules)
+
+
+@pytest.mark.parametrize('retained',(None,'',b'foreign'))
+def test_program_source_capture_refuses_regeneration_before_any_dump(tmp_path,retained):
+    from tests.python.support.m16_explicit_native_capture import dump_retained_program
+    class AdvancedHandle:
+        _generated_cpp=retained
+        calls=[]
+        def dump_cpp(self,path):
+            self.calls.append('regenerated')
+            path.write_text('synthetic regenerated CPP')
+        def dump_ir(self,path):
+            self.calls.append('ir')
+    handle=AdvancedHandle()
+    with pytest.raises(ValueError,match='regeneration forbidden'):
+        dump_retained_program(handle,tmp_path)
+    assert handle.calls==[] and not tuple(tmp_path.iterdir())
+
+
+def test_fixture_provenance_uses_retained_guard_not_direct_dump():
+    import ast
+    tree=ast.parse(Path(f.__file__).read_text())
+    fn=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='retain_sources')
+    calls=[node for node in ast.walk(fn) if isinstance(node,ast.Call)]
+    assert any(isinstance(node.func,ast.Name) and node.func.id=='dump_retained_program' for node in calls)
+    assert not any(isinstance(node.func,ast.Attribute) and node.func.attr=='dump_cpp'
+                   and isinstance(node.func.value,ast.Attribute) and node.func.value.attr=='program' for node in calls)

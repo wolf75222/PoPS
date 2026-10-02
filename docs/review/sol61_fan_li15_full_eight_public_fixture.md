@@ -6,7 +6,7 @@ The fixture performs public validate → resolve → compile → bind → run. R
 
 Each of nine phases (initial, accepted1 through accepted8) persists its valid NumPy array and clock immediately. Attempt and capture failures are retained without replacing the original collective exception. A rejected run is labelled rejected-attempt, never accepted. The fixture explicitly reports Uniform full-storage carriers unavailable: these captures do not qualify grown ghosts, checkpoints, restart or full-storage rollback. It neither substitutes AMR nor calls private observation APIs.
 
-Scientific checks retain original initial/state/time/y-invariance/inventory criteria, positive density and covariance, active third/fourth moments and nonconservative terms. A separate vectorized signed FV/SSPRK2 reference is checked at every phase; the original independent DOP853 semidiscrete reference is checked at eight steps. The independent reception reader is authored separately by Banach; fixture success does not grant ROOT approval or full M17 qualification (other truncations, discontinuities and AMR remain separate).
+Scientific checks retain original initial/state/time/y-invariance/inventory criteria, positive density and covariance, active third/fourth moments and nonconservative terms. A separate vectorized signed FV/SSPRK2 reference is checked at every phase; the original independent DOP853 semidiscrete reference is checked at eight steps. The original Gauss4/GL48 saved-face bound (3e-8) and cross-campaign canonical/reverse permutation bound (1e-12) are mandatory independent reader checks, not assertions closed by this individual fixture. The independent reception reader is authored separately by Banach; fixture success does not grant ROOT approval or full M17 qualification (other truncations, discontinuities and AMR remain separate).
 
 Source preparation command (no native module/build):
 
@@ -30,3 +30,5 @@ env -u PYTHONPATH "$SDK_PYTHON" docs/development/api_040/run_installed_checks.py
 `SDK_PYTHON` and `FRESH_OUTPUT` designate the authenticated installed interpreter and a new receipt directory; they are not source-import substitutions.
 
 Both nodes must also be received independently under MPI2 with every rank participating in genuine collectives. Source preparation and collection alone are not Native execution. Historical two-step fixture and receipts remain intact. The preparatory RED about literal C++ diagnostic labels was a Source-test assumption, not a numerical or emission defect; the corrected test requires the genuine Uniform installation entry instead.
+
+The provenance followup requires compiler-retained Program C++ before the public dump. The actual fresh/cache public compile driver already retains this text; no Native fallback failure was observed. Source adversaries exercise advanced handles with absent/invalid retained text and require refusal before any regenerated dump. This capture guard introduces no observation API dependency.
