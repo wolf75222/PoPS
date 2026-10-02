@@ -2,7 +2,7 @@
 import numpy as np
 from tests.review.sol61_amr_full_carrier_offline import decode
 
-CONTRACT='accepted-initial-field-ghost-public@2'
+CONTRACT='accepted-initial-field-ghost-public@3'
 DT=1/64
 ORIGINAL_F_BOUND=1e-10
 FIELD_BOUND=1e-10  # fixed pre-execution uniform Helmholtz absolute error guard
@@ -91,3 +91,91 @@ def original_residual(fields,state):
         out.append(float(np.max(np.abs(residual[mask]))))
     assert max(out)<=ORIGINAL_F_BOUND, out
     return out
+
+
+def check_observed(blob, masks, rows_by_rank, steps):
+    """Full producer image consumed at Ghost point; cache getters are not inputs.
+
+    Rows are real observer output in Native tests, synthetic only in offline unit tests.
+    Every consumer invocation is checked independently across all source ranks.
+    """
+    state_image=decode(np.frombuffer(blob,dtype=np.uint8))
+    ranks=state_image['ranks']
+    assert type(rows_by_rank) is list and len(rows_by_rank)==ranks
+    keyed=[]
+    for rank,rows in enumerate(rows_by_rank):
+        assert type(rows) is list and len(rows)==2
+        bykey={}
+        for row in rows:
+            assert type(row) is dict and row['schema']=='pops.amr.field-candidate-observation@1'
+            assert row['status']=='producer-completed-consumer-preparation-completed' and row['accepted_publication'] is False
+            for key in ('consumer_level','owner_macro_step','topology_epoch','materialization_generation'):
+                assert type(row[key]) is int and row[key]>=0
+            assert type(row['consumer_block']) is str and row['consumer_block']==state_image['blocks'][0] and row['consumer_level'] in (0,1)
+            assert type(row['owner_time']) is float and row['owner_time']==steps*DT
+            assert row['owner_macro_step']==steps
+            for key in ('provider_slot','configuration_identity','provider_identity','plan_identity','output_owner_identity','output_block','output_key'):
+                assert type(row[key]) is str and row[key]
+            point=row['point']
+            assert type(point) is dict and type(point['clock']) is str and point['clock']
+            for key in ('tick','level','substep','stage','fraction_numerator','fraction_denominator'):
+                assert type(point[key]) is int and point[key]>=0
+            assert point['level']==row['consumer_level'] and point['fraction_denominator']>0
+            assert point['fraction_numerator']<=point['fraction_denominator']
+            assert type(point['dt']) is float and point['dt']==(DT if steps else 0.) and not np.signbit(point['dt'])
+            assert type(point['physical_time']) is float and point['physical_time']==steps*DT
+            if not steps:
+                assert point['tick']==point['substep']==point['stage']==point['fraction_numerator']==0 and point['fraction_denominator']==1
+            for key in ('graph_identity','rate_identity','application_identity'):
+                assert type(point[key]) is str
+            key=(row['provider_slot'],row['consumer_block'],row['consumer_level'])
+            assert key not in bykey
+            image=decode(np.frombuffer(row['carrier_bytes'],dtype=np.uint8))
+            assert image['dim']==2 and image['real']==64 and image['levels']==2 and image['ranks']==ranks and image['shard']==rank and image['blocks']==[row['provider_slot']]
+            bykey[key]=(row,image)
+        keyed.append(bykey)
+    assert all(set(row)==set(keyed[0]) for row in keyed)
+    results=[]
+    for key in sorted(keyed[0]):
+        patches={}
+        reference={k:v for k,v in keyed[0][key][0].items() if k!='carrier_bytes'}
+        for rank in range(ranks):
+            row,image=keyed[rank][key]
+            assert {k:v for k,v in row.items() if k!='carrier_bytes'}==reference
+            for patch in image['patches']:
+                assert patch['components']==1 and patch['owner'] in (-1,rank)
+                if patch['key'] in patches: assert patches[patch['key']]==patch
+                patches[patch['key']]=patch
+        expected={p['key']:p for p in state_image['patches']}
+        assert set(patches)==set(expected)
+        fields=[(np.full(mask.shape,np.nan),mask.copy()) for mask in masks]
+        for pkey,patch in patches.items():
+            assert [a[:2] for a in patch['axes']]==[a[:2] for a in expected[pkey]['axes']] and patch['owner']==expected[pkey]['owner']
+            (xl,xh,gxl,gxh),(yl,yh,gyl,gyh)=patch['axes']
+            values=np.asarray(patch['bits'],dtype=np.uint64).view(np.float64).reshape(gyh-gyl+1,gxh-gxl+1)
+            fields[pkey[1]][0][yl:yh+1,xl:xh+1]=values[yl-gyl:yh-gyl+1,xl-gxl:xh-gxl+1]
+        results.append({'consumer_level':key[2],'point':reference['point'],'math':check(blob,fields,steps)})
+    return {'scope':'consumed-full-candidate; retained-cache excluded','invocations':results}
+
+
+def load_observed(directory, phase, ranks):
+    """Read persisted rank-local evidence; immutable exact hash check, no Native call."""
+    import hashlib
+    import json
+    from pathlib import Path
+    directory=Path(directory).resolve()
+    result=[]
+    assert type(ranks) is int and ranks>0 and phase in ('initial','accepted')
+    for rank in range(ranks):
+        document=json.loads((directory/f'{phase}-field-candidate-rank{rank}.json').read_text())
+        assert document['schema']=='pops.amr.field-candidate-observation@1' and type(document['rank']) is int and document['rank']==rank
+        rows=[]
+        for stored in document['observations']:
+            row=dict(stored);carrier=row.pop('carrier');path=Path(carrier['path']).resolve()
+            assert path.parent==directory and path.name.startswith(f'{phase}-field-candidate-rank{rank}-') and path.suffix=='.bin'
+            blob=path.read_bytes()
+            assert type(carrier['size_bytes']) is int and len(blob)==carrier['size_bytes']
+            assert hashlib.sha256(blob).hexdigest()==carrier['sha256']
+            row['carrier_bytes']=blob;rows.append(row)
+        result.append(rows)
+    return result
