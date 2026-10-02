@@ -60,6 +60,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstring>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
@@ -1314,6 +1315,9 @@ PreparedFieldGather<Dim> prepare_field_gather(const MultiFab<Dim>& field, const 
                          0.0);
   prepared.bytes = checked_size_product(prepared.values.size(), sizeof(double),
                                         "AmrSystem gather byte count exceeds size_t");
+  // Noncontributors must supply the object-byte OR identity.
+  if (prepared.bytes != 0)
+    std::memset(prepared.values.data(), 0, prepared.bytes);
   const int rank = lane.rank();
   const bool contributes = !field.distribution().replicated() || rank == 0;
   for (std::size_t local = 0; contributes && local < field.local_size(); ++local) {
@@ -1333,9 +1337,11 @@ PreparedFieldGather<Dim> prepare_field_gather(const MultiFab<Dim>& field, const 
                                      offset(index, grown)));
       }
   }
+  const double transported_marker = 1.0;
   ExactContractBuilder exact;
   exact.text("pops.amr-field-gather")
       .scalar(std::uint32_t{2})
+      .text(std::string_view(reinterpret_cast<const char*>(&transported_marker), sizeof(double)))
       .scalar(std::int32_t{Dim})
       .text(semantic_identity)
       .scalar(components)
@@ -1387,9 +1393,9 @@ std::vector<double> gather_field(const MultiFab<Dim>& field, const Box<Dim>& dom
     throw std::runtime_error("AMR field gather preparation failed collectively on " +
                              std::to_string(failures) + " rank(s)");
   }
-  const std::vector<std::pair<std::string_view, std::string_view>> contract = {
-      {std::string_view("amr-field-gather"), std::string_view(prepared->exact_contract)}};
-  const bool agrees = all_ranks_agree_exact_ordered_byte_pairs(contract, lane);
+  // An initializer-list does not allocate after the collectively voted preparation.
+  const bool agrees = all_ranks_agree_exact_ordered_byte_pairs(
+      {{std::string_view("amr-field-gather"), std::string_view(prepared->exact_contract)}}, lane);
   if (!agrees)
     throw std::runtime_error("AMR field gather contract differs between communicator ranks");
   execute_field_gather(*prepared, lane);
