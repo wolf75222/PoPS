@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+import numpy as np
 from pathlib import Path
 import sys
 import pops
@@ -33,12 +34,12 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
     # All ranks must enter component loading collectives consistently.
     case,layout=collective_call(world,lambda:build(boundary_composer=lambda base:InitialFailureBoundary(base,component)))
     plan=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout,components=(component,)))
-    artifact=compile_resolved_plan_once(world,plan,route='initial-ghost-failure@1',compile_artifact=pops.compile)
+    artifact=compile_resolved_plan_once(world,plan,route='initial-ghost-failure-owned-face@2',compile_artifact=pops.compile)
     context=collective_call(world,lambda:artifact_execution_context(artifact))
     monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_LOG',str(directory/'callback'))
     from pops.runtime._amr_bootstrap_execution import NativeAMRBootstrapConsumer
     original=NativeAMRBootstrapConsumer.finalize_bootstrap
-    images=[];owners=[]
+    images=[];owners=[];targets=[]
     def image(owner):
         engine=owner._engine;native_owner=engine._s
         # Raw checkpoint carriers/registries only: no Field accessor, solve, refresh or publication.
@@ -49,6 +50,17 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
     def observed(owner):
         owners.append(owner._engine)
         before=image(owner)
+        from tests.review.sol61_amr_full_carrier_offline import decode
+        geometry=decode(np.frombuffer(before['blob'],dtype=np.uint8))
+        assert geometry['ranks']==world.size and geometry['dim']==2
+        # Actual native boxes/dmap determine who owns the authored x-min face.
+        eligible=set()
+        for patch in geometry['patches']:
+            if patch['axes'][0][0]==0:
+                eligible.update(range(world.size) if patch['owner']==-1 else (patch['owner'],))
+        assert eligible
+        target=max(eligible);targets.append({'target':target,'eligible':sorted(eligible)})
+        monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',str(target))
         try:return original(owner)
         except Exception:
             after=image(owner);images.append((before,after));raise
@@ -60,14 +72,15 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
         (directory/f'before-rank{world.rank}.bin').write_bytes(before['blob'])
         (directory/f'after-rank{world.rank}.bin').write_bytes(after['blob'])
         metadata={phase:{k:v for k,v in value.items() if k!='blob'} for phase,value in [('before',before),('after',after)]}
-        proof={'schema':'sol61.initial-ghost-failure@1','rank':world.rank,'world_size':world.size,'failures':failures,'metadata':metadata,'native':{'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},'component_manifest':component.component_manifest.to_data(),'artifact_identity':artifact.artifact_identity.token,'observer_only':True,'outer_bootstrap_abort_not_certified':True}
+        proof={'schema':'sol61.initial-ghost-failure-owned-face@2','rank':world.rank,'world_size':world.size,'target_selection':targets,'failures':failures,'metadata':metadata,'native':{'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},'component_manifest':component.component_manifest.to_data(),'artifact_identity':artifact.artifact_identity.token,'observer_only':True,'outer_bootstrap_abort_not_certified':True}
         (directory/f'proof-rank{world.rank}.json').write_text(json.dumps(proof,indent=2,default=str)+'\n')
         assert all(failures) and len(failures)==world.size
         assert all('independent initial Ghost rank-local failure' in failure[1] for failure in failures)
         assert before==after, 'initial candidate failure changed same-owner prepublication state'
-        events=(directory/f'callback-rank{world.rank}.log').read_text()
+        log=directory/f'callback-rank{world.rank}.log'
+        events=log.read_text() if log.exists() else ''
         reads=[line for line in events.splitlines() if line.startswith('field-before-write ')]
-        assert reads and 'tentative-write' in events
+        if world.rank==targets[0]['target']:assert reads and 'tentative-write' in events
         from tests.python.support.initial_field_ghost_native_oracle import FIELD_BOUND
         for line in reads:
             row=dict(item.split('=',1) for item in line.split()[1:])
@@ -75,4 +88,4 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
             assert math.isfinite(value) and abs(value-2.)<=FIELD_BOUND
             assert time==0.
             assert int(row['rank'])==world.rank and int(row['size'])==world.size
-        assert ('injected-failure' in events)==(world.rank==world.size-1)
+        assert ('injected-failure' in events)==(world.rank==targets[0]['target'])

@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import shutil
 import sys
+import pytest
 import pops
 from pops import interfaces
 from tests.python.support.initial_ghost_failure_component import package_data,load_component,InitialFailureBoundary
@@ -18,6 +19,23 @@ def test_genuine_failure_package_and_field_dependency(tmp_path):
     case,layout=build(boundary_composer=lambda base:InitialFailureBoundary(base,component))
     plan=pops.resolve(pops.validate(case),layout=layout,components=(component,));plan.verify()
     assert len(plan.field_plans)==1 and len(plan.component_inputs)==1
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+    compiled=CompiledBoundaryPlan.from_resolved(plan.blocks[0].numerics.boundaries[0])
+    data=compiled.runtime_boundary_data({})
+    assert len([f for f in compiled.compile_data['faces'] if 'value_delegate' in f])==1
+    assert data['faces']
+    boundary=plan.blocks[0].numerics.boundaries[0]
+    manual=boundary.execution_authority
+    from tests.python.support.initial_ghost_failure_component import ManualInitialFaceExecution
+    class Mixed:
+        def inferred_component_bindings(self):return manual.base.inferred_component_bindings()*2
+    with pytest.raises(AssertionError):ManualInitialFaceExecution(Mixed(),manual.binding,component)
+    # The production reader must reject detachment that drops the authenticated delegate.
+    from copy import deepcopy
+    bad=deepcopy(boundary.compile_boundary_data())
+    bad['faces']=[dict(face) for face in bad['faces']]
+    next(face for face in bad['faces'] if 'value_delegate' in face).pop('value_delegate')
+    with pytest.raises(ValueError,match='invalid contract'):CompiledBoundaryPlan(bad).runtime_boundary_data({})
     assert 'pops._pops' not in sys.modules
 
 def test_complete_generated_header_source_syntax(tmp_path):

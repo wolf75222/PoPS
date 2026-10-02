@@ -5,7 +5,24 @@ from pops import interfaces
 from pops.external import build_source_package_manifest,load
 from pops.model import ComponentManifest
 from pops.mesh.boundaries import BoundaryComponentBinding
-from tests.python.integration.runtime.test_shared_interface_runtime import _ExternalGhostFaceExecutionAuthority
+
+class ManualInitialFaceExecution:
+    """Exact manual component delegate, not an unused inferred implementation."""
+    def __init__(self,base,binding,component):
+        inferred=base.inferred_component_bindings()
+        assert len(inferred)==1 and inferred[0][0].target==binding.target
+        binding.require_component(component)
+        self.base=base;self.binding=binding
+    def canonical_identity(self):return {'schema_version':1,'authority_type':'manual-initial-failure-delegate@1','base':self.base.canonical_identity(),'binding':self.binding.canonical_identity()}
+    def inferred_component_bindings(self):return ()
+    def _externalize(self,data):
+        from copy import deepcopy
+        result=deepcopy(data);rows=[face for face in result['faces'] if face['producer']==self.binding.target.qualified_id]
+        assert len(rows)==1 and rows[0].get('value_protocol')=='native-boundary-component-values@1'
+        rows[0]['type']='external';rows[0]['values']=[];rows[0]['value_delegate']=self.binding.canonical_identity()
+        return result
+    def compile_boundary_data(self):return self._externalize(self.base.compile_boundary_data())
+    def runtime_boundary_data(self,params):return self._externalize(self.base.runtime_boundary_data(params))
 
 class InitialFailureBoundary:
     def __init__(self,base,component):self.base=base;self.component=component
@@ -26,7 +43,7 @@ class ResolvedInitialFailure:
         assert len(providers)==1 and providers[0].dependencies.fields
         target=providers[0].handle
         # Preserve the exact physical producer/dependencies; only implementation is supplied.
-        return replace(boundary,execution_authority=_ExternalGhostFaceExecutionAuthority(boundary.execution_authority,target.qualified_id),component_bindings=(BoundaryComponentBinding(target,self.component),))
+        return replace(boundary,execution_authority=ManualInitialFaceExecution(boundary.execution_authority,BoundaryComponentBinding(target,self.component),self.component),component_bindings=(BoundaryComponentBinding(target,self.component),))
 
 def package_data():
     ordinary=interfaces.GhostBoundary;initial=interfaces.AcceptedInitialGhost
@@ -68,7 +85,9 @@ int initial(void* p,const PopsAcceptedInitialGhostRequestV1* r,PopsComponentStat
  event("field-before-write",s->rank,s->size,phi,q.logical_time.physical_time);
  // Dirty genuine ABI scratch before the outer owner makes its collective decision.
  *static_cast<double*>(q.ghosts.data)=-1234.;event("tentative-write",s->rank,s->size,phi,q.logical_time.physical_time);
- if(s->rank==s->size-1){event("injected-failure",s->rank,s->size,phi,q.logical_time.physical_time);
+ const char* target=std::getenv("POPS_TEST_INITIAL_GHOST_TARGET_RANK");
+ if(!target)return 55;
+ if(s->rank==std::atoi(target)){event("injected-failure",s->rank,s->size,phi,q.logical_time.physical_time);
  *status={sizeof(PopsComponentStatusV1),73,POPS_COMPONENT_ABORT_RUN_V1,"independent initial Ghost rank-local failure after Field read/write"};}
  else *status={sizeof(PopsComponentStatusV1),0,POPS_COMPONENT_CONTINUE_V1,nullptr};
  return 0;
