@@ -36,11 +36,11 @@ to the actual authenticated installed interpreter and matching MPI launcher:
 
 ```sh
 env -u PYTHONPATH "$SDK_PYTHON" -m pytest -q -o pythonpath='' tests/python/integration/runtime/test_program_affine_moment_explicit_basis_runtime.py --junitxml="$OUT/serial.xml" --basetemp="$OUT/serial-tmp"
-env -u PYTHONPATH "$SDK_MPIEXEC" -n 2 "$SDK_PYTHON" -m pytest -q -o pythonpath='' tests/python/integration/runtime/test_program_affine_moment_explicit_basis_runtime.py --junitxml="$OUT/mpi-rank.xml" --basetemp="$OUT/mpi-tmp"
+env -u PYTHONPATH SDK_PYTHON="$SDK_PYTHON" OUT="$OUT" "$SDK_MPIEXEC" -n 2 sh -c 'rank="${PMI_RANK:-${OMPI_COMM_WORLD_RANK:-}}"; test -n "$rank" || exit 2; exec "$SDK_PYTHON" -m pytest -q -o pythonpath="" tests/python/integration/runtime/test_program_affine_moment_explicit_basis_runtime.py --junitxml="$OUT/mpi-rank$rank.xml" --basetemp="$OUT/mpi-tmp-rank$rank"' 
 ```
 
-MPI JUnit/basetemp should be rank-separated by ROOT's existing launcher receipt
-convention; the above spells the genuine command payload, not a substitute harness.
+MPI JUnit/basetemp are rank-separated by the matching launcher's actual PMI/OMPI rank.
+An absent rank is refused. ROOT may apply its existing launcher receipt convention.
 No source package may shadow the installed PoPS. Preserve before/after installed
 identity receipts and all rejection logs.
 
