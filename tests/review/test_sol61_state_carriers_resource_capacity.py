@@ -64,6 +64,8 @@ def test_unknown_codec_refused_and_native_capacity_vote_before_consensus():
     body=s[s.index('std::uint64_t AmrSystem<Dim>::checkpoint_state_carriers_byte_capacity() const'):s.index('void AmrSystem<Dim>::validate_checkpoint_state_carriers(')]
     assert 'p_->cfg.transition_ratios' in body and 'block.ghosts[axis]' in body and 'block.ncomp' in body
     assert body.index('catch (...)')<body.index('rethrow_collective_failure')<body.index('all_ranks_agree_exact_ordered_byte_pairs')
+    assert body.index('contract = std::move(exact).release()') < body.index('named_pairs.emplace_back') < body.index('catch (...)')
+    assert 'all_ranks_agree_exact_ordered_byte_pairs(named_pairs, lane)' in body
     assert 'copy_to_host' not in body and 'materialize_field' not in body and 'checkpoint_state_carriers()' not in body
     assert 'template std::uint64_t AmrSystem<kNativeDimension>::checkpoint_state_carriers_byte_capacity() const;' in s
 

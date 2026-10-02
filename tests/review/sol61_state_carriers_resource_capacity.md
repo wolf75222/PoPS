@@ -17,3 +17,9 @@ Source command: env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoul
 No Native/JIT/build/ENV/Main mutation or execution. No full AMR translation-unit/link/runtime claim from host codec tests. Native SDK14 production build, fresh package identity, checkpoint/restart and MPI2 real execution remain Root obligations. Frozen SDK13 CP refusal and physical failures remain historical evidence; no SCI seal/approval produced.
 
 A broader Source-only runtime_instance_gate budget selection returned45PASS/2FAIL/118deselected: existing planning-artifact fixture requires a selected native module and existing lazy-cache SimpleNamespace artifact lacks verify(), failing unchanged diagnostic-inventory code. They were not bypassed or patched and are not claimed green; no Native was loaded to satisfy them.
+
+## Follow-up: voted consensus container preparation
+
+The named `vector<ExactOrderedBytePair>` is now populated inside the same preflight try as the capacity and contract, before the collective failure vote. The consensus receives that already prepared container. Its string views borrow the local contract, which remains alive and unchanged through consensus.
+
+The existing initializer-list overload uses pairs of string views and forwards a span; it does not itself allocate a vector or copy the contract string. This follow-up therefore makes container allocation explicitly voted, rather than claiming an experimentally demonstrated allocation failure in the old initializer. Source ordering checks cover the new seam; no MPI OOM or Native runtime proof is claimed.

@@ -11534,6 +11534,7 @@ std::uint64_t AmrSystem<Dim>::checkpoint_state_carriers_byte_capacity() const {
   const auto& lane = p_->require_package_assembly_lane();
   std::uint64_t result = 0;
   std::string contract;
+  std::vector<ExactOrderedBytePair> named_pairs;
   std::exception_ptr error;
   try {
     if (p_->cfg.level_count < 1 || p_->blocks.empty() ||
@@ -11579,10 +11580,11 @@ std::uint64_t AmrSystem<Dim>::checkpoint_state_carriers_byte_capacity() const {
     result = runtime::checkpoint::state_carriers_byte_capacity<Dim>(levels, storage);
     exact.scalar(result);
     contract = std::move(exact).release();
+    named_pairs.emplace_back("state-carriers-capacity", contract);
   } catch (...) { error = std::current_exception(); }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       error, &lane, "state carrier capacity preflight failed collectively");
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"state-carriers-capacity", contract}}, lane))
+  if (!all_ranks_agree_exact_ordered_byte_pairs(named_pairs, lane))
     throw std::invalid_argument("state carrier capacity differs between RuntimeInstance ranks");
   return result;
 }
