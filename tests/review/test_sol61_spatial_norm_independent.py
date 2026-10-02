@@ -35,8 +35,22 @@ def test_real_archived_small_reference_matches_derived_bound_and_zero_report_adv
  spec=importlib.util.spec_from_file_location('real_norm_fixture',P.with_name('test_sol61_spatial_mixed_rule_v3.py'))
  t=importlib.util.module_from_spec(spec);spec.loader.exec_module(t)
  images,masks=t.actual_images();metrics=r.science(images,masks,8)['accepted']
- r.independent_original_norm(metrics,t.check(t.triplet()))
+ r.independent_original_norm(metrics,t.check(t.triplet()),t.arithmetic())
  # Diagnostic authenticity adversary: final zero cannot describe nonzero saved F.
- # This assertion intentionally specifies refusal; the author must close it.
+ # Corrective author freeze must close this previously failing adversary.
  with pytest.raises(ValueError,match='original-F'):
-  r.independent_original_norm(metrics,report(0.,metrics['original_F_zero_seed_reference_l2']))
+  r.independent_original_norm(metrics,report(0.,metrics['original_F_zero_seed_reference_l2']),t.arithmetic())
+
+@pytest.mark.parametrize('claimed',[0.,1e-10])
+def test_in_range_false_final_norm_refused_with_real_arithmetic(claimed):
+ spec=importlib.util.spec_from_file_location('auth_arithmetic',P.with_name('test_sol61_spatial_mixed_rule_v3.py'))
+ t=importlib.util.module_from_spec(spec);spec.loader.exec_module(t)
+ images,masks=t.actual_images();metrics=r.science(images,masks,8)['accepted']
+ with pytest.raises(ValueError,match='native original-F norm differs'):
+  r.independent_original_norm(metrics,report(claimed,metrics['original_F_zero_seed_reference_l2']),t.arithmetic())
+def test_arithmetic_certificate_missing_refused_on_real_good_state():
+ spec=importlib.util.spec_from_file_location('no_cert',P.with_name('test_sol61_spatial_mixed_rule_v3.py'))
+ t=importlib.util.module_from_spec(spec);spec.loader.exec_module(t)
+ images,masks=t.actual_images();metrics=r.science(images,masks,8)['accepted']
+ with pytest.raises(ValueError,match='arithmetic proof'):
+  r.independent_original_norm(metrics,t.check(t.triplet()))
