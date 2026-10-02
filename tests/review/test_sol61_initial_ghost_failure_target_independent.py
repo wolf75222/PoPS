@@ -13,13 +13,17 @@ int main(){
  PopsQualifiedConstFieldV1 field{};field.present=1;field.values.component_count=1;field.values.data=&value;field.values.dimension=2;
  PopsAcceptedInitialGhostRequestV1 request{};request.point_contract_version=1;request.region_request.dependencies=&field;request.region_request.dependency_count=1;request.region_request.ghosts.data=&out;
  PopsComponentStatusV1 status{};
- for(const char* target:{"garbage","-1","2","0trailing"}){
+ for(const char* target:{"garbage","-1","2","0trailing","","00","+0"," 0","false","999999999999999999999999999999999999"}){
   setenv("POPS_TEST_INITIAL_GHOST_TARGET_RANK",target,1);out=7.;
   if(initial(&state,&request,&status)==0)return 1;
   if(out!=7.)return 2;
  }
  unsetenv("POPS_TEST_INITIAL_GHOST_TARGET_RANK");out=7.;
  if(initial(&state,&request,&status)==0||out!=7.)return 3;
+ setenv("POPS_TEST_INITIAL_GHOST_TARGET_RANK","0",1);out=7.;
+ if(initial(&state,&request,&status)!=0||status.code!=73||out!=-1234.)return 4;
+ setenv("POPS_TEST_INITIAL_GHOST_TARGET_RANK","1",1);out=7.;
+ if(initial(&state,&request,&status)!=0||status.code!=0||out!=-1234.)return 5;
  return 0;
 }
 '''
