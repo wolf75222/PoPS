@@ -69,6 +69,14 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
                 else:monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',old_target)
     monkeypatch.setattr(NativeAMRBootstrapConsumer,'finalize_bootstrap',observed)
     _,failures=collective_attempt(world,lambda:pops.bind(artifact,resources={'execution_context':context}))
+    # Persist the real collective refusal even when bind never reaches our finalizer.
+    # This receipt claims no snapshot/rollback proof and cannot satisfy the assertions below.
+    from tests.python.support.initial_ghost_failure_receipt import save_early_bind_receipt
+    with collective_check(world):
+        save_early_bind_receipt(directory,rank=world.rank,world_size=world.size,
+            failures=failures,owner_count=len(owners),image_count=len(images),target_count=len(targets),
+            native={'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},
+            artifact_identity=artifact.artifact_identity.token,component_manifest=component.component_manifest.to_data())
     with collective_check(world):
         assert len(images)==1 and len(owners)==1, 'actual initial owner/failure boundary not observed'
         before,after=images[0]
