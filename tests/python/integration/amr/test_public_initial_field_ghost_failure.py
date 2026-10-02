@@ -34,19 +34,20 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
     # All ranks must enter component loading collectives consistently.
     case,layout=collective_call(world,lambda:build(boundary_composer=lambda base:InitialFailureBoundary(base,component)))
     plan=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout,components=(component,)))
-    artifact=compile_resolved_plan_once(world,plan,route='initial-ghost-failure-bootstrap-abort@4',compile_artifact=pops.compile)
+    artifact=compile_resolved_plan_once(world,plan,route='initial-ghost-failure-bootstrap-abort-readiness@5',compile_artifact=pops.compile)
     context=collective_call(world,lambda:artifact_execution_context(artifact))
     monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_LOG',str(directory/'callback'))
     from pops.runtime._amr_bootstrap_execution import NativeAMRBootstrapConsumer
     original=NativeAMRBootstrapConsumer.consume_bootstrap_action
     original_init=NativeAMRBootstrapConsumer.__init__
     original_abort=NativeAMRBootstrapConsumer.abort_bootstrap
+    from tests.python.support.initial_ghost_registry_readiness import capture_registry_disposition
     images=[];owners=[];targets=[];observed_actions=[];bootstrap_baselines=[];transition_images=[]
-    def image(owner):
+    def image(owner,phase):
         engine=owner._engine;native_owner=engine._s
         # Raw checkpoint carriers/registries only: no Field accessor, solve, refresh or publication.
         return {'blob':collective_call(world,lambda:bytes(native_owner.checkpoint_state_carriers())),
-                'registry':collective_call(world,native_owner.checkpoint_rank_local_carrier_manifest),
+                'registry':capture_registry_disposition(world,native_owner,phase),
                 'field_manifest':collective_call(world,native_owner.field_provider_checkpoint_manifest),
                 'time':collective_call(world,native_owner.time),'tick':collective_call(world,native_owner.macro_step),
                 'levels':collective_call(world,engine.n_levels)}
@@ -56,7 +57,7 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
         if action.operation!='create_level':return original(owner,action)
         if observed_actions:raise AssertionError('fault fixture must reach only one parent transition')
         observed_actions.append({'operation':action.operation,'level':action.level,'identity':action.identity.token})
-        before=image(owner)
+        before=image(owner,'parent-before')
         from tests.python.support.initial_ghost_failure_selection import select_xmin_owner,require_selection_agreement
         from pops._native_collectives import allgather_value
         # Local parsing failures vote before any next collective Native phase.
@@ -69,7 +70,7 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
             with collective_check(world):monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',str(selected['target']))
             return original(owner,action)
         except Exception:
-            after=image(owner);transition_images.append((before,after));raise
+            after=image(owner,'parent-rejected');transition_images.append((before,after));raise
         finally:
             with collective_check(world):
                 if old_target is None:monkeypatch.delenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',raising=False)
@@ -78,11 +79,11 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
         # The bound engine exists before the genuine constructor starts its Native snapshot.
         owner._engine=engine
         owners.append(engine)
-        bootstrap_baselines.append(image(owner))
+        bootstrap_baselines.append(image(owner,'bootstrap-baseline'))
         return original_init(owner,engine,*args,**kwargs)
     def observed_abort(owner):
         result=original_abort(owner) # Genuine transaction restoration; never a replacement.
-        after=image(owner)
+        after=image(owner,'after-bootstrap-abort')
         assert len(bootstrap_baselines)==1
         images.append((bootstrap_baselines[0],after))
         return result
@@ -105,7 +106,7 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
         (directory/f'before-rank{world.rank}.bin').write_bytes(before['blob'])
         (directory/f'after-rank{world.rank}.bin').write_bytes(after['blob'])
         metadata={phase:{k:v for k,v in value.items() if k!='blob'} for phase,value in [('before',before),('after',after)]}
-        proof={'schema':'sol61.initial-ghost-failure-bootstrap-abort@4','rank':world.rank,'world_size':world.size,'scope':'actual outer bootstrap abort; not successful construction or nested parent rollback','observed_actions':observed_actions,'transition_diagnostic':[{phase:{k:v for k,v in value.items() if k!='blob'} for phase,value in [('before',pair[0]),('after',pair[1])]} for pair in transition_images],'target_selection':targets,'failures':failures,'metadata':metadata,'native':{'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},'component_manifest':component.component_manifest.to_data(),'artifact_identity':artifact.artifact_identity.token,'observer_only':True,'actual_outer_bootstrap_abort_observed':True,'nested_parent_rollback_not_certified':True}
+        proof={'schema':'sol61.initial-ghost-failure-bootstrap-abort-readiness@5','rank':world.rank,'world_size':world.size,'scope':'actual outer bootstrap abort; not successful construction or nested parent rollback','observed_actions':observed_actions,'transition_diagnostic':[{phase:{k:v for k,v in value.items() if k!='blob'} for phase,value in [('before',pair[0]),('after',pair[1])]} for pair in transition_images],'target_selection':targets,'failures':failures,'metadata':metadata,'native':{'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},'component_manifest':component.component_manifest.to_data(),'artifact_identity':artifact.artifact_identity.token,'observer_only':True,'registry_contents_unmaterialized_not_received':True,'actual_outer_bootstrap_abort_observed':True,'nested_parent_rollback_not_certified':True}
         for index,(parent_before,parent_after) in enumerate(transition_images):
             (directory/f'parent-before-rank{world.rank}-{index}.bin').write_bytes(parent_before['blob'])
             (directory/f'parent-after-rank{world.rank}-{index}.bin').write_bytes(parent_after['blob'])

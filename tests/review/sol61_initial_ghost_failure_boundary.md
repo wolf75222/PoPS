@@ -66,3 +66,11 @@ Raw @3 originals:
 - proof-rank0.json: 93ba54a59523ba1cea37fb792349d6e6927b314904fb9e1cfd8b913287764d3e
 
 Final @4 Source/host cohort:27PASS10.28s across the eight affected files, zero skips. The genuine abort-failure adversary propagates failure without post-restore capture. New proof JSON preserves typed data with allow_nan=False, without default=str. No author Native/JIT/ENV run; next actual Native run remains required.
+
+## Readiness-disposition contract @5
+
+Actual @4 failed before begin because the rank-local registry API correctly requires all Fields materialized. The constructor baseline is explicitly unmaterialized; getter guards are unchanged. Existing readonly field_provider_slots/materialized and field_provider_checkpoint_manifest (readiness column8) authenticate that condition. @5 records either actual available registry rows or the exact normative readiness refusal, never an empty substitute registry. Before/after baseline equality includes this disposition plus full State carrier bytes, Field manifest, clocks and levels. Unmaterialized registry contents are explicitly not received.
+
+Slot consensus precedes per-slot Native reads; exact bool flags must agree with the manifest. Baseline/after-abort require unmaterialized Fields; parent-before/rejected require materialized Fields. The real registry call still runs through collective_attempt: a non-ready owner must produce RuntimeError with the exact all-fields readiness reason on every rank; ready owners must return actual typed rows. Unknown errors, missing ranks, different phases, contradictory readiness or unexpected materialization fail. Actual restore snapshots retain Field potential images only when already materialized; no accessor solve or initialization is added.
+
+Pure disposition adversaries and the genuine collective helper with Source-only readonly-owner stand-ins close expected refusal versus other errors. The outer-abort failure adversary continues to forbid post-restore images. Nine-file coherent Source/host cohort40PASS10.61s, zero skips; this does not establish Native @5 restoration. Root owns the next Serial/MPI2 experiment.

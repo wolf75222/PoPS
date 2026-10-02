@@ -23,7 +23,7 @@ def test_actual_transition_wrapper_arms_before_real_consumer_dispatch(monkeypatc
     plan=SimpleNamespace(identity=SimpleNamespace(to_data=lambda:{'scope':'SourceOnly'}))
     owner=NativeAMRBootstrapConsumer(Engine(),plan,[])
     owner._tagged_level=0;owner._clustered=True
-    def snapshot(owner):events.append('snapshot');return {'blob':b'SourceOnly-snapshot'}
+    def snapshot(owner,phase):events.append('snapshot');return {'blob':b'SourceOnly-snapshot'}
     monkeypatch.setattr(selection,'select_xmin_owner',lambda blob,size:{'target':0})
     monkeypatch.setattr(selection,'require_selection_agreement',lambda rows,selected:{'agreed':selected})
     monkeypatch.setattr(collectives,'allgather_value',lambda world,row:[row])
@@ -55,7 +55,7 @@ def test_real_bootstrap_abort_is_observed_after_actual_restore(monkeypatch):
     class Engine:
         _s=Native()
         def _rollback_bootstrap_level(self):events.append('genuine-restore');state['value']=0
-    def snapshot(owner):events.append('capture');return {'blob':bytes([state['value']])}
+    def snapshot(owner,phase):events.append('capture');return {'blob':bytes([state['value']])}
     scope={'original_init':NativeAMRBootstrapConsumer.__init__,'original_abort':NativeAMRBootstrapConsumer.abort_bootstrap,'owners':owners,'bootstrap_baselines':baseline,'images':images,'image':snapshot}
     exec(compile(ast.Module(body=list(wrappers.values()),type_ignores=[]),'<actual bootstrap observers>','exec'),scope)
     monkeypatch.setattr(NativeAMRBootstrapConsumer,'__init__',scope['observed_init'])
@@ -76,7 +76,7 @@ def test_abort_failure_never_synthesizes_postrestore_capture(monkeypatch):
     class Engine:
         def _rollback_bootstrap_level(self):raise RuntimeError('Source-only genuine abort failed')
     owner=object.__new__(NativeAMRBootstrapConsumer);owner._engine=Engine();owner._active=True
-    scope={'original_abort':NativeAMRBootstrapConsumer.abort_bootstrap,'image':lambda owner:calls.append('capture'),'bootstrap_baselines':[{'blob':b'SourceOnly'}],'images':images}
+    scope={'original_abort':NativeAMRBootstrapConsumer.abort_bootstrap,'image':lambda owner,phase:calls.append('capture'),'bootstrap_baselines':[{'blob':b'SourceOnly'}],'images':images}
     exec(compile(ast.Module(body=[wrapper],type_ignores=[]),'<actual abort wrapper>','exec'),scope)
     with pytest.raises(RuntimeError,match='genuine abort failed'):scope['observed_abort'](owner)
     assert not images and not calls and owner._active
