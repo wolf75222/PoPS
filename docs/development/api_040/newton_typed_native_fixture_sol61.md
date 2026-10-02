@@ -38,3 +38,36 @@ no Native execution, ENV writes, JIT, new physics or qualification claim.
 Reproduction: `env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops/bin/python`
 with private WT/python explicitly inserted, then pytest
 `tests/review/test_sol61_newton_native_fixture_source.py`.
+
+
+Follow-up to independent review fdf: each actual native Program diagnostic group
+must contain the complete finite nonnegative float triplet norm/reference/rawratio.
+The rawratio equals norm/(reference>0?reference:1) exactly. Complete emitted solve
+groups are required (two Uniform, one AMR, ordered by SSA node id). These names
+come from the real emitters program_emit_nonlinear_field.py and
+program_emit_amr_original_field.py; no diagnostic is inferred from a text log.
+Admission independently computes Relative coefficient*reference, the explicit
+floor maximum, or Absolute coefficient; no legacy max(1,reference), no infinity
+allowance. Original physical error guards remain unchanged.
+
+Uniform reopens actual saved NPZ solutions and captured coefficient/load arrays
+and recomputes full Original residual including periodic diffusion using the
+existing independent NumPy original_lhs oracle. Zero and .8*first-solution seeds
+provide independent complete reference norms. References compare within2e-14;
+norm comparison has2e-13 absolute allowance for arithmetic ordering only.
+Both actual native norm and independently recomputed norm must satisfy the
+unmodified typed cutoff. AMR physical checks remain genuine saved active-state
+checks; this fixture has no independent arbitrary composite coarse/fine flux-L2
+oracle, so its triplet admission is actual native diagnostic evidence, not an
+invented independently reconstructed AMR norm. ROOT authenticates artifact/native
+identity for both backends during reception.
+
+Rollback compares dtype, shape and C-order bytes, including signedzero; reopens
+persisted NPZ and compares both saved images to their actual captured snapshots.
+Uniform histories, accepted diagnostic/clock representation before and after are
+persisted in the receipt. AMR fullcarrier byte equality remains stronger coverage.
+No nonexistent Original component-provider field snapshot is synthesized.
+
+Follow-up Source suite:21PASS30.17s, zero skip; includes8real public authoring
+cases and13pure diagnostic/bit/original-oracle checks. Native collect-only8nodes
+passes0.67s. No Native execution or acceptance is claimed.
