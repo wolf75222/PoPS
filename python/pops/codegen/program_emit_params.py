@@ -180,7 +180,10 @@ def _qualified_param_identity(ref: Any, block: Any, *, graph_aware: bool) -> tup
         raise ValueError(
             "runtime parameter %r in block %r belongs to model owner %s, not %s"
             % (ref.name, block.local_id, actual, owner))
-    return owner, handle.qualified_id
+    # Authoring reads and resolved numerical metadata name the same declaration
+    # through different phase handles. After exact owner/block authentication,
+    # compare both against its canonical resolved declaration identity.
+    return owner, handle._resolved().qualified_id
 
 
 def _parameter_read_sites(program, model):
@@ -235,7 +238,7 @@ def program_param_entries(program: Any, model: Any) -> list:
             nodes = impl.assign_runtime_indices()
             by_name = {node.name: (index, node) for index, node in enumerate(nodes)}
             by_identity = {
-                (node.handle.declaration_ref if node.handle.is_instance else node.handle).qualified_id: node
+                (node.handle.declaration_ref if node.handle.is_instance else node.handle)._resolved().qualified_id: node
                 for node in nodes
                 if getattr(node, "handle", None) is not None
             }
