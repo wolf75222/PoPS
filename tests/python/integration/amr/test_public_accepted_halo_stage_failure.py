@@ -1,6 +1,7 @@
 """Actual Native test-hook@1; ROOT execution required, no synthetic runtime."""
 from pathlib import Path
 import json
+import sys
 import numpy as np
 import pops
 import pytest
@@ -39,6 +40,10 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
     del isolated_native_cache
     from pops._native_selector import select_native_dimension
     native=select_native_dimension(2);world=native.mpi_world()
+    with collective_check(world):
+        assert native.__abi_version__==8
+        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+        assert Path(native.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
     case,layout=collective_call(world,build_growth)
     resolved=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout))
     artifact=compile_resolved_plan_once(world,resolved,route='accepted-halo-test-failure@1',compile_artifact=pops.compile)
@@ -46,12 +51,27 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
     def bind():return pops.bind(artifact,resources={'execution_context':context})
     runtime=collective_call(world,bind);control=collective_call(world,bind)
     directory=collective_directory(world,tmp_path/'halo-stage-failure')
+    record_property('accepted_halo_stage_failure_receipt',str(directory))
     for owner in (runtime,control):
         collective_call(world,lambda owner=owner:pops.run(owner,t_end=DT,max_steps=1,console=False))
     before=observe(world,runtime);publish(world,directory,'before',before)
     original=collective_call(world,lambda:runtime.checkpoint(directory/'before-checkpoint'))
     engine=runtime._executor._s
     target=int(world.size)-1
+    # Genuine Native preflight adversaries: all ranks enter the same collective
+    # call and a rejected request leaves the diagnostic owner unarmed.
+    invalid_requests=(dict(version=2,block=0,level=0,rank=target),
+        dict(block=-1,level=0,rank=target),dict(block=1,level=0,rank=target),
+        dict(block=0,level=-1,rank=target),dict(block=0,level=2,rank=target),
+        dict(block=0,level=0,rank=-1),dict(block=0,level=0,rank=int(world.size)))
+    preflight_failures=[]
+    for arguments in invalid_requests:
+        invalid=collective_call(world,lambda arguments=arguments:native._AcceptedHaloTestFailureRequest(**arguments))
+        _,refusals=collective_attempt(world,lambda:engine._arm_accepted_halo_test_failure(invalid))
+        preflight_failures.append(refusals)
+        with collective_check(world):
+            assert all(refusals)
+            assert not receipt(engine)['requested']
     if world.size>1:
         divergent=collective_call(world,lambda:native._AcceptedHaloTestFailureRequest(block=0,level=0,rank=int(world.rank)))
         _,divergent_failures=collective_attempt(world,lambda:engine._arm_accepted_halo_test_failure(divergent))
@@ -61,6 +81,11 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
             assert not receipt(engine)['requested']
     request=collective_call(world,lambda:native._AcceptedHaloTestFailureRequest(block=0,level=0,rank=target))
     collective_call(world,lambda:engine._arm_accepted_halo_test_failure(request))
+    armed=collective_call(world,lambda:receipt(engine))
+    _,duplicate=collective_attempt(world,lambda:engine._arm_accepted_halo_test_failure(request))
+    with collective_check(world):
+        assert all(duplicate)
+        assert receipt(engine)==armed
     _,failures=collective_attempt(world,lambda:pops.run(runtime,t_end=2*DT,max_steps=1,console=False))
     local_proof=collective_call(world,lambda:receipt(engine))
     proofs=allgather_value(world,local_proof)
@@ -83,6 +108,7 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
             assert json.loads(str(a['amr_accepted_contract']))['schema_version']==9
             same_accepted_payload(a,b)
             (directory/'failure-proof.json').write_text(json.dumps({'failures':failures,'receipts':proofs,
+                'invalid_request_refusals':preflight_failures,'duplicate_arm_refusals':duplicate,
                 'lifecycle_seal_differences':[key for key in (MANIFEST_KEY,IDENTITY_KEY) if a[key].tobytes()!=b[key].tobytes()]},indent=2)+'\n')
     # No rearming: successful retry proves consumption survived the physical rollback.
     collective_call(world,lambda:pops.run(runtime,t_end=2*DT,max_steps=1,console=False))
@@ -90,5 +116,4 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
     retry=observe(world,runtime);reference=observe(world,control)
     publish(world,directory,'retry',retry);publish(world,directory,'continuous-control',reference)
     with collective_check(world):same(retry,reference)
-    record_property('accepted_halo_stage_failure_receipt',str(directory))
     record_property('phase','after actual block-level preparation/fence; before Q publication')

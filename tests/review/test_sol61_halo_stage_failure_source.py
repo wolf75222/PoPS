@@ -1,6 +1,7 @@
 """Source/host tests only; no claim of actual Native stage injection."""
 from pathlib import Path
 import subprocess
+import shutil
 import numpy as np
 import pytest
 from tests.python.integration.amr.test_public_accepted_halo_stage_failure import same_accepted_payload
@@ -9,6 +10,8 @@ from pops.runtime._checkpoint_manifest import MANIFEST_KEY,IDENTITY_KEY
 ROOT=Path(__file__).resolve().parents[2]
 
 def test_actual_standalone_request_header_host(tmp_path):
+    compiler=shutil.which('clang++') or shutil.which('c++')
+    if compiler is None:pytest.skip('host C++20 compiler unavailable')
     source=tmp_path/'request.cpp';binary=tmp_path/'request'
     source.write_text('''#include <pops/runtime/accepted_halo_test_failure.hpp>
 #include <cassert>
@@ -22,7 +25,7 @@ int main(){
     catch(const std::invalid_argument&){refused=true;}assert(refused);
   }
 }''')
-    subprocess.run(['/usr/bin/clang++','-std=c++20','-Wall','-Wextra','-Werror','-I',str(ROOT/'include'),str(source),'-o',str(binary)],check=True,capture_output=True)
+    subprocess.run([compiler,'-std=c++20','-Wall','-Wextra','-Werror','-I',str(ROOT/'include'),str(source),'-o',str(binary)],check=True,capture_output=True)
     subprocess.run([str(binary)],check=True,capture_output=True)
 
 @pytest.mark.parametrize('member',('state','clock','history','diagnostics','field'))
