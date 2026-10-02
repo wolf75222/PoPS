@@ -11,3 +11,12 @@ MPI geometry is fail-closed but not yet assured: only xmin is targeted, whereas 
 Reproduction: run the independent test with Source import pinned to final Core ee21c042 and author tests root fd6032c3; assert `pops.mesh.boundaries.compiled_plan.__file__` before pytest. The first actual final-Core direct probe failed exactly at the delegation guard (3.51s). No fresh SDK fault was run.
 
 Historical author cohort reproduced14PASS9.12s on its own frozen Core. Independent final-Core metadata gate is **1FAIL3.26s**, module absolute path asserted above; this discrepancy is the blocker, not a Native run.
+
+
+## Follow-up5e474fd7
+
+Author5e474fd7 was copied exactly into this private review WT; frozen Core prerequisites91cc3c6e/a2ee8766 (equivalent already integrated ROOT delegation/uniqueness changes) were copied solely to make Source imports coherent, not new production edits. Do not integrate these prerequisite duplicates into ROOT. The coherent current-Core cohort now gives **15 PASS19.49s**, including the original independent positive detached metadata gate. Manual binding delegation is authenticated and the obsolete inferred package is not silently installed.
+
+Failure target@2 selects greatest actual xmin owner from decoded Native global carrier geometry; replicated owner−1 maps to all ranks. This removes the arbitrary last-world-rank ownership assumption. It still requires explicit convergence/consensus before original Native finalize; local selection exceptions must not leave other ranks entering commit. The proof must persist agreed target/eligibility and genuine selected callback events.
+
+A second genuine HOST_ONLY counterexample compiles the entire actual test-owned callback source with existing read-only MPICH headers/library and invokes its initial callback from a C++ main (not a Native owner or MPI run). With State rank0/size2, target environment `garbage` is accepted by std::atoi as0, callback returns0 and writes scratch. Independent target adversary **1 FAIL1.77s**. Missing, negative, out-of-range and trailing-character targets must be rejected before Field read/write; strict full-string/range parsing is required. Author notified. This does not claim a public Native exploit or actual rollback failure; it is a test hook protocol ambiguity which must close before reception.
