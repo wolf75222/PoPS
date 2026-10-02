@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess
 
 def test_initial_point_and_provider_state_authority(tmp_path):
-    root=Path("/Users/romaindespoulain/dev/tmp/PoPS-sol61-initial-field-ghost")
+    root=Path(__file__).resolve().parents[2]
     source=tmp_path/"probe.cpp";binary=tmp_path/"probe"
     source.write_text(r'''#include <pops/runtime/dynamic/component_consumers.hpp>
 #include <cassert>
