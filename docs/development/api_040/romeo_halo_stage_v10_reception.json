@@ -1,0 +1,74 @@
+{
+  "accepted_state": 9,
+  "amr_payload": 12,
+  "backend": "x86 CPU Kokkos OpenMP, MPICH, same-node MPI2",
+  "cases": [
+    {
+      "case": "halo-world1",
+      "job": 731349,
+      "ranks": 1,
+      "scoped_received": true
+    },
+    {
+      "case": "halo-world2",
+      "job": 731350,
+      "ranks": 2,
+      "scoped_received": true
+    },
+    {
+      "case": "stage-world1",
+      "job": 731351,
+      "ranks": 1,
+      "scoped_received": true
+    },
+    {
+      "case": "stage-world2",
+      "job": 731352,
+      "ranks": 2,
+      "scoped_received": true
+    }
+  ],
+  "execution": {
+    "bytes": 10425,
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-reception-v10/actual-reception-result.json",
+    "sha256": "527b8174412bedb56d303f87bb2a1e064d28adc0901d5735854ed105bb4a9364"
+  },
+  "exported_members": 216,
+  "independent_review": {
+    "bytes": 4513,
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-v10-independent-reception/report.json",
+    "sha256": "6c7b0712a78220820e00e777743d8a737d900191f795d1516efd47427d3e3d82"
+  },
+  "limits": [
+    "Runtime roots are actual same-node local XFS; GPFS renameat2 RENAME_NOREPLACE returned EINVAL in preserved failed job731317 and capability job731329. No production fallback or direct-GPFS checkpoint receipt.",
+    "CPU OpenMP/MPICH same-node worlds1/2 only; no GPU, inter-node MPI, Field/Ghost, other models or latest SDK initial11/12 reception.",
+    "Stage injected failure is after actual boundary preparation/fence and before canonical state publication; not an MPI transport failure.",
+    "Active-cell original growth math is checked separately from whole-grown constant/restart identity; no whole-grown evolved-marker formula claim.",
+    "SIGKILL/node loss can prevent export; complete receipts are required. Times include JIT/setup, not comparable solver performance.",
+    "Remote installed DSO bytes independently rehashed live by ROOT after jobs; whole ENV inventories and run-time origins are preserved fingerprints, not an execution-time C++ to DSO cryptographic graph."
+  ],
+  "live_root_byte_authentication": {
+    "bytes": 893,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/romeo-halo-stage-v10-root-reception/remote-byte-authentication.json",
+    "sha256": "364bb7505ce8456837cb6166034f51f7888afb52c16c453b21131c68eb4e743b"
+  },
+  "native_abi": 8,
+  "native_sha256": "3496ac88cc8ee99b314f5c21f12afe2bc71338f20be3b754d90c29e119388446",
+  "rank_xml_passes": 6,
+  "raw_pins": 39,
+  "root_approval": {
+    "bytes": 590,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/romeo-halo-stage-v10-root-reception/root-approval.json",
+    "sha256": "b720ebb675e1c7780f7992827cc970e71a3f1834de11bb24a0c22c41d8eb8c18"
+  },
+  "root_owner": {
+    "bytes": 16209,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/romeo-halo-stage-v10-root-reception/root-owner.json",
+    "sha256": "82bd480a896b39ecca00685865bcf52fe3c8edbc6e000a91ac929e58cb4627b8"
+  },
+  "schema": "root.api040.romeo-halo-stage-documentary-reception@1",
+  "scope": "accepted-Halo-FE-five-halves-and-fenced-Stage-failure-three-owner@2",
+  "sdk_signature": "678ecad64a90a445dec23c8de219358cac76ad038012429973093c034fa580e8",
+  "source_commit": "5582d98ad49dd5d93d5ededa43448fb9c54e8cd4",
+  "whole_mission_received": false
+}

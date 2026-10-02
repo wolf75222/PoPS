@@ -1,0 +1,33 @@
+{
+  "current_blockage": "Source initialField authority958c4b8b and independent8b805b59 integrated; genuine SDK13 build002860fe running, actual public run and native failure/restart/MPI receipt pending.",
+  "inferred_bind_correction_source": "ee21c042592dfa1881a0f7a140f1c00291f07ec2",
+  "inferred_bind_independent_review": "eb4ad0c9c9ddbd73e2004f55d20f8e54ca31553e",
+  "initial_field_authority_independent_review": "8b805b5945975aa7a18f2002904344ba5cbb270f",
+  "initial_field_authority_source": "958c4b8bb712bd07411b917a393662517b9c8f00",
+  "public_example_independent_review": "3ec0b8596dfd6407e2ee073d1ec4a87681497e3b",
+  "public_example_source": "016dc020b70417f9b63a4382745ec46ee139d15f",
+  "schema": "root.api040.initial-field-ghost-progress@2",
+  "scoped_native_received": false,
+  "sdk11_failed_attempt": {
+    "bytes": 2615,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk11-initial-field-ghost-failed-bind-root-receipt.json",
+    "sha256": "0976f2ae548efa1d8bfcb6b5bfc39a7aeda2dda915c9f4748520a753310218b9"
+  },
+  "sdk12_build": {
+    "bytes": 4234,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-sdk12-initial-field-ghost-dim2-3843390d/build-reception.json",
+    "sha256": "95cc5394592a76d159bdb06f33af4d1c2c7bc0b3e7ec1d0cb3a8925aafbc6451"
+  },
+  "sdk12_failed_attempt": {
+    "bytes": 4421,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk12-initial-field-ghost-failed-field-point-root-receipt.json",
+    "sha256": "982714b7c9d4e192254da9d6671484662b930bb16d4fee63cf24d9506fc5677d"
+  },
+  "sdk13_build_source_commit": "002860fea6f23469b172d74cc8733d409a4dcdcd",
+  "sdk13_dependency_clone": {
+    "bytes": 551,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk12-dependency-clone-initial13/result.json",
+    "sha256": "e8baa574fee4e24a46c2cdb415b584d633349c59bc88d352cd4a2a2e921b03c1"
+  },
+  "whole_mission_received": false
+}
