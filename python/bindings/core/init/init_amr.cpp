@@ -1775,7 +1775,14 @@ void init_amr(py::module_& m) {
                 value, "AmrSystemConfig.transition_lookaheads", 0);
           })
       .def_readwrite("accepted_halo_contract_version", &NativeAmrSystemConfig::accepted_halo_contract_version)
-      .def_readwrite("accepted_halo_extent", &NativeAmrSystemConfig::accepted_halo_extent)
+      .def_property("accepted_halo_extent",
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_extent_to_python(config.accepted_halo_extent);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.accepted_halo_extent = ranked_extent_from_python<kNativeDimension>(
+                value, "AmrSystemConfig.accepted_halo_extent");
+          })
       .def_readwrite("tag_selection_contract_version", &NativeAmrSystemConfig::tag_selection_contract_version)
       .def_property("tag_selection_buffer",
           [](const NativeAmrSystemConfig& config) {
