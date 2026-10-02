@@ -43,27 +43,30 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
     def image(owner):
         engine=owner._engine;native_owner=engine._s
         # Raw checkpoint carriers/registries only: no Field accessor, solve, refresh or publication.
-        return {'blob':bytes(native_owner.checkpoint_state_carriers()),
-                'registry':native_owner.checkpoint_rank_local_carrier_manifest(),
-                'field_manifest':native_owner.field_provider_checkpoint_manifest(),
-                'time':native_owner.time(),'tick':native_owner.macro_step()}
+        return {'blob':collective_call(world,lambda:bytes(native_owner.checkpoint_state_carriers())),
+                'registry':collective_call(world,native_owner.checkpoint_rank_local_carrier_manifest),
+                'field_manifest':collective_call(world,native_owner.field_provider_checkpoint_manifest),
+                'time':collective_call(world,native_owner.time),'tick':collective_call(world,native_owner.macro_step)}
     def observed(owner):
         owners.append(owner._engine)
         before=image(owner)
-        from tests.review.sol61_amr_full_carrier_offline import decode
-        geometry=decode(np.frombuffer(before['blob'],dtype=np.uint8))
-        assert geometry['ranks']==world.size and geometry['dim']==2
-        # Actual native boxes/dmap determine who owns the authored x-min face.
-        eligible=set()
-        for patch in geometry['patches']:
-            if patch['axes'][0][0]==0:
-                eligible.update(range(world.size) if patch['owner']==-1 else (patch['owner'],))
-        assert eligible
-        target=max(eligible);targets.append({'target':target,'eligible':sorted(eligible)})
-        monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',str(target))
-        try:return original(owner)
+        from tests.python.support.initial_ghost_failure_selection import select_xmin_owner,require_selection_agreement
+        from pops._native_collectives import allgather_value
+        # Local parsing failures vote before any next collective Native phase.
+        selected=collective_call(world,lambda:select_xmin_owner(before['blob'],world.size))
+        rows=allgather_value(world,selected)
+        agreed=collective_call(world,lambda:require_selection_agreement(rows,selected))
+        targets.append(agreed)
+        old_target=__import__('os').environ.get('POPS_TEST_INITIAL_GHOST_TARGET_RANK')
+        try:
+            with collective_check(world):monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',str(selected['target']))
+            return original(owner)
         except Exception:
             after=image(owner);images.append((before,after));raise
+        finally:
+            with collective_check(world):
+                if old_target is None:monkeypatch.delenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',raising=False)
+                else:monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',old_target)
     monkeypatch.setattr(NativeAMRBootstrapConsumer,'finalize_bootstrap',observed)
     _,failures=collective_attempt(world,lambda:pops.bind(artifact,resources={'execution_context':context}))
     with collective_check(world):
@@ -80,7 +83,7 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
         log=directory/f'callback-rank{world.rank}.log'
         events=log.read_text() if log.exists() else ''
         reads=[line for line in events.splitlines() if line.startswith('field-before-write ')]
-        if world.rank==targets[0]['target']:assert reads and 'tentative-write' in events
+        if world.rank==targets[0]['agreed']['target']:assert reads and 'tentative-write' in events
         from tests.python.support.initial_field_ghost_native_oracle import FIELD_BOUND
         for line in reads:
             row=dict(item.split('=',1) for item in line.split()[1:])
@@ -88,4 +91,4 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
             assert math.isfinite(value) and abs(value-2.)<=FIELD_BOUND
             assert time==0.
             assert int(row['rank'])==world.rank and int(row['size'])==world.size
-        assert ('injected-failure' in events)==(world.rank==targets[0]['target'])
+        assert ('injected-failure' in events)==(world.rank==targets[0]['agreed']['target'])

@@ -56,6 +56,8 @@ def package_data():
 #include <cstdlib>
 #include <cstring>
 #include <cstddef>
+#include <cerrno>
+#include <climits>
 namespace {
 void event(const char* kind,int rank,int size,double value,double time){
  const char* base=std::getenv("POPS_TEST_INITIAL_GHOST_LOG");if(!base)return;
@@ -75,6 +77,13 @@ int ordinary(void*,const PopsGhostBoundaryRequestV1*,PopsComponentStatusV1* stat
 }
 int initial(void* p,const PopsAcceptedInitialGhostRequestV1* r,PopsComponentStatusV1* status){
  auto* s=static_cast<State*>(p);if(!s||!r||!status)return 52;
+ const char* text=std::getenv("POPS_TEST_INITIAL_GHOST_TARGET_RANK");
+ if(!text||!*text)return 55;
+ // Canonical decimal integer only; no sign, whitespace, partial parse or overflow.
+ if((text[0]=='0'&&text[1])||text[0]<'0'||text[0]>'9')return 55;
+ for(const char* at=text;*at;++at)if(*at<'0'||*at>'9')return 55;
+ errno=0;char* end=nullptr;const long target=std::strtol(text,&end,10);
+ if(errno==ERANGE||!end||*end||target<0||target>=s->size)return 55;
  const auto& q=r->region_request;
  if(r->point_contract_version!=1||q.logical_time.tick!=0||q.logical_time.dt!=0.||!q.dependencies||!q.ghosts.data)return 53;
  const PopsQualifiedConstFieldV1* field=nullptr;
@@ -85,9 +94,7 @@ int initial(void* p,const PopsAcceptedInitialGhostRequestV1* r,PopsComponentStat
  event("field-before-write",s->rank,s->size,phi,q.logical_time.physical_time);
  // Dirty genuine ABI scratch before the outer owner makes its collective decision.
  *static_cast<double*>(q.ghosts.data)=-1234.;event("tentative-write",s->rank,s->size,phi,q.logical_time.physical_time);
- const char* target=std::getenv("POPS_TEST_INITIAL_GHOST_TARGET_RANK");
- if(!target)return 55;
- if(s->rank==std::atoi(target)){event("injected-failure",s->rank,s->size,phi,q.logical_time.physical_time);
+ if(s->rank==target){event("injected-failure",s->rank,s->size,phi,q.logical_time.physical_time);
  *status={sizeof(PopsComponentStatusV1),73,POPS_COMPONENT_ABORT_RUN_V1,"independent initial Ghost rank-local failure after Field read/write"};}
  else *status={sizeof(PopsComponentStatusV1),0,POPS_COMPONENT_CONTINUE_V1,nullptr};
  return 0;
