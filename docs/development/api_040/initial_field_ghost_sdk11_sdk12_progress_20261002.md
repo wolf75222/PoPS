@@ -24,23 +24,69 @@ L'exemple utilise le FAC par défaut : son succès ne qualifie pas la garde SCI1
 Les suites Source99PASS et27PASS sont distinctes des runs et ne sont pas
 additionnées aux suites qui les recouvrent.
 
-L'injection native@5 passe en Serial : vraie Field2 lue, candidate écrite puis
-échec ABI natif, abandon outer-bootstrap original et comparaison exacte de tous
-les State valides+grown accessibles, métadonnées et readiness restaurée.
-MPI2@5 atteint la même injection sur la cible propriétaire1 et restaure les deux
-owners, mais le test échoue : le diagnostic parent intermédiaire refuse des
-replicas ghost divergents et masque la cause native. Ce refus est légitime ;
-aucune garde Core n'est contournée. Correction test-only@6 et contre-revue en cours.
-Aucun sceau ROOT d'injection n'est encore délivré. Les contenus du registre
-Field non matérialisé, payloads Field/auxiliaires indisponibles et rollback nested
-parent ne sont pas reçus. Les échecs précédents@3/@4 et les journaux@5 sont gardés.
+L'[injection native@6 ROOT](/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-initial-ghost-capture-fault-root-reception.json) est reçue Serial et MPI2. Le recompute ROOT
+rehash les57 pins du gel indépendant, relit les9/14 exports réels, compare ses
+résultats au rapport non-auteur et authentifie les1 140 fichiers du paquet et du
+checkout ainsi que le DSO. En Serial, le XML compte1PASS49,277 s ; en MPI2,
+chaque rang compte le même cas1PASS54,344 s (un seul cas partagé). Les wrappers
+mesurent respectivement52,082 s et57,646 s. Le Field réel2 est lu avant l'écriture
+candidate, puis le callback ABI natif déclenche l'échec sur le propriétaire xmin
+déduit du carrier réel. L'abandon outer-bootstrap original restaure exactement
+les State valides+grown, métadonnées accessibles et readiness non matérialisée.
+Le point temporel +0 est aussi vérifié par bits au recompute ROOT.
+
+Le diagnostic parent-rejected MPI reste explicitement canonical-refused : aucun
+State/registre intermédiaire n'est inventé ou reçu et la cause native d'origine
+est conservée. La contre-revue Source@6 et31 contrôles offline par configuration
+couvrent les refus et mutations de copies ; ces suites ne sont pas deux runs
+Native supplémentaires. Les payloads Field/registre/auxiliaires indisponibles,
+caches/history de cette faute, rollback nested parent et constructeur antérieur
+ne sont pas certifiés. Les échecs@3/@4 et MPI@5 restent immuables et distincts.
+Cette tranche obligatoire bornée est terminée ; la mission94 reste active.
 
 Portée : CPU arm64 Kokkos OpenMP1/MPICH Dim2, Serial et MPI2 sur même machine ;
 Field scalaire uniforme FAC, AMR8×8/deux niveaux synchrones, une FE dt1/64,
 ghosts physiques xmin à indices tangentiels valides. Pas de réception GPU,
 inter-nœuds, autre dimension, modèle complet, ROMEO SDK14 ou GitHub CI actuel.
-Le suivi machine est [progression@4](initial_field_ghost_sdk11_sdk12_progress_20261002.json).
+Le suivi machine est [progression@5](initial_field_ghost_sdk11_sdk12_progress_20261002.json).
 La mission complète reste active, avec94 obligations conservées.
+
+Reproduction Native depuis le checkout gelé
+`/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002`
+(test Source53d62a5e ; build Source8d438518, aucun diff de production).
+Chaque sortie doit être neuve ; les réceptions originales ne sont pas écrasées.
+Pour refaire le positif, remplacer le node par celui de
+`tests/python/integration/amr/test_public_initial_field_ghost.py::test_public_initial_field_fresh_before_ghost_and_positive_point` indiqué dans les reçus positifs.
+
+```sh
+POPS_RECEPTION_ENV=/Users/romaindespoulain/miniforge3/envs/pops-api040-initial14
+POPS_RECEPTION_OUTPUT=/Users/romaindespoulain/dev/tmp/pops-initial-ghost-reproduction-serial
+cd /Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002
+rtk proxy env -u PYTHONPATH CONDA_PREFIX="$POPS_RECEPTION_ENV" \
+  Kokkos_ROOT="$POPS_RECEPTION_ENV" POPS_KOKKOS_ROOT="$POPS_RECEPTION_ENV" \
+  CMAKE_PREFIX_PATH="$POPS_RECEPTION_ENV" \
+  POPS_INCLUDE="$POPS_RECEPTION_ENV/lib/python3.12/site-packages/pops/include" \
+  POPS_NATIVE_DIM=2 PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
+  OMP_NUM_THREADS=1 POPS_THREADS=1 OMP_PROC_BIND=false FI_PROVIDER=tcp \
+  PATH="$POPS_RECEPTION_ENV/bin:/Users/romaindespoulain/miniforge3/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  "$POPS_RECEPTION_ENV/bin/python" docs/development/api_040/run_installed_checks.py \
+  --output "$POPS_RECEPTION_OUTPUT" \
+  --test tests/python/integration/amr/test_public_initial_field_ghost_failure.py::test_public_initial_ghost_rank_fault_keeps_prepublication_owner
+```
+
+Avec le même préfixe env, refaire `run_installed_checks.py --identity-only
+--output "$POPS_RECEPTION_OUTPUT/after"` même après un échec, puis comparer
+l'identité entière et les bytes `source-files.json` avant/après. Pour MPI2,
+utiliser une sortie distincte vide et `run_installed_mpi_checks.py --output
+"$POPS_RECEPTION_OUTPUT" --ranks 2 --dimension 2 --threads 1 --timeout 1800
+--test tests/python/integration/amr/test_public_initial_field_ghost_failure.py::test_public_initial_ghost_rank_fault_keeps_prepublication_owner`.
+Ce driver conserve ses authentifications avant/après et XML par rang.
+Les commandes exactes et environnements des exécutions reçues sont dans les
+`root-commands.json` liés aux sorties du sceau. Le
+[lecteur indépendant reproductible](/Users/romaindespoulain/dev/tmp/sol61-sdk14-initial-capture-fault-independent-20261002/README.md)
+permet le recompute offline sans importer PoPS ni écrire dans les originaux.
+Le [driver ROOT](/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-capture-fault-root-receiver.py) est figé ;
+son reçu existant se lit sans le régénérer. Les hashes ne sont pas un résultat CI.
 
 Historique SDK13 (avant le build SDK14 et sa réception positive) :
 

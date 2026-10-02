@@ -3,7 +3,7 @@
   "checkpoint_capacity_independent_review": "10053d60f8be786197b6ef367e9a63be6090a456",
   "checkpoint_capacity_source": "a2d5f7d4ed354938d87e50ddf52d497af36df604",
   "checkpoint_consensus_review_correction": "Old initializer_list/string_view/span overload did not allocate vector/string. Allocation allegation withdrawn; new named container is explicitly prepared under vote.",
-  "current_blockage": "SDK14 positive scientific Serial/MPI2 received with exact consumed Field, CP12/accepted9 and restart. Fault @5 Serial execution PASS, independent receipt pending. Fault @5 MPI2 failed because the intermediate parent diagnostic masks the genuine rank-local failure with the normative divergent-replica capture refusal. Test-only @6 correction and nonauthor review underway; no Core defect established.",
+  "current_blockage": "Mandatory SDK14 initial Field/Ghost slice received: scientific consumed initial/endpoint Field, CP12/accepted9/restart, genuine rank-local Ghost read/write/failure and exact outer-abort State/readiness restore in Serial/MPI2. All historical failures preserved. Strict generic core M16 canonical affine basis and M17 compiler-selected physical/method recipe remain; next public Python composition plus explicit common native mathematical primitives and structurally new nonauthor witness.",
   "fac_explicit_realization_source": "5065539483fb2ffc2bf223f163811f0d24f9b269",
   "fac_independent_review": "e390e3a121994e84fdc1e7ea777ab1115d72864e",
   "field_observation_decision": "Generic optional full candidate observation implemented and built before genuine Ghost, with qualified slot/invocation/point/topology. Positive initial and endpoint observations independently recomputed and ROOT received in Serial/MPI2; the getter stays the last FE-stage warm seed and performs no solve.",
@@ -29,12 +29,12 @@
     "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-integrated-state-carrier-capacity-source-receipt.json",
     "sha256": "90b8187061e8ad095d345678b91f25909fbe573d8fb70b24862cfd168a7ca3ca"
   },
-  "native_fault_injection_received": false,
+  "native_fault_injection_received": true,
   "native_limits": [
     "Actual SDK14 arm64 Apple LLVM21/C++20 Kokkos5.2 OpenMP one thread, MPICH4.1.2, parallel HDF5, Dim2 Serial/same-host MPI2 only.",
     "Positive uniform scalar built-in FAC screened Field, N8/two synchronous levels, one ForwardEuler step dt1/64, physical xmin ghosts with valid tangential indices; not arbitrary providers/corners/general populated Field halos/full models.",
     "Initial and accepted consumed Field OriginalF limit remains 1e-10. Getter warm seed at the last FE stage is a distinct observation.",
-    "CP12/accepted9 and exact restart received for the positive case. Fault @5 Serial execution passes; @5 MPI2 test fails at a legitimate intermediate capture guard. No ROOT fault seal yet.",
+    "CP12/accepted9 and exact restart received for the positive case. Native fault@6 Serial/MPI2 independently recomputed and ROOT received in the exact outer-abort scope; @5 MPI diagnostic failure preserved.",
     "Fault baseline/after genuine outer bootstrap abort preserves available full State bits and explicit unmaterialized readiness; unavailable registry/Field/auxiliary payload contents and nested parent rollback are not certified.",
     "No SDK14 Dim1/Dim3, GPU, inter-node, ROMEO or current GitHub CI result. No cryptographic C++-to-DSO graph proof."
   ],
@@ -44,12 +44,13 @@
     "native_abi": 8,
     "original_F_linf_limit": 1e-10
   },
-  "previous_progress_commit": "af0c1e54350474c5741388c94be769aa572a1498",
+  "previous_progress_commit": "6353c11ceb5ef2bbf4c4f9d375bec27d8953604b",
   "public_example_independent_review": "3ec0b8596dfd6407e2ee073d1ec4a87681497e3b",
   "public_example_source": "016dc020b70417f9b63a4382745ec46ee139d15f",
-  "schema": "root.api040.initial-field-ghost-progress@4",
-  "scoped_native_received": false,
-  "scoped_native_received_scope": "Complete bounded positive-plus-injection slice; positive scientific reception alone is recorded separately.",
+  "schema": "root.api040.initial-field-ghost-progress@5",
+  "scoped_joint_initial_field_ghost_slice_received": true,
+  "scoped_native_received": true,
+  "scoped_native_received_scope": "Bounded SDK14 initial Field-to-Ghost positive scientific case plus first parent-to-fine outer-bootstrap abort fault in actual Serial and same-host MPI2; no whole-model or whole-mission reception.",
   "scoped_positive_native_scientific_received": true,
   "sdk11_failed_attempt": {
     "bytes": 2615,
@@ -115,6 +116,16 @@
     "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8d438518-srcb5fd6104-initial-ghost-readiness-fault-mpi2-dim2/root-export-pins.json",
     "sha256": "b00997f69dd6353a63456c863188a2ea35fe187302cb6076df6c02fa5960866a"
   },
+  "sdk14_initial_ghost_fault_mpi2_v6_execution": {
+    "bytes": 390,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-capture-initial-ghost-fault-mpi2-launch/root-execution-result.json",
+    "sha256": "b467940b91b73e4e10fdda85bcbffcd7e702cbe9770385cedd28ecdec48bdaaa"
+  },
+  "sdk14_initial_ghost_fault_root_reception": {
+    "bytes": 6988,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-initial-ghost-capture-fault-root-reception.json",
+    "sha256": "f2fac478da968085dfb84065b43555d3e7f55fde158d258a51e86fc2d3b05704"
+  },
   "sdk14_initial_ghost_fault_serial_execution": {
     "bytes": 422,
     "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8d438518-srcb5fd6104-initial-ghost-readiness-fault-serial-dim2/root-execution-result.json",
@@ -125,6 +136,47 @@
     "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8d438518-srcb5fd6104-initial-ghost-readiness-fault-serial-dim2/root-export-pins.json",
     "sha256": "2ebd6e834b17b534e0587d79816a12c6c684ce3c3055323aa5a351eadb3b1c6c"
   },
+  "sdk14_initial_ghost_fault_serial_v6_execution": {
+    "bytes": 419,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8d438518-src53d62a5e-initial-ghost-capture-fault-serial-dim2/root-execution-result.json",
+    "sha256": "2548c027a82e47e11b011e43d8df1a529b81290eed92aa6db1d4ce6310437105"
+  },
+  "sdk14_initial_ghost_fault_v6_author": "c09f2300b5b66ef3c851d210cafad3b244e09e6e",
+  "sdk14_initial_ghost_fault_v6_backend_results": [
+    {
+      "backend": "Serial",
+      "exports": 9,
+      "native_experiments": 1,
+      "native_junit_seconds_by_rank": [
+        49.625
+      ],
+      "ranks": 1,
+      "same_complete_identity_and_source_bytes": true,
+      "scoped_root_fault_received": true,
+      "verified_installed_and_test_tree_files": 1140
+    },
+    {
+      "backend": "MPI2",
+      "exports": 14,
+      "native_experiments": 1,
+      "native_junit_seconds_by_rank": [
+        54.71,
+        54.71
+      ],
+      "ranks": 2,
+      "same_complete_identity_and_source_bytes": true,
+      "scoped_root_fault_received": true,
+      "verified_installed_and_test_tree_files": 1140
+    }
+  ],
+  "sdk14_initial_ghost_fault_v6_independent_freeze": {
+    "bytes": 14692,
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk14-initial-capture-fault-independent-20261002/freeze-final-pins.json",
+    "sha256": "51e25cba208a3305fc6b2d19fdd8322d3e62db180b5712b6d7b50e380954bb22"
+  },
+  "sdk14_initial_ghost_fault_v6_independent_source_review": "fa8e96e850a62946f005a478a674b5527c951edf",
+  "sdk14_initial_ghost_fault_v6_test_source_commit": "53d62a5e5479a3dcc1fc96bfd9d0f32531c3543b",
+  "sdk14_initial_ghost_fault_v6_time_measurements": "Root seal native_junit_seconds_by_rank measures XML testsuite time. Markdown49.277/54.344 measures testcase time; wrapper52.082/57.646 is separate. MPI ranks share one native experiment.",
   "sdk14_integrated_consumed_field_oracle_source": {
     "bytes": 1450,
     "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-integrated-consumed-field-oracle-source-receipt.json",
@@ -174,6 +226,6 @@
   },
   "sdk14_positive_test_source_commit": "3e688beb8fa613f77e37ad9c9aaabd83e015b6ad",
   "sdk14_sdk_signature": "8c238f29d89a6a576870bbb5806f1e50e4c2c421dda1495cbfa86edc5f5006a4",
-  "updated_at_utc": "2026-10-02T15:06:15.778606+00:00",
+  "updated_at_utc": "2026-10-02T15:43:33.937099+00:00",
   "whole_mission_received": false
 }
