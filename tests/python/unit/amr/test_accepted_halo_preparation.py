@@ -38,3 +38,17 @@ def test_actual_public_stationary_case_resolves_with_explicit_numerical_effect(s
     assert resolved is not None
     assert layout.runtime_layout_data()["execution"]["accepted_halo"]["effect"] == "prepare_accepted_halo"
     assert not any(name == "_pops" or name.endswith("._pops") for name in sys.modules)
+
+
+def test_actual_program_exports_its_typed_primary_clock_for_topology_relay():
+    import json
+    from pops.codegen.program_emit_amr import _emit_checkpoint_shape_metadata
+    case, _ = build((8, 12), 1, "injection")
+    program = case._time
+    manifest = program.temporal_manifest()
+    source = _emit_checkpoint_shape_metadata(program)
+    expected = ('extern "C" const char* pops_program_checkpoint_primary_clock_identity() {\n'
+                '  return %s;\n}\n' % json.dumps(manifest["primary_clock"]))
+    assert expected in source
+    assert manifest["primary_clock"] == program.clock.qualified_id
+    assert not any(name == "_pops" or name.endswith("._pops") for name in sys.modules)

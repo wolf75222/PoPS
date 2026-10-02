@@ -436,6 +436,8 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
         + integer_accessor("pops_program_checkpoint_history_components", 7)
         + f'extern "C" int pops_program_checkpoint_logical_clock_count() {{ return {len(clocks)}; }}\n'
         + string_accessor("pops_program_checkpoint_logical_clock_identity", 0, clocks)
+        + 'extern "C" const char* pops_program_checkpoint_primary_clock_identity() {\n'
+        + "  return %s;\n}\n" % json.dumps(temporal["primary_clock"])
         + 'extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {\n'
         + (
             '  return "pops.amr.same-level-transport-euler-stage-flux@2";\n}\n'

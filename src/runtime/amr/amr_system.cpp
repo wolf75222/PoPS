@@ -3580,6 +3580,7 @@ struct AmrSystem<Dim>::Impl {
   mutable std::unique_ptr<AcceptedSnapshot> bootstrap_transaction;
   mutable std::set<std::pair<std::string, int>> bootstrap_materialized_actions;
   mutable bool automatic_bootstrap_complete = false;
+  bool accepted_transaction_active = false;
 
   struct AcceptedSnapshot {
     std::optional<typename engine_type::Snapshot> engine;
@@ -9575,9 +9576,6 @@ struct AmrSystem<Dim>::Impl {
     try {
       if (!tagging_spec)
         throw std::logic_error("AMR hierarchy has no prepared tagging authority");
-      if (cfg.accepted_halo_contract_version == 1 && !bootstrap_transaction)
-        throw std::invalid_argument(
-            "accepted halo regrid route lacks an authenticated candidate clock authority");
       if (parent_level < 0 ||
           static_cast<std::size_t>(parent_level) >= engine->hierarchy().num_levels() ||
           parent_level >= cfg.level_count - 1)
@@ -9814,15 +9812,99 @@ struct AmrSystem<Dim>::Impl {
     return shards;
   }
 
+  using AcceptedHaloPointPack =
+      std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>>;
+
+  AcceptedHaloPointPack accepted_halo_topology_points() const {
+    const auto& metadata = program.checkpoint_metadata_;
+    if (metadata.primary_clock_identity.empty())
+      throw std::invalid_argument("accepted halo topology lacks its installed primary clock authority");
+    const auto bytes = facade->program_accepted_state();
+    const auto budget = accepted_state_interface_flux_ledger_budget();
+    const auto accepted = runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &budget);
+    if (accepted.topology_epoch != engine->topology_epoch() ||
+        accepted.materialization_generation != engine->materialization_generation() ||
+        accepted.level_clocks.size() != engine->hierarchy().num_levels() ||
+        !accepted.logical_clock_ticks.contains(metadata.primary_clock_identity) ||
+        accepted.logical_clock_ticks.at(metadata.primary_clock_identity) != macro_step)
+      throw std::invalid_argument("accepted halo topology clock pack differs from its live authority");
+    for (const auto& clock : accepted.level_clocks)
+      if (clock.macro_step != macro_step || clock.physical_time != accepted_time ||
+          clock.phase != ::pops::amr::Rational(0, 1))
+        throw std::invalid_argument("accepted halo topology requires aligned accepted clocks");
+    const double macro_dt = static_cast<double>(program.last_dt_);
+    if (!std::isfinite(macro_dt) || macro_dt < 0 || (macro_step != 0 && macro_dt == 0))
+      throw std::invalid_argument("accepted halo topology lacks its accepted numerical duration");
+    std::vector<double> durations(static_cast<std::size_t>(cfg.level_count), macro_dt);
+    if (macro_dt > 0) {
+      // This normalized numerical interval feeds only the exact declared schedule partition;
+      // boundary execution always receives the authenticated physical accepted time below.
+      ::pops::amr::ClockWindow window{{0, macro_step, {0, 1}, 0},
+                                     {0, macro_step, {1, 1}, macro_dt}};
+      for (std::size_t level = 1; level < durations.size(); ++level) {
+        if (level - 1 >= temporal_relations.size())
+          throw std::invalid_argument("accepted halo topology lacks a declared temporal transition");
+        const auto partition = temporal_relations[level - 1].partition(window);
+        if (partition.empty())
+          throw std::invalid_argument("accepted halo topology has an empty temporal partition");
+        window = partition.back().window;
+        durations[level] = macro_dt * (window.end.phase - window.begin.phase).value();
+      }
+    }
+    AcceptedHaloPointPack result(blocks.size());
+    for (auto& block : result)
+      for (std::size_t level = 0; level < durations.size(); ++level)
+        block.push_back({.clock = metadata.primary_clock_identity, .tick = macro_step,
+            .level = static_cast<int>(level), .substep = 0, .stage = 0,
+            .stage_fraction = {0, 1}, .dt = durations[level], .physical_time = accepted_time});
+    if (macro_dt == 0)
+      for (std::size_t block = 0; block < result.size(); ++block)
+        for (std::size_t level = 0;
+             level < prepared_hierarchy->accepted_halo_boundary_preflight[block].size(); ++level)
+          prepared_hierarchy->accepted_halo_boundary_preflight[block][level](result[block][level]);
+    return result;
+  }
+
+  void prepare_topology_accepted_halos(AcceptedHaloPointPack points) {
+    if (cfg.accepted_halo_contract_version != 1 || bootstrap_transaction) return;
+    const auto& lane = *prepared_hierarchy->lane;
+    std::vector<std::vector<field_type>> candidates;
+    std::exception_ptr error;
+    try {
+      candidates.resize(blocks.size());
+      if (points.size() != candidates.size())
+        throw std::invalid_argument("accepted halo topology lost its block point pack");
+      const auto levels = engine->hierarchy().num_levels();
+      for (std::size_t block = 0; block < candidates.size(); ++block) {
+        if (points[block].size() < levels)
+          throw std::invalid_argument("accepted halo topology exceeds its declared point capacity");
+        points[block].resize(levels);
+        candidates[block].reserve(levels);
+        for (std::size_t level = 0; level < levels; ++level)
+          candidates[block].emplace_back(block_state(block, level));
+      }
+      Kokkos::fence();
+    } catch (...) { error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "accepted halo topology candidate allocation failed collectively");
+    facade->prepare_accepted_halo_candidates(candidates, points);
+    error = {};
+    try {
+      for (std::size_t block = 0; block < candidates.size(); ++block)
+        for (std::size_t level = 0; level < candidates[block].size(); ++level)
+          copy_full_field_in_place(candidates[block][level], block_state(block, level));
+      Kokkos::fence();
+    } catch (...) { error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "accepted halo topology precommit copy failed collectively");
+  }
+
   template <class Publish>
   void publish_program_topology(Publish&& publish) {
     ensure_engine();
     const ExecutionLane& lane = multiblock_hierarchy->lane();
     std::exception_ptr authority_error;
     try {
-      if (cfg.accepted_halo_contract_version == 1 && !bootstrap_transaction)
-        throw std::invalid_argument(
-            "accepted halo topology route lacks an authenticated candidate clock authority");
       if (multiblock_hierarchy->block_count() != 1)
         throw std::invalid_argument(
             "single-carrier AMR Program topology requires exactly one block");
@@ -9838,6 +9920,7 @@ struct AmrSystem<Dim>::Impl {
     execute_transaction([&] {
       std::string reason;
       runtime::multiblock::BoundaryEvaluationPoint point;
+      AcceptedHaloPointPack halo_points;
       std::exception_ptr admission_error;
       try {
         reason = restart_transaction     ? "restart_regrid"
@@ -9852,6 +9935,10 @@ struct AmrSystem<Dim>::Impl {
         point.stage_fraction = {0, 1};
         point.dt = static_cast<double>(program.last_dt_);
         point.physical_time = accepted_time;
+        if (cfg.accepted_halo_contract_version == 1 && !bootstrap_transaction) {
+          halo_points = accepted_halo_topology_points();
+          point = halo_points.at(0).at(0);
+        }
       } catch (...) {
         admission_error = std::current_exception();
       }
@@ -9887,6 +9974,7 @@ struct AmrSystem<Dim>::Impl {
       }
       runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
           refresh_error, &published_lane, "AMR Program topology refresh failed collectively");
+      prepare_topology_accepted_halos(std::move(halo_points));
     });
   }
 
@@ -9998,6 +10086,7 @@ struct AmrSystem<Dim>::Impl {
 
     std::string rematerialization_reason;
     runtime::multiblock::BoundaryEvaluationPoint rematerialization_point;
+    AcceptedHaloPointPack halo_points;
     std::exception_ptr rematerialization_preflight_error;
     try {
       if (facade == nullptr)
@@ -10015,6 +10104,10 @@ struct AmrSystem<Dim>::Impl {
       rematerialization_point.stage_fraction = {0, 1};
       rematerialization_point.dt = static_cast<double>(program.last_dt_);
       rematerialization_point.physical_time = accepted_time;
+      if (cfg.accepted_halo_contract_version == 1 && !bootstrap_transaction) {
+        halo_points = accepted_halo_topology_points();
+        rematerialization_point = halo_points.at(0).at(0);
+      }
     } catch (...) {
       rematerialization_preflight_error = std::current_exception();
     }
@@ -10219,6 +10312,7 @@ struct AmrSystem<Dim>::Impl {
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         program_refresh_error, &published_lane,
         "AMR Program hierarchy-state publication failed collectively");
+    prepare_topology_accepted_halos(std::move(halo_points));
     if (hierarchy_cycle_state == nullptr)
       publish_tagging_checkpoint();
     if (topology_changed) {
@@ -10794,6 +10888,11 @@ struct AmrSystem<Dim>::Impl {
     ensure_engine();
     std::unique_ptr<AcceptedSnapshot> snapshot =
         prepare_accepted_snapshot_collectively("accepted transaction");
+    struct ActiveTransaction {
+      bool& slot; bool prior;
+      explicit ActiveTransaction(bool& value) : slot(value), prior(value) { slot = true; }
+      ~ActiveTransaction() { slot = prior; }
+    } active(accepted_transaction_active);
     try {
       return std::forward<Function>(function)();
     } catch (const std::exception& transaction_error) {
@@ -13659,7 +13758,7 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
   std::exception_ptr error;
   try {
     const auto levels = p_->engine->hierarchy().num_levels();
-    if (!p_->bootstrap_transaction && step_transaction_depth() == 0)
+    if (!p_->bootstrap_transaction && !p_->accepted_transaction_active && step_transaction_depth() == 0)
       throw std::invalid_argument("accepted halo preparation requires its enclosing rollback transaction");
     if (candidates.size() != p_->blocks.size() || points.size() != candidates.size())
       throw std::invalid_argument("accepted halo preparation requires every exact block candidate");
@@ -17798,14 +17897,14 @@ void AmrSystem<Dim>::begin_bootstrap_plan() {
     const auto& lane = *p_->prepared_hierarchy->lane;
     std::exception_ptr preflight_error;
     try {
-      if (p_->tagging_spec->clock_identity.empty())
-        throw std::invalid_argument("accepted halo bootstrap lacks its initial clock authority");
+      if (p_->program.checkpoint_metadata_.primary_clock_identity.empty())
+        throw std::invalid_argument("accepted halo bootstrap lacks its installed primary clock authority");
       for (std::size_t block = 0;
            block < p_->prepared_hierarchy->accepted_halo_boundary_preflight.size(); ++block)
         for (std::size_t level = 0;
              level < p_->prepared_hierarchy->accepted_halo_boundary_preflight[block].size(); ++level) {
           runtime::multiblock::BoundaryEvaluationPoint point{
-              .clock = p_->tagging_spec->clock_identity, .tick = 0,
+              .clock = p_->program.checkpoint_metadata_.primary_clock_identity, .tick = 0,
               .level = static_cast<int>(level), .substep = 0, .stage = 0,
               .stage_fraction = {0, 1}, .dt = 0.0, .physical_time = 0.0};
           p_->prepared_hierarchy->accepted_halo_boundary_preflight[block][level](point);
@@ -17883,6 +17982,7 @@ void AmrSystem<Dim>::commit_bootstrap_level() {
     std::exception_ptr error;
     try {
       if (!p_->tagging_spec || p_->tagging_spec->clock_identity.empty() ||
+          p_->program.checkpoint_metadata_.primary_clock_identity.empty() ||
           std::find(p_->program.checkpoint_metadata_.logical_clock_identities.begin(),
                     p_->program.checkpoint_metadata_.logical_clock_identities.end(),
                     p_->tagging_spec->clock_identity) ==
@@ -17892,7 +17992,7 @@ void AmrSystem<Dim>::commit_bootstrap_level() {
       for (std::size_t block = 0; block < candidates.size(); ++block)
         for (std::size_t level = 0; level < p_->engine->hierarchy().num_levels(); ++level) {
           candidates[block].emplace_back(p_->block_state(block, level));
-          points[block].push_back({.clock = p_->tagging_spec->clock_identity,
+          points[block].push_back({.clock = p_->program.checkpoint_metadata_.primary_clock_identity,
               .tick = 0, .level = static_cast<int>(level), .substep = 0, .stage = 0,
               .stage_fraction = {0, 1}, .dt = 0.0, .physical_time = 0.0});
         }

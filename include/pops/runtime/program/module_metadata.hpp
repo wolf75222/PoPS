@@ -229,6 +229,7 @@ struct ProgramCheckpointHistoryMetadata {
 struct ProgramCheckpointMetadata {
   std::vector<ProgramCheckpointHistoryMetadata> histories;
   std::vector<std::string> logical_clock_identities;
+  std::string primary_clock_identity;
   std::string temporal_provider_identity;
   std::size_t temporal_cell_capacity = 0;
   std::size_t temporal_cells_per_topology_cell = 0;
@@ -311,6 +312,16 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
     metadata.logical_clock_identities.push_back(std::move(identity));
   }
   std::sort(metadata.logical_clock_identities.begin(), metadata.logical_clock_identities.end());
+  // Optional for historical artifacts; an explicit stronger numerical request authenticates it.
+  using PrimaryClockFn = const char* (*)();
+  const auto primary_clock = reinterpret_cast<PrimaryClockFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_checkpoint_primary_clock_identity"));
+  if (primary_clock) {
+    const char* identity = primary_clock();
+    if (identity == nullptr || identity[0] == '\0' || !logical_clocks.contains(identity))
+      throw std::runtime_error("compiled Program primary clock is outside its logical authorities");
+    metadata.primary_clock_identity = identity;
+  }
 
   using TemporalProviderFn = const char* (*)();
   using TemporalCellCapacityFn = std::uint64_t (*)();
