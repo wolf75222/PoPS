@@ -1,6 +1,7 @@
 """Actual Native test-hook@1; ROOT execution required, no synthetic runtime."""
 from pathlib import Path
 import json
+import hashlib
 import sys
 import numpy as np
 import pops
@@ -25,6 +26,19 @@ def same_accepted_payload(before,after):
         if key in (MANIFEST_KEY,IDENTITY_KEY):continue
         a,b=before[key],after[key]
         assert a.dtype==b.dtype and a.shape==b.shape and a.tobytes()==b.tobytes(),key
+
+def checkpoint_pair_proof(retry_path,control_path):
+    retry,control=read_payload(retry_path),read_payload(control_path)
+    same_accepted_payload(retry,control)
+    assert int(retry['pops_amr_checkpoint_version'])==12
+    assert json.loads(str(retry['amr_accepted_contract']))['schema_version']==9
+    return {'schema':'pops.accepted-halo-test-failure.retry-control@1',
+        'checkpoints':{label:{'path':str(Path(path).resolve()),
+            'sha256':hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+            for label,path in (('retry',retry_path),('continuous_control',control_path))},
+        'excluded_lifecycle_seals':[MANIFEST_KEY,IDENTITY_KEY],
+        'lifecycle_seal_differences':[key for key in (MANIFEST_KEY,IDENTITY_KEY)
+            if retry[key].tobytes()!=control[key].tobytes()]}
 
 def receipt(engine):
     r=engine._accepted_halo_test_failure_receipt()
@@ -72,6 +86,7 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
         with collective_check(world):
             assert all(refusals)
             assert not receipt(engine)['requested']
+    divergent_failures=[]
     if world.size>1:
         divergent=collective_call(world,lambda:native._AcceptedHaloTestFailureRequest(block=0,level=0,rank=int(world.rank)))
         _,divergent_failures=collective_attempt(world,lambda:engine._arm_accepted_halo_test_failure(divergent))
@@ -109,11 +124,18 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
             same_accepted_payload(a,b)
             (directory/'failure-proof.json').write_text(json.dumps({'failures':failures,'receipts':proofs,
                 'invalid_request_refusals':preflight_failures,'duplicate_arm_refusals':duplicate,
+                'divergent_request_applicable':bool(world.size>1),'divergent_request_refusals':divergent_failures,
                 'lifecycle_seal_differences':[key for key in (MANIFEST_KEY,IDENTITY_KEY) if a[key].tobytes()!=b[key].tobytes()]},indent=2)+'\n')
     # No rearming: successful retry proves consumption survived the physical rollback.
     collective_call(world,lambda:pops.run(runtime,t_end=2*DT,max_steps=1,console=False))
     collective_call(world,lambda:pops.run(control,t_end=2*DT,max_steps=1,console=False))
     retry=observe(world,runtime);reference=observe(world,control)
     publish(world,directory,'retry',retry);publish(world,directory,'continuous-control',reference)
-    with collective_check(world):same(retry,reference)
+    retry_checkpoint=collective_call(world,lambda:runtime.checkpoint(directory/'retry-checkpoint'))
+    control_checkpoint=collective_call(world,lambda:control.checkpoint(directory/'continuous-control-checkpoint'))
+    with collective_check(world):
+        same(retry,reference)
+        if world.rank==0:
+            proof=checkpoint_pair_proof(retry_checkpoint,control_checkpoint)
+            (directory/'retry-control-checkpoint-proof.json').write_text(json.dumps(proof,indent=2)+'\n')
     record_property('phase','after actual block-level preparation/fence; before Q publication')
