@@ -13,7 +13,7 @@ from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 pytestmark=[pytest.mark.compiler,pytest.mark.native_loader]
-SCHEMA='pops.m16-second-state-native-fixture@1'
+SCHEMA='pops.m16-second-state-native-fixture@2'
 
 
 def test_installed_affine_degree_five_selected_second_state(tmp_path,record_property,isolated_native_cache,native_cxx,kokkos_root):
@@ -26,12 +26,12 @@ def test_installed_affine_degree_five_selected_second_state(tmp_path,record_prop
     with collective_check(world):assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
     declaration,layout,subjects,_,_=collective_call(world,case.build)
     validated=collective_call(world,lambda:pops.validate(declaration))
-    resolved=collective_call(world,lambda:pops.resolve(validated,layout=layout))
+    resolved=collective_call(world,lambda:pops.resolve(validated,layout=layout,compile_options={"model_source_policy":"require"}))
     artifact=(collective_call(world,lambda:pops.compile(resolved)) if world is None else
         compile_resolved_plan_once(world,resolved,route='m16-selected-second-state',compile_artifact=pops.compile))
     directory=collective_directory(world,tmp_path/'second-state-affine')
     record_property('m16_second_state_provenance',str(directory/'provenance.json'))
-    collective_call(world,lambda:retain_provenance(artifact,resolved,native,directory,blocks=case.PARTITION) if root() else None)
+    collective_call(world,lambda:retain_provenance(artifact,resolved,native,directory,blocks=case.PARTITION,require_model_sources=True) if root() else None)
     initial=case.initials()
     runtime=collective_call(world,lambda:pops.bind(artifact,initial_values={validated.resolve(subjects[label]):initial[label] for label in case.PARTITION},resources={'execution_context':artifact_execution_context(artifact)}))
     images={};phases=[];attempts=[];capture_errors=[]

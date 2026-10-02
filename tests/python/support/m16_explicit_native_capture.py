@@ -42,17 +42,28 @@ def select_partition_program(artifact,resolved,blocks):
     return row
 
 
-def retain_provenance(artifact,resolved,native,directory,*,blocks=None):
+def retain_provenance(artifact,resolved,native,directory,*,blocks=None,require_model_sources=False):
     row=select_layout_program(artifact,resolved) if blocks is None else select_partition_program(artifact,resolved,blocks)
     program=row.program
+    if type(require_model_sources) is not bool:
+        raise TypeError('require_model_sources must be an exact boolean')
+    if blocks is not None and (len(artifact.blocks)!=len(blocks) or {block.name for block in artifact.blocks}!=set(blocks)):
+        raise ValueError('compiled model blocks differ from full partition')
     dump_retained_program(program,directory)
     (directory/'compiled-manifest.json').write_text(json.dumps(artifact.manifest().to_dict(),sort_keys=True,allow_nan=False)+'\n')
-    binaries=[]
+    binaries=[];model_source_files=[]
     for block in artifact.blocks:
         path=Path(block.model.so_path).resolve()
-        binaries.append({'block':block.name,'states':list(block.state_spaces),'path':str(path),'sha256':digest(path)})
+        binary_proof={'block':block.name,'states':list(block.state_spaces),'path':str(path),'sha256':digest(path)}
+        if require_model_sources:
+            binary_proof['actual_source']=block.model.source_provenance(require_complete=True)
+            name=block.name+'.model.cpp'
+            block.model.dump_cpp(directory/name)
+            binary_proof['retained_source']={'file':name,'sha256':digest(directory/name)}
+            model_source_files.append(name)
+        binaries.append(binary_proof)
     binary=Path(program.so_path).resolve()
-    proof={'schema':'pops.m16-explicit-retained-provenance@1',
+    proof={'schema':'pops.m16-explicit-retained-provenance@2' if require_model_sources else 'pops.m16-explicit-retained-provenance@1',
         'package':str(Path(pops.__file__).resolve()),
         'native':{'path':str(Path(native.__file__).resolve()),'sha256':digest(native.__file__)},
         'artifact_identity':artifact.artifact_identity.token,
@@ -61,7 +72,7 @@ def retain_provenance(artifact,resolved,native,directory,*,blocks=None):
         'program':{'path':str(binary),'sha256':digest(binary),'abi_key':program.abi_key,
                    'problem_hash':program.problem_hash,'cache_key':program.cache_key},
         'model_binaries':binaries,
-        'files':{name:digest(directory/name) for name in ('program.cpp','program.ir.json','compiled-manifest.json')},
+        'files':{name:digest(directory/name) for name in ('program.cpp','program.ir.json','compiled-manifest.json',*model_source_files)},
         'root_scientific_approval':False}
     (directory/'provenance.json').write_text(json.dumps(proof,sort_keys=True,allow_nan=False)+'\n')
     return row
