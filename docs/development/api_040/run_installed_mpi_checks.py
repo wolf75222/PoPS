@@ -24,6 +24,25 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def identity_mismatches(before, identities):
+    """Compare canonical origins and retain every differing authority field."""
+    keys = ("package_file", "native_file", "native_sha256", "execution_environment")
+    result = []
+    for rank, row in enumerate(identities):
+        expected = {"rank": rank, **{key: before[key] for key in keys}}
+        for key, value in expected.items():
+            actual = row.get(key)
+            if actual != value:
+                result.append({"rank": rank, "field": key,
+                               "expected": value, "observed": actual})
+    return result
+
+
+def rank_test_parity(rows):
+    return bool(rows) and all(row.get("nodes") is not None for row in rows) and all(
+        row["nodes"] == rows[0]["nodes"] for row in rows)
+
+
 def worker(output: Path, ranks: int, dimension: int, tests: list[str]) -> int:
     from run_installed_checks import execution_environment
     import pops
@@ -41,12 +60,13 @@ def worker(output: Path, ranks: int, dimension: int, tests: list[str]) -> int:
                 "native_sha256": digest(Path(native.__file__)),
                 "execution_environment": execution_environment()}
     identities = allgather_value(world, observed)
-    for rank, row in enumerate(identities):
-        if row["rank"] != rank or any(row[key] != before[key] for key in
-                                       ("package_file", "native_file", "native_sha256",
-                                        "execution_environment")):
-            raise RuntimeError(f"rank {rank} did not import the authenticated installation")
+    mismatches = identity_mismatches(before, identities)
     (output / f"rank{world.rank}.identity.json").write_text(json.dumps(observed, indent=2) + "\n")
+    (output / f"rank{world.rank}.identity-check.json").write_text(json.dumps({
+        "schema_version": 1, "observed_identities": identities,
+        "mismatches": mismatches}, indent=2) + "\n")
+    if mismatches:
+        raise RuntimeError(f"rank installation authentication failed: {mismatches}")
     # Redirect file descriptors as well as Python output, to retain native diagnostics.
     with (output / f"rank{world.rank}.log").open("w") as log:
         os.dup2(log.fileno(), 1)
@@ -143,7 +163,7 @@ def main() -> int:
         rank_results.append({"rank": rank, "counts": counts, "nodes": nodes,
                              "xml_sha256": digest(xml),
                              "log_sha256": digest(output / f"rank{rank}.log")})
-    rank_parity = all(row.get("nodes") == rank_results[0].get("nodes") for row in rank_results)
+    rank_parity = rank_test_parity(rank_results)
     clean = all(row.get("counts", {}).get("tests", 0) > 0 and
                 all(row["counts"][key] == 0 for key in ("failures", "errors", "skipped"))
                 for row in rank_results)

@@ -112,7 +112,7 @@ def main() -> int:
     identity = {
         "schema_version": 2, "source_commit": git("rev-parse", "HEAD"),
         "source_diff_sha256": hashlib.sha256(git("diff", "HEAD", "--binary").encode()).hexdigest(),
-        "python": sys.executable, "package_file": pops.__file__, "package_version": pops.__version__,
+        "python": sys.executable, "package_file": str(Path(pops.__file__).resolve()), "package_version": pops.__version__,
         "native_file": str(origin), "native_sha256": digest(origin), "abi_key": native.abi_key(),
         "doctor": checks, "verified_source_files": len(sources),
         "source_files_sha256": digest(output / "source-files.json"),
