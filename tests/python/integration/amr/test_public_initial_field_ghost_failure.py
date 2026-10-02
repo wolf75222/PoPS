@@ -34,20 +34,26 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
     # All ranks must enter component loading collectives consistently.
     case,layout=collective_call(world,lambda:build(boundary_composer=lambda base:InitialFailureBoundary(base,component)))
     plan=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout,components=(component,)))
-    artifact=compile_resolved_plan_once(world,plan,route='initial-ghost-failure-owned-face@2',compile_artifact=pops.compile)
+    artifact=compile_resolved_plan_once(world,plan,route='initial-ghost-failure-parent-transition@3',compile_artifact=pops.compile)
     context=collective_call(world,lambda:artifact_execution_context(artifact))
     monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_LOG',str(directory/'callback'))
     from pops.runtime._amr_bootstrap_execution import NativeAMRBootstrapConsumer
-    original=NativeAMRBootstrapConsumer.finalize_bootstrap
-    images=[];owners=[];targets=[]
+    original=NativeAMRBootstrapConsumer.consume_bootstrap_action
+    images=[];owners=[];targets=[];observed_actions=[]
     def image(owner):
         engine=owner._engine;native_owner=engine._s
         # Raw checkpoint carriers/registries only: no Field accessor, solve, refresh or publication.
         return {'blob':collective_call(world,lambda:bytes(native_owner.checkpoint_state_carriers())),
                 'registry':collective_call(world,native_owner.checkpoint_rank_local_carrier_manifest),
                 'field_manifest':collective_call(world,native_owner.field_provider_checkpoint_manifest),
-                'time':collective_call(world,native_owner.time),'tick':collective_call(world,native_owner.macro_step)}
-    def observed(owner):
+                'time':collective_call(world,native_owner.time),'tick':collective_call(world,native_owner.macro_step),
+                'levels':collective_call(world,engine.n_levels)}
+    def observed(owner,action):
+        # Parent sources and Field recompute are genuine preceding bootstrap actions.
+        # Bracket the first transition that prepares its physical Ghost before fine creation.
+        if action.operation!='create_level':return original(owner,action)
+        if observed_actions:raise AssertionError('fault fixture must reach only one parent transition')
+        observed_actions.append({'operation':action.operation,'level':action.level,'identity':action.identity.token})
         owners.append(owner._engine)
         before=image(owner)
         from tests.python.support.initial_ghost_failure_selection import select_xmin_owner,require_selection_agreement
@@ -60,14 +66,14 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
         old_target=__import__('os').environ.get('POPS_TEST_INITIAL_GHOST_TARGET_RANK')
         try:
             with collective_check(world):monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',str(selected['target']))
-            return original(owner)
+            return original(owner,action)
         except Exception:
             after=image(owner);images.append((before,after));raise
         finally:
             with collective_check(world):
                 if old_target is None:monkeypatch.delenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',raising=False)
                 else:monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',old_target)
-    monkeypatch.setattr(NativeAMRBootstrapConsumer,'finalize_bootstrap',observed)
+    monkeypatch.setattr(NativeAMRBootstrapConsumer,'consume_bootstrap_action',observed)
     _,failures=collective_attempt(world,lambda:pops.bind(artifact,resources={'execution_context':context}))
     # Persist the real collective refusal even when bind never reaches our finalizer.
     # This receipt claims no snapshot/rollback proof and cannot satisfy the assertions below.
@@ -80,10 +86,11 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
     with collective_check(world):
         assert len(images)==1 and len(owners)==1, 'actual initial owner/failure boundary not observed'
         before,after=images[0]
+        assert before['levels']==after['levels']==1, 'fault scope must remain the real parent before first fine creation'
         (directory/f'before-rank{world.rank}.bin').write_bytes(before['blob'])
         (directory/f'after-rank{world.rank}.bin').write_bytes(after['blob'])
         metadata={phase:{k:v for k,v in value.items() if k!='blob'} for phase,value in [('before',before),('after',after)]}
-        proof={'schema':'sol61.initial-ghost-failure-owned-face@2','rank':world.rank,'world_size':world.size,'target_selection':targets,'failures':failures,'metadata':metadata,'native':{'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},'component_manifest':component.component_manifest.to_data(),'artifact_identity':artifact.artifact_identity.token,'observer_only':True,'outer_bootstrap_abort_not_certified':True}
+        proof={'schema':'sol61.initial-ghost-failure-parent-transition@3','rank':world.rank,'world_size':world.size,'scope':'same-owner parent transition rejection; not full bootstrap construction','observed_actions':observed_actions,'target_selection':targets,'failures':failures,'metadata':metadata,'native':{'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},'component_manifest':component.component_manifest.to_data(),'artifact_identity':artifact.artifact_identity.token,'observer_only':True,'outer_bootstrap_abort_not_certified':True}
         (directory/f'proof-rank{world.rank}.json').write_text(json.dumps(proof,indent=2,default=str)+'\n')
         assert all(failures) and len(failures)==world.size
         assert all('independent initial Ghost rank-local failure' in failure[1] for failure in failures)
