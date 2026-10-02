@@ -20,6 +20,7 @@ from tests.review.sol61_amr_full_carrier_offline import decode
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
 from tests.python.support.evolving_accepted_halo_oracle import full_carrier,halo_rows
 from tests.review.sol61_tag_selection_oracle import receive
+from tests.python.support.evolving_accepted_halo_archive import truncated_carrier_archive
 
 def observe(world,runtime):
     blob=collective_call(world,lambda:bytes(runtime._executor.checkpoint_state_carriers()))
@@ -135,15 +136,15 @@ def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache
             halo_rows(contract["accepted_halo"])
             assert contract["accepted_halo"]==images["accepted"][2][2]
             assert payload["state_carriers_checkpoint"].dtype==np.uint8
-            payload["state_carriers_checkpoint"]=payload["state_carriers_checkpoint"][:-1]
-            bad=directory/"truncated-carrier-checkpoint.npz";np.savez(bad,**payload)
+            bad=directory/"truncated-carrier-checkpoint.npz"
+            truncated_carrier_archive(path,bad)
     bad=directory/"truncated-carrier-checkpoint.npz"
     _,failures=collective_attempt(world,lambda:restarted.restart(bad))
     refused=observe(world,restarted)
     with collective_check(world):
         if world.rank==0:persist(directory,"refused-preflight",refused)
         assert all(failures),failures
-        assert all("carrier" in row[1].lower() for row in failures),failures
+        assert all("state carrier payload exceeds bytes" in row[1] for row in failures),failures
         same(images["replay"],refused)
     record_property("evolving_halo_observations",str(directory))
     record_property("refusal_phase","restart carrier preflight; NOT halo-stage rollback")
