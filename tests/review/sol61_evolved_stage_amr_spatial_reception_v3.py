@@ -52,7 +52,43 @@ def zero_seed_selection(ir):
          and request["initialization_identity"] == expected, "authenticated zero-seed initialization differs")
     return expected
 
-def independent_original_norm(metrics, report):
+def norm_arithmetic_ir(ir, ranks):
+    need(type(ranks) is int and ranks in (1,2), "arithmetic proof rank terms absent")
+    solves = [node for node in ir["nodes"] if node["op"] == "solve_spatial_field"]
+    need(len(solves) == 1, "arithmetic physical solve inventory differs")
+    attrs = solves[0]["attrs"]
+    need(type(attrs["ncomp"]) is int and attrs["ncomp"] == 3, "arithmetic residual width differs")
+    def count(node):
+        need(type(node) is list and node, "arithmetic expression schema differs")
+        op = node[0]
+        if op in ("literal","unknown","input"):
+            return 0
+        if op == "temporal_tau":
+            return 1
+        if op == "neg" and len(node)==2:
+            return count(node[1])
+        if op in ("add","sub","mul","div") and len(node)==3:
+            return 1+count(node[1])+count(node[2])
+        # In particular, no source-only libm pow/sqrt accuracy assumption.
+        raise ValueError("arithmetic expression lacks proved primitive error bound")
+    expressions = attrs["local_expressions"]
+    need(len(expressions)==3, "arithmetic physical equation count differs")
+    physical = sum(count(expression) for expression in expressions)
+    dim, components = 2, 3
+    # Source QuadraticInterpolationTransfer: 7 ops/axis to form weights;
+    # 3**dim points each dim weight products, one sample product and one sum.
+    interpolation = 7*dim+(3**dim)*(dim+2)
+    faces = 2*dim
+    # Two sides/all components interpolated; arithmetic coefficient means;
+    # differences and metric division; all rows of the signed matrix product.
+    face = 2*components*interpolation+2*components**2+2*components+components*(2*components-1)
+    divergence = faces*(face+2*components)
+    return dict(physical=physical, stencil=divergence, ranks=ranks)
+
+
+def independent_original_norm(metrics, report, arithmetic=None):
+    need(type(arithmetic) is dict and type(arithmetic.get("ranks")) is int and arithmetic["ranks"] in (1,2),
+         "arithmetic proof rank terms absent")
     reference = metrics["original_F_zero_seed_reference_l2"]
     need(type(reference) is float and math.isfinite(reference) and 0 < reference < 1.,
          "independent zero-seed reference outside profile")
@@ -71,6 +107,14 @@ def independent_original_norm(metrics, report):
     need(type(value) is float and math.isfinite(value) and value >= 0
          and value <= 1e-10,
          "independent original-F selected mixed norm fails")
+    # Authenticated physical IR, source 2D stencil loop extents, global active
+    # scalar terms, and explicit rank reduction count; no empirical op budget.
+    final_terms = 3*count//2
+    final_k = arithmetic["physical"]+arithmetic["stencil"]+3*final_terms+2+(arithmetic["ranks"]-1)
+    final_gamma = final_k*u/(1.-final_k*u)
+    final_bound = 2.*final_gamma/(1.-final_gamma)*metrics["original_F_absolute_scale_l2"]
+    need(abs(value-report["residual_norm"]) <= final_bound,
+         "native original-F norm differs from independent physical residual")
 
 
 _tree = ast.parse(inspect.getsource(_historical_c.checkpoint_current))
@@ -306,6 +350,12 @@ def science(images, masks, n):
         residual, activity, original_squared, reference_squared = 0.0, 0.0, 0.0, 0.0
         reference_terms = 0
         reference_scale_squared = 0.
+        final_scale_squared = 0.
+        # Quadratic cell-centered offsets +/-1/4 have absolute weight sum19/16
+        # per axis. The 2D tensor ghost interpolation is bounded by (19/16)^2.
+        maxima = np.array([max(float(np.max(np.abs(images[phase][level]["T"+str(i)][images[phase][level]["valid"].ravel()])))
+                              for level in range(2)) for i in range(2)])
+        divergence_scale = 4.*(2*n)**2*(19./16.)**2*(np.abs(D)@maxima)
         amounts = np.zeros(2)
         initial_amounts = np.zeros(2)
         diffusion_amounts = np.zeros(2)
@@ -323,6 +373,11 @@ def science(images, masks, n):
             reference_squared += float(np.sum((old+b.DT*load)[:,active]**2)/m**2)
             reference_terms += 2*int(np.count_nonzero(active))
             reference_scale_squared += float(np.sum((np.abs(old)+b.DT*np.abs(load))[:,active]**2)/m**2)
+            absolute_t = np.abs(t_full)
+            h_scale = b.q_of(absolute_t)
+            f_scale = h_scale+np.abs(old)+b.DT*(divergence_scale[:,None,None]+np.abs(load))
+            z_scale = np.abs(row["z"].reshape(m,m))+.25*absolute_t[0]+.5*absolute_t[1]
+            final_scale_squared += float((np.sum(f_scale[:,active]**2)+np.sum(z_scale[active]**2))/m**2)
             residual = max(
                 residual, float(np.max(np.abs((q - old - b.DT * (action + load))[:, active])))
             )
@@ -363,6 +418,7 @@ def science(images, masks, n):
             original_F_zero_seed_reference_l2=math.sqrt(reference_squared),
             original_F_reference_terms=reference_terms,
             original_F_reference_absolute_scale_l2=math.sqrt(reference_scale_squared),
+            original_F_absolute_scale_l2=math.sqrt(final_scale_squared),
             restriction_gap=float(gap),
             Q_amounts=amounts.tolist(),
         )
@@ -661,6 +717,7 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
             )
     need(len(hashes) == 1, "one actual Program required")
     need(zero_seed_selection(program_ir) == pins["seed_selection"], "ROOT-pinned zero seed differs")
+    arithmetic = norm_arithmetic_ir(program_ir, pins["ranks"])
     masks = None
     manifests, diagnostics = {}, {}
     for phase, cp in arrays.items():
@@ -849,11 +906,11 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
     for phase, diagnostic_rows in diagnostics.items():
         reports = [diagnostic_triplet(row) for row in diagnostic_rows]
         for report in reports:
-            independent_original_norm(science_result[phase], report)
+            independent_original_norm(science_result[phase], report, arithmetic)
         need(all(typed(report, reports[0]) for report in reports), "rank original-F diagnostics differ")
         science_result[phase]["native_original_F_triplets"] = reports
         if phase == "accepted":
-            independent_original_norm(science_result["reloaded"], reports[0])
+            independent_original_norm(science_result["reloaded"], reports[0], arithmetic)
             science_result["reloaded"]["native_original_F_triplets"] = reports
     nonlinear_attacks = nonlinear_restriction_attacks(images, masks, 8)
     return dict(

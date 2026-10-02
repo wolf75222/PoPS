@@ -11,6 +11,7 @@ sp=importlib.util.spec_from_file_location('mixed_reader',P);r=importlib.util.mod
 RAW=Path('/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-nonconstant-n8-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr-spatial')
 def triplet(norm=4.2112344066743426e-11,ref=.3630691185175441):
     return [('solve.'+name,value) for name,value in [('residual_norm',norm),('reference_residual_norm',ref),('rel_residual',norm/(ref if ref>0 else 1.))]]
+def arithmetic():return r.norm_arithmetic_ir(r.b.strict_json(next(RAW.glob("*.ir.json")).read_bytes()),1)
 def check(rows):return r._accept.selected_native_mixed_rule(rows,1e-10)
 def test_actual_counterexample_preserves_raw_ratio():
     index=r.b.strict_json((RAW/'observation-index.json').read_bytes())
@@ -55,7 +56,7 @@ def test_authentic_original_F_and_nonlinear_adverse():
     report=check(triplet())
     index=r.b.strict_json((RAW/'observation-index.json').read_bytes())
     for phase in ('accepted','continuous','reloaded','replay'):
-        r.independent_original_norm(metrics[phase],check(index['phases'][phase]['metadata'][2]))
+        r.independent_original_norm(metrics[phase],check(index['phases'][phase]['metadata'][2]),arithmetic())
     assert metrics['accepted']['original_F_weighted_l2']==pytest.approx(4.211236792117065e-11,rel=1e-12)
     r.nonlinear_restriction_attacks(images,masks,8)
 
@@ -68,7 +69,7 @@ def test_original_F_recheck_refuses_below_old_Linf_guard():
     # Old 3e-8 science guards and exact reload equality still pass.
     metrics=r.science(images,masks,8)
     assert metrics['accepted']['original_F_weighted_l2']>1e-10
-    with pytest.raises(ValueError,match='independent original-F'):r.independent_original_norm(metrics['accepted'],check(triplet()))
+    with pytest.raises(ValueError,match='independent original-F'):r.independent_original_norm(metrics['accepted'],check(triplet()),arithmetic())
 
 def test_historical_callback_and_ABI_profiles_immutable():
     assert r._historical_c.native_abi_receipt.__globals__['QUALIFICATION'].endswith('@3')
@@ -132,7 +133,7 @@ def test_private_checkpoint_changes_only_diagnostic_guard():
 @pytest.mark.parametrize('ref',(0.,.5,1.,10.))
 def test_forged_consistent_reference_rejected_by_saved_seed(ref):
     images,masks=actual_images();metrics=r.science(images,masks,8)
-    with pytest.raises(ValueError,match='zero-seed reference'):r.independent_original_norm(metrics['accepted'],check(triplet(ref=ref)))
+    with pytest.raises(ValueError,match='zero-seed reference'):r.independent_original_norm(metrics['accepted'],check(triplet(ref=ref)),arithmetic())
 
 def test_zero_seed_authority_actual_and_resealed_attacks():
     ir=r.b.strict_json(next(RAW.glob('*.ir.json')).read_bytes())
@@ -145,3 +146,27 @@ def test_zero_seed_authority_actual_and_resealed_attacks():
         elif attack=='identity':attrs['solve_request']['initialization_identity']=identity[:-1]+'2'
         else:del attrs['seed_index']
         with pytest.raises(ValueError):r.zero_seed_selection(bad)
+
+def test_zero_final_diagnostic_cannot_impersonate_saved_original_F():
+    images,masks=actual_images();metrics=r.science(images,masks,8)
+    report=check(triplet(norm=0.))
+    with pytest.raises(ValueError,match='native original-F norm differs'):r.independent_original_norm(metrics['accepted'],report,arithmetic())
+
+def test_zero_seed_reference_above_one_cannot_open_science_gate():
+    images,masks=actual_images();metrics=r.science(images,masks,8)
+    metrics['accepted']['original_F_zero_seed_reference_l2']=2.
+    with pytest.raises(ValueError,match='outside profile'):r.independent_original_norm(metrics['accepted'],check(triplet()),arithmetic())
+
+def test_arithmetic_proof_derived_from_authentic_IR_and_no_libm_upcast():
+    ir=r.b.strict_json(next(RAW.glob('*.ir.json')).read_bytes())
+    assert r.norm_arithmetic_ir(ir,1)==dict(physical=28,stencil=1380,ranks=1)
+    assert r.norm_arithmetic_ir(ir,2)['ranks']==2
+    for ranks in (None,True,0,3):
+        with pytest.raises(ValueError):r.norm_arithmetic_ir(ir,ranks)
+    bad=deepcopy(ir);attrs=next(n['attrs'] for n in bad['nodes'] if n['op']=='solve_spatial_field')
+    attrs['local_expressions'][0]=['pow',['literal',{}],['literal',{}]]
+    with pytest.raises(ValueError,match='primitive error bound'):r.norm_arithmetic_ir(bad,1)
+
+def test_independent_norm_refuses_missing_rank_arithmetic_authority():
+    images,masks=actual_images();metrics=r.science(images,masks,8)
+    with pytest.raises(ValueError,match='rank terms absent'):r.independent_original_norm(metrics['accepted'],check(triplet()))
