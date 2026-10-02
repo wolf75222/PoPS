@@ -144,6 +144,16 @@ struct InterfaceFluxSampleProjection;
 }  // namespace multiblock
 }  // namespace runtime
 
+/// Typed numerical effect, qualified by the complete candidate tower and BC/transfer provider graph.
+template <int Dim>
+struct AcceptedHaloPreparationRequest {
+  static constexpr std::uint32_t version = 1;
+  runtime::multiblock::BoundaryEvaluationPoint point;
+  Extent<Dim> extent{};
+  std::string candidate_hierarchy_authority;
+  std::string numerical_provider_authority;
+};
+
 /// Exact ranked AMR mesh and cadence (per-block physical parameters live in the ModelSpec).
 template <int Dim>
 struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
@@ -162,6 +172,9 @@ struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
   /// Transition buffers/lookaheads are separate parent-coverage requirements.
   std::uint32_t tag_selection_contract_version = 1;
   Extent<Dim> tag_selection_buffer{};
+  /// Explicit optional AcceptedHaloPreparation@1, never inferred from allocated ghosts.
+  std::uint32_t accepted_halo_contract_version = 0;
+  Extent<Dim> accepted_halo_extent{};
   bool explicit_bootstrap = false;  ///< coarse-only start; BootstrapPlan creates fine levels
   /// OWNERSHIP POLICY of the coarse level (cf. AmrCouplerMP::replicated_coarse).
   /// false (DEFAULT, historical): coarse mono-box REPLICATED on all ranks. The coarse Poisson
@@ -426,6 +439,12 @@ class AmrSystem {
   POPS_EXPORT runtime::multiblock::InterfaceFluxSampleProjection<Dim>
   prepare_prepared_amr_interface_sample_projection(
       const runtime::multiblock::InterfaceFluxSample& sample, int target_level) const;
+  POPS_EXPORT bool requests_accepted_halo_preparation() const noexcept;
+  POPS_EXPORT void prepare_accepted_halo_candidates(
+      std::vector<std::vector<MultiFab<Dim>>>& candidates,
+      const std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>>& points);
+  POPS_EXPORT std::vector<std::vector<std::string>> checkpoint_accepted_halo_contract() const;
+
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);
 

@@ -246,6 +246,17 @@ def amr_config_from_layout(
     _install_native_tag_selection_config(cfg, tagging, dimension=len(cells))
     cfg.regrid_every = _regrid_every(data)
     cfg.explicit_bootstrap = True
+    halo = data["execution"].get("accepted_halo")
+    if halo is not None:
+        if type(halo) is not dict or set(halo) != {"schema_version", "effect", "point_authority", "cells", "components"} or halo["schema_version"] != 1 or halo["effect"] != "prepare_accepted_halo" or halo["point_authority"] != "candidate_accepted_clock" or halo["components"] != "all_state_components":
+            raise ValueError("unsupported exact accepted halo preparation authority")
+        widths = (halo["cells"],) * len(cells) if type(halo["cells"]) is int else tuple(halo["cells"])
+        if len(widths) != len(cells) or any(type(v) is not int or not 0 < v <= 2147483647 for v in widths):
+            raise ValueError("accepted halo preparation requires positive ranked native extents")
+        if not hasattr(type(cfg), "accepted_halo_contract_version"):
+            raise RuntimeError("native SDK lacks accepted halo preparation contract")
+        cfg.accepted_halo_contract_version = 1
+        cfg.accepted_halo_extent = widths
 
     cluster = hierarchy.plan.clustering.options.to_data()
     clustering_provider = cluster.get("provider")

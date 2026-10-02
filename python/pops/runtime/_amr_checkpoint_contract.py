@@ -129,10 +129,13 @@ def contract_for(sim):
                 "remainder_policy": remainder,
             }
         )
+    halo_report = getattr(sim, "checkpoint_accepted_halo_contract", None)
+    accepted_halo = _rows(halo_report()) if callable(halo_report) else []
     flux_ledger = _rows(sim.program_flux_ledger_manifest())
     interface_flux_ledger = _rows(sim.program_interface_flux_ledger_manifest())
     return {
-        "schema_version": _SCHEMA,
+        "schema_version": 9 if accepted_halo else _SCHEMA,
+        **({"accepted_halo": accepted_halo} if accepted_halo else {}),
         "guarantee": _GUARANTEE,
         "program_state": "compiled" if sim.installed_program_hash() else "native_none",
         "ledger": {
@@ -168,8 +171,15 @@ def _decode_contract(payload):
     contract = strict_json_loads(
         str(payload["amr_accepted_contract"]), where="AMR accepted-state contract"
     )
-    if not isinstance(contract, dict) or set(contract) != _CONTRACT_KEYS:
+    if not isinstance(contract, dict) or contract.get("schema_version") not in (8, 9) or set(contract) != (_CONTRACT_KEYS | {"accepted_halo"} if contract.get("schema_version") == 9 else _CONTRACT_KEYS):
         raise TypeError("restart: AMR accepted-state contract has an invalid exact schema")
+    if contract.get("schema_version") == 9:
+        rows = contract["accepted_halo"]
+        if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not list:
+            raise TypeError("restart: accepted halo authority has invalid exact rows")
+        row = rows[0]
+        if not 4 <= len(row) <= 6 or row[:3] != ["pops.amr.accepted-halo-preparation@1", "candidate_accepted_clock", "all_state_components"] or any(type(v) is not str or not v.isascii() or not v.isdecimal() or v != str(int(v)) or not 0 < int(v) <= 2147483647 for v in row[3:]):
+            raise TypeError("restart: accepted halo authority has invalid exact extent/point contract")
     return contract
 
 
@@ -210,7 +220,7 @@ def preflight_contract(sim, payload):
     contract = _decode_contract(payload)
     current = contract_for(sim)
     if contract != current:
-        mismatched = sorted(key for key in _PREFLIGHT_KEYS if contract.get(key) != current.get(key))
+        mismatched = sorted(key for key in (_PREFLIGHT_KEYS | {"accepted_halo"}) if contract.get(key) != current.get(key))
         if mismatched:
             raise ValueError(
                 "restart: AMR static accepted-state provenance differs from the installed "
@@ -277,7 +287,7 @@ def validate_restored_contract(sim, payload):
             row[:7] if len(row) == 11 else row for row in current["synchronization"]
         ]
     if contract != current:
-        mismatched = sorted(key for key in _CONTRACT_KEYS if contract.get(key) != current.get(key))
+        mismatched = sorted(key for key in (_CONTRACT_KEYS | {"accepted_halo"}) if contract.get(key) != current.get(key))
         raise ValueError(
             "restart: restored AMR accepted-state image differs from its authenticated contract "
             "(mismatched sections: %r)" % mismatched

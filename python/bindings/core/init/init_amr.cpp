@@ -1613,6 +1613,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("checkpoint_topology_epoch", &AmrSystem::checkpoint_topology_epoch)
       .def("restore_checkpoint_counters", &AmrSystem::restore_checkpoint_counters,
            py::arg("regrid_count"), py::arg("topology_epoch"))
+      .def("checkpoint_accepted_halo_contract", &AmrSystem::checkpoint_accepted_halo_contract)
       .def("checkpoint_tag_selection_contract", &AmrSystem::checkpoint_tag_selection_contract)
       .def("checkpoint_temporal_relations", &AmrSystem::checkpoint_temporal_relations)
       .def("set_temporal_relations", &AmrSystem::set_temporal_relations, py::arg("numerators"),
@@ -1769,6 +1770,8 @@ void init_amr(py::module_& m) {
             config.transition_lookaheads = ranked_extents_from_python<kNativeDimension>(
                 value, "AmrSystemConfig.transition_lookaheads", 0);
           })
+      .def_readwrite("accepted_halo_contract_version", &NativeAmrSystemConfig::accepted_halo_contract_version)
+      .def_readwrite("accepted_halo_extent", &NativeAmrSystemConfig::accepted_halo_extent)
       .def_readwrite("tag_selection_contract_version", &NativeAmrSystemConfig::tag_selection_contract_version)
       .def_property("tag_selection_buffer",
           [](const NativeAmrSystemConfig& config) {

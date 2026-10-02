@@ -258,6 +258,16 @@ void validate_amr_config(const AmrSystemConfig<Dim>& config) {
 
   if (config.tag_selection_contract_version != 1)
     throw std::invalid_argument("AmrSystem requires pops.amr.tag-selection@1");
+  if (config.accepted_halo_contract_version != 0 && !config.explicit_bootstrap)
+    throw std::invalid_argument("accepted halo preparation requires authenticated explicit bootstrap");
+  if (config.accepted_halo_contract_version > 1)
+    throw std::invalid_argument("unsupported accepted halo preparation contract");
+  for (int axis = 0; axis < Dim; ++axis)
+    if (config.accepted_halo_contract_version == 1
+            ? (config.accepted_halo_extent[axis] <= 0 ||
+               config.accepted_halo_extent[axis] > std::numeric_limits<int>::max())
+            : config.accepted_halo_extent[axis] != 0)
+      throw std::invalid_argument("accepted halo preparation requires exact positive ranked extent");
   std::size_t tag_neighborhood = 1;
   for (int axis = 0; axis < Dim; ++axis) {
     const auto buffer = config.tag_selection_buffer[axis];
@@ -3268,6 +3278,8 @@ struct AmrSystem<Dim>::Impl {
         embedded_boundary;
     std::vector<std::shared_ptr<const field_type>> active_coverage;
     std::vector<std::vector<level_block_type>> block_levels;
+    std::vector<std::vector<std::function<void(
+        const runtime::multiblock::BoundaryEvaluationPoint&)>>> accepted_halo_boundary_preflight;
     std::vector<std::vector<std::optional<evaluation_type>>> block_evaluations;
     std::vector<std::vector<std::optional<evaluation_type>>> block_evaluation_candidates;
     std::vector<std::vector<bool>> block_evaluation_published;
@@ -4433,6 +4445,7 @@ struct AmrSystem<Dim>::Impl {
     contract.text("pops.amr-system.initial-materialization")
         .scalar(std::uint32_t{2})
         .scalar(cfg.tag_selection_contract_version)
+        .scalar(cfg.accepted_halo_contract_version)
         .scalar(std::int32_t{Dim})
         .text(package_assembly_lane ? package_assembly_lane->identity() : std::string_view{})
         .scalar(std::int32_t{cfg.regrid_every})
@@ -4460,7 +4473,8 @@ struct AmrSystem<Dim>::Impl {
           .scalar(cfg.upper[axis])
           .scalar(cfg.periodicity[axis])
           .scalar(cfg.coarse_max_grid[axis])
-          .scalar(cfg.tag_selection_buffer[axis]);
+          .scalar(cfg.tag_selection_buffer[axis])
+          .scalar(cfg.accepted_halo_extent[axis]);
     contract.scalar(static_cast<std::uint64_t>(cfg.transition_ratios.size()));
     for (std::size_t transition = 0; transition < cfg.transition_ratios.size(); ++transition)
       for (int axis = 0; axis < Dim; ++axis)
@@ -7310,6 +7324,7 @@ struct AmrSystem<Dim>::Impl {
       candidate->provider_candidate_physical_boundaries.resize(level_count);
       candidate->embedded_boundary.resize(level_count);
       candidate->block_levels.resize(prepared_blocks.size());
+      candidate->accepted_halo_boundary_preflight.resize(prepared_blocks.size());
       candidate->block_evaluations.resize(prepared_blocks.size());
       candidate->block_evaluation_candidates.resize(prepared_blocks.size());
       candidate->block_evaluation_published.resize(prepared_blocks.size());
@@ -7317,6 +7332,7 @@ struct AmrSystem<Dim>::Impl {
       candidate->block_state_storage.resize(prepared_blocks.size());
       for (std::size_t block = 0; block < prepared_blocks.size(); ++block) {
         candidate->block_levels[block].reserve(level_count);
+        candidate->accepted_halo_boundary_preflight[block].reserve(level_count);
         candidate->block_evaluations[block].resize(level_count);
         candidate->block_evaluation_candidates[block].resize(level_count);
         candidate->block_evaluation_published[block].assign(level_count, false);
@@ -7917,6 +7933,30 @@ struct AmrSystem<Dim>::Impl {
           for (const auto& invocation : prepared_external.ghosts)
             prepared_ghosts.push_back(
                 {invocation.provider, invocation.session, invocation.dependencies});
+          candidate->accepted_halo_boundary_preflight[block_index].push_back(
+              [providers = prepared_ghosts](const runtime::multiblock::BoundaryEvaluationPoint& point) {
+                for (const auto& invocation : providers) {
+                  // GhostBoundary ABI v1 requires a positive numerical interval; initial dt=0
+                  // cannot be silently replaced by a fabricated interval.
+                  if (!(point.dt > 0.0))
+                    throw std::invalid_argument(
+                        "accepted halo typed GhostBoundary lacks an authenticated positive initial interval");
+                  const auto& dependencies = *invocation.dependencies;
+                  if (!dependencies.field_plans.empty() && dependencies.clock_identity != point.clock)
+                    throw std::invalid_argument("accepted halo BC field clock authority differs");
+                  for (const auto* plan : dependencies.field_plans) {
+                    if (plan == nullptr || !plan->boundary_point)
+                      throw std::invalid_argument("accepted halo BC field lacks candidate point authority");
+                    const auto& field_point = *plan->boundary_point;
+                    if (field_point.time != point.physical_time || field_point.dt != point.dt ||
+                        field_point.step != point.tick || field_point.stage_slot != point.stage ||
+                        field_point.substep != point.substep ||
+                        field_point.stage_fraction_numerator != point.stage_fraction.numerator ||
+                        field_point.stage_fraction_denominator != point.stage_fraction.denominator)
+                      throw std::invalid_argument("accepted halo BC field candidate point is stale");
+                  }
+                }
+              });
           prepared_fluxes.reserve(prepared_external.fluxes.size());
           for (const auto& invocation : prepared_external.fluxes)
             prepared_fluxes.push_back(
@@ -9535,6 +9575,9 @@ struct AmrSystem<Dim>::Impl {
     try {
       if (!tagging_spec)
         throw std::logic_error("AMR hierarchy has no prepared tagging authority");
+      if (cfg.accepted_halo_contract_version == 1 && !bootstrap_transaction)
+        throw std::invalid_argument(
+            "accepted halo regrid route lacks an authenticated candidate clock authority");
       if (parent_level < 0 ||
           static_cast<std::size_t>(parent_level) >= engine->hierarchy().num_levels() ||
           parent_level >= cfg.level_count - 1)
@@ -9777,6 +9820,9 @@ struct AmrSystem<Dim>::Impl {
     const ExecutionLane& lane = multiblock_hierarchy->lane();
     std::exception_ptr authority_error;
     try {
+      if (cfg.accepted_halo_contract_version == 1 && !bootstrap_transaction)
+        throw std::invalid_argument(
+            "accepted halo topology route lacks an authenticated candidate clock authority");
       if (multiblock_hierarchy->block_count() != 1)
         throw std::invalid_argument(
             "single-carrier AMR Program topology requires exactly one block");
@@ -13585,8 +13631,164 @@ AmrSystem<Dim>::prepare_prepared_amr_interface_sample_projection(
 }
 
 template <int Dim>
+bool AmrSystem<Dim>::requests_accepted_halo_preparation() const noexcept {
+  return p_->cfg.accepted_halo_contract_version == 1;
+}
+
+template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_accepted_halo_contract() const {
+  if (!requests_accepted_halo_preparation()) return {};
+  std::vector<std::string> row{"pops.amr.accepted-halo-preparation@1",
+                               "candidate_accepted_clock", "all_state_components"};
+  for (int axis = 0; axis < Dim; ++axis)
+    row.push_back(std::to_string(p_->cfg.accepted_halo_extent[axis]));
+  return {std::move(row)};
+}
+
+template <int Dim>
+void AmrSystem<Dim>::prepare_accepted_halo_candidates(
+    std::vector<std::vector<MultiFab<Dim>>>& candidates,
+    const std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>>& points) {
+  if (!requests_accepted_halo_preparation()) return;
+  p_->ensure_engine();
+  const auto& lane = *p_->prepared_hierarchy->lane;
+  const auto communicator = lane.communicator();
+  std::vector<const std::vector<MultiFab<Dim>>*> prior, bindings;
+  std::vector<std::vector<MultiFab<Dim>>> accepted_backup;
+  std::string request_contract;
+  std::exception_ptr error;
+  try {
+    const auto levels = p_->engine->hierarchy().num_levels();
+    if (!p_->bootstrap_transaction && step_transaction_depth() == 0)
+      throw std::invalid_argument("accepted halo preparation requires its enclosing rollback transaction");
+    if (candidates.size() != p_->blocks.size() || points.size() != candidates.size())
+      throw std::invalid_argument("accepted halo preparation requires every exact block candidate");
+    if (!p_->dirty_auxiliary_providers.empty())
+      throw std::invalid_argument("accepted halo preparation lacks fresh field/auxiliary authorities");
+    ExactContractBuilder exact;
+    exact.text("pops.amr.accepted-halo-preparation-request").scalar(std::uint32_t{1})
+        .bytes(p_->multiblock_hierarchy->collective_contract())
+        .bytes(p_->prepared_hierarchy->collective_contract);
+    for (std::size_t block = 0; block < candidates.size(); ++block) {
+      if (candidates[block].size() != levels || points[block].size() != levels)
+        throw std::invalid_argument("accepted halo preparation requires a complete candidate hierarchy");
+      for (std::size_t level = 0; level < levels; ++level) {
+        AcceptedHaloPreparationRequest<Dim> request{
+            points[block][level], p_->cfg.accepted_halo_extent,
+            std::string(p_->multiblock_hierarchy->collective_contract()),
+            p_->prepared_hierarchy->collective_contract};
+        const auto& point = request.point;
+        const auto& field = candidates[block][level];
+        if (!same_field_contract(field, p_->block_state(block, level)) ||
+            point.level != static_cast<int>(level) || point.clock.empty() ||
+            !std::isfinite(point.physical_time) || !std::isfinite(point.dt) || point.dt < 0 ||
+            point.stage_fraction.denominator <= 0 || point.stage_fraction.numerator < 0 ||
+            point.stage_fraction.numerator > point.stage_fraction.denominator ||
+            point.tick != p_->macro_step || point.substep < 0 || point.stage < 0 ||
+            std::find(p_->program.checkpoint_metadata_.logical_clock_identities.begin(),
+                      p_->program.checkpoint_metadata_.logical_clock_identities.end(), point.clock) ==
+                p_->program.checkpoint_metadata_.logical_clock_identities.end())
+          throw std::invalid_argument("accepted halo preparation lost its exact field or clock point");
+        if (level != 0 &&
+            (point.physical_time != points[block][level - 1].physical_time ||
+             point.clock != points[block][level - 1].clock ||
+             point.tick != points[block][level - 1].tick ||
+             point.stage_fraction != points[block][level - 1].stage_fraction))
+          throw std::invalid_argument("accepted halo parent and child clocks do not align causally");
+        if (p_->prepared_hierarchy->accepted_halo_boundary_preflight.size() != candidates.size() ||
+            p_->prepared_hierarchy->accepted_halo_boundary_preflight[block].size() != levels)
+          throw std::invalid_argument("accepted halo preparation lost typed boundary preflight authorities");
+        p_->prepared_hierarchy->accepted_halo_boundary_preflight[block][level](point);
+        for (int axis = 0; axis < Dim; ++axis)
+          if (field.ghosts()[axis] != request.extent[axis])
+            throw std::invalid_argument("accepted halo extent differs from declared carrier storage");
+        exact.scalar(static_cast<std::uint64_t>(block)).scalar(static_cast<std::uint64_t>(level))
+            .text(point.clock).scalar(point.tick).scalar(point.substep).scalar(point.stage)
+            .scalar(point.stage_fraction.numerator).scalar(point.stage_fraction.denominator)
+            .scalar(point.dt).scalar(point.physical_time);
+      }
+    }
+    std::size_t backup_bytes = 0;
+    for (const auto& block : candidates)
+      for (const auto& field : block)
+        for (std::size_t local = 0; local < field.local_size(); ++local)
+          backup_bytes = checked_size_sum(
+              backup_bytes, checked_size_product(field.fab(local).storage().size(), sizeof(Real),
+                  "accepted halo snapshot bytes exceed size_t"),
+              "accepted halo snapshot pack bytes exceed size_t");
+    (void)backup_bytes; // Exact allocated local-pack bound; Kokkos allocation failures are voted.
+    accepted_backup.resize(candidates.size());
+    for (std::size_t block = 0; block < candidates.size(); ++block) {
+      accepted_backup[block].reserve(levels);
+      for (std::size_t level = 0; level < levels; ++level)
+        accepted_backup[block].emplace_back(p_->block_state(block, level));
+    }
+    Kokkos::fence();
+    prior = p_->program_hierarchy_candidates;
+    bindings.resize(candidates.size(), nullptr);
+    for (std::size_t block = 0; block < candidates.size(); ++block)
+      bindings[block] = &candidates[block];
+    request_contract = std::move(exact).release();
+  } catch (...) { error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "accepted halo candidate preflight/allocation failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"accepted-halo-request", request_contract}}, lane))
+    throw std::invalid_argument("accepted halo candidate request differs between ranks");
+  struct RestoreBindings {
+    decltype(p_->program_hierarchy_candidates)& slot;
+    decltype(prior)& saved;
+    ~RestoreBindings() { slot.swap(saved); }
+  } restore{p_->program_hierarchy_candidates, prior};
+  p_->program_hierarchy_candidates.swap(bindings);
+  const auto restore_accepted = [&] {
+    std::exception_ptr restore_error;
+    try {
+      for (std::size_t block = 0; block < accepted_backup.size(); ++block)
+        for (std::size_t level = 0; level < accepted_backup[block].size(); ++level)
+          copy_full_field_in_place(accepted_backup[block][level], p_->block_state(block, level));
+      Kokkos::fence();
+    } catch (...) { restore_error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        restore_error, &lane, "accepted halo staging restoration failed collectively");
+  };
+  try {
+    // All block/level valid states are candidates while typed BCs execute, including cross-block
+    // dependencies. Publication has not begun; the complete accepted image is retained separately.
+    error = {};
+    try {
+      for (std::size_t block = 0; block < candidates.size(); ++block)
+        for (std::size_t level = 0; level < candidates[block].size(); ++level)
+          copy_full_field_in_place(candidates[block][level], p_->block_state(block, level));
+      Kokkos::fence();
+    } catch (...) { error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "accepted halo complete-tower staging failed collectively");
+    for (std::size_t level = 0; level < p_->engine->hierarchy().num_levels(); ++level)
+      for (std::size_t block = 0; block < candidates.size(); ++block) {
+        error = {};
+        try {
+          prepare_generated_amr_block_level_state(static_cast<int>(block), points[block][level],
+                                                  candidates[block][level]);
+          copy_full_field_in_place(candidates[block][level], p_->block_state(block, level));
+          Kokkos::fence();
+        } catch (...) { error = std::current_exception(); }
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            error, &lane, "accepted halo candidate preparation/copy/fence failed collectively");
+      }
+  } catch (...) {
+    const auto preparation_error = std::current_exception();
+    restore_accepted();
+    std::rethrow_exception(preparation_error);
+  }
+  restore_accepted();
+}
+
+template <int Dim>
 void AmrSystem<Dim>::publish_prepared_amr_program_candidates(
     int level, std::span<MultiFab<Dim>* const> program_candidates) {
+  if (requests_accepted_halo_preparation())
+    throw std::invalid_argument(
+        "accepted halo publication requires complete hierarchy candidate clocks; level-only publication is unqualified");
   p_->ensure_engine();
   const ExecutionLane& lane = p_->multiblock_hierarchy->lane();
   const auto communicator = lane.communicator();
@@ -17592,6 +17794,26 @@ void AmrSystem<Dim>::begin_bootstrap_plan() {
           "AmrSystem explicit bootstrap sources do not uniquely cover the runtime blocks");
   }
   p_->ensure_engine();
+  if (requests_accepted_halo_preparation()) {
+    const auto& lane = *p_->prepared_hierarchy->lane;
+    std::exception_ptr preflight_error;
+    try {
+      if (p_->tagging_spec->clock_identity.empty())
+        throw std::invalid_argument("accepted halo bootstrap lacks its initial clock authority");
+      for (std::size_t block = 0;
+           block < p_->prepared_hierarchy->accepted_halo_boundary_preflight.size(); ++block)
+        for (std::size_t level = 0;
+             level < p_->prepared_hierarchy->accepted_halo_boundary_preflight[block].size(); ++level) {
+          runtime::multiblock::BoundaryEvaluationPoint point{
+              .clock = p_->tagging_spec->clock_identity, .tick = 0,
+              .level = static_cast<int>(level), .substep = 0, .stage = 0,
+              .stage_fraction = {0, 1}, .dt = 0.0, .physical_time = 0.0};
+          p_->prepared_hierarchy->accepted_halo_boundary_preflight[block][level](point);
+        }
+    } catch (...) { preflight_error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        preflight_error, &lane, "accepted halo bootstrap point preflight failed collectively");
+  }
   const bool artifact_backed = p_->program.artifact_backed_;
   if (artifact_backed)
     (void)checkpoint_program_state_capacity();
@@ -17654,6 +17876,40 @@ void AmrSystem<Dim>::commit_bootstrap_level() {
     (void)rematerialize_fields_after_topology_change("bootstrap_regrid", point);
   }
   p_->program.refresh_hierarchy_state("AmrSystem::commit_bootstrap_level");
+  if (requests_accepted_halo_preparation()) {
+    const auto& lane = *p_->prepared_hierarchy->lane;
+    std::vector<std::vector<MultiFab<Dim>>> candidates;
+    std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>> points;
+    std::exception_ptr error;
+    try {
+      if (!p_->tagging_spec || p_->tagging_spec->clock_identity.empty() ||
+          std::find(p_->program.checkpoint_metadata_.logical_clock_identities.begin(),
+                    p_->program.checkpoint_metadata_.logical_clock_identities.end(),
+                    p_->tagging_spec->clock_identity) ==
+              p_->program.checkpoint_metadata_.logical_clock_identities.end())
+        throw std::invalid_argument("accepted halo bootstrap lacks an authenticated initial AMR clock");
+      candidates.resize(p_->blocks.size()); points.resize(p_->blocks.size());
+      for (std::size_t block = 0; block < candidates.size(); ++block)
+        for (std::size_t level = 0; level < p_->engine->hierarchy().num_levels(); ++level) {
+          candidates[block].emplace_back(p_->block_state(block, level));
+          points[block].push_back({.clock = p_->tagging_spec->clock_identity,
+              .tick = 0, .level = static_cast<int>(level), .substep = 0, .stage = 0,
+              .stage_fraction = {0, 1}, .dt = 0.0, .physical_time = 0.0});
+        }
+    } catch (...) { error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "accepted halo bootstrap candidate allocation failed collectively");
+    prepare_accepted_halo_candidates(candidates, points);
+    error = {};
+    try {
+      for (std::size_t block = 0; block < candidates.size(); ++block)
+        for (std::size_t level = 0; level < candidates[block].size(); ++level)
+          copy_full_field_in_place(candidates[block][level], p_->block_state(block, level));
+      Kokkos::fence();
+    } catch (...) { error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "accepted halo bootstrap publication/copy/fence failed collectively");
+  }
   p_->publish_tagging_checkpoint();
   p_->history_regrid_sequence_sources.reset();
   p_->bootstrap_transaction.reset();
@@ -22614,6 +22870,11 @@ template std::string AmrSystem<kNativeDimension>::authenticate_prepared_amr_inte
 template runtime::multiblock::InterfaceFluxSampleProjection<kNativeDimension>
 AmrSystem<kNativeDimension>::prepare_prepared_amr_interface_sample_projection(
     const runtime::multiblock::InterfaceFluxSample&, int) const;
+template bool AmrSystem<kNativeDimension>::requests_accepted_halo_preparation() const noexcept;
+template std::vector<std::vector<std::string>> AmrSystem<kNativeDimension>::checkpoint_accepted_halo_contract() const;
+template void AmrSystem<kNativeDimension>::prepare_accepted_halo_candidates(
+    std::vector<std::vector<MultiFab<kNativeDimension>>>&,
+    const std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>>&);
 template void AmrSystem<kNativeDimension>::publish_prepared_amr_program_candidates(
     int, std::span<MultiFab<kNativeDimension>* const>);
 template bool AmrSystem<kNativeDimension>::has_package_assembly_lane() const;

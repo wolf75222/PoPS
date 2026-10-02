@@ -5,6 +5,7 @@ kernels remain in ``pops.lib.amr``. Resolved plans remain internal to ``pops.mes
 immutable native materialization IR is public so external providers can implement its protocol.
 """
 from .authoring import (
+    AcceptedHaloPreparation,
     AMRClockRelation,
     AMRExecution,
     AMRHierarchy,
@@ -43,6 +44,7 @@ from .providers import (
 
 
 __all__ = [
+    "AcceptedHaloPreparation",
     "AMRClockRelation",
     "AMRExecution",
     "AMRHierarchy",

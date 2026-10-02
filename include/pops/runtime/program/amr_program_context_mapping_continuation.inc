@@ -198,8 +198,11 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
             facade_->validate_prepared_amr_state_publication_candidate(
                 static_cast<int>(block), static_cast<int>(level), candidate);
           },
-          [&](std::size_t level, std::span<field_type*> pack) {
-            stage_prepared_publication_candidates_(level, pack);
+          [&](auto&& first, auto&& second, auto&&... history) {
+            if constexpr (std::is_integral_v<std::remove_cvref_t<decltype(first)>>)
+              stage_prepared_publication_candidates_(first, second);
+            else
+              prepare_accepted_publication_halos_(mapping_continuation_->dt, first, second, history...);
           });
       commit_interface_flux_attempt_();
       accepted_subcycling_attempt_ = multiblock_subcycling_->last_accepted_attempt();

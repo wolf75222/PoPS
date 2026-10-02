@@ -1,7 +1,7 @@
 """Public stationary transport and periodic rectangular tag selection."""
 import math
 import pops
-from pops.amr import AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer, Buffer, Tag, Hysteresis, EqualityPolicy, ConflictPolicy
+from pops.amr import AcceptedHaloPreparation, AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer, Buffer, Tag, Hysteresis, EqualityPolicy, ConflictPolicy
 from pops.analytic import cos, x
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
@@ -54,6 +54,6 @@ def build(shape, tag_buffer, transfer_kind):
         tagging=AMRTagging(rules=(Tag(ValueExpr(block[STATE])["marker"] > case.value(threshold)), Buffer(cells=tag_buffer)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(1000, clock=program.clock)), transfer=transfer,
-        execution=AMRExecution.synchronous(),
+        execution=AMRExecution.synchronous(accepted_halo=AcceptedHaloPreparation()),
         clustering=BergerRigoutsos(minimum_efficiency=1., minimum_box_size=1, maximum_box_size=4))
     return case, layout

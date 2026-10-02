@@ -516,6 +516,11 @@ class PreparedMultiBlockAmrSubcyclingEngine {
       for (std::size_t level = 0; level < hierarchy_->level_count(); ++level)
         invoke_collectively_([&] { stage(level, std::span<field_type*>(packs[level])); },
                              "multi-block AMR candidate staging failed collectively");
+    // Optional explicit whole-tower effect: all level staging is complete, no live publication
+    // has begun, and exact candidate clocks/parents remain available. Legacy stages are unchanged.
+    if constexpr (std::is_invocable_v<Stage&, CandidateMatrix&, const ClockMatrix&, const HistoryMatrix&>)
+      invoke_collectively_([&] { stage(candidates, std::as_const(attempt.clocks), std::as_const(attempt.histories)); },
+                           "multi-block AMR accepted halo preparation failed collectively");
     bool publication_started = false;
     try {
       for (std::size_t level = 0; level < hierarchy_->level_count(); ++level) {

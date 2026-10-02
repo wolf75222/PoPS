@@ -279,15 +279,38 @@ class AMRClockRelation:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class AcceptedHaloPreparation:
+    """Explicit numerical effect: prepare accepted state halos before publication.
+
+    The boundary point comes from authenticated candidate clocks, not user time.
+    Widths are ranked cell extents; the policy applies to every state component.
+    """
+    cells: int | tuple[int, ...] = 1
+    __pops_ir_immutable__ = True
+
+    def __post_init__(self) -> None:
+        rows = (self.cells,) if type(self.cells) is int else self.cells
+        if type(rows) is not tuple or not rows or any(type(v) is not int or v <= 0 for v in rows):
+            raise ValueError("AcceptedHaloPreparation cells must be positive exact integers")
+
+    def to_data(self) -> dict[str, Any]:
+        return {"schema_version": 1, "effect": "prepare_accepted_halo",
+                "point_authority": "candidate_accepted_clock", "cells": self.cells,
+                "components": "all_state_components"}
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class AMRExecution:
     """How levels advance in time, independently of the temporal Program graph."""
 
     mode: str
     relations: tuple[AMRClockRelation, ...]
+    accepted_halo: AcceptedHaloPreparation | None
     __pops_ir_immutable__ = True
 
-    def __init__(self, mode: str, relations: tuple[AMRClockRelation, ...] = ()) -> None:
+    def __init__(self, mode: str, relations: tuple[AMRClockRelation, ...] = (), *,
+                 accepted_halo: AcceptedHaloPreparation | None = None) -> None:
         if mode not in {"subcycled", "synchronous"}:
             raise ValueError("AMRExecution mode must be subcycled or synchronous")
         rows = tuple(relations)
@@ -298,23 +321,28 @@ class AMRExecution:
         children = [row.child_level for row in rows]
         if len(children) != len(set(children)):
             raise ValueError("AMRExecution declares one clock relation per child level")
+        if accepted_halo is not None and type(accepted_halo) is not AcceptedHaloPreparation:
+            raise TypeError("accepted_halo must be an exact AcceptedHaloPreparation")
+        object.__setattr__(self, "accepted_halo", accepted_halo)
         object.__setattr__(self, "mode", mode)
         object.__setattr__(self, "relations", rows)
 
     @classmethod
     def subcycled(
-        cls, relations: tuple[AMRClockRelation, ...] = (),
+        cls, relations: tuple[AMRClockRelation, ...] = (), *,
+        accepted_halo: AcceptedHaloPreparation | None = None,
     ) -> AMRExecution:
-        return cls("subcycled", relations)
+        return cls("subcycled", relations, accepted_halo=accepted_halo)
 
     @classmethod
-    def synchronous(cls) -> AMRExecution:
-        return cls("synchronous")
+    def synchronous(cls, *, accepted_halo: AcceptedHaloPreparation | None = None) -> AMRExecution:
+        return cls("synchronous", accepted_halo=accepted_halo)
 
     def to_data(self) -> dict[str, Any]:
         return {
-            "schema_version": 2,
+            "schema_version": 2 if self.accepted_halo is None else 3,
             "authority_type": "amr_execution",
+            **({} if self.accepted_halo is None else {"accepted_halo": self.accepted_halo.to_data()}),
             "mode": self.mode,
             "relations": [row.to_data() for row in self.relations],
         }
