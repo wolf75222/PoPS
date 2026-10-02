@@ -32,7 +32,7 @@ from .closures import (gaussian_closure, closure, Closure, LocalClosure,
 # --- facade API (thin wrappers over the generator) -------------------------
 from .hierarchy import CartesianVelocityMoments, CompositeMean, MomentModel, MomentHierarchy
 from .ordering import MomentOrdering
-from .basis import MomentBasis, RawMomentBasis
+from .basis import CartesianMonomialBasis, MomentBasis, RawMomentBasis
 from .transforms import CenteredTransform, StandardizedTransform
 from .affine import affine_push_forward
 from .speeds import ExactSpeeds
@@ -67,6 +67,7 @@ __all__ = [
     "fan_li15_expressions",
     "fan_li15_from_hermite",
     # facade API
+    "CartesianMonomialBasis",
     "CartesianVelocityMoments",
     "CompositeMean",
     "MomentModel",
