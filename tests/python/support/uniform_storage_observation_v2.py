@@ -48,3 +48,19 @@ def retain_uniform_provenance(artifact,native,directory):
            'files':{name:digest(directory/name) for name in ('program.cpp','program.ir.json')},
            'root_scientific_approval':False}
     (directory/'provenance.json').write_text(json.dumps(proof,sort_keys=True,allow_nan=False)+'\n')
+
+
+def authenticate_owner_shard(observation,rank,ranks):
+    """Test-only actual wire validation, including all grown bits and empty owners."""
+    from tests.review.sol61_amr_full_carrier_offline import decode
+    if type(rank) is not int or type(ranks) is not int or not 0<=rank<ranks:
+        raise ValueError('exact rank/world authority required')
+    local=decode(np.frombuffer(observation.rank_local,dtype=np.uint8))
+    complete=decode(np.frombuffer(observation.complete,dtype=np.uint8))
+    if local['ranks']!=ranks or complete['ranks']!=ranks or local['shard']!=rank or complete['shard']!=-1:
+        raise ValueError('rank/world/shard authority differs')
+    for key in ('dim','real','levels','blocks'):
+        if local[key]!=complete[key]:raise ValueError('local/complete authority differs')
+    if local['dim']!=observation.dimension:raise ValueError('observation dimension differs')
+    expected=[patch for patch in complete['patches'] if patch['owner'] in (-1,rank)]
+    if local['patches']!=expected:raise ValueError('local/complete full-grown owner rows differ')
