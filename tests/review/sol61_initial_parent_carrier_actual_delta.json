@@ -1,0 +1,13 @@
+{
+  "schema": "sol61.initial-parent-carrier-delta@1",
+  "scope": "offline diagnostic; no acceptance",
+  "before_sha256": "47fb4a70795b47c808f465e4e9ea23bc55e75d1639f043527f69ec3cb06bf82b",
+  "after_sha256": "b1c784dc496378eab8a73868b7e5069d824accffc42c1c30275e98b25629c2f4",
+  "changed_valid": 0,
+  "changed_ghost": 48,
+  "poison_present_after": false,
+  "changed_components": {
+    "0": 24,
+    "1": 24
+  }
+}
