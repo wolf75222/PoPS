@@ -41,3 +41,14 @@ Synthetic files are explicitly test data, never authentic Native observations.
 Verdict: favourable bounded Source preparation. Future ROOT actual captures and
 provenance remain mandatory before scientific reception. No Main/Native/ENV/
 ROMEO, raw evidence or historical profiles were modified.
+
+## Independent finite-grown counterexample followup
+
+Hooke executed a coherent reseal changing the same final grown bit to NaN in
+complete and replicated local images. The initial storage layer accepted it:
+local/complete and valid-bit correspondence alone do not imply finite ghosts.
+The reader now separately requires every full grown float64 value to be finite,
+without changing equations or claiming a Ghost formula. The replicated NaN
+adversary re-pins all files and metadata and is refused. Storage suite: 11 PASS
+in 0.95s. The earlier reader acceptance is preserved as a Source counterexample,
+not a Native observation or scientific receipt.

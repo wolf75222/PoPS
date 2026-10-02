@@ -52,3 +52,13 @@ def test_resealed_storage_mutants_refused(tmp_path,mutation):
 def test_partitioned_empty_rank_preserves_full_inventory(tmp_path):
     report=r.audit_storage(tmp_path,captures(tmp_path,partitioned=True))
     assert report['ranks']==2 and report['patch_counts']==[1]*9
+
+
+def test_coherently_resealed_replicated_nan_grown_is_refused(tmp_path):
+    pins=captures(tmp_path);phase='accepted8';name=phase+'.storage.json'
+    meta=json.loads((tmp_path/name).read_text())
+    for row in [meta['complete'],*meta['rank_local']]:
+        path=tmp_path/row['file'];path.write_bytes(path.read_bytes()[:-8]+struct.pack('<d',float('nan')))
+        row['sha256']=pins[row['file']]=hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path/name).write_text(json.dumps(meta));pins[name]=hashlib.sha256((tmp_path/name).read_bytes()).hexdigest()
+    with pytest.raises(ValueError,match='nonfinite grown'):r.audit_storage(tmp_path,pins)

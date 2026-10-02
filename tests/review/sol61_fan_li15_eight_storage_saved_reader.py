@@ -54,6 +54,7 @@ def audit_storage(directory,pins):
             require(0<=xl<=xh<16 and 0<=yl<=yh<16,'valid geometry differs')
             coverage[yl:yh+1,xl:xh+1]+=1
             bits=np.asarray(patch['bits'],dtype=np.uint64).reshape(15,yG-yg+1,xG-xg+1)
+            require(np.all(np.isfinite(bits.view(np.float64))),'nonfinite grown storage')
             require(np.array_equal(bits[:,yl-yg:yh-yg+1,xl-xg:xh-xg+1],values.view(np.uint64)[:,yl:yh+1,xl:xh+1]),'valid/carrier bits differ')
         require(np.all(coverage==1),'complete coverage differs');counts.append(len(whole['patches']))
     return {'contract':CONTRACT,'phases':list(PHASES),'ranks':world,'patch_counts':counts,'native_authority':False,'root_scientific_approval':False,'ghost_formula_qualified':False,'checkpoint_restart_qualified':False}
