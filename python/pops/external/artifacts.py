@@ -443,6 +443,9 @@ class InstalledComponent:
             raise RuntimeError(
                 "installed component loading requires a native _load_component provider"
             )
+        from pops.interfaces import required_native_interface_tables
+        required_tables=required_native_interface_tables(
+            self.runtime_contract.manifest_data["signature"],self.interface)
         handle = loader(
             str(self.path),
             self.component_id,
@@ -451,7 +454,7 @@ class InstalledComponent:
             self.interface.to_data()["catalog_sha256"],
             self.platform_manifest.abi.require("component.abi"),
             self.binary_identity.token,
-            [(self.interface.abi_id, self.interface.version, self.interface.cpp_table)],
+            list(required_tables),
             _canonical_runtime_json(self.runtime_contract.manifest_data["parameters"]),
             _canonical_runtime_json(self.runtime_contract.manifest_data["target"]),
         )

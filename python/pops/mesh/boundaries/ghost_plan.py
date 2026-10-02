@@ -764,6 +764,11 @@ class GhostProducerPlan:
     def _binding_map(self) -> dict[Handle, BoundaryComponentBinding]:
         return {row.target: row for row in self.component_bindings}
 
+    @property
+    def inferred_component_inputs(self) -> tuple[Any, ...]:
+        factory=getattr(self.execution_authority,"inferred_component_bindings",None)
+        return tuple(component for _,component in factory()) if callable(factory) else ()
+
     def require_component_inputs(self, components: tuple[Any, ...]) -> None:
         """Authenticate every bound component against the explicit resolve input tuple."""
         by_id = {}

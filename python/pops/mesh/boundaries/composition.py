@@ -231,12 +231,14 @@ def compose_transport_boundary(
         discretization_manifest,
         tuple(regions),
     )
+    inferred=authority.inferred_component_bindings()
     return GhostProducerRegistry(*producers).resolve(
         topology,
         coverage,
         tuple(regions),
         tuple(productions),
         execution_authority=authority,
+        component_bindings=tuple(binding for binding,_ in inferred),
     )
 
 

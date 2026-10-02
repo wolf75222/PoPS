@@ -334,6 +334,19 @@ def resolve(
         )
         for block in blocks
     )
+    # Pure generated package authorities are inferred from public boundary Exprs.
+    # Compile remains the sole native compilation phase; exact input validation follows.
+    generated=tuple(component for block in blocks if block.numerics is not None
+        for boundary in block.numerics.boundaries
+        for component in getattr(boundary,"inferred_component_inputs",()))
+    inputs_by_id={getattr(item,"component_id",None) or item.component_manifest.component_id:item
+        for item in components}
+    for item in generated:
+        identity=item.component_manifest.component_id
+        if identity in inputs_by_id:
+            raise ValueError("inferred boundary component conflicts with an explicit component input")
+        inputs_by_id[identity]=item
+    components=tuple(inputs_by_id.values())
     from pops.mesh.boundaries.composition import compose_shared_interfaces
     blocks = compose_shared_interfaces(blocks, layout_plan=layout_plan)
     from pops.codegen._resolved_block_operations import build_block_resolved_operations

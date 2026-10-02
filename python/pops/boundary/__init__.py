@@ -24,4 +24,8 @@ __all__ = [
     "SlipWall",
     "TransportBoundarySet",
     "ZeroFlux",
+    "InteriorTrace",
+    "interior_trace",
 ]
+
+from .interior_trace import InteriorTrace, interior_trace

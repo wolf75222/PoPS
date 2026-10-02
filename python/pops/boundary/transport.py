@@ -42,8 +42,14 @@ def _expression_data(value: Expr | ScalarExpr, *, qualified: bool = False) -> An
     if qualified:
         from pops.model._bind_expression import qualified_expression_key
 
-        key = qualified_expression_key(
-            value, where="resolved transport boundary expression")
+        try:
+            key = qualified_expression_key(
+                value, where="resolved transport boundary expression")
+        except (TypeError,NotImplementedError):
+            from pops.codegen.inferred_boundary_expression import lower_expression
+            cpp,leaves=lower_expression(value)
+            return {"protocol":"pops.inferred-boundary-expression@1",
+                "value":{"ordered_cpp":cpp,"qualified_leaves":list(leaves)}}
     else:
         key = _key(value)
     return {
@@ -183,12 +189,18 @@ def _analytic_time_handle(clock: Any) -> Handle:
 def _dependency_handles(
     values: tuple[Expr | ScalarExpr, ...], *, include_state: Handle | None = None
 ) -> tuple[tuple[Handle, ...], tuple[Handle, ...], tuple[Handle, ...], tuple[ParamHandle, ...]]:
-    references = _unique_references(
-        *(
-            value.declaration_references() if isinstance(value, Expr) else value.parameter_handles()
-            for value in values
-        )
-    )
+    from .interior_trace import InteriorTrace
+    def storage_references(value: Any) -> tuple[Handle, ...]:
+        # Resolve retains the primary Handle, but its authenticated interior view
+        # is not a ghost-region dependency or another producer in the DAG.
+        if isinstance(value, InteriorTrace):return ()
+        children=getattr(value,"__pops_ir_children__",None)
+        rows=children() if callable(children) else NotImplemented
+        if rows is NotImplemented:
+            rows=tuple(getattr(value,name) for name in ("a","b") if hasattr(value,name))
+        if rows:return _unique_references(*(storage_references(child) for child in rows))
+        return value.declaration_references() if isinstance(value,Expr) else value.parameter_handles()
+    references = _unique_references(*(storage_references(value) for value in values))
     states = [reference for reference in references if reference.kind == "state"]
     fields = [reference for reference in references if reference.kind == "field"]
     time = [reference for reference in references if reference.kind == "time"]
@@ -799,6 +811,33 @@ class ResolvedTransportBoundarySet:
         # same pure validator again so detached/tampered resolved values remain fail-closed.
         self._native_contract()
 
+    @staticmethod
+    def requires_expression_component(condition: ResolvedTransportCondition) -> bool:
+        deps=condition.provider.dependencies
+        from pops.fields.boundary_values import LogicalTimeValue
+        from .interior_trace import InteriorTrace
+        from pops.mesh.boundaries import ClosureMode
+        def reads_time(node: Any) -> bool:
+            if isinstance(node,(LogicalTimeValue,InteriorTrace)):return True
+            children=getattr(node,"__pops_ir_children__",None)
+            rows=children() if callable(children) else NotImplemented
+            if rows is NotImplemented:
+                rows=tuple(getattr(node,name) for name in ("a","b") if hasattr(node,name))
+            return any(reads_time(child) for child in rows)
+        return (condition.condition_type == "inflow"
+            and deps.characteristic.mode is ClosureMode.NONE
+            and not any(isinstance(row,ScalarExpr) for row in condition.values)
+            and bool(deps.states or deps.fields or deps.time
+                or any(reads_time(row) for row in condition.values)))
+
+    def inferred_component_bindings(self) -> tuple[Any, ...]:
+        from pops.codegen.inferred_boundary_expression import inferred_component
+        from pops.mesh.boundaries.component_binding import BoundaryComponentBinding
+        state,_,conditions,_,dimension=self._native_contract()
+        return tuple((BoundaryComponentBinding(condition.provider.handle,component),component)
+            for condition in conditions if self.requires_expression_component(condition)
+            for component in (inferred_component(condition,state,frame_id=self.frame_id,dimension=dimension),))
+
     def canonical_identity(self) -> dict[str, Any]:
         return {
             "schema_version": _SCHEMA_VERSION,
@@ -984,16 +1023,19 @@ class ResolvedTransportBoundarySet:
                         )
                     if (
                         dependencies.characteristic.mode is ClosureMode.NONE
-                        and (dependencies.states or dependencies.fields or dependencies.time)
+                        and self.requires_expression_component(condition)
                     ):
-                        raise NotImplementedError(
-                            "state/field/time-dependent PoPS Expr inflow requires a compiled "
-                            "boundary component"
-                        )
+                        from pops.codegen.inferred_boundary_expression import lower_expression
+                        if representation != "conservative":
+                            raise NotImplementedError(
+                                "inferred-boundary-expression-component@1 requires conservative output; "
+                                "primitive conversion needs an explicit versioned conversion contract")
+                        for expression in condition.values:
+                            lower_expression(expression,output_state=state)
                     for expression in condition.values:
                         if (
                             _expression_data(expression, qualified=True).get("protocol")
-                            != "pops.expr.key.v1"
+                            not in {"pops.expr.key.v1","pops.inferred-boundary-expression@1"}
                         ):
                             raise NotImplementedError("unsupported boundary expression protocol")
         if any(row is None and ordinal not in periodic_ordinals
@@ -1084,7 +1126,9 @@ class ResolvedTransportBoundarySet:
                     "converter": self._native_representation_contract(
                         row, state)[1],
                     "values": (
-                        []
+                        [0.0]*ncomp
+                        if self.requires_expression_component(row)
+                        else []
                         if row.condition_type in {"no_flux", "outflow"}
                         else [
                             (
@@ -1165,8 +1209,8 @@ class ResolvedTransportBoundarySet:
                 else:
                     clock_id = None
                     analytic_programs = []
-                    values = []
-                    for index, expression in enumerate(condition.values):
+                    values = [0.0]*ncomp if self.requires_expression_component(condition) else []
+                    for index, expression in enumerate(() if self.requires_expression_component(condition) else condition.values):
                         data = _expression_data(expression, qualified=True)
                         value = eval_expression_key(
                             data["value"], env,
