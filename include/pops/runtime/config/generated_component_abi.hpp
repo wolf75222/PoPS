@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define POPS_COMPONENT_API_SYMBOL_V1 "pops_component_interface_v1"
-#define POPS_COMPONENT_CATALOG_SHA256_V1 "8797c3721e51b181711c0d4d832688b5f32af7d184ce28b81422815010b465c3"
+#define POPS_COMPONENT_CATALOG_SHA256_V1 "3300f2e69852d0b12cbcb12b2c90c1c1dbdd9cddde375d4633062a64d0857985"
 #define POPS_COMPONENT_PROTOCOL_ABI_V1 1u
 #define POPS_COMPONENT_COMMON_ABI_V1 1u
 
@@ -31,6 +31,7 @@ typedef enum PopsNativeInterfaceIdV1 {
   POPS_NATIVE_INTERFACE_WRITER_V1 = 8,
   POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2 = 9,
   POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1 = 10,
+  POPS_NATIVE_INTERFACE_ACCEPTED_INITIAL_GHOST_V1 = 11,
   // Retired numeric spelling for diagnostic/refusal fixtures only; version 1 is never accepted.
   POPS_NATIVE_INTERFACE_TRANSFER_V1 = POPS_NATIVE_INTERFACE_TRANSFER_V2,
 } PopsNativeInterfaceIdV1;
@@ -292,6 +293,20 @@ typedef struct PopsGhostBoundaryApiV1 {
   PopsComponentTableHeaderV1 header;
   PopsApplyRegionBatchFnV1 apply_region_batch;
 } PopsGhostBoundaryApiV1;
+
+// Additive capability: non-integrating accepted initial evaluation only.
+// The callback borrows the same prepared provider state as GhostBoundaryV1.
+typedef struct PopsAcceptedInitialGhostRequestV1 {
+  uint32_t struct_size;
+  uint32_t point_contract_version;
+  PopsGhostBoundaryRequestV1 region_request;
+} PopsAcceptedInitialGhostRequestV1;
+typedef int32_t (*PopsApplyInitialRegionBatchFnV1)(
+    void*, const PopsAcceptedInitialGhostRequestV1*, PopsComponentStatusV1*);
+typedef struct PopsAcceptedInitialGhostApiV1 {
+  PopsComponentTableHeaderV1 header;
+  PopsApplyInitialRegionBatchFnV1 apply_initial_region_batch;
+} PopsAcceptedInitialGhostApiV1;
 
 typedef struct PopsBoundaryFluxRequestV1 {
   uint32_t struct_size;
@@ -827,6 +842,7 @@ inline constexpr size_t generated_native_interface_table_size(
     case POPS_NATIVE_INTERFACE_WRITER_V1: return sizeof(PopsWriterApiV1);
     case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2: return sizeof(PopsFieldTopologyApiV2);
     case POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1: return sizeof(PopsBoundaryFluxApiV1);
+    case POPS_NATIVE_INTERFACE_ACCEPTED_INITIAL_GHOST_V1: return sizeof(PopsAcceptedInitialGhostApiV1);
   }
   return 0;
 }
@@ -843,6 +859,7 @@ inline constexpr uint32_t generated_native_interface_version(PopsNativeInterface
     case POPS_NATIVE_INTERFACE_WRITER_V1: return 1u;
     case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2: return 2u;
     case POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1: return 1u;
+    case POPS_NATIVE_INTERFACE_ACCEPTED_INITIAL_GHOST_V1: return 1u;
   }
   return 0;
 }
@@ -860,6 +877,7 @@ inline constexpr const char* generated_native_interface_table_name(
     case POPS_NATIVE_INTERFACE_WRITER_V1: return "PopsWriterApiV1";
     case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2: return "PopsFieldTopologyApiV2";
     case POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1: return "PopsBoundaryFluxApiV1";
+    case POPS_NATIVE_INTERFACE_ACCEPTED_INITIAL_GHOST_V1: return "PopsAcceptedInitialGhostApiV1";
   }
   return nullptr;
 }
@@ -955,6 +973,14 @@ inline bool generated_native_interface_table_is_complete(
           header->interface_version != 1u) return false;
       const auto* api = static_cast<const PopsBoundaryFluxApiV1*>(table);
       return api->transform_faces != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_ACCEPTED_INITIAL_GHOST_V1: {
+      if (table_size < sizeof(PopsAcceptedInitialGhostApiV1)) return false;
+      const auto* header = static_cast<const PopsComponentTableHeaderV1*>(table);
+      if (header->struct_size < sizeof(PopsAcceptedInitialGhostApiV1) || header->struct_size > table_size ||
+          header->interface_version != 1u) return false;
+      const auto* api = static_cast<const PopsAcceptedInitialGhostApiV1*>(table);
+      return api->apply_initial_region_batch != nullptr;
     }
   }
   return false;

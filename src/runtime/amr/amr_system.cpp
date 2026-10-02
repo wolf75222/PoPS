@@ -3287,6 +3287,8 @@ struct AmrSystem<Dim>::Impl {
     std::vector<std::vector<level_block_type>> block_levels;
     std::vector<std::vector<std::function<void(
         const runtime::multiblock::BoundaryEvaluationPoint&)>>> accepted_halo_boundary_preflight;
+    std::vector<std::vector<std::function<void(
+        const runtime::multiblock::BoundaryEvaluationPoint&)>>> accepted_halo_initial_point_preflight;
     std::vector<std::vector<std::vector<std::string>>> accepted_halo_boundary_fields;
     std::vector<std::vector<std::optional<evaluation_type>>> block_evaluations;
     std::vector<std::vector<std::optional<evaluation_type>>> block_evaluation_candidates;
@@ -7346,6 +7348,7 @@ struct AmrSystem<Dim>::Impl {
       candidate->embedded_boundary.resize(level_count);
       candidate->block_levels.resize(prepared_blocks.size());
       candidate->accepted_halo_boundary_preflight.resize(prepared_blocks.size());
+      candidate->accepted_halo_initial_point_preflight.resize(prepared_blocks.size());
       candidate->accepted_halo_boundary_fields.resize(prepared_blocks.size());
       candidate->block_evaluations.resize(prepared_blocks.size());
       candidate->block_evaluation_candidates.resize(prepared_blocks.size());
@@ -7355,6 +7358,7 @@ struct AmrSystem<Dim>::Impl {
       for (std::size_t block = 0; block < prepared_blocks.size(); ++block) {
         candidate->block_levels[block].reserve(level_count);
         candidate->accepted_halo_boundary_preflight[block].reserve(level_count);
+        candidate->accepted_halo_initial_point_preflight[block].reserve(level_count);
         candidate->accepted_halo_boundary_fields[block].reserve(level_count);
         candidate->block_evaluations[block].resize(level_count);
         candidate->block_evaluation_candidates[block].resize(level_count);
@@ -7967,14 +7971,29 @@ struct AmrSystem<Dim>::Impl {
             }
           candidate->accepted_halo_boundary_fields[block_index].emplace_back(
               halo_fields.begin(), halo_fields.end());
+          // Capability/point-only preflight may run before initial Field producers exist.
+          // Full dependency freshness is checked separately after genuine Field preparation.
+          candidate->accepted_halo_initial_point_preflight[block_index].push_back(
+              [providers = prepared_ghosts](const runtime::multiblock::BoundaryEvaluationPoint& point) {
+                const PopsLogicalTimeV1 logical{sizeof(PopsLogicalTimeV1), point.clock.c_str(),
+                    point.tick, point.level, point.substep, point.stage,
+                    point.stage_fraction.numerator, point.stage_fraction.denominator, point.dt, point.physical_time};
+                for (const auto& invocation : providers) {
+                  component::validate_accepted_initial_ghost_point(logical, 1);
+                  (void)invocation.provider->accepted_initial_ghost_api();
+                }
+              });
           candidate->accepted_halo_boundary_preflight[block_index].push_back(
               [providers = prepared_ghosts](const runtime::multiblock::BoundaryEvaluationPoint& point) {
                 for (const auto& invocation : providers) {
-                  // GhostBoundary ABI v1 requires a positive numerical interval; initial dt=0
-                  // cannot be silently replaced by a fabricated interval.
-                  if (!(point.dt > 0.0))
-                    throw std::invalid_argument(
-                        "accepted halo typed GhostBoundary lacks an authenticated positive initial interval");
+                  if (point.dt == 0.0) {
+                    const PopsLogicalTimeV1 logical{sizeof(PopsLogicalTimeV1), point.clock.c_str(),
+                        point.tick, point.level, point.substep, point.stage,
+                        point.stage_fraction.numerator, point.stage_fraction.denominator, point.dt, point.physical_time};
+                    component::validate_accepted_initial_ghost_point(logical, 1);
+                    (void)invocation.provider->accepted_initial_ghost_api();
+                  } else if (!(point.dt > 0.0))
+                    throw std::invalid_argument("accepted halo GhostBoundary point is invalid");
                   const auto& dependencies = *invocation.dependencies;
                   for (const auto* plan : dependencies.field_plans) {
                     if (plan == nullptr || !plan->accepted_halo_producer_point)
@@ -10050,7 +10069,7 @@ struct AmrSystem<Dim>::Impl {
       for (std::size_t block = 0; block < result.size(); ++block)
         for (std::size_t level = 0;
              level < prepared_hierarchy->accepted_halo_boundary_preflight[block].size(); ++level)
-          prepared_hierarchy->accepted_halo_boundary_preflight[block][level](result[block][level]);
+          prepared_hierarchy->accepted_halo_initial_point_preflight[block][level](result[block][level]);
     return result;
   }
 
@@ -14042,10 +14061,12 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
              point.stage_fraction != points[block][level - 1].stage_fraction))
           throw std::invalid_argument("accepted halo parent and child clocks do not align causally");
         if (p_->prepared_hierarchy->accepted_halo_boundary_preflight.size() != candidates.size() ||
-            p_->prepared_hierarchy->accepted_halo_boundary_preflight[block].size() != levels)
+            p_->prepared_hierarchy->accepted_halo_boundary_preflight[block].size() != levels ||
+            p_->prepared_hierarchy->accepted_halo_initial_point_preflight.size() != candidates.size() ||
+            p_->prepared_hierarchy->accepted_halo_initial_point_preflight[block].size() != levels)
           throw std::invalid_argument("accepted halo preparation lost typed boundary preflight authorities");
         if (point.dt == 0)
-          p_->prepared_hierarchy->accepted_halo_boundary_preflight[block][level](point);
+          p_->prepared_hierarchy->accepted_halo_initial_point_preflight[block][level](point);
         for (int axis = 0; axis < Dim; ++axis)
           if (field.ghosts()[axis] != request.extent[axis])
             throw std::invalid_argument("accepted halo extent differs from declared carrier storage");
@@ -18262,8 +18283,8 @@ void AmrSystem<Dim>::begin_bootstrap_plan() {
           runtime::multiblock::BoundaryEvaluationPoint point{
               .clock = p_->program.checkpoint_metadata_.primary_clock_identity, .tick = 0,
               .level = static_cast<int>(level), .substep = 0, .stage = 0,
-              .stage_fraction = {0, 1}, .dt = 0.0, .physical_time = 0.0};
-          p_->prepared_hierarchy->accepted_halo_boundary_preflight[block][level](point);
+              .stage_fraction = {0, 1}, .dt = 0.0, .physical_time = p_->accepted_time};
+          p_->prepared_hierarchy->accepted_halo_initial_point_preflight[block][level](point);
         }
     } catch (...) { preflight_error = std::current_exception(); }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
@@ -18350,7 +18371,7 @@ void AmrSystem<Dim>::commit_bootstrap_level() {
           candidates[block].emplace_back(p_->block_state(block, level));
           points[block].push_back({.clock = p_->program.checkpoint_metadata_.primary_clock_identity,
               .tick = 0, .level = static_cast<int>(level), .substep = 0, .stage = 0,
-              .stage_fraction = {0, 1}, .dt = 0.0, .physical_time = 0.0});
+              .stage_fraction = {0, 1}, .dt = 0.0, .physical_time = p_->accepted_time});
         }
     } catch (...) { error = std::current_exception(); }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(

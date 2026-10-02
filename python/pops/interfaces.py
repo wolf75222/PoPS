@@ -201,6 +201,7 @@ def resolve(name: str) -> ComponentInterface:
 
 NumericalFlux = resolve("numerical_flux")
 GhostBoundary = resolve("ghost_boundary")
+AcceptedInitialGhost = resolve("accepted_initial_ghost")
 FieldBoundaryClosure = resolve("field_boundary_closure")
 Tagger = resolve("tagger")
 Clustering = resolve("clustering")
@@ -212,7 +213,7 @@ FieldTopology = resolve("field_topology")
 
 
 __all__ = [
-    "ComponentInterface", "resolve", "NumericalFlux", "GhostBoundary",
+    "ComponentInterface", "resolve", "NumericalFlux", "GhostBoundary", "AcceptedInitialGhost",
     "FieldBoundaryClosure", "Tagger", "Clustering", "Transfer", "Reflux",
     "FieldSolver", "Writer", "FieldTopology",
 ]
