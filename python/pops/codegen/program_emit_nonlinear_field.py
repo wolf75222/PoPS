@@ -223,6 +223,15 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
               "  %s.mark_failed(failure.status(), %s, failure.what());" % (report, action), "}",
               "%s.evaluations = %s->residual_evaluations() + %s_original_rechecks;" % (report, workspace, stem),
               "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane(std::move(%s), ctx.prepared_execution_lane());" % (outcome, report)]
+    if convergence is not None:
+        offset = next(index for index in range(len(lines)-1, -1, -1)
+                      if "if (!std::isfinite(original_norm)" in lines[index])
+        lane = "*%s_lane" % stem if guarded else "ctx.prepared_execution_lane()"
+        lines[offset:offset+1] = [
+            "    pops::Real original_stop = 0;", "    std::exception_ptr cutoff_error;",
+            "    try { original_stop = %s; } catch (...) { cutoff_error = std::current_exception(); }" % recheck_stop,
+            '    pops::collectively_rethrow_exception(cutoff_error, %s, "typed Original Newton recheck cutoff");' % lane,
+            "    if (!std::isfinite(original_norm) || original_norm > original_stop)"]
     if guarded:
         solve_offset = next(index for index in range(len(lines)-1, -1, -1)
                             if "%s->solve(" % workspace in lines[index])

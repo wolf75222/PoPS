@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
+#include <pops/numerics/elliptic/interface/field_newton_krylov.hpp>
+#include <pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp>
 
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
@@ -66,6 +68,42 @@ TEST(test_numerical_defaults, original_newton_typed_criterion_and_legacy_are_dis
   o.convergence = {FieldNewtonConvergenceKind::kAbsolute, Real(0), Real(1e-11)};
   EXPECT_EQ(field_newton_stop_tolerance(o, Real(4)), Real(1e-11));
   EXPECT_THROW(field_newton_stop_tolerance(o, Real(-1)), std::invalid_argument);
+  o.convergence = {FieldNewtonConvergenceKind::kRelative, std::numeric_limits<Real>::max(), Real(0)};
+  EXPECT_THROW(field_newton_stop_tolerance(o, Real(2)), std::invalid_argument);
   o.convergence.kind = static_cast<FieldNewtonConvergenceKind>(99);
   EXPECT_THROW(validate_field_newton_options(o), std::invalid_argument);
+}
+
+
+TEST(test_numerical_defaults, typed_overflow_refuses_before_krylov_uniform_and_amr) {
+  const auto lane = ExecutionLane::world("test.typed-newton.cutoff");
+  const Box<2> domain{Index<2>{}, Index<2>{}};
+  const auto layout = mesh::BoxArray<2>::from_domain(domain, Extent<2>{1,1});
+  const mesh::RankSpace<2> ranks{Index<2>{}, Extent<2>{1,1}};
+  const auto distribution = mesh::Distribution<2>::replicated(layout, ranks);
+  MultiFab<2> state(layout, distribution, Index<2>{}, 1, Extent<2>{});
+  state.set_val(Real(0));
+  FieldNewtonOptions options;
+  options.convergence = {FieldNewtonConvergenceKind::kRelative, std::numeric_limits<Real>::max(), Real(0)};
+  int evaluations = 0, derivatives = 0;
+  FieldNewtonKrylovWorkspace<2> uniform(layout, distribution, Index<2>{}, options);
+  EXPECT_ANY_THROW(uniform.solve(state,
+      [&](const auto&, auto& output, int) { ++evaluations; output.set_val(Real(2)); },
+      [&](const auto&, const auto&, auto&, int) { ++derivatives; }, [](auto&) {}, lane, false));
+  EXPECT_EQ(evaluations, 1);
+  EXPECT_EQ(derivatives, 0);
+  EXPECT_EQ(reduce_norm_inf(state), Real(0));
+  MultiFab<2> mask(layout, distribution, Index<2>{}, 1, Extent<2>{});
+  mask.set_val(Real(1));
+  const std::array<const MultiFab<2>*, 1> layouts{&state}, masks{&mask};
+  const std::array<Real, 1> measures{Real(1)};
+  const std::array<MultiFab<2>*, 1> destinations{&state};
+  AmrFieldNewtonKrylovWorkspace<2> amr(layouts, masks, measures, options);
+  evaluations = derivatives = 0;
+  EXPECT_ANY_THROW(amr.solve(destinations,
+      [&](const auto&, auto& output, int) { ++evaluations; output[0].set_val(Real(2)); },
+      [&](const auto&, const auto&, auto&, int) { ++derivatives; }, [](auto&) {}, lane, false));
+  EXPECT_EQ(evaluations, 1);
+  EXPECT_EQ(derivatives, 0);
+  EXPECT_EQ(reduce_norm_inf(state), Real(0));
 }

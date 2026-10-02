@@ -16,7 +16,7 @@ Raw relative residual remains diagnostic and uses the historical zero-reference 
 The shared public header helper `field_newton_stop_tolerance` is used by both
 Newton-Krylov workspaces and the AMR Original recheck. Uniform emission uses it only
 for the explicit policy, preserving historical generated C++ bytes. No residual
-application or collective reduction is added. Complete Original equation bodies,
+application or norm reduction is added. Complete Original equation bodies,
 unknown order, captures and existing publication guards are retained.
 
 Prepared spatial explicit-policy identity is `prepared-spatial-newton-v4`; its payload
@@ -64,3 +64,17 @@ no installed package or shared Native checkout is written. This is a host C++ ch
 not an installed Python Native Original simulation.
 
 Final validation: existing Original Source suites30 PASS121.16s; author policy suite23 PASS (see gel report for duration); real repository host gtest5 PASS, zero failures/skips. The host companion JSON pins the actual source, binary, XML and commands. No Native simulation acceptance is inferred.
+
+
+## Counterreview correction: computed cutoff overflow
+
+Finite coefficients and finite reference do not imply a finite product. Typed
+Relative policies now require the computed cutoff to be finite representable Real;
+overflow throws before initial admission. Both Newton engines perform a mandatory
+collective failure vote for this calculation even with optional algebra guards off,
+before any subsequent Krylov collective. Uniform and AMR Original rechecks likewise
+vote cutoff failures before continuation/publication. No new residual evaluation or
+norm reduction is added; explicit typed policies add this one small failure vote.
+Legacy numeric calculation and emitted bytes remain unchanged, including its
+historical arithmetic behavior. This is a typed-policy representability boundary,
+not a physical/model tolerance limit or a Schur-residual criterion.

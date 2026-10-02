@@ -439,8 +439,14 @@ class PreparedAmrFieldResidual final {
       evaluate(candidate_, recheck_, 0);
       const Real squared = op_->original_field_dot(recheck_, recheck_);
       const Real norm = std::sqrt(squared);
-      if (!std::isfinite(norm) ||
-          norm > field_newton_stop_tolerance(options_, report.reference_residual_norm))
+      Real original_stop = Real(0);
+      if (options_.convergence.kind == FieldNewtonConvergenceKind::kLegacy)
+        original_stop = field_newton_stop_tolerance(options_, report.reference_residual_norm);
+      else
+        local_phase_(lane, [&] {
+          original_stop = field_newton_stop_tolerance(options_, report.reference_residual_norm);
+        });
+      if (!std::isfinite(norm) || norm > original_stop)
         report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                            "original_amr_field_residual_recheck_failed");
       report.residual_norm = norm;

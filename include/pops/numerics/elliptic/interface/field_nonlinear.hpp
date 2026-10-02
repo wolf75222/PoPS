@@ -68,8 +68,12 @@ inline Real field_newton_stop_tolerance(const FieldNewtonOptions& options, Real 
   switch (options.convergence.kind) {
     case FieldNewtonConvergenceKind::kLegacy:
       return options.tolerance * std::max(Real(1), reference);
-    case FieldNewtonConvergenceKind::kRelative:
-      return std::max(options.convergence.absolute, options.convergence.relative * reference);
+    case FieldNewtonConvergenceKind::kRelative: {
+      const Real cutoff = std::max(options.convergence.absolute, options.convergence.relative * reference);
+      if (!std::isfinite(cutoff))
+        throw std::invalid_argument("typed Newton computed cutoff is not finite representable Real");
+      return cutoff;
+    }
     case FieldNewtonConvergenceKind::kAbsolute:
       return options.convergence.absolute;
   }

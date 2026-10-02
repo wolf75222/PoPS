@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <pops/numerics/elliptic/interface/field_newton_krylov.hpp>
 #include <pops/runtime/program/prepared_amr_spatial_residual.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
@@ -395,3 +396,29 @@ TEST(AmrSpatialMaterialization, PendingProofSurvivesPublicationAndRejectsRankLoc
 }
 
 #endif  // POPS_NATIVE_DIM == 2
+
+
+TEST(AmrSpatialNorm, TypedCutoffOneRankOverflowVotesBeforeKrylov) {
+  using namespace pops;
+  const auto lane = ExecutionLane::world("test.typed-cutoff.rank-local-failure");
+  auto state = field(false, false), mask = field(false, false);
+  state.set_val(Real(0)); mask.set_val(Real(1));
+  FieldNewtonOptions options;
+  options.convergence = {FieldNewtonConvergenceKind::kRelative,
+      my_rank() == 0 ? std::numeric_limits<Real>::max() : Real(.1), Real(0)};
+  int derivatives = 0;
+  const auto residual = [](const auto&, auto& output, int) { output.set_val(Real(2)); };
+  const auto derivative = [&](const auto&, const auto&, auto&, int) { ++derivatives; };
+  FieldNewtonKrylovWorkspace<2> uniform(state.layout(), state.distribution(), state.local_rank(), options);
+  EXPECT_ANY_THROW(uniform.solve(state, residual, derivative, [](auto&) {}, lane, false));
+  EXPECT_EQ(derivatives, 0);
+  const std::array<const MultiFab<2>*,1> layouts{&state}, masks{&mask};
+  const std::array<Real,1> measures{Real(1)};
+  const std::array<MultiFab<2>*,1> destinations{&state};
+  AmrFieldNewtonKrylovWorkspace<2> amr(layouts,masks,measures,options);
+  EXPECT_ANY_THROW(amr.solve(destinations,
+      [](const auto&, auto& output, int) { output[0].set_val(Real(2)); },
+      derivative, [](auto&) {}, lane, false));
+  EXPECT_EQ(derivatives, 0);
+  EXPECT_EQ(reduce_norm_inf(state), Real(0));
+}
