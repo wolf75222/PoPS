@@ -25,14 +25,23 @@ def observe(world,runtime):
     blob=collective_call(world,lambda:bytes(runtime._executor.checkpoint_state_carriers()))
     levels=collective_call(world,runtime.n_levels)
     arrays=[]
+    geometry=[]
     for level in range(levels):
         state=collective_call(world,lambda level=level:runtime.block_level_state_global("marker",level))
         active=collective_call(world,lambda level=level:composite_active_mask(runtime,level,refinement_ratio=2))
-        arrays.append((np.asarray(state).copy(),np.asarray(active).copy()))
+        shape=8*2**level
+        snapshot=collective_call(world,lambda level=level,shape=shape:runtime._executor._s._output_geometry_snapshot(
+            level,(0.,0.),(1/shape,1/shape),(shape,shape),
+            (2,2) if level+1<levels else (0,0),"pops://cell-measures/cartesian-area@1"))
+        with collective_check(world):
+            assert snapshot["dimension"]==2 and tuple(snapshot["cell_shape"])==(shape,shape)
+            np.testing.assert_array_equal(active,np.asarray(snapshot["valid_cells"]) & ~np.asarray(snapshot["coverage"]))
+            geometry.append(tuple(tuple(row) for row in snapshot["boxes"]))
+            arrays.append((np.asarray(state).copy(),np.asarray(active).copy()))
     report=collective_call(world,runtime.program_report)
     halo=collective_call(world,runtime._executor.checkpoint_accepted_halo_contract)
     clock=collective_call(world,lambda:(runtime.time(),runtime.macro_step(),tuple(runtime.patch_boxes())))
-    return blob,arrays,(report.histories,report.diagnostics,halo,clock)
+    return blob,arrays,(report.histories,report.diagnostics,halo,tuple(geometry),clock)
 
 def same(left,right):
     assert left[0]==right[0] and left[2]==right[2]
@@ -44,7 +53,7 @@ def same(left,right):
 def persist(directory,phase,image):
     (directory/(phase+"-carriers.bin")).write_bytes(image[0])
     np.savez(directory/(phase+"-valid.npz"),**{f"{i}-{j}":a for i,row in enumerate(image[1]) for j,a in enumerate(row)})
-    (directory/(phase+"-metadata.json")).write_text(json.dumps({"phase":phase,"native_metadata_repr":repr(image[2]),"accepted_halo_contract":image[2][2],"accepted_clock":image[2][-1][:2],"carrier_sha256":hashlib.sha256(image[0]).hexdigest()},indent=2)+"\n")
+    (directory/(phase+"-metadata.json")).write_text(json.dumps({"phase":phase,"native_metadata_repr":repr(image[2]),"accepted_halo_contract":image[2][2],"accepted_clock":image[2][-1][:2],"writer_geometry_boxes":image[2][3],"fine_patch_boxes":image[2][-1][2],"carrier_sha256":hashlib.sha256(image[0]).hexdigest()},indent=2)+"\n")
 
 def publish(world,directory,phase,image):
     with collective_check(world):
@@ -96,8 +105,12 @@ def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache
     with collective_check(world):
         same(images["accepted"],images["reloaded"]);same(images["continuous"],images["replay"])
         initial_archive=decode(np.frombuffer(images["initial"][0],dtype=np.uint8))
-        boxes=images["initial"][2][-1][2]
-        coarse,fine=receive(boxes,(8,8),0)
+        fine_boxes=images["initial"][2][-1][2]
+        geometry=images["initial"][2][3]
+        coarse,fine=receive(fine_boxes,(8,8),0)
+        # patch_boxes uses inclusive native(x,y), Writer uses half-open numpy(y,x).
+        assert all(row[0]==1 for row in fine_boxes)
+        assert tuple((lo[1],lo[0],hi[1]+1,hi[0]+1) for level,lo,hi in fine_boxes)==geometry[1]
         assert len(images["initial"][1])==2
         np.testing.assert_array_equal(images["initial"][1][0][1],coarse)
         np.testing.assert_array_equal(images["initial"][1][1][1],fine)
@@ -105,7 +118,8 @@ def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache
             image=images[phase];assert image[2][-1][:2]==(step*DT,step)
             halo_rows(image[2][2])
             archive=decode(np.frombuffer(image[0],dtype=np.uint8))
-            full_carrier(initial_archive,archive,boxes,step*DT,step,1 if subcycled else 0)
+            assert image[2][3]==geometry
+            full_carrier(initial_archive,archive,geometry,step*DT,step,1 if subcycled else 0)
             for (current,mask),(initial,oldmask) in zip(image[1],images["initial"][1],strict=True):
                 np.testing.assert_array_equal(mask,oldmask)
                 current=current.reshape(2,*mask.shape);initial=initial.reshape(2,*mask.shape)

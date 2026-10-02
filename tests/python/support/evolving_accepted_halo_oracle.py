@@ -19,15 +19,19 @@ def affine_bound(scale,elapsed,steps,dim=2):
     # Perturbation amplification ≤1+dim for this one coarse→fine interface.
     return gamma*(1+dim)*(scale+abs(elapsed)+1)
 
-def full_carrier(initial,current,boxes,elapsed,steps,constant):
+def full_carrier(initial,current,geometry,elapsed,steps,constant):
     for name,value in (("dim",2),("real",64),("shard",-1),("levels",2),("blocks",["marker"])):
         assert initial[name]==current[name]==value,(name,initial[name],current[name])
     assert initial["ranks"]==current["ranks"]
     expected={}
-    for level in range(2):
-        selected=[row for row in boxes if row[0]==level]
+    assert len(geometry)==2
+    for level,selected in enumerate(geometry):
         assert selected
-        for i,row in enumerate(selected):expected[(0,level,i)]=[(row[1],row[3]),(row[2],row[4])]
+        for i,row in enumerate(selected):
+            assert len(row)==4 and all(type(v) is int for v in row)
+            ylo,xlo,yend,xend=row
+            assert xlo<xend and ylo<yend
+            expected[(0,level,i)]=[(xlo,xend-1),(ylo,yend-1)]
     left={p["key"]:p for p in initial["patches"]};right={p["key"]:p for p in current["patches"]}
     assert len(left)==len(initial["patches"]) and len(right)==len(current["patches"])
     assert left.keys()==right.keys()==expected.keys()
