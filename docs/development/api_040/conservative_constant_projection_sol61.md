@@ -58,3 +58,52 @@ expressions now stay finite and near the independent odd antiderivative0.
 Max-magnitude/subnormal/signed-zero constants and degree1..7 moments also pass.
 The actual C++ host suite receives the same opposed-sign antiderivative control;
 ROOT still owns its complete build/execution. Tiny Source host pair:2PASS2.15s.
+
+
+## Real repository C++ gtest reception
+
+The true source file tests/cpp/unit/runtime/test_analytic_expression.cpp was
+compiled and linked by the repository CMake target, not by the extracted-body
+probe. Frozen e75ea17 header and test bytes were verified identical to Git blobs
+before recording evidence. Build/output is a new private directory:
+`/Users/romaindespoulain/dev/tmp/PoPS-sol61-constant-projection/build-gtest-projection-e75ea17`.
+The worktree remained clean after configure/build/run, before this evidence note.
+
+Successful configure (the repository requires explicit POPS_NATIVE_DIM):
+
+```sh
+/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/cmake -S . -B build-gtest-projection-e75ea17 \
+  -DPOPS_NATIVE_DIM=2 -DPOPS_BUILD_TESTS=ON -DPOPS_BUILD_PYTHON=OFF \
+  -DPOPS_USE_KOKKOS=ON -DPOPS_USE_MPI=OFF -DPOPS_USE_HDF5=OFF \
+  -DPOPS_TESTS_FAST_O0=ON -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17 \
+  -DKokkos_DIR=/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/cmake/Kokkos \
+  -DOpenMP_CXX_FLAGS='-Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/include' \
+  -DOpenMP_CXX_LIB_NAMES=omp \
+  -DOpenMP_omp_LIBRARY=/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/libomp.dylib \
+  -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=/Users/romaindespoulain/dev/tmp/pops-audit-20260907/build-mpi/_deps/googletest-src
+/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/cmake --build build-gtest-projection-e75ea17 --target test_analytic_expression -j1
+env OMP_NUM_THREADS=2 build-gtest-projection-e75ea17/bin/test_analytic_expression \
+  --gtest_filter='AnalyticExpression.*' \
+  --gtest_output=xml:build-gtest-projection-e75ea17/analytic-expression.xml
+```
+
+Result:12PASS,0failures/errors/skips,0.100s gtest total. The new host test
+ExpressionCellAveragesPreserveConstantsAndPolynomialMomentsOnHost executes real
+compiled AnalyticProgram/Geometry in dimensions1/2/3. The entire suite also
+executes existing actual ranked Kokkos materialization, exact polynomial
+integrals, Gaussian neutrality, literals and invalid-input refusals. C++build
+rc0; two existing nodiscard warnings from EXPECT_THROW uses remain in the log.
+No PoPS runtime-library, Python extension or installed SDK/DSO was built/installed.
+Only the dedicated executable, test main and private GoogleTest archives were
+built. j1 limited simultaneous translation-unit compilation to one.
+
+The actual runtime log shows Kokkos::OpenMP::initialize; enabled devices are
+OPENMP/SERIAL. Mach-O dependency/RPATH inspection resolves Kokkos5.2 and libomp
+through the existing pops-api040-ir17/lib directory. This is CPU OpenMP C++
+header conformance, not a new installed-package Python lifecycle receipt, MPI
+qualification, GPU/device execution or a ghost-materialization result.
+conservative_projection_real_cpp_reception_sol61.json pins source, executable,
+raw XML/log/CMake cache, configure/build logs and actual dependency bytes.
+The NativeWT, ENV/site-packages and installed DSO received no writes from this
+agent. ROOT's separate SDK/DSO rebuild and Tag lifecycle rerun remain necessary.

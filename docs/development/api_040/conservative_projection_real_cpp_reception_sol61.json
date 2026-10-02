@@ -1,0 +1,74 @@
+{
+  "backend": "actual Kokkos::OpenMP initialized; OPENMP and SERIAL enabled; CPU",
+  "build_jobs": 1,
+  "cpp_header_materializer_dimensions": [
+    1,
+    2,
+    3
+  ],
+  "dependencies": [
+    {
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/libkokkoscore.5.2.0.dylib",
+      "sha256": "32ee292f9fc0341397c585aa08992d2120429c9221a3ca6e06e34d008201ffc3"
+    },
+    {
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/libomp.dylib",
+      "sha256": "844796bbd71a7492d78776fad75a306fbb1206e521c1d4ca593e5c1b83d338f1"
+    }
+  ],
+  "errors": 0,
+  "evidence": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-constant-projection/build-gtest-projection-e75ea17/bin/test_analytic_expression",
+      "sha256": "6cca3d81ce0c186119ee826299ad6a5951af491b7791e5a16562364035c20436"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-constant-projection/build-gtest-projection-e75ea17/analytic-expression.xml",
+      "sha256": "ed88719068c5f198c47d400add522f5b2c378b9c419970ea04d2175fd2a0e803"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-constant-projection/build-gtest-projection-e75ea17/analytic-expression.log",
+      "sha256": "6df3dc2685123b4fd23af12b10827d065d42ffcdf75b42edd6fe8d73d15afbd2"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-constant-projection/build-gtest-projection-e75ea17/CMakeCache.txt",
+      "sha256": "02fce1f39a83da783680ad201780720a8fe5819ed924e58ab3fbcefe0bbf0125"
+    },
+    {
+      "path": "/private/tmp/sol61-gtest-projection-configure2.log",
+      "sha256": "3ebefafecc59917014ea4e0729eea3a123c144ab65a75e1c4a2d7dda0b6c4da2"
+    },
+    {
+      "path": "/private/tmp/sol61-gtest-projection-build.log",
+      "sha256": "89cb52bafe54cdab6b4cab10f0cee0baf15bc268c2f382b1b883049dfdbbb2f1"
+    }
+  ],
+  "failures": 0,
+  "gtest_seconds": "0.1",
+  "hdf5_enabled": false,
+  "installed_artifacts_written_by_this_build": false,
+  "limits": [
+    "real C++ gtest/header execution; not installed Python validate-resolve-compile-bind-run reception",
+    "no MPI/GPU qualification",
+    "no ghost materialization fix or guard change"
+  ],
+  "mpi_enabled": false,
+  "native_dimension": 2,
+  "python_module_built": false,
+  "real_bits": 64,
+  "schema": "sol61.real-cpp-projection-reception@1",
+  "skips": 0,
+  "source": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-constant-projection/include/pops/runtime/analytic/initial_materialization.hpp",
+      "sha256": "ac7efab9d8a2df8d32a39e77525f4d1026a98a3a2ed0a6a9dba338b06dc6b86d"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-constant-projection/tests/cpp/unit/runtime/test_analytic_expression.cpp",
+      "sha256": "a7fbafd136e9e0869ea479cc4c3575771fcc13714ba396fdf2a15c6cca05ec5c"
+    }
+  ],
+  "source_commit": "e75ea17fb9bcc9015e2de55d360f4f1237edcb9e",
+  "source_integrity": "actual header/test bytes equal frozen e75ea17 Git blobs",
+  "tests": 12
+}
