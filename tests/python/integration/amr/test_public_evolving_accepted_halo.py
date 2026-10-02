@@ -44,6 +44,10 @@ def persist(directory,phase,image):
     np.savez(directory/(phase+"-valid.npz"),**{f"{i}-{j}":a for i,row in enumerate(image[1]) for j,a in enumerate(row)})
     (directory/(phase+"-metadata.json")).write_text(json.dumps({"phase":phase,"native_metadata_repr":repr(image[2]),"accepted_halo_contract":image[2][2],"accepted_clock":image[2][-1][:2],"carrier_sha256":hashlib.sha256(image[0]).hexdigest()},indent=2)+"\n")
 
+def publish(world,directory,phase,image):
+    with collective_check(world):
+        if world.rank==0:persist(directory,phase,image)
+
 @pytest.mark.compiler
 @pytest.mark.native_loader
 @pytest.mark.parametrize("subcycled",(False,True))
@@ -63,19 +67,22 @@ def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache
     runtime=collective_call(world,bind)
     directory=collective_directory(world,tmp_path/"evolving-halo")
     images={"initial":observe(world,runtime)}
+    publish(world,directory,"initial",images["initial"])
     for step,phase in ((1,"accepted"),(2,"continuous")):
         report=collective_call(world,lambda step=step:pops.run(runtime,t_end=step*DT,max_steps=1,console=False))
         images[phase]=observe(world,runtime)
+        publish(world,directory,phase,images[phase])
         if step==1:path=collective_call(world,lambda:runtime.checkpoint(directory/"accepted-checkpoint"))
         with collective_check(world):assert report.accepted_steps==1 and report.rejected_steps==0
     restarted=collective_call(world,bind)
     collective_call(world,lambda:restarted.restart(path))
     images["reloaded"]=observe(world,restarted)
+    publish(world,directory,"reloaded",images["reloaded"])
     collective_call(world,lambda:pops.run(restarted,t_end=2*DT,max_steps=1,console=False))
     images["replay"]=observe(world,restarted)
+    publish(world,directory,"replay",images["replay"])
     with collective_check(world):
         if world.rank==0:
-            for phase,image in images.items():persist(directory,phase,image)
             with np.load(path,allow_pickle=False) as saved:
                 payload={k:saved[k].copy() for k in saved.files}
             contract=json.loads(str(payload["amr_accepted_contract"]))
