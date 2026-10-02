@@ -61,3 +61,36 @@ def test_activation_prebootstrap_contract_has_distinct_transaction_guards():
     assert 'p_->bootstrap_transaction' in preflight, 'active bootstrap is not a pre-bootstrap owner'
     assert 'p_->restart_transaction' in preflight, 'initial-cursor restart remains an active transaction'
     assert activation.index('rethrow_collective_failure') < activation.index('all_ranks_agree_exact_ordered_byte_pairs') < activation.index('field_candidate_observation_enabled = true')
+
+
+def test_real_bootstrap_constructor_and_actual_fixture_activation_wrapper(monkeypatch):
+    # Execute the genuine Python lifecycle methods with explicitly Source-only engine spies.
+    from types import SimpleNamespace
+    from pops.runtime._amr_bootstrap_execution import NativeAMRBootstrapConsumer
+    fixture=ast.parse((ROOT/'tests/python/integration/amr/test_public_initial_field_ghost.py').read_text())
+    wrappers=[n for n in ast.walk(fixture) if isinstance(n,ast.FunctionDef) and any(isinstance(x,ast.Attribute) and x.attr=='_enable_field_candidate_observation' for x in ast.walk(n))]
+    # The outer test also contains that attribute; retain only the innermost wrapper.
+    wrappers=[n for n in wrappers if not any(isinstance(x,ast.FunctionDef) and x is not n for x in ast.walk(n))]
+    assert len(wrappers)==1
+    events=[]
+    class State:
+        active=False
+        def _enable_field_candidate_observation(self,version):
+            assert not self.active, 'activation is inside real bootstrap transaction'
+            assert version==1;events.append('enable')
+        def _begin_bootstrap_plan(self):self.active=True;events.append('begin')
+    state=State()
+    class Engine:
+        _s=state
+        def _commit_bootstrap_level(self):assert state.active;state.active=False;events.append('commit')
+    original_init=NativeAMRBootstrapConsumer.__init__
+    original_finalize=NativeAMRBootstrapConsumer.finalize_bootstrap
+    scope={'original_init':original_init,'original_finalize':original_finalize,'world':None,'collective_call':lambda world,fn:fn()}
+    exec(compile(ast.Module(body=wrappers,type_ignores=[]),'<actual fixture wrapper>','exec'),scope)
+    wrapper=scope[wrappers[0].name]
+    method='__init__' if 'init' in wrappers[0].name else 'finalize_bootstrap'
+    monkeypatch.setattr(NativeAMRBootstrapConsumer,method,wrapper)
+    plan=SimpleNamespace(identity=SimpleNamespace(to_data=lambda:{'schema':'source-only-plan'}))
+    owner=NativeAMRBootstrapConsumer(Engine(),plan,[])
+    owner.finalize_bootstrap()
+    assert events==['enable','begin','commit']

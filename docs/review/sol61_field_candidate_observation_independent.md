@@ -11,3 +11,11 @@ Capture allocations/copy/encoding/map insertion are enclosed in the voted try; c
 The returned status is producer-completed/consumer-preparation-completed with accepted_publication=false. Grown bytes are storage evidence, not a general Field-halo-ready certificate. Optional memory is O(slots × consumer blocks × levels × full Field storage), plus staged/archive/getter copies; not an unlimited history. Numerical CP12/accepted9, FE stage warm starts and component ABI8 layouts remain unchanged, but additive exports/value type require an authenticated rebuilt SDK/DSO.
 
 No proof of Native allocations failing collectively, GPU copy/fence behavior, physical OriginalF, or endpoint scientific reception follows from these host checks. Root owns rebuilt runtime tests and reception.
+
+## Final corrected Source reception
+
+Exact author delta 42d2cee over 25da1171 closes both lifecycle guards in the voted try and moves activation before original NativeAMRBootstrapConsumer.__init__. The independent test executes the actual fixture wrapper AST and the genuine runtime constructor/finalizer with Source-only engine lifecycle spies: enable → begin → commit now passes. This is genuine Python lifecycle coverage, not Native activation or MPI execution. The additional guard check is Source structural coverage, not an executed C++ collective.
+
+Final coherent command (env -u PYTHONPATH, PYTHONDONTWRITEBYTECODE=1, pops Python, --noconftest -p no:cacheprovider -o pythonpath=python) covers independent tests, observation author tests, initial Ghost preparation, initial Field point and accepted Halo policy: **49 PASS / 23.95s / no skips**. Initial exact baseline was 2 PASS / 2 FAIL / 2.90s for the independent group; corrected group is included in the final cohort. No blocking defect remains in this bounded Source review.
+
+The local rollback_active_field_candidate_collectively clears plan candidate state/active slot only; it does not enter AcceptedSnapshot::restore or purge staged diagnostics, so successful DiscardCandidate preserves the captured image. Full outer snapshot restore and clock/parameter mutation invalidate both maps. Diagnostic capture remains producer/consumer-preparation evidence and never certifies accepted publication. Root must rebuild/authenticate exports and execute Native/MPI/scientific checks.
