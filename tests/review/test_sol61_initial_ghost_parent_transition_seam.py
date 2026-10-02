@@ -5,12 +5,14 @@ from types import SimpleNamespace
 import pytest
 ROOT=Path(__file__).resolve().parents[2]
 
-def test_actual_transition_wrapper_arms_before_real_consumer_dispatch(monkeypatch):
+@pytest.mark.parametrize('diagnostic_kind',('available','canonical-refused','foreign'))
+def test_actual_transition_wrapper_arms_before_real_consumer_dispatch(monkeypatch,diagnostic_kind):
     from pops.runtime._amr_bootstrap_execution import NativeAMRBootstrapConsumer
     import tests.python.support.initial_ghost_failure_selection as selection
     import pops._native_collectives as collectives
     source=ast.parse((ROOT/'tests/python/integration/amr/test_public_initial_field_ghost_failure.py').read_text())
     wrapper=next(n for n in ast.walk(source) if isinstance(n,ast.FunctionDef) and n.name=='observed')
+    native_error=RuntimeError('Source-only callback refusal')
     events=[];images=[];owners=[];targets=[];actions=[];world=SimpleNamespace(size=1,rank=0)
     class State:
         def _begin_bootstrap_plan(self):events.append('begin')
@@ -19,20 +21,28 @@ def test_actual_transition_wrapper_arms_before_real_consumer_dispatch(monkeypatc
         def _bootstrap_next_level(self):
             assert os.environ['POPS_TEST_INITIAL_GHOST_TARGET_RANK']=='0'
             events.extend(['actual-create-dispatch','Field-read','tentative-write','local-rollback'])
-            raise RuntimeError('Source-only callback refusal')
+            raise native_error
     plan=SimpleNamespace(identity=SimpleNamespace(to_data=lambda:{'scope':'SourceOnly'}))
     owner=NativeAMRBootstrapConsumer(Engine(),plan,[])
     owner._tagged_level=0;owner._clustered=True
-    def snapshot(owner,phase):events.append('snapshot');return {'blob':b'SourceOnly-snapshot'}
+    def snapshot(owner,phase,captured_blob=None):events.append('snapshot');return {'blob':b'SourceOnly-snapshot'}
     monkeypatch.setattr(selection,'select_xmin_owner',lambda blob,size:{'target':0})
     monkeypatch.setattr(selection,'require_selection_agreement',lambda rows,selected:{'agreed':selected})
+    import tests.python.support.initial_ghost_parent_capture as parent_capture
+    def diagnostic(world,owner,blob):
+        if diagnostic_kind=='foreign':raise ValueError('Source-only unexpected diagnostic error')
+        return {'disposition':'available','blob':blob} if diagnostic_kind=='available' else {'disposition':'canonical-refused','scope':'SourceOnly-no-image'}
+    monkeypatch.setattr(parent_capture,'capture_parent_rejected',diagnostic)
     monkeypatch.setattr(collectives,'allgather_value',lambda world,row:[row])
-    scope={'original':NativeAMRBootstrapConsumer.consume_bootstrap_action,'image':snapshot,'transition_images':images,'owners':owners,'targets':targets,'observed_actions':actions,'world':world,'collective_call':lambda world,fn:fn(),'collective_check':lambda world:__import__('contextlib').nullcontext(),'monkeypatch':monkeypatch}
+    scope={'original':NativeAMRBootstrapConsumer.consume_bootstrap_action,'image':snapshot,'transition_images':images,'diagnostic_errors':[],'owners':owners,'targets':targets,'observed_actions':actions,'world':world,'collective_call':lambda world,fn:fn(),'collective_check':lambda world:__import__('contextlib').nullcontext(),'monkeypatch':monkeypatch}
     exec(compile(ast.Module(body=[wrapper],type_ignores=[]),'<actual fixture transition wrapper>','exec'),scope)
     monkeypatch.delenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',raising=False)
     action=SimpleNamespace(operation='create_level',level=1,identity=SimpleNamespace(token='SourceOnly-action'))
-    with pytest.raises(RuntimeError,match='Source-only callback refusal'):scope['observed'](owner,action)
-    assert events==['begin','snapshot','actual-create-dispatch','Field-read','tentative-write','local-rollback','snapshot']
+    with pytest.raises(RuntimeError,match='Source-only callback refusal') as caught:scope['observed'](owner,action)
+    assert caught.value is native_error
+    assert events==['begin','snapshot','actual-create-dispatch','Field-read','tentative-write','local-rollback']+(['snapshot'] if diagnostic_kind=='available' else [])
+    assert bool(scope['diagnostic_errors'])==(diagnostic_kind=='foreign')
+    assert ('blob' in images[0][1])==(diagnostic_kind=='available')
     assert len(images)==len(targets)==len(actions)==1 and not owners
     assert 'POPS_TEST_INITIAL_GHOST_TARGET_RANK' not in os.environ
     assert owner._active # Outer abort is later; not certified by this bracket.
@@ -41,6 +51,7 @@ def test_source_scope_and_guarded_component_unchanged():
     source=(ROOT/'tests/python/integration/amr/test_public_initial_field_ghost_failure.py').read_text()
     assert "consume_bootstrap_action',observed" in source and 'finalize_bootstrap' not in source
     assert 'not successful construction or nested parent rollback' in source and 'assert before==after' in source
+    assert "assert not diagnostic_errors" in source
     assert "assert time==0." in source and "actual initial owner/failure boundary not observed" in source
 
 
@@ -55,7 +66,7 @@ def test_real_bootstrap_abort_is_observed_after_actual_restore(monkeypatch):
     class Engine:
         _s=Native()
         def _rollback_bootstrap_level(self):events.append('genuine-restore');state['value']=0
-    def snapshot(owner,phase):events.append('capture');return {'blob':bytes([state['value']])}
+    def snapshot(owner,phase,captured_blob=None):events.append('capture');return {'blob':bytes([state['value']])}
     scope={'original_init':NativeAMRBootstrapConsumer.__init__,'original_abort':NativeAMRBootstrapConsumer.abort_bootstrap,'owners':owners,'bootstrap_baselines':baseline,'images':images,'image':snapshot}
     exec(compile(ast.Module(body=list(wrappers.values()),type_ignores=[]),'<actual bootstrap observers>','exec'),scope)
     monkeypatch.setattr(NativeAMRBootstrapConsumer,'__init__',scope['observed_init'])
