@@ -1260,13 +1260,21 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
         raise ValueError("runtime authorities require one coherent layout capability")
 
     from pops.amr._execution_contract import runtime_execution_data
+    dimension = install_plan.artifact.resolved_dimension
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise ValueError("AMR runtime execution requires exact native spatial dimension 1, 2, or 3")
     first = runtime_execution_data(
-        install_plan.amr_execution, dimension=install_plan.artifact.resolved_dimension)
+        install_plan.amr_execution, dimension=dimension)
     relations = first["relations"]
+    expected = len(install_plan.resolved_hierarchy.plan.transitions)
+    # AmrSystemConfig.level_count is int; generated parent/child indices come
+    # from this exact hierarchy, never from foreign level labels.
+    if expected > 2147483646:
+        raise OverflowError("AMR execution hierarchy exceeds native level_count range")
     if not isinstance(relations, list):
         raise TypeError("AMR execution relations must be a list")
     if first.get("mode") == "synchronous":
-        nlevels = len(install_plan.resolved_hierarchy.plan.transitions) + 1
+        nlevels = expected + 1
         relations = [
             {
                 "parent_level": parent,
@@ -1278,7 +1286,6 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
         ]
     elif first.get("mode") != "subcycled":
         raise ValueError("AMR execution mode must be subcycled or synchronous")
-    expected = len(install_plan.resolved_hierarchy.plan.transitions)
     if len(relations) != expected:
         raise ValueError("AMR execution requires one temporal relation per hierarchy transition")
     # All execution/effect/hierarchy checks precede any native authority installation.

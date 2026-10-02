@@ -1,5 +1,6 @@
 """Shared exact execution-v2/v3 protocol admission, before runtime mutations."""
 from copy import deepcopy
+from math import gcd
 
 
 def validate_execution_data(data, *, dimension=None):
@@ -30,6 +31,12 @@ def validate_execution_data(data, *, dimension=None):
             or ratio["denominator"] <= 0 or ratio["numerator"] < ratio["denominator"]
             or row["remainder_policy"] not in ("integral_only", "explicit_final_substep")):
             raise ValueError("AMR execution temporal relation is not canonical")
+        # The existing Native clock setter consumes vector<int64_t>. Check the
+        # wire values before any boundary/provider installation, not after a cast.
+        if ratio["numerator"] > (1 << 63) - 1 or ratio["denominator"] > (1 << 63) - 1:
+            raise OverflowError("AMR execution temporal ratio exceeds native exact-clock int64 range")
+        if gcd(ratio["numerator"], ratio["denominator"]) != 1:
+            raise ValueError("AMR execution temporal ratio must already be reduced")
         if ratio["numerator"] % ratio["denominator"] and row["remainder_policy"] == "integral_only":
             raise ValueError("non-integral AMR temporal relation requires an explicit remainder")
     if version == 3:

@@ -81,3 +81,51 @@ def test_protocol_snapshot_detects_reused_mutable_dict_and_no_alias():
     snapshot = validate_execution_data(good)
     good["accepted_halo"]["cells"] = 5
     assert snapshot["accepted_halo"]["cells"] == 1
+
+
+@pytest.mark.parametrize("numerator,denominator", ((1 << 63, 1), (1 << 63, 1 << 63), (2, 2)))
+def test_native_clock_wire_range_refuses_before_callbacks(metadata_platform, spies, numerator, denominator):
+    from types import SimpleNamespace
+    install = _install(artifact_fixture(target="amr_system"))
+    data = AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)).to_data()
+    data["relations"][0]["temporal_ratio"] = {"numerator": numerator, "denominator": denominator}
+    view = SimpleNamespace(artifact=install.artifact, resolved_hierarchy=install.resolved_hierarchy,
+                           amr_execution=SimpleNamespace(runtime_execution_data=lambda: data))
+    engine = Engine()
+    with pytest.raises((OverflowError, ValueError)): install_runtime_authorities(engine, view)
+    assert engine.calls == []
+
+
+def test_int64_max_wire_value_passes_without_native_grid_allocation(metadata_platform, spies):
+    execution = AMRExecution.subcycled((AMRClockRelation(0, 1, (1 << 63) - 1),))
+    install = _install(artifact_fixture(target="amr_system", execution=execution))
+    install.verify()
+    engine = Engine()
+    install_runtime_authorities(engine, install)
+    assert engine.calls[2] == ("clock", ([(1 << 63) - 1], [1], ["integral_only"]))
+
+
+def test_runtime_missing_dimension_refuses_before_callbacks(metadata_platform, spies):
+    from types import SimpleNamespace
+    install = _install(artifact_fixture(target="amr_system"))
+    view = SimpleNamespace(artifact=SimpleNamespace(layout_plan=install.artifact.layout_plan,
+                                                    resolved_dimension=None),
+                           amr_execution=install.amr_execution,
+                           resolved_hierarchy=install.resolved_hierarchy)
+    engine = Engine()
+    with pytest.raises(ValueError, match="dimension"): install_runtime_authorities(engine, view)
+    assert engine.calls == []
+
+
+def test_hierarchy_native_level_count_range_before_relation_allocation(metadata_platform, spies):
+    from types import SimpleNamespace
+    class OversizedTransitions:
+        def __len__(self): return 1 << 31
+    install = _install(artifact_fixture(target="amr_system"))
+    view = SimpleNamespace(artifact=install.artifact,
+                           amr_execution=AMRExecution.synchronous(),
+                           resolved_hierarchy=SimpleNamespace(plan=SimpleNamespace(
+                               transitions=OversizedTransitions())))
+    engine = Engine()
+    with pytest.raises(OverflowError, match="level_count"): install_runtime_authorities(engine, view)
+    assert engine.calls == []
