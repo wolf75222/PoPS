@@ -122,3 +122,17 @@ Native/scientific/performance evidence remain separate gates.
 La borne de vitesse reçoit explicitement le même état brut que la récupération normalisée, avec la liaison exacte des composantes. Le noyau commun conserve le protocole historique à deux arguments pour les lois existantes. Aucun nœud non atteignable depuis les sorties déclarées n'est accepté : une opération inconnue, cyclique ou falsifiée ne peut donc être cachée dans une capacité supplémentaire.
 
 Delta Source/host : 12 tests passent en 2.93 s ; les neuf adversaires indépendants de Galileo passent en 0.72 s, dont la compilation réelle de la vitesse dépendant d'un moment brut. La précédente cohorte au gel7541 est incomplète : ENOSPC aux probes finales et à l'écriture XML. Elle ne constitue pas un reçu positif. La cohorte finale complète est relancée sur ce correctif. Aucun résultat Native, GPU, MPI ou performance n'est déduit de ces contrôles.
+
+## Gel Source final
+
+Le code au gel `45e746abff861781cd78e881d3572d8952afe742` ferme la cohorte complète : **39 PASS en 355.84 s**, sans échec ni skip. XML externe `/tmp/sol61-m17-final-source.xml`, SHA256 `6974f62223e6672eaa1704ee405e506e965d2c79eeabd6489ae9fdcdc52ad6eb`. Le reçu JSON compagnon lie les fichiers de production réellement inspectés. Un import frontal depuis le chemin absolu du WT confirme zéro extension `_pops` chargée.
+
+Commande exécutée depuis ce WT :
+
+```sh
+rtk proxy env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops/bin/python -m pytest --noconftest -p no:cacheprovider -o pythonpath=python tests/python/unit/codegen/test_fan_li15_path_program.py tests/python/unit/numerics/test_fan_li15_path_contract.py tests/python/unit/moments/test_fan_li15_constitutive.py tests/python/unit/numerics/test_symbolic_path.py tests/review/test_m17_normalized_path_composition.py tests/review/test_generic_core_composition_source_only.py -q --tb=short --junitxml=/tmp/sol61-m17-final-source.xml
+```
+
+Contre-revue indépendante Galileo du delta : dix tests Source/host passent en 1.55 s ; pins SHA256 `8832efba522c3da3e987efc03d022e4c3a4cbafa79cd965fd0ddce62d0c59161`. Cela comprend une densité brute au slot4 et le protocole historique à deux arguments. La compilation hôte de code réellement émis ne qualifie aucune DSO PoPS, exécution MPI/GPU, stabilité globale ou performance.
+
+Le corpus original a effectivement été lu dans la copie authentifiée fournie par ROOT : `context/CORPUS_ORIGINAL.md`135–174 et `reference/PoPS_API_v0.4.0/sources/mathematical_original.tex`547–551. La composition conserve dix équations de degrés0–3 conservatives et cinq terminales non conservatives ; elle ne transforme pas le produit différentiel en source. Le port arithmétique accepte une base2 et une capacité6 indépendante ; la bibliothèque FanLi15 conserve son modèle degré4. Les nouvelles réceptions scientifiques, cas non-auteur et mesures FP/performance Native appartiennent à ROOT.
