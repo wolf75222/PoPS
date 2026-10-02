@@ -1,4 +1,10 @@
-# Current SDK8 source slice — 2026-10-02
+# SDK8 source snapshot before native construction — 2026-10-02
+
+This historical Source snapshot and its JSON remain unchanged in scope. The
+later [actual SDK8 builds and bind results](sdk8_native_build_binding_progress_20261002.md)
+record completed construction, one installed typed Newton pass, five C++ MPI
+collective passes and two distinct failed public Tag binds. Full scientific
+Halo reception remains pending.
 
 The integrated source contains the conservative cell-average projection correction,
 the public signed free-transport fixture and the independently reviewed spatial

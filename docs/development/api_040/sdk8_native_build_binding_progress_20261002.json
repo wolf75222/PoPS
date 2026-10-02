@@ -1,0 +1,277 @@
+{
+  "schema": "root.api040.sdk8-native-build-and-bind-progress@1",
+  "recorded_at": "2026-10-02T02:52:42.382913+00:00",
+  "scope": "actual production PoPS CPU Kokkos/OpenMP MPICH-enabled Dim2; no prototype import",
+  "native_abi": 8,
+  "amr_checkpoint_carriers": 12,
+  "accepted_state_default": 8,
+  "accepted_state_optional_halo": 9,
+  "typed_program_ir": 22,
+  "native_scientific_acceptance": false,
+  "cpp_to_dso_cryptographic_graph_proof": false,
+  "builds": [
+    {
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-sdk8-newton-halo-dim2-bee0787c/build-reception.json",
+        "sha256": "ca9c4a9aa6694d9f6c34a2f2df1f90781a7f1177d30d3c6240a599596dbe88f7",
+        "bytes": 1319
+      },
+      "source": "bee0787c8dd99463c846b36a19df1fc973c7d7ea",
+      "returncode": 1,
+      "native_scientific_acceptance": false
+    },
+    {
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-sdk8-newton-halo-dim2-e19ce632/build-reception.json",
+        "sha256": "9f13ca7b42963ef0440f2a3182fe76225da5c82134a73f84499ee37c85d3dae5",
+        "bytes": 1319
+      },
+      "source": "e19ce63235f2b0b2b905048ee343a9e7a0a56f7c",
+      "returncode": 1,
+      "native_scientific_acceptance": false
+    },
+    {
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-sdk8-newton-halo-dim2-8ba956b8/build-reception.json",
+        "sha256": "6130abd472194803bf87312ae9f3c646e3ed9abb71e6e310e52470f9fc69d93a",
+        "bytes": 4149
+      },
+      "source": "8ba956b81e488d93602210363a968e3cc6d1fb3f",
+      "returncode": 0,
+      "native_scientific_acceptance": false
+    },
+    {
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-sdk8-extent-binding-dim2-aabaa816/build-reception.json",
+        "sha256": "929fc39d30557a3cbc62f31e3a334675752384eaa4b51f53364ff1a6f2509d21",
+        "bytes": 4173
+      },
+      "source": "aabaa816427275259001ab4bb1c976797048f584",
+      "returncode": 0,
+      "native_scientific_acceptance": false
+    },
+    {
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-sdk8-execution-v3-dim2-3d8481c9/build-reception.json",
+        "sha256": "530645025d56d80f42101e5b828b10734718070f2507b222f31e828698049108",
+        "bytes": 4157
+      },
+      "source": "3d8481c9d5dc0f2aaa99764a2dd7662ef4e1d23c",
+      "returncode": 0,
+      "native_scientific_acceptance": false
+    }
+  ],
+  "independent_sdk_audit": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-sdk8-independent-audit.json",
+    "sha256": "a4d138a4f060268660c875914a6c01bd997c3c2eb118e0f27e4466a5c31debb1",
+    "bytes": 1424
+  },
+  "independent_primary_clock_jit_export": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-sdk8-retained-primary-clock-audit.json",
+    "sha256": "bba8389adf3d1386ae1ccd2cb3a99f66583dde1a590d2d99b875617cd9fbe8fc",
+    "bytes": 1075
+  },
+  "independent_extent_fix": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-accepted-halo-extent-binding-independent.json",
+    "sha256": "e0a33f5c8c014efa646db4e391e0cf6bd570cc8b3cc977cab4991ece2c4c033b",
+    "bytes": 1138
+  },
+  "actual_cpp_mpi5": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-mpi-sdk8-reception-8ba956b8/reception.json",
+    "sha256": "3b84960ced5189da721f5f705b5c8b905fb0c8a3a680b08078a8604c6bf5d1f6",
+    "bytes": 4364
+  },
+  "runs": {
+    "installed-sdk8ba956-public-tag-representative-serial-dim2": {
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-public-tag-representative-serial-dim2/result.json",
+        "sha256": "ede8d7a4b18e22a9d03e4caf25e37747e5c5c745027f9f5ee6b8c036b34253a3",
+        "bytes": 1750
+      },
+      "junit": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-public-tag-representative-serial-dim2/pytest.xml",
+        "sha256": "04cadc3ee0bf56dabf3bc9c6f138e81ecd3ff518433669d2127efe44ca147e9f",
+        "bytes": 1554
+      },
+      "log": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-public-tag-representative-serial-dim2/pytest.log",
+        "sha256": "6357c58068b13de4a911717045fcd873f412cbe33a046b133ea4a6a193f937fc",
+        "bytes": 2718
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-public-tag-representative-serial-dim2/identity.json",
+        "sha256": "add8340c9f161cc35426fbfd176857547f93b0df00ef2d37a95947c527b2ee08",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-public-tag-representative-serial-dim2/after/identity.json",
+        "sha256": "add8340c9f161cc35426fbfd176857547f93b0df00ef2d37a95947c527b2ee08",
+        "bytes": 2928
+      },
+      "source_files": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-public-tag-representative-serial-dim2/source-files.json",
+        "sha256": "de1f3a9ebba9ec7da2ae55ffded63edd6e8967d58ba23012a6311e39dfe49c62",
+        "bytes": 132804
+      },
+      "identities_and_sources_byte_equal": true,
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "seconds": 39.72515987511724,
+      "status": "failed",
+      "scientific_reception": false
+    },
+    "installed-sdk8ba956-typed-original-representative-serial-dim2": {
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-typed-original-representative-serial-dim2/result.json",
+        "sha256": "772fc3630fec36da54c4dccf91b80d0bc5c31395534d95d69dd9755429787513",
+        "bytes": 1729
+      },
+      "junit": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-typed-original-representative-serial-dim2/pytest.xml",
+        "sha256": "9ec77456837a9c28c494c2bdf06123bf1c1844885815f7e8ac90512feb46684c",
+        "bytes": 720
+      },
+      "log": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-typed-original-representative-serial-dim2/pytest.log",
+        "sha256": "6e6c37d45f8fb769e2ce2a52c9549051576e914b30b38784201394360cbc50f2",
+        "bytes": 1287
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-typed-original-representative-serial-dim2/identity.json",
+        "sha256": "add8340c9f161cc35426fbfd176857547f93b0df00ef2d37a95947c527b2ee08",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-typed-original-representative-serial-dim2/after/identity.json",
+        "sha256": "add8340c9f161cc35426fbfd176857547f93b0df00ef2d37a95947c527b2ee08",
+        "bytes": 2928
+      },
+      "source_files": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk8ba956-typed-original-representative-serial-dim2/source-files.json",
+        "sha256": "de1f3a9ebba9ec7da2ae55ffded63edd6e8967d58ba23012a6311e39dfe49c62",
+        "bytes": 132804
+      },
+      "identities_and_sources_byte_equal": true,
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "seconds": 22.289200791157782,
+      "status": "passed",
+      "scientific_reception": false
+    },
+    "installed-sdkaabaa816-extent-binding-serial-dim2": {
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-extent-binding-serial-dim2/result.json",
+        "sha256": "bda83f9c3b4125b0c5c356c164713f6a0f17247a78bdc38e64aeac34273e7523",
+        "bytes": 1646
+      },
+      "junit": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-extent-binding-serial-dim2/pytest.xml",
+        "sha256": "53b2aed3eeaa681bc22ba4efc9f4602077f28233195966687fb40d9774d256e9",
+        "bytes": 411
+      },
+      "log": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-extent-binding-serial-dim2/pytest.log",
+        "sha256": "ac47896b05e832726c0660d066a9b700607dd9b61981ce7aba2362c444c7b014",
+        "bytes": 757
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-extent-binding-serial-dim2/identity.json",
+        "sha256": "8d56c42460190aa3812e87a9e63fee389e1a469ddcd7389debc582fdeeb2211f",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-extent-binding-serial-dim2/after/identity.json",
+        "sha256": "8d56c42460190aa3812e87a9e63fee389e1a469ddcd7389debc582fdeeb2211f",
+        "bytes": 2928
+      },
+      "source_files": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-extent-binding-serial-dim2/source-files.json",
+        "sha256": "de1f3a9ebba9ec7da2ae55ffded63edd6e8967d58ba23012a6311e39dfe49c62",
+        "bytes": 132804
+      },
+      "identities_and_sources_byte_equal": true,
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "seconds": 0.4396606660448015,
+      "status": "passed",
+      "scientific_reception": false
+    },
+    "installed-sdkaabaa816-public-tag-representative-serial-dim2": {
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-public-tag-representative-serial-dim2/result.json",
+        "sha256": "560787994a1a310d5375fdc115235c34dd7658b80b9d8b7b92a1c663a4a827c9",
+        "bytes": 1754
+      },
+      "junit": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-public-tag-representative-serial-dim2/pytest.xml",
+        "sha256": "4f1735958b17c61b1a15dec10db5b0f57d9e2b72dc8d118fe942a76758c498cc",
+        "bytes": 1196
+      },
+      "log": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-public-tag-representative-serial-dim2/pytest.log",
+        "sha256": "944b20182b729ac1b5bac6dbb9cd3ab5c8135874f1b5a2c31147b83ebf5883b5",
+        "bytes": 2556
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-public-tag-representative-serial-dim2/identity.json",
+        "sha256": "8d56c42460190aa3812e87a9e63fee389e1a469ddcd7389debc582fdeeb2211f",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-public-tag-representative-serial-dim2/after/identity.json",
+        "sha256": "8d56c42460190aa3812e87a9e63fee389e1a469ddcd7389debc582fdeeb2211f",
+        "bytes": 2928
+      },
+      "source_files": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkaabaa816-public-tag-representative-serial-dim2/source-files.json",
+        "sha256": "de1f3a9ebba9ec7da2ae55ffded63edd6e8967d58ba23012a6311e39dfe49c62",
+        "bytes": 132804
+      },
+      "identities_and_sources_byte_equal": true,
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "seconds": 38.76049912511371,
+      "status": "failed",
+      "scientific_reception": false
+    }
+  },
+  "failures": [
+    "first build: new consensus header absent from SDK packaging manifest; corrected e19ce632",
+    "second build: levels used outside preflight try scope; corrected 8ba956b8",
+    "first installed Tag bind: tuple to unregistered Extent; corrected aabaa816 and true setter test passes",
+    "second installed Tag bind: runtime authority consumer still requires deterministic v2 execution dictionary; optional v3 consumer correction pending"
+  ],
+  "pending": [
+    "complete public AMR bind with opt-in execution v3",
+    "full-grown periodic Tag selection reception Serial/MPI",
+    "typed Original Newton variants and overflow rollback Serial/MPI",
+    "nonconstant AMR N8/N16 reader3 scientific reception",
+    "authentic M19 signed free-transport Native/restart",
+    "all remaining 94 obligations and backend qualification"
+  ],
+  "retention": "Original attempted environment paths are timestamped provenance. Each successful build retains its immutable wheel and records its installed native member hash. Historical DSO33eed was superseded by DSO7fd8 only in the isolated target prefix. Preserved SDK2e4 and SDKbb416 remain distinct.",
+  "actual_sdkbb416_preservation": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-preservation-after-sdk8-builds.json",
+    "sha256": "be02fa8cba60e96e564e3c5bbb1ecca6ccb91d2c5395911febe5b33c35f22ea6",
+    "bytes": 860
+  },
+  "independent_execution_source_review": "f1b32ede + 69ec8e3f / review6b3b10fd: 245 passes, no Native execution",
+  "latest_built_source": "3d8481c9d5dc0f2aaa99764a2dd7662ef4e1d23c",
+  "latest_verified_installed_source_files": 1136
+}
