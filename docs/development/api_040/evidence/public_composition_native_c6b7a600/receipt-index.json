@@ -1,0 +1,38 @@
+{
+  "native_script_sha256": "ff2f056d2d50619a3c02d40d70b2a3e66cd8547e4fcacb122a42f73ca04977d6",
+  "receipts": [
+    {
+      "name": "root-sdk18-build-reception-732009.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk18-build-reception-732009.json",
+      "schema": "root.sdk18.build-install-reception@1",
+      "sha256": "a20ca731187e441352cdf7730a7618022d36c4748065ccc59ec540c710d8818c"
+    },
+    {
+      "name": "root-sdk18-two-witnesses-scientific-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk18-two-witnesses-scientific-reception.json",
+      "schema": "root.sdk18-two-witnesses-scoped-scientific-reception@1",
+      "sha256": "5c8148b6abbe3e60016b55ed4f803ed2925c4739ca58cfa323f5cadae50a6447"
+    },
+    {
+      "name": "root-sdk18-c25-publication-reception-732025.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk18-c25-publication-reception-732025.json",
+      "schema": "root.sdk18-c25-mocked-publication-reception@1",
+      "sha256": "9bef343521ea5d3ac0d84cddd6e2b69bfa0e5195018293bf6e0c941c7fc1e85b"
+    },
+    {
+      "name": "root-sdk18-waves-mpi2-scientific-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk18-waves-mpi2-scientific-reception.json",
+      "schema": "root.sdk18-waves-mpi2-scoped-scientific-reception@1",
+      "sha256": "248f10a43795b73801503c2fa4b776786fed54f81db9db0c5723c9b0129ac05d"
+    },
+    {
+      "name": "root-sdk18-m16-state2-mpi2-negative-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk18-m16-state2-mpi2-negative-reception.json",
+      "schema": "root.sdk18-m16-state2-mpi2-negative-reception@1",
+      "sha256": "9fb874c01b91906413f8b488f60400b609058917bb28509d91915e483a7b1eb2"
+    }
+  ],
+  "schema": "root.sdk18-compact-receipt-copies@1",
+  "scope": "exact compact copies; complete archives, DSOs, source inventories and independent readers remain at the named external immutable origins",
+  "source_freeze": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87"
+}

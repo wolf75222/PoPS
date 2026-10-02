@@ -1,0 +1,7 @@
+{
+  "head": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87",
+  "native_modules_before": [],
+  "package_file": "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/python/pops/__init__.py",
+  "python": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/python",
+  "scope": "Source and bounded host only, no PoPS Native/JIT simulation"
+}

@@ -1,0 +1,24 @@
+{
+  "ci_qualified": false,
+  "counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 325
+  },
+  "deselected": 1,
+  "exclusion": "failed_program_compile_leaves requires authentic Native authority",
+  "files": 43,
+  "independent_receipt_sha256": "af4031465786ad07157111472673c5c2a25f6fe02f23ef1c1af37b3acf5307b7",
+  "native_qualified": false,
+  "production_domain": "tracked python/include/src/cmake/scripts plus four build files",
+  "production_domain_files": 1240,
+  "root_source_acceptance": true,
+  "same_as_build_snapshot_1190_domain": false,
+  "schema": "root.sdk18.source-host-nonreg-reception@1",
+  "seconds": 449.12479500006884,
+  "source_freeze": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87",
+  "unique_testcases": 325,
+  "verified_pins": 11,
+  "whole_mission_complete": false
+}

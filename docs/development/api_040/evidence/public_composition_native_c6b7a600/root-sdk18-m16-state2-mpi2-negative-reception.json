@@ -1,0 +1,77 @@
+{
+  "JUnit_failed_by_rank": {
+    "0": 1,
+    "1": 1
+  },
+  "actual_ranks": [
+    0,
+    1
+  ],
+  "correction_native_qualification_received": false,
+  "independent_pins": "/Users/romaindespoulain/dev/tmp/sol61-sdk18-wave-mpi2-m16-negative-independent-20261002/pins.json",
+  "independent_pins_sha256": "68f87f6c015e9e5b2a3db7363e9b1b545769d9b2729d0e712bfbde3e87d3ad41",
+  "independent_report_sha256": "b3cd12da5769d52ff31a529e7eb16c63ac778ef7987e56b7269114fe5daac0bc",
+  "job": "732028",
+  "phases": [
+    {
+      "clock": [
+        0.0,
+        0,
+        1
+      ],
+      "diagnostic_fraction_error_getter": 0.0,
+      "diagnostic_fraction_error_storage": 0.0,
+      "getter_sha256": "514636445359054040b4c6df6c188c4c65c7c52dd1266c4f4dbb928d4abf02c3",
+      "grown_values": 828,
+      "phase": "before",
+      "storage_getter_bit_differences": [
+        {
+          "component": 1,
+          "getter_bits": "0000000000000000",
+          "numeric_equal": true,
+          "storage_bits": "8000000000000000",
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "storage_sha256": "ec0990cb2d1153c3d2a49e1c7fdde20fcb2b76fe2f2624ae1953fa4d436734fb",
+      "valid_values": 368
+    },
+    {
+      "clock": [
+        0.125,
+        1,
+        1
+      ],
+      "diagnostic_fraction_error_getter": 4.440892098500626e-16,
+      "diagnostic_fraction_error_storage": 4.440892098500626e-16,
+      "getter_sha256": "a61a44a6f36a2b070a83470f1c948726b1a05d721d8345ba80f509c89426f96f",
+      "grown_values": 828,
+      "phase": "after",
+      "storage_getter_bit_differences": [
+        {
+          "component": 1,
+          "getter_bits": "0000000000000000",
+          "numeric_equal": true,
+          "storage_bits": "8000000000000000",
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "storage_sha256": "0dd74548ed7169119c60a0c6bfdc3cdd555589d303832c675f938d28cfaeada0",
+      "valid_values": 368
+    }
+  ],
+  "pops_imported_by_reader": false,
+  "pure_readers_recomputed_exactly": true,
+  "regular_pins_verified": 158,
+  "root_replay_script_sha256": "d73cc5be1a276a297b84ba2a0e183aebd376f47063d915371c3b71128e899e96",
+  "root_seal": true,
+  "schema": "root.sdk18-m16-state2-mpi2-negative-reception@1",
+  "scientific_acceptance": false,
+  "scope": "actual before/after storage and getter diagnostics, no positive M16 MPI scientific receipt; numerical equality does not waive signed-zero bits; no exclusive production-cause assertion beyond source inspection",
+  "source_freeze": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87",
+  "status": "FAILED-initial-bitexact-guard",
+  "symlinks_verified": 4,
+  "whole_mission_complete": false
+}

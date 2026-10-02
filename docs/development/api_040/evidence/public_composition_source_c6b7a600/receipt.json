@@ -1,0 +1,55 @@
+{
+  "base": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87",
+  "ci_qualified": false,
+  "collected_total": 326,
+  "contract": "sol61.integrated-source-host@1",
+  "deselected": 1,
+  "duplicate_cases": 0,
+  "elapsed_seconds": 449.12479500006884,
+  "exit_code": 0,
+  "files": 43,
+  "git_after": {
+    "dirty": "",
+    "head": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87"
+  },
+  "git_before": {
+    "dirty": "",
+    "head": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87"
+  },
+  "historical_d584": "317 PASS / 1 FAIL joint / 1 deselected preserved separately",
+  "module_classification": [
+    {
+      "extension": false,
+      "loader": "SourceFileLoader",
+      "name": "_pops_time_typed_program_support",
+      "origin": "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/python/unit/time/typed_program_support.py",
+      "sha256": "c7e2bfb4bfdffa22a1e37cbd6b6a5f62db727fcc54e3b6ae74d0da30b806104e"
+    }
+  ],
+  "native_modules_after": [],
+  "native_qualified": false,
+  "pins": {
+    "after.json": "1a29c9dc960c7d61274d37ad8c58fc3c909b011cdf1dfa0cc6d6368402a21b3a",
+    "before.json": "1a29c9dc960c7d61274d37ad8c58fc3c909b011cdf1dfa0cc6d6368402a21b3a",
+    "collected-nodes.json": "feff884cd96455b6947c59505596ab88c7fad5cd5dc3f74cb959e900dbf77f84",
+    "command.json": "24b040cab8775bcbc4cd6c62297472f0bb7ce138f50f5d3ab52eb10c38dffc72",
+    "module-classification-after.json": "31483676596766dc4928fe8f68d342edc1fba4b0ee4a119ea28cf13fdee7d520",
+    "pytest.log": "a7cdf50cd36083bad82d4d9ecd91c82ab07dfae6e930074fe4996b3b9409573d",
+    "pytest.xml": "60e1ace11ff6983b0372bd5a867efd12be1a379118e5228e054b4836f55039f5",
+    "reports.jsonl": "e5eec594b5f3cd707f4d8d9d153cfac40700c08a17db55308a52d2e02df5c15f",
+    "result.json": "a32a150f8f0c6d5f89409e4aa1df34d38288de865cde9fb961e461a3d87caffd",
+    "run.py": "1d7e2df9eb97df0cf42713ffa90ed2e78a0bdb7ddbf9eec2d2f09aa4f8e59219",
+    "source-identity.json": "b889c04c82261dba846779d59eb316b3dcb67572ad1971455682603d668130bd"
+  },
+  "production_domain_files": 1240,
+  "root_seal": false,
+  "selected": 325,
+  "source_freeze_exact": true,
+  "totals": {
+    "errors": 0,
+    "failures": 0,
+    "skips": 0,
+    "tests": 325
+  },
+  "unique_cases": 325
+}

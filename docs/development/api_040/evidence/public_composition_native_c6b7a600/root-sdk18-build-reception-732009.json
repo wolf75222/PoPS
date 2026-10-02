@@ -1,0 +1,40 @@
+{
+  "abi_key": "compiler=15.3.0;std=202002L;headers=ae40d2c0bd718f7bed15da474dd30106f48aa69dc7c7f56303e4c06dd4e9efe4;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+  "all_independent_checks_rerun": true,
+  "build_source_freeze": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87",
+  "checks": {
+    "announced_source_count": 1190,
+    "doctor_all_true": true,
+    "git_source_blobs_verified": 1190,
+    "installed_codegen_authority_matches_git": true,
+    "installed_files": 1155,
+    "observed_CXX_objects": 0,
+    "observed_snapshot_domain_count": 1190,
+    "old_environment_preserved": true,
+    "root_transfer_pins_rehashed": 21,
+    "sdk17_archive_verified_files": 1155,
+    "sdk17_matches_sdk17_prior_installation": true,
+    "shipped_source_verified_files": 1146,
+    "source_before_after_equal": true,
+    "wheel_nonRECORD_members_verified": 1151
+  },
+  "codegen_source_authority": {
+    "contract": "pops.codegen-source@1",
+    "sha256": "c90343018034d7259dacccfb6e37dc92f0e1c72735b8fa0f74c7a9ef31301d4b"
+  },
+  "independent_reader_sha256": "b9f2823901bed42b9dd9297583f8685b019d9141e2de31357e7c07d5558b023e",
+  "independent_report_sha256": "b2e2fbc41f381c215fdf15b344d106af7ec30d7d149112c83a14b19671a760a7",
+  "installed_changes": [
+    "pops-1.1.0.dist-info/RECORD",
+    "pops-1.1.0.dist-info/direct_url.json",
+    "pops/codegen/_compile_drivers.py",
+    "pops/codegen/_phases.py"
+  ],
+  "job": "732009",
+  "native_scientific_acceptance": false,
+  "native_sha256": "3f4e01cfa9d69dbd1148519a947c25895814cca4b5e010c5348ff9f7e41a3fff",
+  "root_transfer_receipt_sha256": "e85a0fcce0c042f4ce4a820869f459cdd2e6fc8ef2b5a196ff478c2e1b6011ec",
+  "schema": "root.sdk18.build-install-reception@1",
+  "wheel_sha256": "c2eb84efbff05ff4eccb5c354b415b8ce947c6629372de9aa130709a5a91585c",
+  "whole_mission_complete": false
+}

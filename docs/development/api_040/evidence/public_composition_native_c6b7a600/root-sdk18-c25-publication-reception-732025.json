@@ -1,0 +1,23 @@
+{
+  "actual_CXX_compilation_proved": false,
+  "compiler_mock": true,
+  "failed_cpp_sha256": "c2e5785df908f9dcbf28fe56ea73512a094bb0728b168ac791f22d3edb02160d",
+  "independent_pins": "/Users/romaindespoulain/dev/tmp/sol61-sdk18-c25-publication-independent-20261002/pins.json",
+  "independent_pins_sha256": "aebf95e6b6156dab6fbb57ceb3208e87c1abcbd751acb09e54ceee43974f27ef",
+  "independent_report_sha256": "a282692fab13e6dfa8e90501c8693e15afdc6cf9cddf9443a018edc17968ca6a",
+  "job": "732025",
+  "limits": "installed Python compile/publication failure cleanup and failed-source retention only; no Program bind/run or real compiler execution",
+  "partial_final_staging_or_sidecar_remaining": false,
+  "pops_imported_by_reader": false,
+  "pure_reader_recomputed_exactly": true,
+  "pytest_seconds": 1.429,
+  "pytest_tests": 1,
+  "regular_pins_verified": 28,
+  "root_replay_script_sha256": "0989adcfbef4d6b51bbc2f08c42d17cdb06e3864169095021c37f7754d0a7350",
+  "root_seal": true,
+  "schema": "root.sdk18-c25-mocked-publication-reception@1",
+  "scientific_acceptance": false,
+  "source_freeze": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87",
+  "test_source_equals_frozen_git_blob": true,
+  "whole_mission_complete": false
+}
