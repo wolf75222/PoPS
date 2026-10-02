@@ -1,5 +1,17 @@
 # Integration checkpoint — 2026-10-01
 
+## Source slice awaiting SDK8 reception — 2026-10-02
+
+The [current source progress receipt](native_sdk8_slice_progress_20261002.md)
+records the integrated convex conservative projection, 47 passing M19 Source
+tests and 90 passing pure offline spatial-reader tests. The actual SDKbb416
+nonconstant N8 failure remains preserved; its raw-relative guard differed from
+the documented selected mixed norm rule. The versioned reader correction keeps
+the original equations and tolerances and refuses false final diagnostics.
+The isolated dependency clone preserves the old package; typed Newton and
+accepted-halo reviews, central ABI8 generation, rebuild and native reception are
+still pending. These source results do not promote the older native receipts.
+
 ## Current required slice: full-carrier AMR payload v12 (2026-10-01)
 
 The corrected [SDK a37c Dim2 build](sdka37c_dim2_native_build.md) now closes successfully at `bb668797`, with 1,132 source/installed files and wheel/native bytes authenticated. Its complete representative reaches exact ghost-storage restart/replay, then closes with one scientific topology-guard failure: native tag dilation consumes derived nesting margins and fully refines N8. [The actual failed attempt](sdka37c_amr12_representative_attempt.json) and [independent causal review](hooke_tag_buffer_nesting_causal_review.md) remain exact. The generic separation and current SDKbb416 build/run are recorded below; this a37c failure remains historical. No representative scientific pass is asserted.

@@ -1,0 +1,133 @@
+{
+  "schema": "root.api040.sdk8-source-progress@1",
+  "integration_main_source": "0a764c59",
+  "native_checkout_source": "abfc0201",
+  "native_sdk8_built": false,
+  "native_sdk8_scientific_acceptance": false,
+  "source_and_host_checks": [
+    {
+      "source_commit": "abfc0201",
+      "scope": "pure offline reader; no pops import",
+      "junit": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/spatial-v3-pure-offline-integrated-abfc0201.xml",
+        "sha256": "028d7b1f29072aa7ae1f84731cd2f9a9ec23905cde9437873d6c6990c2dc497b",
+        "size_bytes": 14181
+      },
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "90",
+          "time": "1.488",
+          "timestamp": "2026-10-02T03:34:45.450015+02:00",
+          "hostname": "macbookpro.home"
+        }
+      ],
+      "installed_native_scientific_acceptance": false
+    },
+    {
+      "source_commit": "fe1726d4",
+      "scope": "real checkout Python source; no native extension",
+      "junit": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-source-integrated-fe1726d4.xml",
+        "sha256": "bf92a071dc9854366daea7b3dd81edd99afc7dfb9907376789f7133bf14f2f5e",
+        "size_bytes": 8199
+      },
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "47",
+          "time": "9.343",
+          "timestamp": "2026-10-02T03:15:55.836280+02:00",
+          "hostname": "macbookpro.home"
+        }
+      ],
+      "installed_native_scientific_acceptance": false
+    },
+    {
+      "source_commit": "5486e2d9",
+      "scope": "independent actual-header C++ host probes",
+      "junit": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/convex-projection-integrated-5486e2d9.xml",
+        "sha256": "41d0cf52d2778f24d573e121c4d886e9df4ed796fbf663f937b9f9a97214c6e8",
+        "size_bytes": 747
+      },
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "3",
+          "time": "3.797",
+          "timestamp": "2026-10-02T02:29:19.632074+02:00",
+          "hostname": "macbookpro.home"
+        }
+      ],
+      "installed_native_scientific_acceptance": false
+    }
+  ],
+  "projection_repository_gtest_receipt": {
+    "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/conservative_projection_real_cpp_reception_sol61.json",
+    "sha256": "28852f186c8ee091291f72cc7c0966f395ff70b758d43c2753216650fa332422",
+    "size_bytes": 2995
+  },
+  "preserved_nonconstant_native_failure": {
+    "result": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-nonconstant-n8-serial-dim2/result.json",
+      "sha256": "849c2a869bdf6e349146a461cce9ca8ac6e0c16561385496c5594f2a4cc74dfe",
+      "size_bytes": 1725
+    },
+    "status": "failed",
+    "counts": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "duration_seconds": 222.1134348330088,
+    "identity_before": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-nonconstant-n8-serial-dim2/identity.json",
+      "sha256": "d2755b7c6c348d1500617ddaea16df56545efe6bf17310bc7f18709eac5635cb",
+      "size_bytes": 2917
+    },
+    "identity_after": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-nonconstant-n8-serial-dim2/after/identity.json",
+      "sha256": "d2755b7c6c348d1500617ddaea16df56545efe6bf17310bc7f18709eac5635cb",
+      "size_bytes": 2917
+    },
+    "identities_byte_equal": true,
+    "log": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-nonconstant-n8-serial-dim2/pytest.log",
+      "sha256": "85f8194cfee7109ee874657025d2869641a78cc69afb66f4a3241da16549175a",
+      "size_bytes": 2797
+    },
+    "scientific_reception": false
+  },
+  "preserved_dependency_clone": {
+    "receipt": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-dependency-clone-halo9/result.json",
+      "sha256": "be0c40e08221bf1801aabf4adabc12811149a1be641fa943de9035eed3c7d4f7",
+      "size_bytes": 542
+    },
+    "conda_package_count": 64,
+    "verified_source_files": 1132,
+    "source_runtime_untouched": true,
+    "destination_sdk_built": false,
+    "source_prefix": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17",
+    "target_prefix": "/Users/romaindespoulain/miniforge3/envs/pops-api040-halo9"
+  },
+  "pending": [
+    "typed Newton independent policy consensus review",
+    "accepted-halo causal Field producer independent review",
+    "central NativeABI8 generation",
+    "repository incremental native build",
+    "true installed Serial/MPI scientific runs and failures",
+    "remaining 94 requirements and backend qualification"
+  ]
+}
