@@ -249,19 +249,293 @@
       "seconds": 38.76049912511371,
       "status": "failed",
       "scientific_reception": false
+    },
+    "tag_representative_serial": {
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-serial-dim2/result.json",
+        "sha256": "f609e61a7b792a3901b53a8c6a45c74899de50cfe14ca2b803a58d32bfe89292",
+        "bytes": 1751
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-serial-dim2/pytest.xml",
+          "sha256": "34ce59a3587be2a94e07e0d7f4d738542e052de14c308e1ba7a1980ddb90af56",
+          "bytes": 1951
+        }
+      ],
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-serial-dim2/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-serial-dim2/after/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "source_inventory_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-serial-dim2/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "source_inventory_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-serial-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "status": "passed",
+      "distinct_cases": 1,
+      "ranks": 1,
+      "backend": "CPU Kokkos/OpenMP Dim2 MPICH-enabled",
+      "native_sha256": "7fd8c7fef0ff8d330422c763c8b51afb10d4fae25f096d38a4154cbc2f846a44",
+      "same_installation": true,
+      "same_shipped_sources": true,
+      "scientific_owner_seal": false,
+      "logs": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-serial-dim2/pytest.log",
+          "sha256": "b0a165ba4d21d3e05aaaa14e6dd3fd4af85b0dfbf3c203ec52fbade9ae3bde72",
+          "bytes": 1304
+        }
+      ]
+    },
+    "tag_variants_serial": {
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-serial-dim2/result.json",
+        "sha256": "1154c93177216fdfd0505018dd1e07fe69fcb5eb7c331738f272114b3646198e",
+        "bytes": 2710
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-serial-dim2/pytest.xml",
+          "sha256": "70e5f847394b7e0f0a086322d7aefa4a7c255bf0634c8ebb255fae69ddb143cc",
+          "bytes": 8404
+        }
+      ],
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-serial-dim2/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-serial-dim2/after/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "source_inventory_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-serial-dim2/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "source_inventory_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-serial-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "status": "passed",
+      "distinct_cases": 7,
+      "ranks": 1,
+      "backend": "CPU Kokkos/OpenMP Dim2 MPICH-enabled",
+      "native_sha256": "7fd8c7fef0ff8d330422c763c8b51afb10d4fae25f096d38a4154cbc2f846a44",
+      "same_installation": true,
+      "same_shipped_sources": true,
+      "scientific_owner_seal": false,
+      "logs": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-serial-dim2/pytest.log",
+          "sha256": "1dca113a7ec48d2e846c1476adecee7e20ffd0730b3d5a402ae5b0583180a461",
+          "bytes": 3243
+        }
+      ]
+    },
+    "tag_representative_mpi2": {
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-mpi2-dim2/result.json",
+        "sha256": "c987bd9a43cd534e31509128c70f4e36106fcf1ce981c0b96e084fb32a7ffd03",
+        "bytes": 2455
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-mpi2-dim2/rank0.xml",
+          "sha256": "036f24b5b977295767dcd391eaa42f4a56ab2986cb8e5179354c49a2803bb76d",
+          "bytes": 1945
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-mpi2-dim2/rank1.xml",
+          "sha256": "95d1398fa027795d6d3e57ba427494f1f84597e68bf7d5d5f22407258fc3e0a4",
+          "bytes": 1945
+        }
+      ],
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-mpi2-dim2/before/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-mpi2-dim2/after/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "source_inventory_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-mpi2-dim2/before/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "source_inventory_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-mpi2-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "status": "passed",
+      "distinct_cases": 1,
+      "ranks": 2,
+      "backend": "CPU Kokkos/OpenMP Dim2 MPICH-enabled",
+      "native_sha256": "7fd8c7fef0ff8d330422c763c8b51afb10d4fae25f096d38a4154cbc2f846a44",
+      "same_installation": true,
+      "same_shipped_sources": true,
+      "scientific_owner_seal": false,
+      "logs": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-mpi2-dim2/rank0.log",
+          "sha256": "8b17a522f5e0b12339a7786fe5b742e754081cd632636ee076a2f2ce46658b64",
+          "bytes": 1301
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-mpi2-dim2/rank1.log",
+          "sha256": "4e12d5ce91852f559c38fe49c6aba6dab76ed6fe82fa899cfb59b28d70840f36",
+          "bytes": 1301
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-representative-mpi2-dim2/launcher.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      ]
+    },
+    "tag_variants_mpi2": {
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-mpi2-dim2/result.json",
+        "sha256": "a3133341a7b82f880975e2e6fb2de8bed29a1fe53739ec9cf731d260410789d6",
+        "bytes": 5869
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-mpi2-dim2/rank0.xml",
+          "sha256": "2d6510d8260494fa9309f51e05bc7e7e58518aecb431c0641e948f26a5e13954",
+          "bytes": 8404
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-mpi2-dim2/rank1.xml",
+          "sha256": "d723e8b192e798c5b3718d523eed626e844fc6a93af66d4f764e4ca7319b3eca",
+          "bytes": 8404
+        }
+      ],
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-mpi2-dim2/before/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-mpi2-dim2/after/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "source_inventory_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-mpi2-dim2/before/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "source_inventory_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-mpi2-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "status": "passed",
+      "distinct_cases": 7,
+      "ranks": 2,
+      "backend": "CPU Kokkos/OpenMP Dim2 MPICH-enabled",
+      "native_sha256": "7fd8c7fef0ff8d330422c763c8b51afb10d4fae25f096d38a4154cbc2f846a44",
+      "same_installation": true,
+      "same_shipped_sources": true,
+      "scientific_owner_seal": false,
+      "logs": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-mpi2-dim2/rank0.log",
+          "sha256": "9f955036e7c3c28bb09880a50ae1ba6146214be7a695ba359811f21bce9320e4",
+          "bytes": 3240
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-mpi2-dim2/rank1.log",
+          "sha256": "015c95485f57717284d6ec1596164b0fffb3acbfe84bfd92eb1c6cf543402cfd",
+          "bytes": 3240
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-public-tag-variants-mpi2-dim2/launcher.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      ]
+    },
+    "typed_original_policies_serial": {
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-serial-dim2/result.json",
+        "sha256": "d68328a33e8a32082e8b9090d799b8dcb385b62a5a861865c3564b1ae968e1de",
+        "bytes": 1664
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-serial-dim2/pytest.xml",
+          "sha256": "7c10ed0cf056ba522ea39acc5f7c23c19179ee2f3567bf491e2aa487a0c000cf",
+          "bytes": 3909
+        }
+      ],
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-serial-dim2/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-serial-dim2/after/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "source_inventory_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-serial-dim2/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "source_inventory_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-serial-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "status": "passed",
+      "distinct_cases": 8,
+      "ranks": 1,
+      "backend": "CPU Kokkos/OpenMP Dim2 MPICH-enabled",
+      "native_sha256": "7fd8c7fef0ff8d330422c763c8b51afb10d4fae25f096d38a4154cbc2f846a44",
+      "same_installation": true,
+      "same_shipped_sources": true,
+      "scientific_owner_seal": false,
+      "logs": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-serial-dim2/pytest.log",
+          "sha256": "dad5158914c4b9cb0dc6ae63973701527dc5b0daa8d1d1532817d86ca9945415",
+          "bytes": 3058
+        }
+      ]
     }
   },
   "failures": [
     "first build: new consensus header absent from SDK packaging manifest; corrected e19ce632",
     "second build: levels used outside preflight try scope; corrected 8ba956b8",
     "first installed Tag bind: tuple to unregistered Extent; corrected aabaa816 and true setter test passes",
-    "second installed Tag bind: runtime authority consumer still requires deterministic v2 execution dictionary; optional v3 consumer correction pending"
+    "second installed Tag bind: runtime authority demanded execution v2; corrected shared contract in new build3d8481; original failed result retained"
   ],
   "pending": [
-    "complete public AMR bind with opt-in execution v3",
-    "full-grown periodic Tag selection reception Serial/MPI",
-    "typed Original Newton variants and overflow rollback Serial/MPI",
-    "nonconstant AMR N8/N16 reader3 scientific reception",
+    "typed Original Newton variants and overflow rollback MPI2",
+    "evolving full-grown halo with directly captured CP12/accepted9 contracts and independent non-author oracle",
+    "nonconstant AMR N8 reader3 and N16 new reader4 scientific reception",
     "authentic M19 signed free-transport Native/restart",
     "all remaining 94 obligations and backend qualification"
   ],
@@ -273,5 +547,48 @@
   },
   "independent_execution_source_review": "f1b32ede + 69ec8e3f / review6b3b10fd: 245 passes, no Native execution",
   "latest_built_source": "3d8481c9d5dc0f2aaa99764a2dd7662ef4e1d23c",
-  "latest_verified_installed_source_files": 1136
+  "latest_verified_installed_source_files": 1136,
+  "independent_tag_representative": {
+    "scope": "periodic stationary Tag; all grown constant exact and physical strip selection; no CP12/accepted9 wire receipt, Field, GhostBC or subcycling qualification",
+    "pins": [
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-public-tag-independent-reception-20261002/REVIEW.md",
+        "sha256": "9c20bbe99775068c9a94b463411287d3f62525efca36b31d389670520123bc52",
+        "bytes": 1615
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-public-tag-independent-reception-20261002/check.py",
+        "sha256": "d21bb1e79ff7754e123df86a208d561bcb3083e40fabab27807f2d24d281ac6a",
+        "bytes": 4261
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-public-tag-independent-reception-20261002/serial.json",
+        "sha256": "c1814598803d06d2a841cb5b974d048edb246a64dae287e1c15e9ce43ae816fc",
+        "bytes": 965
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-public-tag-independent-reception-20261002/mpi2.json",
+        "sha256": "2903f0406fe7dd20485f1f0922a7918deb17dc157c6f740561a30f757c335f64",
+        "bytes": 963
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-public-tag-independent-reception-20261002/authentication.json",
+        "sha256": "5442c41498bccd13f602020ecc3d44bcb39c27582d2cba41c10b43a58a9b70db",
+        "bytes": 2372
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-public-tag-independent-reception-20261002/pins.json",
+        "sha256": "dab1398921d0ff63e56b507dadc0405a3ac48ecac136d3045ba4dfd47183a328",
+        "bytes": 345
+      }
+    ]
+  },
+  "updated_at": "2026-10-02T03:44:15.117937+00:00",
+  "bounded_public_reception": {
+    "tag_cases_per_backend": 8,
+    "tag_mpi_ranks": 2,
+    "typed_original_serial_cases": 8,
+    "rank_counts_not_summed": true,
+    "full_scientific_reception": false
+  }
 }

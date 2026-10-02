@@ -3,11 +3,12 @@
 ## Actual SDK8 build and bind results -- 2026-10-02
 
 The [pinned SDK8 progress](sdk8_native_build_binding_progress_20261002.md)
-records successful actual builds, one installed Relative/Uniform Original Newton
-case, five repository C++ collective cases on MPI2, and the corrected true pybind
-extent setter. Public Tag remains failed at the later execution-v2/v3 consumer.
-Its shared-contract correction has 245 independently run Source passes and is
-being installed for genuine public bind reception. Original equations, thresholds
+records three successful actual builds, eight installed Original Newton policies
+on Serial, eight periodic Tag variants on Serial and on each of two MPI ranks,
+five repository C++ collective cases on MPI2, and the corrected true pybind
+extent setter. The two earlier public Tag attempts remain failed. The shared
+execution-contract correction has 245 independently run Source passes; the
+corrected true public chain now compiles, binds and runs. Original equations, thresholds
 and full-grown guards remain intact. The 94-row table preserves each backend's
 exact scope; no whole-mission or scientific Halo acceptance is claimed.
 
