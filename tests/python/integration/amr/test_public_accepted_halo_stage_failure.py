@@ -27,15 +27,28 @@ def same_accepted_payload(before,after):
         a,b=before[key],after[key]
         assert a.dtype==b.dtype and a.shape==b.shape and a.tobytes()==b.tobytes(),key
 
+def accepted_attempt(payload):
+    # Exact current checkpoint.hpp write_state prefix: magic8, i32 stored as
+    # i64, string(u64 length+bytes), topology u64, generation u64, attempt u64.
+    array=payload['program_accepted_state']
+    assert array.dtype==np.uint8 and array.ndim==1
+    wire=array.tobytes()
+    assert wire[:8]==b'POPSAND9' and len(wire)>=24
+    assert int.from_bytes(wire[8:16],'little')==2
+    length=int.from_bytes(wire[16:24],'little')
+    offset=24+length+16
+    assert offset+8<=len(wire)
+    return int.from_bytes(wire[offset:offset+8],'little')
+
 def checkpoint_pair_proof(retry_path,control_path):
     retry,control=read_payload(retry_path),read_payload(control_path)
     same_accepted_payload(retry,control)
     assert int(retry['pops_amr_checkpoint_version'])==12
     assert json.loads(str(retry['amr_accepted_contract']))['schema_version']==9
-    return {'schema':'pops.accepted-halo-test-failure.retry-control@1',
+    return {'schema':'pops.accepted-halo-test-failure.retry-aligned-control@2',
         'checkpoints':{label:{'path':str(Path(path).resolve()),
             'sha256':hashlib.sha256(Path(path).read_bytes()).hexdigest()}
-            for label,path in (('retry',retry_path),('continuous_control',control_path))},
+            for label,path in (('retry',retry_path),('attempt_aligned_control',control_path))},
         'excluded_lifecycle_seals':[MANIFEST_KEY,IDENTITY_KEY],
         'lifecycle_seal_differences':[key for key in (MANIFEST_KEY,IDENTITY_KEY)
             if retry[key].tobytes()!=control[key].tobytes()]}
@@ -64,12 +77,17 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
     context=collective_call(world,lambda:artifact_execution_context(artifact))
     def bind():return pops.bind(artifact,resources={'execution_context':context})
     runtime=collective_call(world,bind);control=collective_call(world,bind)
+    aligned=collective_call(world,bind)
     directory=collective_directory(world,tmp_path/'halo-stage-failure')
     record_property('accepted_halo_stage_failure_receipt',str(directory))
-    for owner in (runtime,control):
+    for owner in (runtime,control,aligned):
         collective_call(world,lambda owner=owner:pops.run(owner,t_end=DT,max_steps=1,console=False))
     before=observe(world,runtime);publish(world,directory,'before',before)
     original=collective_call(world,lambda:runtime.checkpoint(directory/'before-checkpoint'))
+    aligned_before=observe(world,aligned);publish(world,directory,'aligned-before',aligned_before)
+    aligned_original=collective_call(world,lambda:aligned.checkpoint(directory/'aligned-before-checkpoint'))
+    continuous_before=observe(world,control);publish(world,directory,'continuous-before',continuous_before)
+    collective_call(world,lambda:control.checkpoint(directory/'continuous-before-checkpoint'))
     engine=runtime._executor._s
     target=int(world.size)-1
     # Genuine Native preflight adversaries: all ranks enter the same collective
@@ -133,9 +151,43 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
     publish(world,directory,'retry',retry);publish(world,directory,'continuous-control',reference)
     retry_checkpoint=collective_call(world,lambda:runtime.checkpoint(directory/'retry-checkpoint'))
     control_checkpoint=collective_call(world,lambda:control.checkpoint(directory/'continuous-control-checkpoint'))
+    with collective_check(world):same(retry,reference)
+    # Independent owner with the same authentic attempt history: no ordinal rewrite.
+    aligned_engine=aligned._executor._s
+    collective_call(world,lambda:aligned_engine._arm_accepted_halo_test_failure(request))
+    _,aligned_failures=collective_attempt(world,lambda:pops.run(aligned,t_end=2*DT,max_steps=1,console=False))
+    aligned_local_proof=collective_call(world,lambda:receipt(aligned_engine))
+    aligned_proofs=allgather_value(world,aligned_local_proof)
+    aligned_after=observe(world,aligned);publish(world,directory,'aligned-after-failure',aligned_after)
+    aligned_restored=collective_call(world,lambda:aligned.checkpoint(directory/'aligned-after-failure-checkpoint'))
     with collective_check(world):
-        same(retry,reference)
+        assert len(aligned_failures)==world.size and all(aligned_failures)
+        assert all(boundary in row[1] for row in aligned_failures)
+        assert aligned_proofs==proofs
+        same(aligned_before,aligned_after)
         if world.rank==0:
-            proof=checkpoint_pair_proof(retry_checkpoint,control_checkpoint)
-            (directory/'retry-control-checkpoint-proof.json').write_text(json.dumps(proof,indent=2)+'\n')
+            same_accepted_payload(read_payload(aligned_original),read_payload(aligned_restored))
+            (directory/'aligned-failure-proof.json').write_text(json.dumps({
+                'failures':aligned_failures,'receipts':aligned_proofs},indent=2)+'\n')
+    collective_call(world,lambda:pops.run(aligned,t_end=2*DT,max_steps=1,console=False))
+    aligned_retry=observe(world,aligned);publish(world,directory,'aligned-retry',aligned_retry)
+    aligned_checkpoint=collective_call(world,lambda:aligned.checkpoint(directory/'aligned-retry-checkpoint'))
+    with collective_check(world):
+        same(retry,aligned_retry)
+        if world.rank==0:
+            proof=checkpoint_pair_proof(retry_checkpoint,aligned_checkpoint)
+            (directory/'retry-aligned-control-checkpoint-proof.json').write_text(json.dumps(proof,indent=2)+'\n')
+            a,b=read_payload(retry_checkpoint),read_payload(control_checkpoint)
+            differences=[key for key in a if a[key].dtype!=b[key].dtype or
+                a[key].shape!=b[key].shape or a[key].tobytes()!=b[key].tobytes()]
+            assert a.keys()==b.keys()
+            assert set(differences)=={'program_accepted_state','program_accepted_state_source_authority',MANIFEST_KEY,IDENTITY_KEY}
+            assert accepted_attempt(a)==3 and accepted_attempt(b)==2
+            assert accepted_attempt(read_payload(aligned_checkpoint))==3
+            continuous_proof={'accepted_attempts':{'retry':accepted_attempt(a),'continuous_control':accepted_attempt(b),'attempt_aligned_control':3},'schema':'pops.accepted-halo-test-failure.continuous-comparison@1',
+                'different_members':differences,'physical_images_byte_exact':True,
+                'checkpoints':{label:{'path':str(Path(path).resolve()),
+                    'sha256':hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+                    for label,path in (('retry',retry_checkpoint),('continuous_control',control_checkpoint))}}
+            (directory/'retry-continuous-checkpoint-differences.json').write_text(json.dumps(continuous_proof,indent=2)+'\n')
     record_property('phase','after actual block-level preparation/fence; before Q publication')

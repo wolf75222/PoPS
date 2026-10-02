@@ -25,7 +25,7 @@ def test_checkpoint_pair_records_actual_file_hashes_and_only_two_seals(tmp_path)
     proof=fixture.checkpoint_pair_proof(retry,control)
     assert proof['excluded_lifecycle_seals']==[MANIFEST_KEY,IDENTITY_KEY]
     assert proof['lifecycle_seal_differences']==[MANIFEST_KEY,IDENTITY_KEY]
-    for name,path in [('retry',retry),('continuous_control',control)]:
+    for name,path in [('retry',retry),('attempt_aligned_control',control)]:
         assert proof['checkpoints'][name]=={'path':str(path.resolve()),'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
@@ -50,4 +50,19 @@ def test_fixture_persists_divergence_and_two_genuine_collective_checkpoints():
         inner=call.args[1].body
         assert inner.func.attr=='checkpoint' and inner.func.value.id==owner
         assert inner.args[0].right.value==stem
-    assert "checkpoint_pair_proof(retry_checkpoint,control_checkpoint)" in source
+    assert "checkpoint_pair_proof(retry_checkpoint,aligned_checkpoint)" in source
+
+
+def test_current_wire_attempt_parser_and_three_owner_orchestration():
+    def wire(attempt):
+        prefix=b'POPSAND9'+(2).to_bytes(8,'little')+(3).to_bytes(8,'little')+b'abc'
+        return np.frombuffer(prefix+(0).to_bytes(8,'little')*2+attempt.to_bytes(8,'little'),dtype=np.uint8)
+    assert fixture.accepted_attempt({'program_accepted_state':wire(3)})==3
+    with pytest.raises(AssertionError):fixture.accepted_attempt({'program_accepted_state':wire(3)[:-1]})
+    source=Path(fixture.__file__).read_text()
+    assert 'for owner in (runtime,control,aligned):' in source
+    assert 'aligned_engine._arm_accepted_halo_test_failure(request)' in source
+    assert 'same_accepted_payload(read_payload(aligned_original),read_payload(aligned_restored))' in source
+    assert 'assert aligned_proofs==proofs' in source
+    assert "'pops.accepted-halo-test-failure.retry-aligned-control@2'" in source
+    assert 'assert accepted_attempt(a)==3 and accepted_attempt(b)==2' in source
