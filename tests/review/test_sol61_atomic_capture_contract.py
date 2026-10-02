@@ -7,7 +7,7 @@ import pytest
 from pops.codegen._compiled_artifact import CompiledSimulationArtifact
 from pops.codegen.loader import CompiledProblem
 from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture,CanonicalValue
-from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step
+from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step,layout_program_json_identity
 
 
 def test_actual_wrapper_selects_exact_amr_partition_without_facade_dump(monkeypatch):
@@ -20,6 +20,10 @@ def test_actual_wrapper_selects_exact_amr_partition_without_facade_dump(monkeypa
     artifact=artifact_fixture(target='amr_system',block_names=('population',))
     row=select_layout_program(artifact,artifact.plan)
     assert row.program is artifact.program
+    # Exact actual identity bytes require an explicit token representation in JSON.
+    with pytest.raises(TypeError):json.dumps(row.to_data())
+    identity=layout_program_json_identity(row)
+    assert json.loads(json.dumps(identity))['identity_token']==row.identity.token
     assert not hasattr(CompiledSimulationArtifact,'dump_ir')
     assert not hasattr(CompiledSimulationArtifact,'_generated_cpp')
     assert hasattr(CompiledProblem,'dump_ir')

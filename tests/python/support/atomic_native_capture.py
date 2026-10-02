@@ -63,3 +63,10 @@ def execute_captured_step(world,operation,capture,on_attempt,on_capture):
     _,persistence_failures=collective_attempt(world,lambda:on_capture(image,False))
     assert not any(persistence_failures),persistence_failures
     return report,image
+
+
+def layout_program_json_identity(row):
+    """Explicit JSON identity token; raw Identity.to_data contains digest bytes."""
+    row.verify()
+    return {'layout_id':row.layout_id,'target':row.target,'block_names':list(row.block_names),
+            'identity_token':row.identity.token}

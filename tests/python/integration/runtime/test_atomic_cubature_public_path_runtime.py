@@ -12,7 +12,7 @@ from tests.python.support.collective_checks import collective_call,collective_ch
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
-from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step
+from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step,layout_program_json_identity
 
 pytestmark=[pytest.mark.compiler,pytest.mark.native_loader]
 SCHEMA='pops.atomic-cubature-raw-native-fixture@1'
@@ -64,7 +64,8 @@ def test_installed_atomic_cubature_raw_path(nonconservative,tmp_path,record_prop
                 'package':str(Path(pops.__file__).resolve()),'native':{'path':str(Path(native.__file__).resolve()),'sha256':digest(native.__file__)},
                 'compiled':{'path':str(Path(program.so_path).resolve()),'sha256':digest(program.so_path),
                             'abi_key':program.abi_key,'problem_hash':program.problem_hash,'cache_key':program.cache_key,
-                            'layout_program':row.to_data()},
+                            'layout_program':layout_program_json_identity(row),
+                            'artifact_identity_token':artifact.artifact_identity.token},
                 'files':{p.name:digest(p) for p in sorted(directory.iterdir()) if p.is_file() and p.name!='receipt.json'},
                 'root_scientific_approval':False,'full_m17_qualification':False}
             (directory/'receipt.json').write_text(json.dumps(receipt,sort_keys=True,allow_nan=False)+'\n')
