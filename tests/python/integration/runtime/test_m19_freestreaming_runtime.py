@@ -55,6 +55,14 @@ def _root(world):
     return world is None or int(world.rank) == 0
 
 
+def _velocity_snapshot(runtime):
+    """Use the exact Python wrapper key; the binding owns ranked native gathering."""
+    from pops.model.provider_pack import ComponentKey
+    key = ComponentKey(str(MODULE.owner_path.canonical()), "aux",
+                       "velocity_coordinate", "velocity_coordinate")
+    return runtime._executor.auxiliary_component(key)
+
+
 def _snapshot(world, runtime, directory, phase, nx, nv, *, auxiliary=False):
     values = state_snapshots(runtime, world, ("kinetic",))[0]
     clock = collective_call(world, lambda: (runtime.time(), runtime.macro_step()))
@@ -66,8 +74,7 @@ def _snapshot(world, runtime, directory, phase, nx, nv, *, auxiliary=False):
         boxes = (boxes,)
     velocity = None
     if auxiliary:
-        velocity = collective_call(world, lambda: runtime._executor.auxiliary_component(
-            str(MODULE.owner_path.canonical()), "aux", "velocity_coordinate", "velocity_coordinate"))
+        velocity = collective_call(world, lambda: _velocity_snapshot(runtime))
     checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/(phase+"-checkpoint")))
     checkpoint_pin = collective_call(world, lambda: _pin(checkpoint))
     authority = (collective_call(world, lambda: checkpoint_provenance(runtime, checkpoint))
