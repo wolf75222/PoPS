@@ -12,10 +12,10 @@ from tests.python.support.collective_checks import collective_call,collective_ch
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
-from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step,layout_program_json_identity
+from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step,layout_program_json_identity,compile_with_model_tus
 
 pytestmark=[pytest.mark.compiler,pytest.mark.native_loader]
-SCHEMA='pops.atomic-cubature-raw-native-fixture@1'
+SCHEMA='pops.atomic-cubature-raw-native-fixture@2'
 
 
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -40,11 +40,14 @@ def test_installed_atomic_cubature_raw_path(nonconservative,tmp_path,record_prop
         assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()),'installed package required'
     case,layout=collective_call(world,lambda:make_case(nonconservative=nonconservative,amr=True,fixed_dt=DT))
     resolved=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout))
-    artifact=(collective_call(world,lambda:pops.compile(resolved)) if world is None else
-        compile_resolved_plan_once(world,resolved,route='atomic-raw-'+str(nonconservative),compile_artifact=pops.compile))
+    directory=collective_directory(world,tmp_path/'atomic-raw')
+    def compile_artifact(plan):
+        if world is None or world.rank==0:return compile_with_model_tus(plan,directory/'actual-compiles',pops.compile)
+        return pops.compile(plan)  # authenticated peer cache load, not a TU witness
+    artifact=(collective_call(world,lambda:compile_artifact(resolved)) if world is None else
+        compile_resolved_plan_once(world,resolved,route='atomic-raw-'+str(nonconservative),compile_artifact=compile_artifact))
     row=collective_call(world,lambda:select_layout_program(artifact,resolved))
     program=row.program
-    directory=collective_directory(world,tmp_path/'atomic-raw')
     def retain_provenance():
         if world is None or world.rank==0:
             if type(program._generated_cpp) is not str: raise ValueError('retained Program C++ required')
@@ -66,7 +69,7 @@ def test_installed_atomic_cubature_raw_path(nonconservative,tmp_path,record_prop
                             'abi_key':program.abi_key,'problem_hash':program.problem_hash,'cache_key':program.cache_key,
                             'layout_program':layout_program_json_identity(row),
                             'artifact_identity_token':artifact.artifact_identity.token},
-                'files':{p.name:digest(p) for p in sorted(directory.iterdir()) if p.is_file() and p.name!='receipt.json'},
+                'files':{str(p.relative_to(directory)):digest(p) for p in sorted(directory.rglob('*')) if p.is_file() and p.name!='receipt.json'},
                 'root_scientific_approval':False,'full_m17_qualification':False}
             (directory/'receipt.json').write_text(json.dumps(receipt,sort_keys=True,allow_nan=False)+'\n')
     def persist_capture(phase,image):

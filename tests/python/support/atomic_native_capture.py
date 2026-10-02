@@ -106,3 +106,23 @@ def execute_captured_bind(world,operation,on_failure,on_recorded=lambda:None):
         if any(receipt_failures):original.add_note('bind receipt persistence failures: '+repr(receipt_failures))
         raise original
     raise RuntimeError('peer bind failed: '+repr(failures)+'; persistence failures: '+repr((io_failures,receipt_failures)))
+
+
+def compile_with_model_tus(resolved,directory,compile_artifact):
+    """Publisher only: actual compilation and exact model-binary TU correspondence."""
+    from tests.python.support.actual_compile_capture import capture_actual_compiles,sha
+    with capture_actual_compiles(directory) as capture:
+        artifact=compile_artifact(resolved)
+        if type(artifact) is not CompiledSimulationArtifact:
+            raise TypeError('exact CompiledSimulationArtifact required')
+        artifact.verify()
+        rows=[]
+        for block in artifact.blocks:
+            binary=block.model.so_path
+            rows.append({'block':block.name,'binary_file':str(binary),'binary_sha256':sha(binary),
+                'actual_compile':capture.require_binary(binary)})
+        if not rows:raise ValueError('no actual model binary to authenticate')
+        proof={'schema':'pops.atomic-actual-model-compiles@1',
+            'artifact_identity_token':artifact.artifact_identity.token,'models':rows}
+        (capture.directory/'model-binaries.json').write_text(json.dumps(proof,sort_keys=True,allow_nan=False)+'\n')
+    return artifact

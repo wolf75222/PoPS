@@ -6,7 +6,7 @@ import pops
 import pytest
 from tests.python.support.atomic_cubature_path_case import make_case
 from tests.python.support.atomic_cubature_fv_oracle import DT,initial_averages,authenticate_carrier_values
-from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step,layout_program_json_identity,execute_captured_bind
+from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step,layout_program_json_identity,execute_captured_bind,compile_with_model_tus
 from tests.python.support.collective_checks import collective_call,collective_check,collective_attempt
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -28,16 +28,19 @@ def test_installed_atomic_cubature_finite_parameter_attempt_refusal(tmp_path,rec
     case,layout,parameter=collective_call(world,lambda:make_case(nonconservative=True,
         amr=True,fixed_dt=DT,scale_parameter=True))
     resolved=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout))
-    artifact=(collective_call(world,lambda:pops.compile(resolved)) if world is None else
-        compile_resolved_plan_once(world,resolved,route='atomic-raw-finite-parameter-refusal',compile_artifact=pops.compile))
+    directory=collective_directory(world,tmp_path/'atomic-parameter-refusal')
+    def compile_artifact(plan):
+        if world is None or world.rank==0:return compile_with_model_tus(plan,directory/'actual-compiles',pops.compile)
+        return pops.compile(plan)  # authenticated peer cache load only
+    artifact=(collective_call(world,lambda:compile_artifact(resolved)) if world is None else
+        compile_resolved_plan_once(world,resolved,route='atomic-raw-finite-parameter-refusal',compile_artifact=compile_artifact))
     row=collective_call(world,lambda:select_layout_program(artifact,resolved))
     program=row.program
-    directory=collective_directory(world,tmp_path/'atomic-parameter-refusal')
-    proof={'schema':'pops.atomic-cubature-parametric-refusal@1','parameter':1.e308,
+    proof={'schema':'pops.atomic-cubature-parametric-refusal@2','parameter':1.e308,
         'phase':'before-bind','root_scientific_approval':False,'native_stage_refusal_proved':False}
     def persist():
         if world is None or world.rank==0:
-            proof['files']={p.name:digest(p) for p in sorted(directory.iterdir())
+            proof['files']={str(p.relative_to(directory)):digest(p) for p in sorted(directory.rglob('*'))
                 if p.is_file() and p.name!='receipt.json'}
             (directory/'receipt.json').write_text(json.dumps(proof,sort_keys=True,allow_nan=False)+'\n')
     def provenance():

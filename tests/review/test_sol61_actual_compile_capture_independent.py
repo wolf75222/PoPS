@@ -6,6 +6,22 @@ import pytest
 from tests.python.support.actual_compile_capture import capture_actual_compiles
 
 
+def test_fixture_publisher_capture_all_models_and_recursive_pins_are_explicit():
+    import ast
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[2]
+    helper=(root/'tests/python/support/atomic_native_capture.py').read_text()
+    assert 'for block in artifact.blocks:' in helper
+    assert "capture.require_binary(binary)" in helper
+    for name in ('test_atomic_cubature_public_path_runtime.py','test_atomic_cubature_parametric_refusal_runtime.py'):
+        source=(root/'tests/python/integration/runtime'/name).read_text()
+        ast.parse(source)
+        assert "world is None or world.rank==0:return compile_with_model_tus" in source
+        assert 'return pops.compile(plan)' in source
+        assert "directory.rglob('*')" in source
+        assert source.index('directory=collective_directory')<source.index('artifact=(collective_call')
+
+
 def test_retained_tu_poison_and_ambiguous_outputs_refuse_and_restore_driver(tmp_path):
     cpp=tmp_path/'input.cpp';cpp.write_text('extern "C" int v(){return 3;}\n')
     out=tmp_path/'stage.so'
