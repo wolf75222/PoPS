@@ -1075,8 +1075,10 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if matrix is None:
             raise ValueError("local_linear_operator(%r) requires matrix=" % (name,))
         self._require_state_handle(on, "local_linear_operator", optional=True)
+        if self._multi_module is not None:
+            on = self._species_handle("local_linear_operator", name, on)
         obj = LocalLinearOperatorExpr(name, matrix, on=on)
-        expected = self._dsl._m.n_vars
+        expected = len(on.components) if self._multi_module is not None else self._dsl._m.n_vars
         if len(obj.matrix) != expected or any(len(row) != expected for row in obj.matrix):
             raise ValueError("local_linear_operator(%r) needs a %dx%d matrix"
                              % (obj.name, expected, expected))
@@ -1117,6 +1119,30 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             input_names = () if inputs is None else normalize_sequence(inputs, "operator inputs")
             for input_name in input_names:
                 require_name(input_name, "operator input")
+            if self._multi_module is not None:
+                from pops.model import LocalLinearOperator, Signature
+
+                on = self._species_handle("operator", name, obj.on)
+                expected = len(on.components)
+                if len(obj.matrix) != expected or any(len(row) != expected for row in obj.matrix):
+                    raise ValueError("operator(%r) needs a %dx%d matrix" % (name, expected, expected))
+                module = self._multi_module
+                fields = module.field_spaces()
+                if len(set(input_names)) != len(input_names) or any(n not in fields for n in input_names):
+                    raise ValueError("operator inputs must name distinct declared FieldSpaces")
+                body = [[self._to_expr(e) for e in row] for row in obj.matrix]
+                registry = module.operator_registry()
+                with atomic_attrs(
+                        (registry, "_by_name"), (registry, "_order"),
+                        (module, "_operator_bindings"), (module, "_operator_binding_authorities"),
+                        (self, "_operators"), (self, "_operator_inputs"), (self, "_module_cache")):
+                    module.operator(name=reg, kind="local_linear_operator",
+                        signature=Signature(tuple(fields[n] for n in input_names),
+                                            LocalLinearOperator(on.space, on.space)), expr=body)
+                    self._operators[reg] = obj
+                    self._operator_inputs[reg] = input_names
+                    result = self._registered_operator_handle(reg)
+                return result
             hyp = self._dsl._m
             with atomic_attrs(
                     (hyp, "_provider_components"), (hyp, "_linear_sources"),

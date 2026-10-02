@@ -366,6 +366,9 @@ def _module_to_model(module: Any, state_space: Any = None,
         state_inputs = tuple(
             item for item in op.signature.inputs
             if getattr(item, "kind", None) == "state")
+        from pops.model.operators import LocalLinearOperator
+        if isinstance(op.signature.output, LocalLinearOperator):
+            state_inputs += (op.signature.output.domain,)
         if state_inputs and state not in state_inputs:
             coverage_rows.append(LoweringCoverageRow(
                 source, "documentary"))

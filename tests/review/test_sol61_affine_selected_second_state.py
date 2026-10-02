@@ -2,7 +2,6 @@
 from pathlib import Path
 import sys
 import re
-import pytest
 import pops
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
@@ -89,6 +88,8 @@ def test_authentic_resolved_second_state_emits_without_first_state_selection():
     assert detached._ir_hash()==resolved.time._ir_hash()
 
 
-def test_facade_multi_state_local_operator_refusal_is_not_affine_layout_failure():
-    with pytest.raises(KeyError,match="unknown operator 'selected_skew'"):
-        build(operator_route='facade')
+def test_facade_multi_state_local_operator_now_uses_typed_registry():
+    model,program,*_=build(operator_route='facade')
+    signature=model.module.operator_registry().get('selected_skew').signature
+    assert signature.output.domain.name=='selected'
+    assert signature.output.range==signature.output.domain
