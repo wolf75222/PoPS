@@ -355,7 +355,8 @@ def science(images, masks, n):
         # per axis. The 2D tensor ghost interpolation is bounded by (19/16)^2.
         maxima = np.array([max(float(np.max(np.abs(images[phase][level]["T"+str(i)][images[phase][level]["valid"].ravel()])))
                               for level in range(2)) for i in range(2)])
-        divergence_scale = 4.*(2*n)**2*(19./16.)**2*(np.abs(D)@maxima)
+        spatial_dim = int(images[phase][0]["native_base_shape"].size)
+        divergence_scale = 4.*spatial_dim*(2*n)**2*(19./16.)**2*(np.abs(D)@maxima)
         amounts = np.zeros(2)
         initial_amounts = np.zeros(2)
         diffusion_amounts = np.zeros(2)
