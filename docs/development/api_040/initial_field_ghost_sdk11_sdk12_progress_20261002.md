@@ -1,5 +1,49 @@
 # Field→Ghost initial — SDK11–14, preuves et échecs conservés
 
+Actualisation ROOT SDK14 — build Source8d438518 réel rc0/28 TU, DSO2738b99f,
+SDK8c238f29, 1 140 fichiers installés authentifiés. La
+[réception scientifique positive ROOT](/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-initial-field-ghost-positive-scientific-root-reception.json) reçoit Serial et MPI2 :
+vraie Field consommée avant Ghost au point initial et après une FE, OriginalF
+initial maximal1,02e−11 et accepted maximal4,61e−12 pour la garde intacte1e−10,
+CP12/accepted9 et restart bit exact. Serial possède28 exports, MPI2 en possède34 ;
+deux rangs exécutent le même test MPI, ce ne sont pas deux cas indépendants.
+Le reçu immuable8e335073 sépare cette réception de l'injection et de la mission94.
+
+L'observation complète candidate est opt-in, générique et qualifiée par le slot,
+le consommateur, le point temporel et la topologie. Elle est prise après le Solve
+réel et ses votes, avant le Ghost réel. Le getter reste le warm-start du dernier
+stage FE ; il ne déclenche aucune résolution. La capture de signature utilise
+les données JSON typées de ComponentManifest, et le lecteur indépendant@4
+respecte les axes NumPy(y,x) du writer, y compris les rectangles non carrés.
+Les exports antérieurs mal typés et les refus de lecteurs restent conservés.
+
+La non-régression SDK14 exécute trois tests Serial Halo/Stage et restauration ;
+l'exemple public linéaire termine et reload ses états exacts. Leurs identités
+complètes et les 1 140 sources avant/après sont égales et contre-revues.
+L'exemple utilise le FAC par défaut : son succès ne qualifie pas la garde SCI1e−10.
+Les suites Source99PASS et27PASS sont distinctes des runs et ne sont pas
+additionnées aux suites qui les recouvrent.
+
+L'injection native@5 passe en Serial : vraie Field2 lue, candidate écrite puis
+échec ABI natif, abandon outer-bootstrap original et comparaison exacte de tous
+les State valides+grown accessibles, métadonnées et readiness restaurée.
+MPI2@5 atteint la même injection sur la cible propriétaire1 et restaure les deux
+owners, mais le test échoue : le diagnostic parent intermédiaire refuse des
+replicas ghost divergents et masque la cause native. Ce refus est légitime ;
+aucune garde Core n'est contournée. Correction test-only@6 et contre-revue en cours.
+Aucun sceau ROOT d'injection n'est encore délivré. Les contenus du registre
+Field non matérialisé, payloads Field/auxiliaires indisponibles et rollback nested
+parent ne sont pas reçus. Les échecs précédents@3/@4 et les journaux@5 sont gardés.
+
+Portée : CPU arm64 Kokkos OpenMP1/MPICH Dim2, Serial et MPI2 sur même machine ;
+Field scalaire uniforme FAC, AMR8×8/deux niveaux synchrones, une FE dt1/64,
+ghosts physiques xmin à indices tangentiels valides. Pas de réception GPU,
+inter-nœuds, autre dimension, modèle complet, ROMEO SDK14 ou GitHub CI actuel.
+Le suivi machine est [progression@4](initial_field_ghost_sdk11_sdk12_progress_20261002.json).
+La mission complète reste active, avec94 obligations conservées.
+
+Historique SDK13 (avant le build SDK14 et sa réception positive) :
+
 Actualisation ROOT : SDK13 Source002860fe a terminé sa vraie construction, 28 TU,
 wheel/install/doctor rc0, 1 140 fichiers installés, DSOdf7e5a87 et SDK180a9615.
 Le premier essai atteint Field/Ghost puis échoue sur un diagnostic absent de
