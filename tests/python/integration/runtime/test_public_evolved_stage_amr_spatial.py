@@ -87,6 +87,12 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
                         path = Path(dump(directory/("program-%d.%s" % (index, kind))))
                         entry[kind] = {"path":str(path), "sha256":hashlib.sha256(bounded_bytes(path)).hexdigest()}
                     entry["program_hash"] = component.program_hash
+                    program_ir = json.loads(bounded_bytes(Path(entry["ir.json"]["path"])))
+                    solve = [node for node in program_ir["nodes"] if node["op"] == "solve_spatial_field"]
+                    assert len(solve) == 1 and solve[0]["attrs"]["seed_index"] is None
+                    request = solve[0]["attrs"]["solve_request"]
+                    assert request["seed"] is None
+                    seed_selection = request["initialization_identity"]
                 compilation.append(entry)
     initial = capture(world, runtime, width, histories=False)
     registry_phases = {"initial": {"rows_by_rank": collective_call(world, lambda: allgather_value(world, initial[1][1]))}}
@@ -153,8 +159,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
                 if phase != "initial":
                     original = selected_native_mixed_rule(image[1][2], CONTROLS["tolerance"])
                     assert metrics["original_F_weighted_l2"] <= CONTROLS["tolerance"]*max(1., original["reference_residual_norm"])
-                    if metrics["original_F_zero_seed_reference_l2"] < 1.:
-                        assert metrics["original_F_weighted_l2"] <= CONTROLS["tolerance"]
+                    assert metrics["original_F_weighted_l2"] <= CONTROLS["tolerance"]
                     metrics["native_original_F_triplet"] = original
                     metrics["native_original_F_composite_relative"] = original["rel_residual"]
                 for level, row in enumerate(reloaded_rows):
@@ -165,7 +170,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
             assert {Path(row["path"]).resolve() for row in checkpoints.values()}.isdisjoint(
                 {Path(row["path"]).resolve() for phase in observations.values()
                     for row in (*phase["levels"], *phase["independent_references"])})
-            receipt = {"fixture_schema":"pops.evolved-stage-amr-spatial-native-fixture@3", "stop_rule":STOP_RULE, "carrier_registry":registry_pin, "artifact":artifact.artifact_identity.token,
+            receipt = {"fixture_schema":"pops.evolved-stage-amr-spatial-native-fixture@3", "stop_rule":STOP_RULE, "independent_original_l2_threshold":CONTROLS["tolerance"], "seed_selection":seed_selection, "carrier_registry":registry_pin, "artifact":artifact.artifact_identity.token,
                 "dimension":2, "rank":world.rank, "size":world.size, "cells":cells, "width":width,
                 "qualification":"nonconstant periodic full-y strips; composite flux and nonlinear restriction",
                 "initial_temperature":{"T0":[.15, .02, "cos(2*pi*x)"], "T1":[.25, .015, "sin(2*pi*x)"]},

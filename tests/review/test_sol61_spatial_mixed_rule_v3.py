@@ -53,7 +53,9 @@ def actual_images():
 def test_authentic_original_F_and_nonlinear_adverse():
     images,masks=actual_images();metrics=r.science(images,masks,8)
     report=check(triplet())
-    for phase in ('accepted','continuous','reloaded','replay'):r.independent_original_norm(metrics[phase],report)
+    index=r.b.strict_json((RAW/'observation-index.json').read_bytes())
+    for phase in ('accepted','continuous','reloaded','replay'):
+        r.independent_original_norm(metrics[phase],check(index['phases'][phase]['metadata'][2]))
     assert metrics['accepted']['original_F_weighted_l2']==pytest.approx(4.211236792117065e-11,rel=1e-12)
     r.nonlinear_restriction_attacks(images,masks,8)
 
@@ -126,3 +128,20 @@ def test_private_checkpoint_changes_only_diagnostic_guard():
     loop.body=ast.parse('diagnostic_triplet(row)').body
     assert ast.dump(original)==ast.dump(r._tree)
     assert 'c' not in r.receive.__code__.co_varnames
+
+@pytest.mark.parametrize('ref',(0.,.5,1.,10.))
+def test_forged_consistent_reference_rejected_by_saved_seed(ref):
+    images,masks=actual_images();metrics=r.science(images,masks,8)
+    with pytest.raises(ValueError,match='zero-seed reference'):r.independent_original_norm(metrics['accepted'],check(triplet(ref=ref)))
+
+def test_zero_seed_authority_actual_and_resealed_attacks():
+    ir=r.b.strict_json(next(RAW.glob('*.ir.json')).read_bytes())
+    identity=r.zero_seed_selection(ir)
+    assert identity=='pops.solve-initialization.v1:sha256:b29f776ca5be8ebd1a543f97119f80783f49bb6be869ad4a407b1248ca74e1b1'
+    for attack in ('index','seed','identity','missing'):
+        bad=deepcopy(ir);attrs=next(n['attrs'] for n in bad['nodes'] if n['op']=='solve_spatial_field')
+        if attack=='index':attrs['seed_index']=0
+        elif attack=='seed':attrs['solve_request']['seed']={}
+        elif attack=='identity':attrs['solve_request']['initialization_identity']=identity[:-1]+'2'
+        else:del attrs['seed_index']
+        with pytest.raises(ValueError):r.zero_seed_selection(bad)

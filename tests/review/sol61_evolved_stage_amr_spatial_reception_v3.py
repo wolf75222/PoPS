@@ -41,11 +41,35 @@ def diagnostic_triplet(row):
     values = [(name.decode("utf-8"), struct.unpack("<d", bits)[0]) for name, bits in row.items()]
     return _accept.selected_native_mixed_rule(values, 1e-10)
 
+def zero_seed_selection(ir):
+    solves = [node for node in ir["nodes"] if node["op"] == "solve_spatial_field"]
+    need(len(solves) == 1, "zero-seed solve inventory differs")
+    attrs = solves[0]["attrs"]
+    request = attrs["solve_request"]
+    expected = "pops.solve-initialization.v1:sha256:" + b.digest(c.wire.cbor(
+        dict(protocol="pops.identity", domain="solve-initialization", schema_version=1, payload=None)))
+    need("seed_index" in attrs and attrs["seed_index"] is None and request["seed"] is None
+         and request["initialization_identity"] == expected, "authenticated zero-seed initialization differs")
+    return expected
+
 def independent_original_norm(metrics, report):
+    reference = metrics["original_F_zero_seed_reference_l2"]
+    need(type(reference) is float and math.isfinite(reference) and 0 < reference < 1.,
+         "independent zero-seed reference outside profile")
+    # Absolute-input scale bounds cancellation in q+dt*load. Positive squared
+    # terms, at most eight binary64 operations per term plus
+    # reduction/sqrt overhead. Each of the two evaluations obeys gamma_k.
+    count = metrics["original_F_reference_terms"]
+    k = 8*count+8
+    u = 2.**-53
+    need(type(count) is int and count > 0 and k*u < 1., "reference roundoff proof domain differs")
+    gamma = k*u/(1.-k*u)
+    bound = 2.*gamma/(1.-gamma)*max(metrics["original_F_reference_absolute_scale_l2"], report["reference_residual_norm"])
+    need(abs(reference-report["reference_residual_norm"]) <= bound,
+         "native zero-seed reference differs from independent F")
     value = metrics["original_F_weighted_l2"]
     need(type(value) is float and math.isfinite(value) and value >= 0
-         and value <= 1e-10*max(1.,report["reference_residual_norm"])
-         and (metrics["original_F_zero_seed_reference_l2"] >= 1. or value <= 1e-10),
+         and value <= 1e-10,
          "independent original-F selected mixed norm fails")
 
 
@@ -280,6 +304,8 @@ def science(images, masks, n):
         gap = np.max(np.abs((fine_qmean - b.q_of(restricted))[:, covered]))
         need(gap > 1e-10, "nonlinear restriction discriminator absent")
         residual, activity, original_squared, reference_squared = 0.0, 0.0, 0.0, 0.0
+        reference_terms = 0
+        reference_scale_squared = 0.
         amounts = np.zeros(2)
         initial_amounts = np.zeros(2)
         diffusion_amounts = np.zeros(2)
@@ -295,6 +321,8 @@ def science(images, masks, n):
             z_error = row["z"].reshape(m,m) - .25*t_full[0] - .5*t_full[1]
             original_squared += float((np.sum(original[:,active]**2)+np.sum(z_error[active]**2))/m**2)
             reference_squared += float(np.sum((old+b.DT*load)[:,active]**2)/m**2)
+            reference_terms += 2*int(np.count_nonzero(active))
+            reference_scale_squared += float(np.sum((np.abs(old)+b.DT*np.abs(load))[:,active]**2)/m**2)
             residual = max(
                 residual, float(np.max(np.abs((q - old - b.DT * (action + load))[:, active])))
             )
@@ -333,6 +361,8 @@ def science(images, masks, n):
             flux_activity=activity,
             original_F_weighted_l2=math.sqrt(original_squared),
             original_F_zero_seed_reference_l2=math.sqrt(reference_squared),
+            original_F_reference_terms=reference_terms,
+            original_F_reference_absolute_scale_l2=math.sqrt(reference_scale_squared),
             restriction_gap=float(gap),
             Q_amounts=amounts.tolist(),
         )
@@ -419,6 +449,8 @@ def contract():
     for key in ("spatial", "acceptance", "native_abi_header", "release_constants"):
         value["source_files"][key] = "path+sha256"
     value["stop_rule"] = STOP_RULE
+    value["independent_original_l2_threshold"] = 1e-10
+    value["seed_selection"] = "authenticated solve-initialization identity for absent seed"
     value["approval"] = dict(
         schema="sol61.evolved-stage-amr-spatial.root-approval@3",
         approved_by="ROOT",
@@ -453,6 +485,8 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
             "schema",
             "qualification",
             "stop_rule",
+            "independent_original_l2_threshold",
+            "seed_selection",
             "native_evidence",
             "mode",
             "ranks",
@@ -477,6 +511,7 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         pins["schema"] == "sol61.evolved-stage-amr-spatial.owner-pins@3"
         and pins["qualification"] == QUALIFICATION
         and pins["stop_rule"] == STOP_RULE
+        and typed(pins["independent_original_l2_threshold"], 1e-10)
         and pins["native_evidence"] is True,
         "spatial native scope differs",
     )
@@ -528,6 +563,8 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
     need(
         receipt["fixture_schema"] == "pops.evolved-stage-amr-spatial-native-fixture@3"
         and receipt["stop_rule"] == STOP_RULE
+        and typed(receipt["independent_original_l2_threshold"], 1e-10)
+        and receipt["seed_selection"] == pins["seed_selection"]
         and typed(
             [receipt[k] for k in ("cells", "width", "dimension", "rank", "size")],
             [8, 2, 2, 0, pins["ranks"]],
@@ -623,6 +660,7 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
                 )
             )
     need(len(hashes) == 1, "one actual Program required")
+    need(zero_seed_selection(program_ir) == pins["seed_selection"], "ROOT-pinned zero seed differs")
     masks = None
     manifests, diagnostics = {}, {}
     for phase, cp in arrays.items():
@@ -822,6 +860,8 @@ def receive(pins_path, pins_sha, approval_path, approval_sha):
         status="received",
         qualification=QUALIFICATION,
         stop_rule=STOP_RULE,
+        independent_original_l2_threshold=1e-10,
+        seed_selection=pins["seed_selection"],
         native_abi_version=EXPECTED_NATIVE_ABI,
         cases_qualified=1,
         mode=pins["mode"],
