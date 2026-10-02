@@ -95,3 +95,13 @@ __all__ = [
     "RawMomentBasis",
     "RealizableSet",
 ]
+
+def fan_li15_path(product, *, frame, covectors, basis):
+    from .fan_li_path import fan_li15_path as compose
+    return compose(product, frame=frame, covectors=covectors, basis=basis)
+from .polynomial_path import (NormalizedPathInputs, EndpointPathInputs, normalized_polynomial_path,
+    endpoint_polynomial_path, derivative as polynomial_derivative, fma, compensated_sum)
+
+__all__ += ["fan_li15_path", "NormalizedPathInputs", "EndpointPathInputs",
+            "normalized_polynomial_path", "endpoint_polynomial_path",
+            "polynomial_derivative", "fma", "compensated_sum"]

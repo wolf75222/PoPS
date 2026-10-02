@@ -19,7 +19,7 @@ from __future__ import annotations
 from . import riemann, reconstruction, variables, projections, spatial, terms
 from .reconstruction import limiters
 from .spatial import FiniteVolume
-from .nonconservative import FanLi15RawMomentPath, SymbolicPath, PathConservativeFiniteVolume
+from .nonconservative import NormalizedPolynomialPath, SymbolicPath, PathConservativeFiniteVolume
 from .nonconservative import CoordinatedFace, FaceBalance, CoordinatedFiniteVolume
 from .state_storage import StateStorage
 from .named_flux import NamedCenteredDivergence
@@ -31,8 +31,10 @@ from .plan import DiscretizationPlan
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
            "FaceBalance", "CoordinatedFace", "CoordinatedFiniteVolume",
-           "spatial", "FiniteVolume", "FanLi15RawMomentPath", "SymbolicPath", "PathConservativeFiniteVolume",
+           "spatial", "FiniteVolume", "FanLi15RawMomentPath", "NormalizedPolynomialPath", "SymbolicPath", "PathConservativeFiniteVolume",
            "StateStorage", "NamedCenteredDivergence", "Diffusion", "TensorDiffusion",
            "CoupledGradient",
            "ScharfetterGummel",
            "DiscreteGradientStencil", "LinearAxisStencil", "DiscretizationPlan", "JointEvaluation"]
+
+from pops.moments.fan_li_path import FanLi15RawMomentPath

@@ -13,7 +13,7 @@ def emit_path_members(model, *, cse, aux_locals):
     if model._stab_speed is not None:
         raise ValueError("the numerical path owns its incident-face CFL proposal speed")
     lines = []
-    if kernel["kind"] == "normalized_moment_path":
+    if kernel["kind"] == "normalized_polynomial_path":
         from .moment_path_kernel import emit_moment_path_kernel
         if dimension != 2 or len(kernel["plan"]["indices"]) != model.n_vars:
             raise ValueError("normalized moment kernel and native state shapes differ")
@@ -46,7 +46,7 @@ def emit_path_members(model, *, cse, aux_locals):
         lines.append("      return {%s};" % ", ".join(expressions))
         lines.append("    }")
     lines.append("  }")
-    if kernel["kind"] == "normalized_moment_path":
+    if kernel["kind"] == "normalized_polynomial_path":
         lines += [
         "  POPS_HD bool path_admissible(const State& U) const {",
         "    return PathKernel::admissibility(U) == pops::PathStatus::Success;",

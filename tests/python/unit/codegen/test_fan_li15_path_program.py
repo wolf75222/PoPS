@@ -21,7 +21,10 @@ from tests.python.unit.numerics.test_fan_li15_path_contract import _declarations
 def test_public_ssprk2_path_retains_both_native_hierarchy_barriers():
     model, state, flux, product, covectors = _declarations()
     rate = model.rate("transport", equation=ddt(state) == -div(flux) - product)
-    path = FanLi15RawMomentPath(product, frame=FRAME, covectors=covectors)
+    from pops.moments import CartesianMonomialBasis, fan_li15_path
+    from pops.moments.fan_li import FAN_LI15_INDICES
+    path = fan_li15_path(product, frame=FRAME, covectors=covectors,
+                         basis=CartesianMonomialBasis(FAN_LI15_INDICES))
     plan = DiscretizationPlan()
     plan.rates.add(rate, _method(state, flux, path))
     case = pops.Case("two-stage Fan Li path source")
@@ -54,7 +57,7 @@ def test_public_ssprk2_path_retains_both_native_hierarchy_barriers():
     assert "pops::Real(4) * max_wave_speed<Axis>(U, a)" in brick
     assert "real_eig_minmax" not in brick
     assert emitter._m._path_conservative["identity"].startswith(
-        "pops.fan-li15.path-operator.v1:sha256:")
+        "pops.numerics.normalized-polynomial-path.v1:sha256:")
     uniform = emit_cpp_program(resolved.time, model=emitter, target="system")
     assert uniform.count("ctx.path_rhs_into(") == 2
     assert uniform.count("ctx.path_rhs_courant()") == 2
@@ -64,7 +67,7 @@ def test_public_ssprk2_path_retains_both_native_hierarchy_barriers():
 
 def test_cpp_model_fixture_is_generated_from_the_python_constitutive_plan():
     from pathlib import Path
-    from pops.codegen.moment_path_kernel import emit_fan_li15_test_header
+    from pops.moments.fan_li import emit_fan_li15_test_header
     root = Path(__file__).resolve().parents[4]
     assert (root / "tests/cpp/support/generated_fan_li15.hpp").read_text() == emit_fan_li15_test_header()
     for directory in ("include/pops/numerics", "include/pops/runtime"):
@@ -72,12 +75,12 @@ def test_cpp_model_fixture_is_generated_from_the_python_constitutive_plan():
             assert "fan_li15" not in header.read_text(), header
 
 
-def test_moment_kernel_plan_cannot_reinterpret_permuted_raw_storage():
+def test_moment_kernel_requires_an_exact_authored_basis_and_graph():
     from pops.codegen.moment_path_kernel import emit_moment_path_kernel
     from pops.moments.fan_li import fan_li15_native_plan
     plan = fan_li15_native_plan()
-    plan["indices"] = tuple(reversed(plan["indices"]))
-    with pytest.raises(ValueError, match="exact q-outer raw moment ordering"):
+    plan["indices"] = (*plan["indices"][:-1], plan["indices"][0])
+    with pytest.raises(ValueError, match="each exact monomial once"):
         emit_moment_path_kernel(plan, "InvalidKernel")
 
 

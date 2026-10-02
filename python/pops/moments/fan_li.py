@@ -45,24 +45,97 @@ def _regularization_terms(p: int, q: int, direction: int) -> tuple:
                  in enumerate(zip(indices, (1, 1, 2, 1, 2), strict=True)))
 
 
-def fan_li15_native_plan() -> dict:
-    """Model-owned lowering data for the robust generic moment primitives.
+def fan_li15_native_plan(*, basis=None) -> dict:
+    """Compose the complete normalized arithmetic, including the closure.
 
-    The Fan--Li choice f5=0, five regularized rows and spectral constant live
-    here, never in the C++ SDK. Generic transforms retain normalization,
-    compensated sums and covariance certification in the generated calculation.
+    No compiler operation selects Hermite coefficients, an edge closure,
+    regularized rows or a spectral theorem. Those choices are visible here.
     """
-    return {
-        "order": 4,
-        "closure_order": 4,
-        "indices": FAN_LI15_INDICES,
-        "bound_terms": _RAW_SECOND_BOUND_TERMS,
-        "regularization": tuple(
-            (slot, -factorial(p) * factorial(q),
-             tuple((p + 1 if axis == 0 else q + 1, _regularization_terms(p, q, axis))
-                   for axis in range(2)))
-            for slot, (p, q) in zip(FAN_LI15_REGULARIZED_COMPONENTS, _TOP, strict=True)),
-    }
+    from .basis import CartesianMonomialBasis
+    from .polynomial_path import (NormalizedPathInputs, compensated_sum,
+                                  derivative, fma, literal, normalized_polynomial_path,
+                                  square_root)
+    basis = CartesianMonomialBasis(FAN_LI15_INDICES) if basis is None else basis
+    if set(basis.indices) != set(FAN_LI15_INDICES):
+        raise ValueError("Fan–Li15 composition requires its declared degree-four monomials")
+
+    def coefficients(inputs):
+        u, v = inputs.normalized((1, 0)), inputs.normalized((0, 1))
+        r = lambda index: literal(1) if index == (0, 0) else inputs.normalized(index)
+        if inputs.polynomial:
+            a = r((2, 0)) + -(u * u)
+            b = r((1, 1)) + -(u * v)
+            c = r((0, 2)) + -(v * v)
+        else:
+            a, b, c = (fma(-u, u, r((2, 0))), fma(-u, v, r((1, 1))),
+                       fma(-v, v, r((0, 2))))
+        theta = a, b, c
+        gaussian4 = {(4, 0): 3*a*a, (3, 1): 3*a*b,
+                     (2, 2): a*c + 2*b*b, (1, 3): 3*b*c, (0, 4): 3*c*c}
+        h = {(0, 0): literal(1)}
+        for p, q in FAN_LI15_INDICES:
+            if 0 < p + q < 3:
+                h[p, q] = literal(0)
+            elif p + q >= 3:
+                terms = tuple(((((-u)**(p-i) * (-v)**(q-j)) * r((i, j))) * (comb(p, i)*comb(q, j))
+                               if inputs.polynomial else
+                               (comb(p, i)*comb(q, j)) * (-u)**(p-i) * (-v)**(q-j) * r((i, j)))
+                              for j in range(q+1) for i in range(p+1))
+                central = (sum(terms, literal(0)) if inputs.polynomial else compensated_sum(terms))
+                if p + q == 4:
+                    central = central + -gaussian4[p, q]
+                h[p, q] = central / (factorial(p)*factorial(q))
+        return h, theta, u, v
+
+    endpoint = NormalizedPathInputs(basis)
+    h, (a, b, c), u, v = coefficients(endpoint)
+    # Gaussian integration-by-parts transform with the declared f_5 = 0.
+    gaussian = {(0, 0): literal(1)}
+    for q in range(6):
+        for p in range(6-q):
+            if p+q == 0:
+                continue
+            if p:
+                value = u*gaussian[p-1, q]
+                if p > 1:
+                    value = value + (p-1)*a*gaussian[p-2, q]
+                if q:
+                    value = value + q*b*gaussian[p-1, q-1]
+            else:
+                value = v*gaussian[0, q-1]
+                if q > 1:
+                    value = value + (q-1)*c*gaussian[0, q-2]
+            gaussian[p, q] = value
+    edge = {}
+    for q in range(6):
+        p = 5-q
+        value = gaussian[p, q]
+        for j in range(q+1):
+            for i in range(p+1):
+                if 3 <= i+j <= 4:
+                    multiplicity = factorial(p)//factorial(p-i)*factorial(q)//factorial(q-j)
+                    value = value + h[i, j]*(multiplicity*gaussian[p-i, q-j])
+        edge[p, q] = value
+    gx, gy = endpoint.direction(0), endpoint.direction(1)
+    flux = tuple(gx*endpoint.raw((p+1, q)) + gy*endpoint.raw((p, q+1)) if p+q < 4
+                 else endpoint.density*(gx*edge[p+1, q] + gy*edge[p, q+1]) for p, q in basis.indices)
+    path = NormalizedPathInputs(basis, polynomial=True)
+    h, theta, u, v = coefficients(path)
+    differentials = tuple(derivative(value) for value in (u, v, *theta))
+    integrands, factors = [literal(0)]*len(basis.indices), [0]*len(basis.indices)
+    for p, q in _TOP:
+        directions = []
+        for axis in range(2):
+            terms = tuple(h.get(index, literal(0))*differentials[k]/divisor
+                          for index, k, divisor in _regularization_terms(p, q, axis))
+            directional = sum(terms[1:], terms[0])
+            directions.append((p+1 if axis == 0 else q+1)*path.direction(axis)*directional)
+        slot = basis.index((p, q))
+        integrands[slot] = directions[0] + directions[1]
+        factors[slot] = -factorial(p)*factorial(q)
+    speed = square_root(6 + square_root(10))*endpoint.second_moment_norm()
+    return normalized_polynomial_path(basis, flux=flux, integrands=integrands,
+                                      factors=factors, speed=speed)
 
 
 def _sqrt(value: Any) -> Any:
@@ -274,3 +347,33 @@ __all__ = [
     "fan_li15_expressions",
     "fan_li15_from_hermite",
 ]
+
+
+def emit_fan_li15_test_header() -> str:
+    """A reproducible model fixture; never an installed production SDK header."""
+    from pops.codegen.moment_path_kernel import emit_moment_path_kernel
+    return ("// Generated from pops.moments.fan_li by moment_path_kernel.py. Do not edit.\n"
+            "// clang-format off\n"
+            "#pragma once\n\n"
+            "#include <pops/numerics/moments/normalized_moment_path.hpp>\n"
+            "#include <pops/numerics/fv/path_flux.hpp>\n"
+            "#include <array>\n\nnamespace test_fan_li15 {\n\n"
+            + "\n".join(emit_moment_path_kernel(fan_li15_native_plan(), "Kernel"))
+            + """
+
+template <class State>
+POPS_HD auto flux(const State& raw, pops::Real gx, pops::Real gy) {
+  return Kernel{}.path_directional_flux(raw, {gx, gy});
+}
+template <class State>
+POPS_HD auto path_integral(const State& left, const State& right, pops::Real gx, pops::Real gy) {
+  return Kernel{}.path_integral(left, right, {gx, gy});
+}
+template <class State>
+POPS_HD auto interface(const State& left, const State& right, pops::Real gx, pops::Real gy) {
+  return pops::path_rusanov_interface<15>(Kernel{}, left, right, Kernel::Direction{gx, gy});
+}
+
+}  // namespace test_fan_li15
+// clang-format on
+""")

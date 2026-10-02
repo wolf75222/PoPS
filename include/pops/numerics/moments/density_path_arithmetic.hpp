@@ -6,6 +6,16 @@
 
 namespace pops::moments {
 
+/// Explicit integer power with ordered multiplication, shared by scalar and
+/// coefficient-graph realizations. Unlike std::pow this retains the declared
+/// multiplication semantics and requires no frontend unrolling of the exponent.
+POPS_HD inline Real power(Real value, int exponent) {
+  Real result = Real(1);
+  for (int k = 0; k < exponent; ++k)
+    result = value * result;
+  return result;
+}
+
 /// Fixed-capacity coefficient algebra. The generated caller proves its degree bound;
 /// coefficients above Degree must be identically zero before this arithmetic is selected.
 template <int Degree>

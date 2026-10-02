@@ -319,7 +319,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S.append("#include <pops/numerics/linalg/dense_eig.hpp>")
     if path_conservative:
         S += ["#include <string_view>", "#include <pops/numerics/fv/path_result.hpp>"]
-        if model._path_conservative["kernel"]["kind"] == "normalized_moment_path":
+        if model._path_conservative["kernel"]["kind"] == "normalized_polynomial_path":
             S.append("#include <pops/numerics/moments/normalized_moment_path.hpp>")
     S += [
         "namespace %s {" % namespace,

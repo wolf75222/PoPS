@@ -23,6 +23,7 @@ from pops.layouts import Uniform
 from pops.math import ddt, div, maximum, minimum, sqrt
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.moments.fan_li import FAN_LI15_INDICES, fan_li15_expressions
+from pops.moments import CartesianMonomialBasis, fan_li15_path
 from pops.numerics import (DiscretizationPlan, PathConservativeFiniteVolume,
                            SymbolicPath, reconstruction, riemann, variables)
 from pops.representations import Conservative
@@ -58,7 +59,9 @@ def order_from_environment() -> tuple[tuple[int, int], ...]:
     return INDICES if choice == "canonical" else tuple(reversed(INDICES))
 
 
-def build_case(order: tuple[tuple[int, int], ...]):
+def build_case(order: tuple[tuple[int, int], ...], *, path_realization="quadrature"):
+    if path_realization not in ("quadrature", "normalized-analytic"):
+        raise ValueError("M17 path realization must be quadrature or normalized-analytic")
     if len(order) != 15 or set(order) != set(FAN_LI15_INDICES):
         raise ValueError("M17 requires one exact permutation of the fifteen raw moments")
     frame = Rectangle("fan_li_periodic_square", lower=(0., 0.), upper=(1., 1.)).frame(Cartesian2D())
@@ -97,7 +100,12 @@ def build_case(order: tuple[tuple[int, int], ...]):
         return factor * sqrt(maximum(left[moment] / left[rho],
                                      right[moment] / right[rho]))
 
-    path = SymbolicPath(product, frame=frame, quadrature=GAUSS4, speed=whole_path_speed)
+    # This explicit method choice preserves the historical Gauss4 case. The
+    # optimized variant composes its stable arithmetic in the Python library.
+    path = (SymbolicPath(product, frame=frame, quadrature=GAUSS4, speed=whole_path_speed)
+            if path_realization == "quadrature" else
+            fan_li15_path(product, frame=frame, covectors={x_axis: (1, 0), y_axis: (0, 1)},
+                          basis=CartesianMonomialBasis(order)))
     rate = model.rate("complete_fan_li_balance", equation=ddt(state) == -div(flux) - product)
 
     numerics = DiscretizationPlan()
@@ -165,7 +173,7 @@ def main():
     script_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     oracle_sha256 = hashlib.sha256(Path(sys.modules["api040_m17_oracle"].__file__).read_bytes()).hexdigest()
     order = order_from_environment()
-    case, frame = build_case(order)
+    case, frame = build_case(order, path_realization=os.environ.get("POPS_API040_M17_PATH", "quadrature"))
     validated = pops.validate(case)
     layout = Uniform(CartesianGrid(frame=frame, cells=(N, N),
                                    periodic=PeriodicAxes(frame.axes)))

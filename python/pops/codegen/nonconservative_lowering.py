@@ -118,6 +118,7 @@ def require_path_numerical_authority(operation, module):
                 or "body" not in path):
             raise ValueError("native coordinated transport has no complete face identity")
         return
-    if (not isinstance(path, Mapping) or path.get("schema_version") != 1
+    if (not isinstance(path, Mapping) or type(path.get("schema_version")) is not int
+            or path.get("schema_version") not in (1, 2)
             or not path.get("kind") or "integral" not in path or not path.get("stability")):
         raise ValueError("native nonconservative transport has no complete path identity")

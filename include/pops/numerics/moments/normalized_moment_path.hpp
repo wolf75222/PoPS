@@ -1,16 +1,19 @@
 #pragma once
 
-#include <pops/numerics/moments/normalized_hermite.hpp>
+#include <pops/numerics/moments/raw_moment_recovery.hpp>
+#include <pops/numerics/moments/density_path_arithmetic.hpp>
 
 namespace pops::moments {
 
 /// Analytic straight-raw-state integration after density normalization. The
 /// caller supplies the physical polynomial coefficients and the whole-path
 /// speed majorant. Neither a moment closure nor a regularization is selected here.
-template <int Order, class State, class Direction, class Law>
+template <int Order, int Degree = Order, class State, class Direction, class Law>
 POPS_HD PathIntegralResult<CartesianMomentBasis<Order>::size> integrate_normalized_moment_path(
     const State& raw_left, const State& raw_right, const Direction& direction, const Law& law) {
   constexpr int N = CartesianMomentBasis<Order>::size;
+  static_assert(Degree >= 0 && Degree < std::numeric_limits<int>::max(),
+                "polynomial capacity must fit the native coefficient index type");
   PathIntegralResult<N> result;
   NormalizedRawMoments<Order> left, right;
   auto status = law.recover(raw_left, left);
@@ -45,9 +48,18 @@ POPS_HD PathIntegralResult<CartesianMomentBasis<Order>::size> integrate_normaliz
   // One canonical orientation gives exactly antisymmetric evaluation, including
   // equal-density endpoints. Normalized raw density is the first component.
   for (int k = 0; k < N; ++k) {
-    if (raw_left[k] != raw_right[k]) {
+    // An explicit basis binding may permute physical storage. Canonical
+    // comparison is a numerical orientation, not a requirement on that storage.
+    const auto component = [&](const auto& raw) {
+      if constexpr (requires { law.canonical_component(raw, k); })
+        return law.canonical_component(raw, k);
+      else
+        return raw[k];
+    };
+    const Real a = component(raw_left), b = component(raw_right);
+    if (a != b) {
       identical = false;
-      reverse = raw_left[k] < raw_right[k];
+      reverse = a < b;
       break;
     }
   }
@@ -58,10 +70,10 @@ POPS_HD PathIntegralResult<CartesianMomentBasis<Order>::size> integrate_normaliz
   }
   const auto& first = reverse ? right : left;
   const auto& second = reverse ? left : right;
-  Real weight[Order + 1], density_scale;
+  Real weight[Degree + 1], density_scale;
   if (!density_path_weights(first.density, second.density, weight, density_scale))
     return result;
-  Polynomial<Order> integrands[N];
+  Polynomial<Degree> integrands[N];
   Real factors[N]{};
   law.path_polynomials(first, second, direction, integrands, factors);
   Real candidate[N]{};
@@ -69,7 +81,7 @@ POPS_HD PathIntegralResult<CartesianMomentBasis<Order>::size> integrate_normaliz
     if (factors[component] == Real(0))
       continue;
     Real sum = Real(0), compensation = Real(0);
-    for (int k = 0; k <= Order; ++k) {
+    for (int k = 0; k <= Degree; ++k) {
       const Real term = integrands[component].c[k] * weight[k];
       const Real corrected = term - compensation, next = sum + corrected;
       compensation = (next - sum) - corrected;
