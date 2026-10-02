@@ -80,10 +80,10 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
             with np.load(checkpoint,allow_pickle=False) as archive:
                 accepted=json.loads(str(archive['amr_accepted_contract']))
                 assert int(archive['pops_amr_checkpoint_version'])==12 and accepted['schema_version']==9
-            proof={'contract':CONTRACT,'component_signature':dict(component.component_manifest.signature),
+            proof={'contract':CONTRACT,'component_signature':component.component_manifest.to_data()['signature'],
                    'checkpoint':{'path':str(checkpoint),'sha256':hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()},
                    'potential_accessor_may_materialize':True,'native_path':native.__file__,'python_path':pops.__file__,'proof_scope':'uniform screened Field, physical xmin Ghost, synchronous two levels'}
-            (directory/'provenance.json').write_text(json.dumps(proof,indent=2,default=str)+'\n')
+            (directory/'provenance.json').write_text(json.dumps(proof,indent=2,allow_nan=False)+'\n')
         assert report.accepted_steps==1 and report.rejected_steps==0
         assert images['initial'][2][-1][:2]==(0.,0)
         assert images['accepted'][2][-1][:2]==(DT,1)
