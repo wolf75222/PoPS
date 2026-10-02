@@ -128,6 +128,7 @@ class _FacadeCompileMixin(_FacadeModel):
         _native_field_roles: Any = None,
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
+        model_source_policy: str = "allow_missing",
     ) -> Any:
         """Compiles the model into a CompiledModel (Phase A). Delegates the GENERATION + compilation to
         the native package compiler, then
@@ -158,6 +159,8 @@ class _FacadeCompileMixin(_FacadeModel):
         Returns a CompiledModel carrying so_path, backend, target, names/roles/gamma/n_aux/params,
         caps, abi_key, model_hash, cxx, std."""
         import os
+        from pops.codegen.model_compile_evidence import policy, read, paths, guard_recompile
+        policy(model_source_policy)
 
         # Lazy codegen import (keeps pops.physics codegen-free at module load; Spec-4 rule):
         from pops.codegen.toolchain import (
@@ -245,7 +248,9 @@ class _FacadeCompileMixin(_FacadeModel):
 
         semantic_identity = semantic_identity_of(model=self)
         feature_key = _native_feature_key()
+        from pops.codegen.model_compile_evidence import codegen_source_authority
         spec_components = {
+            "codegen_source_authority": codegen_source_authority(),
             "model_hash": str(model_hash),
             "emitted_name": str(name or ""),
             "wave_speed_provider": (
@@ -318,22 +323,25 @@ class _FacadeCompileMixin(_FacadeModel):
         if so_path is None:
             so_path = _identity_cache_so_path(spec_identity)
             with _artifact_cache_lock(so_path):
-                if os.path.exists(so_path):
+                if model_source_policy == "recompile": guard_recompile(so_path)
+                if os.path.exists(so_path) and model_source_policy != "recompile":
                     binary_identity, final_artifact_identity = verify_cached_artifact(
                         so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
                     )
+                    read(so_path, require=model_source_policy == "require")
                 else:
                     staging = _artifact_cache_staging_path(so_path)
                     staged_output = staging
                     try:
                         staged_output = _compile_to(staging)
+                        read(staged_output, require=model_source_policy != "allow_missing")
                         binary_identity, final_artifact_identity = publish_staged_artifact(
                             staged_output, so_path,
                             semantic_identity=semantic_identity, spec_identity=spec_identity,
                         )
                     finally:
                         for path in {staging, staged_output}:
-                            for leftover in (path, artifact_sidecar_path(path)):
+                            for leftover in (path, artifact_sidecar_path(path), *paths(path)):
                                 try:
                                     os.remove(leftover)
                                 except FileNotFoundError:
@@ -342,10 +350,13 @@ class _FacadeCompileMixin(_FacadeModel):
             out_path = so_path
         else:
             # An explicit user destination still forces compilation on every call.
-            out_path = _compile_to(so_path)
-            binary_identity, final_artifact_identity = write_artifact_sidecar(
-                out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
-            )
+            with _artifact_cache_lock(so_path):
+                out_path = _compile_to(so_path)
+                read(out_path, require=model_source_policy != "allow_missing")
+                binary_identity, final_artifact_identity = write_artifact_sidecar(
+                    out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
+                )
+        read(out_path, require=model_source_policy != "allow_missing")
         cons_roles = roles_for(m.cons_names, m.cons_roles)
         cm: Any = CompiledModel(
             so_path=out_path,

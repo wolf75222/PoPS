@@ -862,9 +862,13 @@ class CompiledSimulationArtifact:
                     "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest()
                     if source is not None
                     else None,
+                    "availability": "retained" if source is not None else "unavailable",
+                    "model_compile": component.source_provenance()
+                    if callable(getattr(component, "source_provenance", None)) else None,
                 }
             )
-        return {"contract": "pops.compiled-program.source-evidence@1", "components": evidence}
+        return {"contract": "pops.compiled-program.source-evidence@2", "components": evidence,
+                "complete": all(row['sha256'] is not None for row in evidence)}
 
     def _current_component_evidence(self) -> dict[str, Any]:
         evidence = {

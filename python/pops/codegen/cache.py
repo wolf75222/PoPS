@@ -10,12 +10,13 @@ import errno
 import os
 import re
 import shlex
-from threading import Lock
+from threading import Lock, local
 import tempfile
 import time
 from typing import Any
 
 
+_artifact_lock_owners = local()
 
 # Optimization flags shared by generated libraries on the sole production path.
 # Default -O3 -DNDEBUG: hot-loop asserts disarmed + full vectorization -> parity with a native block (at
@@ -185,6 +186,17 @@ def _artifact_cache_lock(so_path: Any):
     released by the operating system if a compiler process exits unexpectedly.
     """
     path = os.path.abspath(os.fspath(so_path)) + ".pops-cache.lock"
+    # Recursive facades share this thread's OS lock; other threads/processes wait.
+    owners = _artifact_lock_owners
+    if getattr(owners, 'pid', None) != os.getpid():
+        owners.pid = os.getpid()
+        owners.held = set()  # a fork cannot inherit this thread's lock authority
+    held = getattr(owners, 'held', None)
+    if held is None:
+        held = owners.held = set()
+    if path in held:
+        yield
+        return
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     handle = open(path, "a+b")
     windows_locked = False
@@ -210,7 +222,11 @@ def _artifact_cache_lock(so_path: Any):
             import fcntl
 
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        yield
+        held.add(path)
+        try:
+            yield
+        finally:
+            held.remove(path)
     finally:
         try:
             if os.name == "nt":

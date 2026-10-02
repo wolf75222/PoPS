@@ -82,7 +82,7 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             block.resolved_operations, block.instance_owner_qid,
             where="compiled block %r" % block.name, required=True)
     compile_options = {
-        key: value for key, value in options.items() if key in ("include", "cxx", "std")
+        key: value for key, value in options.items() if key in ("include", "cxx", "std", "model_source_policy")
     }
     roles = _resolved_native_amr_field_roles(plan)
     compiled: dict[str, Any] = {}

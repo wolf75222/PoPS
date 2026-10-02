@@ -24,6 +24,34 @@ class CompiledModel:
     diagnostics. cf. DSL_MODEL_DESIGN.md section 3.
     """
 
+    def source_provenance(self, *, require_complete: bool = False) -> dict:
+        """Inspect actual TU evidence; never regenerate historical source.
+
+        Compiler hash is recorded at compilation, not rehashed from a live
+        compiler on a cache hit. Paths are report data, not identities.
+        """
+        if type(require_complete) is not bool:
+            raise TypeError('require_complete must be an exact boolean')
+        from .model_compile_evidence import read
+        evidence = read(self.so_path, require=require_complete)
+        if evidence['complete']:
+            from .compile_provenance import read_artifact_sidecar
+            sidecar = read_artifact_sidecar(self.so_path)
+            if sidecar is None or sidecar['protocol'] != 'pops.artifact-sidecar.v2':
+                raise ValueError('actual model TU lacks committed provenance authority')
+        return evidence
+
+    def dump_cpp(self, path: Any) -> None:
+        """Write verified actual compiler input; refuse missing legacy evidence."""
+        from pathlib import Path
+        from .model_compile_evidence import source
+        Path(path).write_bytes(source(self.so_path).encode('utf-8'))
+
+    @property
+    def _generated_cpp(self):
+        from .model_compile_evidence import source
+        return source(self.so_path) if self.source_provenance()['complete'] else None
+
     def __init__(self, so_path: Any, backend: Any, cons_names: Any, cons_roles: Any,
                  prim_names: Any, n_vars: Any, gamma: Any, n_aux: Any, params: Any, caps: Any,
                  abi_key: Any, model_hash: Any, cxx: Any, std: Any, native_dimension: Any,

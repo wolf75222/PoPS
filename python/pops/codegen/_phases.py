@@ -180,7 +180,10 @@ def resolve(
         else resolved_layouts
 
     options = dict(compile_options or {})
-    allowed_options = {"so_path", "force", "cxx", "include", "std", "debug"}
+    allowed_options = {"so_path", "force", "cxx", "include", "std", "debug", "model_source_policy"}
+    if "model_source_policy" in options:
+        from .model_compile_evidence import policy
+        policy(options["model_source_policy"])
     unknown_options = sorted(set(options) - allowed_options)
     if unknown_options:
         raise TypeError("pops.resolve received unsupported compile option(s) %s" % unknown_options)
@@ -512,6 +515,7 @@ def compile(plan: Any) -> Any:
         from pops._balance_due_contract import BalanceDueContract
 
         options = dict(plan.compile_options)
+        options.pop('model_source_policy', None)  # applies to all models, not Program compilation
         options["libraries"] = plan.libraries
         balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
         validate_balance_due_contract(plan.time, balance_due_contract)

@@ -146,4 +146,5 @@ def test_explicit_facade_destination_still_forces_compilation(tmp_path, monkeypa
     for _ in range(2):
         assert model.compile(destination, include="test-headers").so_path == destination
     assert calls == [destination, destination]
-    assert not tuple(tmp_path.glob("*.pops-cache.lock"))
+    # Explicit destinations now share the publication lock, including source companions.
+    assert tuple(tmp_path.glob("*.pops-cache.lock")) == (Path(destination + ".pops-cache.lock"),)

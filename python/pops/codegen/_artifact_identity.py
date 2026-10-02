@@ -24,6 +24,8 @@ def model_artifact_spec(
     from pops.codegen._native_model_provider_plan import NATIVE_MODEL_PROVIDER_CONTRACT
     from pops.identity import artifact_spec_identity, make_identity
 
+    from pops.codegen.model_compile_evidence import codegen_source_authority
+
     digest = str(model_hash(model))
     wave_speeds = getattr(model, "_ws_jacobian", {}) or {}
     semantic = make_identity(
@@ -40,6 +42,7 @@ def model_artifact_spec(
             "features": _native_feature_key(),
         },
         components={
+            "codegen_source_authority": codegen_source_authority(),
             "model_hash": digest,
             "emitted_name": str(name or ""),
             "consumer_owner_qid": str(consumer_owner_qid or ""),
