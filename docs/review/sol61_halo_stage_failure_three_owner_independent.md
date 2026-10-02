@@ -1,0 +1,7 @@
+# Independent three-owner Halo stage-failure review — SOURCE_ONLY
+
+Exact author gel 8ddc955, parent a542cd42, private WT PoPS-sol61-halo-stage-proof-persistence. Source review finds no blocker: third owner binds same authentic artifact, runs first step, arms the same genuine one-shot failure, publishes reached receipts, checkpoints its own rollback, retries without rearming. All calls that communicate, including checkpoint calls, use collective_call/attempt; local comparisons/publication use collective_check. Aligned receipts equal the original receipts; aligned final CP compares every payload including accepted state and authority, except the two lifecycle seals. Continuous control remains uninterrupted and physically exact; four CP differences are explicitly reported. New pair schema @2 prevents reinterpretation of old @1 failure.
+
+Independent author tests: 8 PASS .98s. Private new reader @2: 11 offline tests PASS .11s, explicitly synthetic metadata, no Native authority. @1 file preserved unchanged. Reader authenticates final pair pins, exact all nonseal payloads, second genuine failure receipt and rollback, continuous exhaustive four-key divergence. Sequential typed POPSAND9 walker checks accepted_attempt +112 face attempts3/2 and every other wire byte exact; unsupported nonzero remaps/interface fragments fail closed. It does not authenticate the authority hash mathematically or execute native semantic validation.
+
+Actual @2 captures pending ROOT; no Native/JIT/build/SDK writes or scientific approval. Old failed @1 and diagnosis retained.
