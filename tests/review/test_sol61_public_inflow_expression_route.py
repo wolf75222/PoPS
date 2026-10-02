@@ -208,3 +208,28 @@ def test_extension_incomplete_unknown_extra_or_drift_rejected(mutation):
     if mutation=="signature":row["cpp_table"]="PopsWrongTable"
     with pytest.raises(ValueError,match="native-interface-extensions@1"):
         interfaces.required_native_interface_tables(signature,interfaces.GhostBoundary)
+
+
+@pytest.mark.parametrize("auto_ghost",[False,True])
+def test_explicit_component_duplicates_remain_rejected(auto_ghost):
+    import pops
+    from tests.python.support.public_inflow_field_case import build
+    case,layout=build(ghost=auto_ghost)
+    component=multi_component()
+    with pytest.raises(ValueError,match="resolve components contain duplicate component_id"):
+        pops.resolve(pops.validate(case),layout=layout,components=(component,component))
+
+
+@pytest.mark.parametrize("auto_ghost",[False,True])
+def test_frozen_prerequisite_resolve_refuses_same_explicit_duplicates(auto_ghost):
+    import subprocess
+    import pops
+    from tests.python.support.public_inflow_field_case import build
+    # Execute the exact frozen pre-extension resolve module. The failure is in
+    # unchanged layout validation, before any new boundary composition is reached.
+    source=subprocess.run(["git","show","6c595c04:python/pops/codegen/_phases.py"],check=True,capture_output=True,text=True).stdout
+    namespace={"__name__":"pops.codegen._frozen_duplicate_probe","__package__":"pops.codegen"}
+    exec(compile(source,"6c595c04/python/pops/codegen/_phases.py","exec"),namespace)
+    case,layout=build(ghost=auto_ghost);component=multi_component()
+    with pytest.raises(ValueError,match="resolve components contain duplicate component_id"):
+        namespace["resolve"](pops.validate(case),layout=layout,components=(component,component))
