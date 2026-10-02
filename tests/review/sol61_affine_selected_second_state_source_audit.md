@@ -14,7 +14,7 @@ Case blocks explicitly select their States with `states=(state,)`.
 
 The test performs real validate → resolve → selected lowering → detached full
 ProgramGraph C++ emission. It proves the affine source's FieldView reads
-`ctx.state(1)`, all gathers use the second block's six local slots, and the exact
+`ctx.state(the authenticated second-block index)`, all gathers use the second block's six local slots, and the exact
 selected emitter component names match that State. No fabricated emitter carrier
 or overridden registry is involved. Full graph identity is retained by detachment.
 
@@ -55,5 +55,7 @@ env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/p
 ```
 
 Cohort result: 8 Source PASS43.91s; the strengthened exact second-block FieldView
-assertion also passes the focused two-test rerun. Source package origin and `_pops`
+assertion is checked against the Program block-index authority, not the model
+declaration position. Blocks are numbered by first Program use (second State is
+index0 in this case); this does not select the first physical State. The focused two-test rerun passes in3.92s. Source package origin and `_pops`
 absence are asserted. No Native/backend qualification follows from this result.

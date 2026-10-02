@@ -78,7 +78,11 @@ def test_authentic_resolved_second_state_emits_without_first_state_selection():
         shared_interface_codegen_evidence=_issue_shared_interface_codegen_evidence(resolved))
     assert 'affine_velocity_push_forward<2>' in cpp
     source_view=re.search(r'old_moments\[0\] = (u\d+)A\(index,',cpp).group(1)
-    assert f'& {source_view} = ctx.state(1);' in cpp
+    affine=next(value for value in detached._values if value.op=='affine_moment_update')
+    assert affine.block.name=='second'
+    block_index=detached._block_indices()[affine.block]
+    assert f'& {source_view} = ctx.state({block_index});' in cpp
+    assert tuple(authority.model_for_block(affine.block).cons_names)==names
     for i,index in enumerate((p,q) for q in range(3) for p in range(3-q)):
         slot=names.index(binding[index])
         assert re.search(r'old_moments\['+str(i)+r'\] = u\d+A\(index, '+str(slot)+r'\);',cpp)
