@@ -103,7 +103,8 @@ def join_provenance(directory,pins,binary_exports,*,native_sha256,header_signatu
         require(not path.is_symlink() and path.is_file() and pin==expected and hashlib.sha256(path.read_bytes()).hexdigest()==pin,'actual binary export differs')
     for row in rows:
         evidence=row['actual_source'];retained=row['retained_source']
-        require(evidence['complete'] is True and evidence['status']=='available' and evidence['source_sha256']==retained['sha256']==pins[retained['file']] and evidence['binary_sha256']==row['sha256'] and evidence['header_signature']==header_signature,'complete actual model TU evidence differs')
+        require(retained['file'] in proof['files'] and Path(retained['file']).name==retained['file'],'retained model TU reference differs')
+        require(evidence['contract']=='pops.model.actual-compile@1' and evidence['complete'] is True and evidence['status']=='available' and evidence['source_sha256']==retained['sha256']==pins[retained['file']] and evidence['binary_sha256']==row['sha256'] and evidence['header_signature']==header_signature,'complete actual model TU evidence differs')
         binary(row['block'],row['sha256'])
     require('headers='+header_signature+';' in proof['program']['abi_key'],'Program header signature differs')
     binary('program',proof['program']['sha256'])
