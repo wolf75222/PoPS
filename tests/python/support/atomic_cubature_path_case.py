@@ -57,7 +57,7 @@ def declarations(*, nonconservative=True, raw_speed=False):
     return model,state,flux,product,path,basis
 
 
-def make_case(*, nonconservative=True):
+def make_case(*, nonconservative=True, amr=False, fixed_dt=None):
     model,state,flux,product,path,basis=declarations(nonconservative=nonconservative)
     rate=model.rate('full_balance',equation=ddt(state)==-div(flux)-product)
     method=PathConservativeFiniteVolume(flux=flux,path=path,variables=variables.Conservative(state),
@@ -66,7 +66,27 @@ def make_case(*, nonconservative=True):
     case=pops.Case('atomic_case');block=case.block('population',model)
     case.numerics(numerics,block=block)
     program=ForwardEuler(block[state],rate=rate)
-    program.step_strategy(AdaptiveCFL(cfl=.25,max_dt=1e-3));case.program(program)
+    if fixed_dt is None:
+        program.step_strategy(AdaptiveCFL(cfl=.25,max_dt=1e-3))
+    else:
+        from pops.time import FixedDt
+        program.step_strategy(FixedDt(fixed_dt))
+    case.program(program)
     case.initials.add(InitialCondition(state=block[state],value=BindArray(),projection=ConservativeCellAverage()))
     layout=Uniform(CartesianGrid(frame=path.frame,cells=(8,4),periodic=PeriodicAxes(path.frame.axes)))
+    if amr:
+        from pops.amr import (AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer,
+                              Buffer, ConflictPolicy, EqualityPolicy, Hysteresis, Tag)
+        from pops.layouts import AMR
+        from pops.lib.amr import StateTransfer
+        from pops.math import ValueExpr
+        from pops.time import every
+        transfer=AMRTransfer();transfer.state(block[state],StateTransfer())
+        from pops.params import RuntimeParam
+        threshold=case.param(RuntimeParam('unused_threshold',default=1000.))
+        layout=AMR(grid=layout.mesh,hierarchy=AMRHierarchy(max_levels=1,ratios=()),
+            tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])[NAMES[1]]>case.value(threshold)),Buffer(cells=0)),
+                hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
+            regrid=AMRRegrid(schedule=every(100,clock=program.clock)),transfer=transfer,
+            execution=AMRExecution.synchronous())
     return case,layout
