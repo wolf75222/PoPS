@@ -91,7 +91,7 @@ def test_genuine_initial_field_then_freshness_then_ghost_order():
     assert preflight.index('accepted_halo_initial_point_preflight')<preflight.index('accepted_halo_boundary_preflight')
     assert 'produced.clock != point.clock' in preflight and 'produced.dt != point.dt' in preflight
 
-def test_public_screened_field_board_and_separate_dynamic_inflow_gap():
+def test_public_screened_field_board_and_explicit_output_ghost_cycle():
     import pops
     from tests.python.support.accepted_initial_field_ghost_case import build
     case,layout=build()
@@ -99,5 +99,9 @@ def test_public_screened_field_board_and_separate_dynamic_inflow_gap():
     assert len(resolved.field_plans)==1
     assert layout.execution.runtime_execution_data()['mode']=='synchronous'
     dynamic,layout=build(ghost=True)
-    with pytest.raises(pops._report.DiagnosticError,match='requires a compiled boundary component'):
+    with pytest.raises(pops._report.DiagnosticError,match='reads its own output ghost'):
         pops.resolve(pops.validate(dynamic),layout=layout)
+    from tests.python.support.public_inflow_field_case import build as build_explicit
+    explicit,layout=build_explicit(ghost=True)
+    resolved=pops.resolve(pops.validate(explicit),layout=layout)
+    assert len(resolved.field_plans)==1 and len(resolved.component_inputs)==1
