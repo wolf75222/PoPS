@@ -240,10 +240,25 @@ def test_derived_contract_is_explicit_and_manifest_is_lossless():
 
     manifest = module.manifest()
     row = manifest.to_dict()["params"]["alpha2"]
-    assert manifest.schema_version == 9
+    assert manifest.schema_version == 10
     assert row["kind"] == "derived"
     assert row["depends_on"] == [{"name": "alpha", "param_kind": "runtime"}]
     assert row["phase"] == "per_block"
     assert row["storage"] == "derived_cache"
     assert isinstance(model.Handle.from_canonical_identity(row["handle"]), model.ParamHandle)
     assert model.ModuleManifest.from_dict(manifest.to_dict()).to_dict() == manifest.to_dict()
+
+
+def test_current_param_manifest_refuses_previous_wire_and_preserves_identity():
+    module = model.Module("param_manifest_wire")
+    module.state_space("U", ("q",))
+    manifest = module.manifest()
+    wire = manifest.to_dict()
+    restored = model.ModuleManifest.from_dict(wire)
+    assert restored.to_dict() == wire
+    assert restored.hash == manifest.hash
+    old = copy.deepcopy(wire)
+    old["schema_version"] = 9
+    with pytest.raises(ValueError, match="unsupported ModuleManifest schema_version"):
+        model.ModuleManifest.from_dict(old)
+    assert module.manifest().hash == manifest.hash
