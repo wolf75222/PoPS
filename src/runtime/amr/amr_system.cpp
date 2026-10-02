@@ -27,6 +27,7 @@
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/amr/component_field_solver_provider.hpp>
+#include <pops/runtime/accepted_initial_field_point.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/amr/composite_reduction.hpp>
@@ -3540,6 +3541,7 @@ struct AmrSystem<Dim>::Impl {
   bool topology_regrid_auxiliary_invalidation_pending = false;
   std::optional<runtime::multiblock::BoundaryEvaluationPoint>
       active_topology_rematerialization_point;
+  const runtime::PreparedAcceptedInitialFieldPointV1* active_initial_field_point = nullptr;
   std::uint64_t last_topology_rematerialization_epoch = std::numeric_limits<std::uint64_t>::max();
   std::uint64_t last_topology_rematerialization_generation =
       std::numeric_limits<std::uint64_t>::max();
@@ -3664,7 +3666,7 @@ struct AmrSystem<Dim>::Impl {
       if (!owner.active_field_slot.empty())
         throw std::logic_error(
             "AmrSystem cannot snapshot an unconsumed exact field solve candidate");
-      if (owner.active_topology_rematerialization_point)
+      if (owner.active_topology_rematerialization_point || owner.active_initial_field_point)
         throw std::logic_error(
             "AmrSystem cannot snapshot an active topology field rematerialization");
       for (const auto& [slot, plan] : owner.field_plans) {
@@ -9960,12 +9962,29 @@ struct AmrSystem<Dim>::Impl {
     for (const auto& slot : order) {
       std::vector<const field_type*> states;
       error = {};
-      try { states.resize(blocks.size(), nullptr); }
+      std::optional<runtime::PreparedAcceptedInitialFieldPointV1> initial_authority;
+      try {
+        states.resize(blocks.size(), nullptr);
+        if (point.dt == 0.0) {
+          if (active_initial_field_point)
+            throw std::logic_error("accepted initial Field authority is already active");
+          initial_authority.emplace(point, program.checkpoint_metadata_.primary_clock_identity,
+              macro_step, accepted_time, static_cast<int>(level), bool(bootstrap_transaction));
+        }
+      }
       catch (...) { error = std::current_exception(); }
       runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
           error, &lane, "accepted halo Field simultaneous source allocation failed collectively");
       // Preflight certified every RHS binding as a direct valid-cell closure. No InputAux
       // launcher participates in this route: its reach/physical-point effects are not inferred.
+      // Authority allocation/validation above was voted before exposing this borrowed scope.
+      const auto* previous_initial_authority = active_initial_field_point;
+      if (initial_authority) active_initial_field_point = &*initial_authority;
+      struct InitialFieldPointReset {
+        Impl& owner;
+        const runtime::PreparedAcceptedInitialFieldPointV1* previous;
+        ~InitialFieldPointReset() { owner.active_initial_field_point = previous; }
+      } initial_point_reset{*this, previous_initial_authority};
       auto outcome = facade->solve_program_field_from_blocks_on_prepared_lane(
           point, slot, static_cast<int>(level), states);
       if (!outcome.report().solved_value_available()) {
@@ -16739,12 +16758,14 @@ SolveOutcome AmrSystem<Dim>::solve_program_field_from_blocks_on_prepared_lane(
   std::exception_ptr local_error;
   try {
     const auto& topology_point = p_->active_topology_rematerialization_point;
-    const bool authenticated_zero_dt =
+    const bool authenticated_initial_point = p_->active_initial_field_point &&
+        p_->bootstrap_transaction && p_->active_initial_field_point->authenticates(point);
+    const bool authenticated_zero_dt = authenticated_initial_point || (
         topology_point && point.dt == 0.0 && point.clock == topology_point->clock &&
         point.tick == topology_point->tick && point.level == topology_point->level &&
         point.substep == topology_point->substep && point.stage == topology_point->stage &&
         point.stage_fraction == topology_point->stage_fraction &&
-        point.physical_time == topology_point->physical_time;
+        point.physical_time == topology_point->physical_time);
     if (point.clock.empty() || point.level != active_level || point.stage < 0 ||
         point.stage_fraction.denominator <= 0 || !std::isfinite(point.dt) ||
         (point.dt <= 0.0 && !authenticated_zero_dt) || !std::isfinite(point.physical_time))
@@ -16763,7 +16784,7 @@ SolveOutcome AmrSystem<Dim>::solve_program_field_from_blocks_on_prepared_lane(
     unique_stages.reserve(stage_overrides.size());
     ExactContractBuilder request;
     request.text("pops.amr.program-field-solve")
-        .scalar(std::uint32_t{2})
+        .scalar(authenticated_initial_point ? std::uint32_t{3} : std::uint32_t{2})
         .scalar(std::int32_t{Dim})
         .text(provider_slot)
         .text(slot)
@@ -16777,6 +16798,9 @@ SolveOutcome AmrSystem<Dim>::solve_program_field_from_blocks_on_prepared_lane(
         .scalar(point.dt)
         .scalar(point.physical_time)
         .scalar(static_cast<std::uint64_t>(stage_overrides.size()));
+    if (authenticated_initial_point)
+      request.text("pops.amr.accepted-initial-field-point@1")
+          .scalar(runtime::PreparedAcceptedInitialFieldPointV1::contract_version);
     for (std::size_t block = 0; block < stage_overrides.size(); ++block) {
       const MultiFab<Dim>& live = p_->block_state(block, static_cast<std::size_t>(active_level));
       const MultiFab<Dim>* stage = stage_overrides[block];

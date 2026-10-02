@@ -214,6 +214,7 @@ api pops/physics/fluids/euler.hpp
 api pops/physics/inversion/inversion.hpp
 api pops/physics/inversion/variable_inversion.hpp
 sdk-support pops/runtime/accepted_halo_test_failure.hpp
+sdk-support pops/runtime/accepted_initial_field_point.hpp
 sdk-support pops/runtime/accelerator/prepared_stream_completion.hpp
 sdk-support pops/runtime/accelerator/prepared_stream_executor.hpp
 api pops/runtime/amr/amr_layout_transfer.hpp

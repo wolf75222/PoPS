@@ -462,12 +462,16 @@ inline int evaluate_faces(const PopsNumericalFluxApiV1& api, void* state,
   return api.evaluate_faces(state, &request, &result);
 }
 
-inline void validate_accepted_initial_ghost_point(const PopsLogicalTimeV1& point, std::uint32_t version) {
+inline void validate_accepted_initial_evaluation_point(const PopsLogicalTimeV1& point, std::uint32_t version) {
   validate_logical_time(point);
   if (version != 1 || point.tick != 0 || point.substep != 0 || point.stage != 0 ||
       point.fraction_numerator != 0 || point.fraction_denominator != 1 ||
       point.dt != 0.0 || std::signbit(point.dt))
-    throw std::invalid_argument("accepted initial ghost requires non-integrating initial point@1");
+    throw std::invalid_argument("accepted initial evaluation requires non-integrating initial point@1");
+}
+
+inline void validate_accepted_initial_ghost_point(const PopsLogicalTimeV1& point, std::uint32_t version) {
+  validate_accepted_initial_evaluation_point(point, version);
 }
 
 inline void require_initial_ghost_provider_lifecycle(const PopsAcceptedInitialGhostApiV1& initial,
