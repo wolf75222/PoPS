@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import numpy as np
-from tests.python.support.initial_field_ghost_native_oracle import check_observed, load_observed, DT, CONTRACT
+from tests.python.support.initial_field_ghost_native_oracle import check_observed, load_observed, checkpoint_primary_clock, DT, CONTRACT
 from tests.review.sol61_amr_full_carrier_offline import decode
 
 
@@ -29,6 +29,10 @@ def receive(directory, expected_pins):
         require(Path(name).name==name and type(digest) is str and len(digest)==64, "pin format differs")
         require(hashlib.sha256((directory/name).read_bytes()).hexdigest()==digest, "external export pin differs")
     provenance=json.loads((directory/'provenance.json').read_text())
+    checkpoint=Path(provenance['checkpoint']['path'])
+    require(checkpoint.parent.resolve()==directory.resolve() and checkpoint.name in expected_pins, 'checkpoint pin authority differs')
+    require(expected_pins[checkpoint.name]==provenance['checkpoint']['sha256'], 'checkpoint projection pin differs')
+    expected_clock=checkpoint_primary_clock(checkpoint)
     require(provenance['contract']==CONTRACT and provenance['potential_accessor_may_materialize'] is True, "provider observation scope differs")
     signature=provenance['component_signature']['inferred_boundary_expression']
     require(signature['schema']=='inferred-boundary-expression-component@1' and len(signature['expressions'])==2 and len(signature['dependencies']['fields'])==1 and not signature['dependencies']['states'], "inferred dependency contract differs")
@@ -63,7 +67,7 @@ def receive(directory, expected_pins):
                 state=valid[f'{level}-0']
                 canonical=state if state.shape==(2,size,size) else state.transpose(2,0,1)
                 require(values[:,yl-gyl:yh-gyl+1,xl-gxl:xh-gxl+1].tobytes()==canonical.view(np.uint64)[:,yl:yh+1,xl:xh+1].tobytes(), "carrier/valid state projection differs")
-        results[phase]=(check_observed(blob,[mask for phi,mask in fields],load_observed(directory,phase,image['ranks']),steps) if phase!='reloaded' else {'scope':'no new producer witness; restart State/Ghost/cache bits only'}) # Original composite F, FE, physical xmin/tangential-valid Ghost
+        results[phase]=(check_observed(blob,[mask for phi,mask in fields],load_observed(directory,phase,image['ranks']),steps,expected_clock=expected_clock) if phase!='reloaded' else {'scope':'no new producer witness; restart State/Ghost/cache bits only'}) # Original composite F, FE, physical xmin/tangential-valid Ghost
         snapshots[phase]=(blob,valid,field,metadata['native_metadata_repr'])
     absence=json.loads((directory/'reloaded-field-candidate-absence.json').read_text())
     require(absence=={'schema':'pops.amr.field-candidate-observation@1','observations':[]}, 'restart producer witness was inherited or recreated')

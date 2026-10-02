@@ -24,7 +24,7 @@ def candidate(steps,delta=0.):
         b.extend(np.full(int(size),2*(1+DT)**steps+delta,dtype='<f8').tobytes())
     rows=[]
     for level in (0,1):
-        rows.append(dict(schema='pops.amr.field-candidate-observation@1',status='producer-completed-consumer-preparation-completed',accepted_publication=False,provider_slot='slot',consumer_block='marker',consumer_level=level,owner_macro_step=steps,owner_time=float(steps*DT),configuration_identity='config',provider_identity='provider',plan_identity='plan',output_owner_identity='output',output_block='marker',output_key='phi',topology_epoch=0,materialization_generation=0,point=dict(clock='primary',tick=steps,level=level,substep=0,stage=0,fraction_numerator=0,fraction_denominator=1,dt=float(DT if steps else 0),physical_time=float(steps*DT),graph_identity='',rate_identity='',application_identity=''),carrier_bytes=bytes(b)))
+        rows.append(dict(schema='pops.amr.field-candidate-observation@1',status='producer-completed-consumer-preparation-completed',accepted_publication=False,provider_slot='slot',consumer_block='marker',consumer_level=level,owner_macro_step=steps,owner_time=float(steps*DT),configuration_identity='config',provider_identity='provider',plan_identity='plan',output_owner_identity='output',output_block='marker',output_key='phi',topology_epoch=0,materialization_generation=0,point=dict(clock='primary',tick=0,level=level,substep=0,stage=0,fraction_numerator=steps,fraction_denominator=1,dt=float(DT if steps else 0),physical_time=float(steps*DT),graph_identity='',rate_identity='',application_identity=''),carrier_bytes=bytes(b)))
     return [rows]
 
 @pytest.mark.parametrize('steps',(0,1))
@@ -56,3 +56,13 @@ def test_missing_rank_and_truncated_candidate_refused():
     with pytest.raises(AssertionError):check_observed(wire(),[m for a,m in fields(0)],[],0)
     rows=candidate(0);rows[0][0]['carrier_bytes']=rows[0][0]['carrier_bytes'][:-1]
     with pytest.raises(ValueError):check_observed(wire(),[m for a,m in fields(0)],rows,0)
+
+
+def test_external_primary_clock_and_empty_builder_context_are_required():
+    rows=candidate(1)
+    with pytest.raises(AssertionError):
+        check_observed(wire(steps=1),[m for a,m in fields(1)],rows,1,expected_clock='foreign.primary')
+    for key in ('graph_identity','rate_identity','application_identity'):
+        rows=candidate(1)
+        rows[0][0]['point'][key]='forged.context'
+        with pytest.raises(AssertionError):check_observed(wire(steps=1),[m for a,m in fields(1)],rows,1,expected_clock='primary')

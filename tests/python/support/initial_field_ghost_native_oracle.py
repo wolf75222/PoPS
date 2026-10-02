@@ -93,12 +93,13 @@ def original_residual(fields,state):
     return out
 
 
-def check_observed(blob, masks, rows_by_rank, steps):
+def check_observed(blob, masks, rows_by_rank, steps, *, expected_clock=None):
     """Full producer image consumed at Ghost point; cache getters are not inputs.
 
     Rows are real observer output in Native tests, synthetic only in offline unit tests.
     Every consumer invocation is checked independently across all source ranks.
     """
+    if expected_clock is not None: assert type(expected_clock) is str and expected_clock
     state_image=decode(np.frombuffer(blob,dtype=np.uint8))
     ranks=state_image['ranks']
     assert type(rows_by_rank) is list and len(rows_by_rank)==ranks
@@ -118,16 +119,17 @@ def check_observed(blob, masks, rows_by_rank, steps):
                 assert type(row[key]) is str and row[key]
             point=row['point']
             assert type(point) is dict and type(point['clock']) is str and point['clock']
+            if expected_clock is not None: assert point['clock']==expected_clock
             for key in ('tick','level','substep','stage','fraction_numerator','fraction_denominator'):
                 assert type(point[key]) is int and point[key]>=0
             assert point['level']==row['consumer_level'] and point['fraction_denominator']>0
             assert point['fraction_numerator']<=point['fraction_denominator']
             assert type(point['dt']) is float and point['dt']==(DT if steps else 0.) and not np.signbit(point['dt'])
             assert type(point['physical_time']) is float and point['physical_time']==steps*DT
-            if not steps:
-                assert point['tick']==point['substep']==point['stage']==point['fraction_numerator']==0 and point['fraction_denominator']==1
+            assert point['tick']==0 and point['substep']==0 and point['stage']==0
+            assert point['fraction_numerator']==steps and point['fraction_denominator']==1
             for key in ('graph_identity','rate_identity','application_identity'):
-                assert type(point[key]) is str
+                assert type(point[key]) is str and point[key]==''
             key=(row['provider_slot'],row['consumer_block'],row['consumer_level'])
             assert key not in bykey
             image=decode(np.frombuffer(row['carrier_bytes'],dtype=np.uint8))
@@ -154,6 +156,22 @@ def check_observed(blob, masks, rows_by_rank, steps):
             (xl,xh,gxl,gxh),(yl,yh,gyl,gyh)=patch['axes']
             values=np.asarray(patch['bits'],dtype=np.uint64).view(np.float64).reshape(gyh-gyl+1,gxh-gxl+1)
             fields[pkey[1]][0][yl:yh+1,xl:xh+1]=values[yl-gyl:yh-gyl+1,xl-gxl:xh-gxl+1]
+            if xl==0:
+                # Actual dependency packing reads x=-1 and tangential-valid y;
+                # no claim for corners or unconsumed Field halos.
+                assert gxl<=-1
+                producer=values[yl-gyl:yh-gyl+1,-1-gxl]
+                state_patch=expected[pkey]
+                (_,_,sgxl,sgxh),(_,_,sgyl,sgyh)=state_patch['axes']
+                assert sgxl<=-1
+                state_values=np.asarray(state_patch['bits'],dtype=np.uint64).view(np.float64).reshape(2,sgyh-sgyl+1,sgxh-sgxl+1)
+                consumed=state_values[1,yl-sgyl:yh-sgyl+1,-1-sgxl]
+                reconstructed=producer+1+steps*DT
+                assert np.isfinite(producer).all() and np.isfinite(consumed).all()
+                # Two physical additions plus three comparison/scale operations.
+                eps=np.finfo(np.float64).eps;gamma=5*eps/(1-5*eps)
+                scale=np.maximum(1,np.abs(producer)+1+steps*DT)
+                assert np.all(np.abs(consumed-reconstructed)<=gamma*scale)
         results.append({'consumer_level':key[2],'point':reference['point'],'math':check(blob,fields,steps)})
     return {'scope':'consumed-full-candidate; retained-cache excluded','invocations':results}
 
@@ -179,3 +197,13 @@ def load_observed(directory, phase, ranks):
             row['carrier_bytes']=blob;rows.append(row)
         result.append(rows)
     return result
+
+
+def checkpoint_primary_clock(path):
+    """Primary clock from retained CP temporal schedule, never observation self-pin."""
+    import json
+    with np.load(path,allow_pickle=False) as archive:
+        temporal=json.loads(str(archive['temporal_restart_state']))
+    clock=temporal['program_schedule']['primary_clock']
+    assert type(clock) is str and clock
+    return clock

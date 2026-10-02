@@ -7,7 +7,7 @@ import numpy as np
 import pops
 import pytest
 from tests.python.support.initial_field_ghost_native_case import build,DT
-from tests.python.support.initial_field_ghost_native_oracle import check_observed,load_observed,CONTRACT
+from tests.python.support.initial_field_ghost_native_oracle import check_observed,load_observed,checkpoint_primary_clock,CONTRACT
 from tests.python.integration.amr.test_public_evolving_accepted_halo import observe,publish,same
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -87,7 +87,7 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
         assert report.accepted_steps==1 and report.rejected_steps==0
         assert images['initial'][2][-1][:2]==(0.,0)
         assert images['accepted'][2][-1][:2]==(DT,1)
-        proofs={phase:check_observed(images[phase][0],[row[1] for row in images[phase][1]],load_observed(directory,phase,world.size),steps) for phase,steps in (('initial',0),('accepted',1))}
+        proofs={phase:check_observed(images[phase][0],[row[1] for row in images[phase][1]],load_observed(directory,phase,world.size),steps,expected_clock=checkpoint_primary_clock(checkpoint)) for phase,steps in (('initial',0),('accepted',1))}
         if world.rank==0:(directory/'math-proof.json').write_text(json.dumps(proofs,indent=2)+'\n')
     restarted=collective_call(world,bind)
     collective_call(world,lambda:restarted.restart(checkpoint))
