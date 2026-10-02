@@ -10,6 +10,18 @@ from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture,C
 from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step,layout_program_json_identity
 
 
+def test_parametric_native_fixture_keeps_initial_capture_before_attempt():
+    source=Path('tests/python/integration/runtime/test_atomic_cubature_parametric_refusal_runtime.py').read_text()
+    tree=ast.parse(source)
+    calls=[(node.lineno,ast.unparse(node.func)) for node in ast.walk(tree) if isinstance(node,ast.Call)]
+    save=min(line for line,name in calls if name=='save_phase')
+    attempt=min(line for line,name in calls if name=='execute_captured_step')
+    assert save<attempt
+    assert 'params={parameter:1.e308}' in source
+    assert "'prepared Cartesian path face tuple refused publication'" in source
+    assert "'native_stage_refusal_proved':False" in source
+
+
 def test_actual_wrapper_selects_exact_amr_partition_without_facade_dump(monkeypatch):
     # Genuine wrapper class with the repository's explicitly metadata-only components.
     # No shared library is loaded, no runtime or scientific receipt is fabricated.
