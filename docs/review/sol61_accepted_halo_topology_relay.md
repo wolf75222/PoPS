@@ -17,3 +17,5 @@ rtk proxy env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/mi
 ```
 
 Actual result 21 passed in 11.18s. New test emits the metadata from the actual public stationary Program and compares the exact typed primary-clock identity. This is Source emitter evidence, not a Native topology/MPI/rollback test. No Native/JIT/build/ENV mutation. Root owns final ABI8 integration with the independent Newton policy extension; this follow-up does not rewrite release ABI fields.
+
+Follow-up Source audit found the old topology-field point admission still required its synthetic clock even when no Field existed. The precise extension now accepts the installed primary only for the opted request and exact live accepted tick/time/root duration, retaining all prior stage/fraction/level checks and the default legacy rule. No guard is removed. This supplement must accompany the topology relay freeze.

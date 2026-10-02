@@ -16746,7 +16746,13 @@ std::vector<std::string> AmrSystem<Dim>::prepare_topology_field_order(
     const std::string_view expected_clock = reason == "restart_regrid"
                                                 ? "pops.amr.restart-regrid.accepted"
                                                 : "pops.amr.topology-rematerialization.accepted";
-    if (reason.empty() || accepted_point.clock != expected_clock || accepted_point.tick < 0 ||
+    const bool exact_requested_clock = requests_accepted_halo_preparation() &&
+        !p_->program.checkpoint_metadata_.primary_clock_identity.empty() &&
+        accepted_point.clock == p_->program.checkpoint_metadata_.primary_clock_identity &&
+        accepted_point.tick == p_->macro_step && accepted_point.physical_time == p_->accepted_time &&
+        accepted_point.dt == static_cast<double>(p_->program.last_dt_);
+    if (reason.empty() ||
+        (accepted_point.clock != expected_clock && !exact_requested_clock) || accepted_point.tick < 0 ||
         accepted_point.level != 0 || accepted_point.substep != 0 || accepted_point.stage != 0 ||
         accepted_point.stage_fraction.numerator != 0 ||
         accepted_point.stage_fraction.denominator != 1 || !std::isfinite(accepted_point.dt) ||
