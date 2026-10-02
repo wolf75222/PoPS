@@ -32,9 +32,11 @@ from tests.python.integration.mpi._compile_once import compile_resolved_plan_onc
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.atomic_native_capture import save_phase,execute_captured_step
+from tests.python.support.m16_explicit_native_capture import retain_provenance,persisted_capture
 
 pytestmark=[pytest.mark.compiler,pytest.mark.native_loader]
-SCHEMA='pops.program-affine-explicit-native-fixture@1'
+SCHEMA='pops.program-affine-explicit-native-fixture@2'
 DEGREE,N,DT,OMEGA=5,4,.125,16./3.
 INDICES=tuple((p,q) for q in range(DEGREE+1) for p in range(DEGREE+1-q))
 # Independent permutations of basis indices and actual State slot names.
@@ -125,29 +127,49 @@ def test_installed_program_explicit_monomial_binding(mode,tmp_path,record_proper
     resolved=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout))
     artifact=(collective_call(world,lambda:pops.compile(resolved)) if world is None else
               compile_resolved_plan_once(world,resolved,route='explicit-affine-'+mode,compile_artifact=pops.compile))
+    directory=collective_directory(world,tmp_path/'explicit-affine')
+    def root():return world is None or world.rank==0
+    record_property('explicit_affine_provenance',str(directory/'provenance.json'))
+    # Authenticate every component and the exact population partition before bind.
+    collective_call(world,lambda:retain_provenance(artifact,resolved,native,directory) if root() else None)
     subject=resolved.initial_condition_plan.bindings[0].subject
     runtime=collective_call(world,lambda:pops.bind(artifact,initial_values={subject:initial(mode)},
                 resources={'execution_context':artifact_execution_context(artifact)}))
-    directory=collective_directory(world,tmp_path/'explicit-affine')
-    before=capture(world,runtime)
-    report,failures=collective_attempt(world,lambda:pops.run(runtime,t_end=DT,max_steps=1,console=False))
-    after=capture(world,runtime)
-    # Save real observations before assertions, including rejected runs.
-    def persist():
-        if world is None or world.rank==0:
-            for phase,image in (('before',before),('after',after)):
-                np.save(directory/(phase+'.npy'),image[0],allow_pickle=False)
-                (directory/(phase+'.carriers')).write_bytes(image[1])
-            receipt={'schema':SCHEMA,'mode':mode,'degree':DEGREE,'dimension':2,
-                'ranks':1 if world is None else int(world.size),'source':str(Path(pops.__file__).resolve()),
-                'native':{'path':str(Path(native.__file__).resolve()),'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},
-                'basis':BASIS.to_data(),'binding':[[list(i),BINDING[i]] for i in INDICES],
-                'clock_before':before[2],'clock_after':after[2],'failures':failures,
-                'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(directory.iterdir()) if p.is_file()}}
-            (directory/'receipt.json').write_text(json.dumps(receipt,sort_keys=True,allow_nan=False)+'\n')
-    collective_call(world,persist)
+    attempts=[];phases=[];capture_failures=[];images={}
+    def persist_receipt(status):
+        if not root():return
+        receipt={'schema':SCHEMA,'mode':mode,'degree':DEGREE,'dimension':2,
+            'ranks':1 if world is None else int(world.size),'status':status,
+            'basis':BASIS.to_data(),'binding':[[list(i),BINDING[i]] for i in INDICES],
+            'phases':list(phases),'clocks':{phase:images[phase][2] for phase in phases},
+            'attempts':attempts,'capture_failures':capture_failures,
+            'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(directory.iterdir())
+                     if p.is_file() and p.name!='receipt.json'},'root_scientific_approval':False}
+        (directory/'receipt.json').write_text(json.dumps(receipt,sort_keys=True,allow_nan=False)+'\n')
+    def saved(phase,image):
+        images[phase]=image;phases.append(phase)
+        if root():save_phase(directory,phase,image)
+        persist_receipt('partial-captures')
+    def failed(phase,failures):
+        capture_failures.append({'phase':phase,'failures':failures})
+        persist_receipt('capture-failed')
     record_property('explicit_affine_receipt',str(directory/'receipt.json'))
+    before=persisted_capture(world,lambda:capture(world,runtime),
+        lambda image:saved('before',image),lambda failures:failed('before',failures))
+    def on_attempt(failures):
+        attempts.append({'failures':failures})
+        persist_receipt('native-run-failed' if any(failures) else 'native-run-returned')
+    def after_capture():
+        return persisted_capture(world,lambda:capture(world,runtime),lambda image:saved('after',image),
+                                 lambda failures:failed('after',failures))
+    def on_after(image,failed_run):
+        persist_receipt('native-run-failed-captured' if failed_run else 'captures-complete')
+    outcome,failures=collective_attempt(world,lambda:execute_captured_step(world,
+        lambda:pops.run(runtime,t_end=DT,max_steps=1,console=False),after_capture,on_attempt,on_after))
+    report=None if outcome is None else outcome[0]
+    after=images.get('after')
     with collective_check(world):
+        assert after is not None and not capture_failures,capture_failures
         np.testing.assert_allclose(before[0].reshape((len(NAMES),N,N)),initial(mode),rtol=0,atol=0)
         if mode=='success':
             assert not any(failures) and report.accepted_steps==1
