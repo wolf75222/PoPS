@@ -73,9 +73,13 @@ def build_case(order: tuple[tuple[int, int], ...], *, path_realization="quadratu
     slot = {pq: k for k, pq in enumerate(order)}
     canonical = tuple(state[slot[pq]] for pq in INDICES)
     physical = fan_li15_expressions(canonical)
+    covectors = {x_axis: (1, 0), y_axis: (0, 1)}
+    directional = ({axis: physical.directional_flux(g) for axis, g in covectors.items()}
+                   if path_realization == "normalized-analytic" else
+                   {x_axis: physical.x, y_axis: physical.y})
     flux = model.flux("hermite_transport", state=state, frame=frame,
-                      components={x_axis: tuple(physical.x[INDICES.index(pq)] for pq in order),
-                                  y_axis: tuple(physical.y[INDICES.index(pq)] for pq in order)})
+                      components={x_axis: tuple(directional[x_axis][INDICES.index(pq)] for pq in order),
+                                  y_axis: tuple(directional[y_axis][INDICES.index(pq)] for pq in order)})
 
     def physical_matrix(direction):
         rows = physical.directional_nonconservative_matrix(direction)
@@ -104,7 +108,7 @@ def build_case(order: tuple[tuple[int, int], ...], *, path_realization="quadratu
     # optimized variant composes its stable arithmetic in the Python library.
     path = (SymbolicPath(product, frame=frame, quadrature=GAUSS4, speed=whole_path_speed)
             if path_realization == "quadrature" else
-            fan_li15_path(product, frame=frame, covectors={x_axis: (1, 0), y_axis: (0, 1)},
+            fan_li15_path(product, frame=frame, covectors=covectors,
                           basis=CartesianMonomialBasis(order)))
     rate = model.rate("complete_fan_li_balance", equation=ddt(state) == -div(flux) - product)
 
