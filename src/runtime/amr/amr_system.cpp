@@ -3596,6 +3596,12 @@ struct AmrSystem<Dim>::Impl {
   // Diagnostic-only state deliberately excluded from all physical rollback snapshots.
   bool accepted_halo_test_failure_armed = false;
   AcceptedHaloTestFailureReceipt accepted_halo_test_failure;
+  bool field_candidate_observation_enabled = false;
+  using FieldObservationKey = std::tuple<std::string, std::string, std::size_t>;
+  // Diagnostic storage is excluded from AcceptedSnapshot and numeric checkpoints.
+  std::map<FieldObservationKey, FieldCandidateObservation> field_candidate_observations;
+  std::map<FieldObservationKey, FieldCandidateObservation> staged_field_candidate_observations;
+
   const runtime::multiblock::BoundaryEvaluationPoint* active_accepted_halo_point = nullptr;
 
   struct AcceptedSnapshot {
@@ -3888,6 +3894,10 @@ struct AmrSystem<Dim>::Impl {
     }
 
     void restore(Impl& owner) {
+      // Producer diagnostics are not accepted state. Any enclosing rollback invalidates
+      // them, including same-time bootstrap/retry collisions and post-Halo publication failure.
+      owner.field_candidate_observations.clear();
+      owner.staged_field_candidate_observations.clear();
       if (!owner.multiblock_hierarchy) {
         // Assembly-time artifact rollback has no materialized carrier or execution lane. Its outer
         // installer already owns rank consensus; this branch restores only locally prepared
@@ -9946,6 +9956,59 @@ struct AmrSystem<Dim>::Impl {
         }
   }
 
+  void capture_field_candidate_observation(const std::string& slot, std::size_t block,
+      std::size_t level, const runtime::multiblock::BoundaryEvaluationPoint& point) {
+    if (!field_candidate_observation_enabled) return;
+    using namespace runtime::checkpoint;
+    const auto& lane = *prepared_hierarchy->lane;
+    std::exception_ptr error;
+    try {
+      auto& plan = field_plans.at(slot);
+      if (!plan.accepted_halo_producer_point || *plan.accepted_halo_producer_point != point ||
+          !plan.candidate_ready || !plan.materialized_for(*engine))
+        throw std::invalid_argument("Field candidate observation lacks its exact executed producer point");
+      FieldCandidateObservation witness;
+      witness.provider_slot = slot; witness.consumer_block = blocks.at(block).name;
+      witness.consumer_level = static_cast<int>(level); witness.point = point;
+      witness.owner_macro_step = macro_step; witness.owner_time = accepted_time;
+      witness.provider_identity = plan.provider_identity; witness.plan_identity = plan.plan_identity;
+      witness.output_owner_identity = plan.output_owner_identity;
+      witness.output_block = plan.output_block; witness.output_key = plan.output_key;
+      witness.topology_epoch = engine->topology_epoch();
+      witness.materialization_generation = engine->materialization_generation();
+      witness.configuration_identity = prefixed_sha256(
+          "pops.amr.field-provider-configuration.v1:sha256:",
+          exact_field_plan_contract(slot, plan, false));
+      StateCarrierArchive<Dim> image;
+      image.real_bits = sizeof(RealBits) * 8; image.ranks = lane.size(); image.shard = lane.rank();
+      image.levels = plan.accepted_potential.size(); image.blocks = {slot};
+      for (std::size_t image_level = 0; image_level < image.levels; ++image_level) {
+        const auto& field = plan.prepared_solver->candidate_level(static_cast<int>(image_level));
+        for (std::size_t local = 0; local < field.local_size(); ++local) {
+          const auto& fab = field.fab(local);
+          StateCarrierPatch<Dim> row;
+          row.level = image_level; row.patch = field.global_index(local); row.components = field.ncomp();
+          row.owner = field.distribution().replicated() ? -1 : lane.rank();
+          for (int d = 0; d < Dim; ++d) {
+            row.lo[d] = fab.box().lo[d]; row.hi[d] = fab.box().hi[d];
+            row.grown_lo[d] = fab.grown_box().lo[d]; row.grown_hi[d] = fab.grown_box().hi[d];
+          }
+          auto host = fab.create_host_mirror(); fab.copy_to_host(host);
+          row.bits.reserve(host.size());
+          for (std::size_t value = 0; value < host.size(); ++value)
+            row.bits.push_back(std::bit_cast<RealBits>(host(value)));
+          image.patches.push_back(std::move(row));
+        }
+      }
+      Kokkos::fence();
+      witness.carrier_bytes = encode_state_carriers(image);
+      staged_field_candidate_observations.insert_or_assign(
+          FieldObservationKey{slot, witness.consumer_block, level}, std::move(witness));
+    } catch (...) { error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "Field candidate observation capture failed collectively");
+  }
+
   void prepare_accepted_halo_field_dependencies(
       std::size_t block, std::size_t level,
       const runtime::multiblock::BoundaryEvaluationPoint& point) {
@@ -10024,6 +10087,10 @@ struct AmrSystem<Dim>::Impl {
         if (lane.size() == 1 && error) std::rethrow_exception(error);
         throw std::runtime_error("accepted halo Field temporary copy/fence failed collectively");
       }
+      // Exact full candidate copies and their fence have succeeded on every rank. This
+      // deep diagnostic capture precedes Ghost and never accepts/publishes the Field cache.
+      try { capture_field_candidate_observation(slot, block, level, point); }
+      catch (...) { discard_candidate(); throw; }
       error = {};
       try {
         for (auto& publication : plan.candidate_provider_publications)
@@ -14083,12 +14150,71 @@ AcceptedHaloTestFailureReceipt AmrSystem<Dim>::accepted_halo_test_failure_receip
 }
 
 template <int Dim>
+void AmrSystem<Dim>::enable_field_candidate_observation(std::uint32_t version) {
+  const auto& lane = p_->require_package_assembly_lane();
+  std::exception_ptr error;
+  std::string contract;
+  try {
+    if (version != 1 || !requests_accepted_halo_preparation() ||
+        p_->automatic_bootstrap_complete || p_->macro_step != 0 ||
+        p_->accepted_transaction_active || step_transaction_depth() != 0 ||
+        p_->field_candidate_observation_enabled)
+      throw std::invalid_argument("field-candidate-observation@1 activation requires an idle pre-bootstrap owner");
+    ExactContractBuilder exact;
+    exact.text("pops.amr.field-candidate-observation@1").scalar(version)
+        .scalar(p_->cfg.accepted_halo_contract_version);
+    contract = std::move(exact).release();
+  } catch (...) { error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "Field candidate observation activation failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"field-candidate-observation", contract}}, lane))
+    throw std::invalid_argument("Field candidate observation activation differs between ranks");
+  p_->field_candidate_observation_enabled = true;
+}
+
+template <int Dim>
+std::vector<FieldCandidateObservation> AmrSystem<Dim>::field_candidate_observations() const {
+  p_->require_no_native_package_callback("field_candidate_observations");
+  if (!p_->engine || !p_->prepared_hierarchy || p_->bootstrap_transaction ||
+      p_->accepted_transaction_active || step_transaction_depth() != 0 || p_->restart_transaction)
+    throw std::invalid_argument("Field candidate observation requires an idle materialized owner");
+  if (!p_->field_candidate_observation_enabled)
+    throw std::invalid_argument("field-candidate-observation@1 is not enabled");
+  std::vector<FieldCandidateObservation> result;
+  result.reserve(p_->field_candidate_observations.size());
+  for (const auto& [key, witness] : p_->field_candidate_observations) {
+    (void)key;
+    const auto found = p_->field_plans.find(witness.provider_slot);
+    if (found == p_->field_plans.end())
+      throw std::invalid_argument("Field candidate observation provider no longer exists");
+    const auto& plan = found->second;
+    if (witness.provider_identity != plan.provider_identity || witness.plan_identity != plan.plan_identity ||
+        witness.output_owner_identity != plan.output_owner_identity ||
+        witness.output_block != plan.output_block || witness.output_key != plan.output_key ||
+        witness.configuration_identity != prefixed_sha256(
+            "pops.amr.field-provider-configuration.v1:sha256:",
+            Impl::exact_field_plan_contract(witness.provider_slot, plan, false)))
+      throw std::invalid_argument("Field candidate observation has stale provider/configuration authority");
+    if (witness.topology_epoch != p_->engine->topology_epoch() ||
+        witness.materialization_generation != p_->engine->materialization_generation() ||
+        witness.owner_time != p_->accepted_time || witness.owner_macro_step != p_->macro_step ||
+        witness.point.physical_time != witness.owner_time)
+      throw std::invalid_argument("Field candidate observation has stale topology/materialization authority");
+    result.push_back(witness);
+  }
+  return result;
+}
+
+template <int Dim>
 void AmrSystem<Dim>::prepare_accepted_halo_candidates(
     std::vector<std::vector<MultiFab<Dim>>>& candidates,
     const std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>>& points) {
   if (!requests_accepted_halo_preparation()) return;
   p_->ensure_engine();
   const auto& lane = *p_->prepared_hierarchy->lane;
+  p_->staged_field_candidate_observations.clear();
+  // An old diagnostic must never masquerade as evidence for a failed new invocation.
+  p_->field_candidate_observations.clear();
   std::vector<const std::vector<MultiFab<Dim>>*> prior, bindings;
   std::vector<std::vector<MultiFab<Dim>>> accepted_backup;
   std::map<std::string, std::vector<MultiFab<Dim>>> field_backup;
@@ -14301,10 +14427,12 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
       }
   } catch (...) {
     const auto preparation_error = std::current_exception();
+    p_->staged_field_candidate_observations.clear();
     restore_accepted();
     std::rethrow_exception(preparation_error);
   }
   restore_accepted();
+  p_->field_candidate_observations.swap(p_->staged_field_candidate_observations);
 }
 
 template <int Dim>
@@ -18827,6 +18955,13 @@ void AmrSystem<Dim>::step(double dt) {
 template <int Dim>
 void AmrSystem<Dim>::complete_program_step_() {
   p_->program.refresh_hierarchy_state("AmrSystem::step");
+  // Cadence completion has advanced the owner cursor. Authenticate it separately from
+  // each consumer's immutable clock/tick; no consumer tick is interpreted as a macro counter.
+  for (auto& [key, witness] : p_->field_candidate_observations) {
+    (void)key;
+    witness.owner_time = p_->accepted_time;
+    witness.owner_macro_step = p_->macro_step;
+  }
   if (!p_->tagging_spec || p_->cfg.regrid_every == 0 || p_->macro_step % p_->cfg.regrid_every != 0)
     return;
   const auto history_sources = p_->prepare_history_hierarchy_images();
@@ -20215,12 +20350,16 @@ template <int Dim>
 void AmrSystem<Dim>::seed_program_params(int block, const std::vector<double>& defaults) {
   p_->require_no_native_package_callback("seed_program_params");
   p_->program.seed_params(block, defaults);
+  p_->field_candidate_observations.clear();
+  p_->staged_field_candidate_observations.clear();
 }
 
 template <int Dim>
 void AmrSystem<Dim>::set_program_params(int block, const std::vector<double>& values) {
   p_->require_no_native_package_callback("set_program_params");
   p_->program.set_params(block, values, "AmrSystem");
+  p_->field_candidate_observations.clear();
+  p_->staged_field_candidate_observations.clear();
 }
 
 template <int Dim>
@@ -20445,6 +20584,9 @@ void AmrSystem<Dim>::set_clock(double accepted_time, int macro_step) {
   if (!std::isfinite(accepted_time) || macro_step < 0)
     throw std::invalid_argument("AmrSystem clock requires finite time and non-negative step");
   p_->program.consume_cadence_clock_restore(accepted_time, macro_step, "AmrSystem");
+  // Clock restoration is not producer execution, even when restored numbers coincide.
+  p_->field_candidate_observations.clear();
+  p_->staged_field_candidate_observations.clear();
   p_->accepted_time = accepted_time;
   p_->macro_step = macro_step;
 }
@@ -23435,6 +23577,8 @@ template bool AmrSystem<kNativeDimension>::requests_accepted_halo_preparation() 
 template std::vector<std::vector<std::string>> AmrSystem<kNativeDimension>::checkpoint_accepted_halo_contract() const;
 template void AmrSystem<kNativeDimension>::arm_accepted_halo_test_failure(const AcceptedHaloTestFailureRequest&);
 template AcceptedHaloTestFailureReceipt AmrSystem<kNativeDimension>::accepted_halo_test_failure_receipt() const;
+template void AmrSystem<kNativeDimension>::enable_field_candidate_observation(std::uint32_t);
+template std::vector<FieldCandidateObservation> AmrSystem<kNativeDimension>::field_candidate_observations() const;
 template void AmrSystem<kNativeDimension>::prepare_accepted_halo_candidates(
     std::vector<std::vector<MultiFab<kNativeDimension>>>&,
     const std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>>&);

@@ -72,6 +72,20 @@ struct AmrProgramHistoryRemapDescriptor;
 
 namespace pops {
 
+/// Diagnostic producer witness, not an accepted Field publication or numeric checkpoint member.
+/// carrier_bytes is a rank-local POPSCAR1 archive with one qualified provider and every level.
+struct FieldCandidateObservation {
+  std::uint32_t version = 1;
+  std::string provider_slot, consumer_block, configuration_identity;
+  std::string provider_identity, plan_identity, output_owner_identity, output_block, output_key;
+  int consumer_level = 0;
+  std::int64_t owner_macro_step = 0;
+  double owner_time = 0.0;
+  std::uint64_t topology_epoch = 0, materialization_generation = 0;
+  runtime::multiblock::BoundaryEvaluationPoint point;
+  std::vector<std::uint8_t> carrier_bytes;
+};
+
 template <int Dim>
 class FieldNullspaceProvider;
 struct FieldLogicalTimePoint;
@@ -448,6 +462,11 @@ class AmrSystem {
   // Private diagnostic test seam. Arm collectively at an accepted, inspectable owner.
   POPS_EXPORT void arm_accepted_halo_test_failure(const AcceptedHaloTestFailureRequest& request);
   POPS_EXPORT AcceptedHaloTestFailureReceipt accepted_halo_test_failure_receipt() const;
+  /// Private opt-in observation capability @1. Collective activation precedes initial bootstrap.
+  POPS_EXPORT void enable_field_candidate_observation(std::uint32_t version);
+  /// Read-only rank-local last witnesses per (slot, consumer block, consumer level). No solve.
+  POPS_EXPORT std::vector<FieldCandidateObservation> field_candidate_observations() const;
+
 
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);

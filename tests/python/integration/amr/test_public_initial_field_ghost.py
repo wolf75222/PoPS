@@ -16,7 +16,7 @@ from tests.python.support.collective_checks import collective_call,collective_ch
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_native_cache,tmp_path,record_property):
+def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_native_cache,tmp_path,record_property,monkeypatch):
     del isolated_native_cache
     from pops._native_selector import select_native_dimension
     native=select_native_dimension(2);world=native.mpi_world()
@@ -32,6 +32,14 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
         assert {i['name'] for i in evidence['interfaces']}=={'ghost_boundary','accepted_initial_ghost'}
     artifact=compile_resolved_plan_once(world,plan,route=CONTRACT,compile_artifact=pops.compile)
     context=collective_call(world,lambda:artifact_execution_context(artifact))
+    # Private, explicit producer observation installed before the genuine Native finalizer.
+    # This wrapper neither solves nor replaces preparation; old binaries fail capability lookup.
+    from pops.runtime._amr_bootstrap_execution import NativeAMRBootstrapConsumer
+    original_finalize=NativeAMRBootstrapConsumer.finalize_bootstrap
+    def observing_finalize(owner):
+        collective_call(world,lambda:owner._engine._s._enable_field_candidate_observation(1))
+        return original_finalize(owner)
+    monkeypatch.setattr(NativeAMRBootstrapConsumer,'finalize_bootstrap',observing_finalize)
     def bind():return pops.bind(artifact,resources={'execution_context':context})
     runtime=collective_call(world,bind)
     directory=collective_directory(world,tmp_path/'initial-field-ghost')
@@ -41,6 +49,12 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
     images={};field_images={}
     def capture(phase):
         image=observe(world,runtime);publish(world,directory,phase,image)
+        if phase in ('initial','accepted'):
+            # Freeze the actual full producer image before every potential getter observation.
+            witness=collective_call(world,runtime._executor._s._field_candidate_observations)
+            from tests.python.support.field_candidate_observation import save_rank_observations
+            collective_call(world,lambda:save_rank_observations(directory,phase,world.rank,witness))
+
         # Observe the const native manifest before the potential accessor can materialize a Field.
         before_manifest=collective_call(world,runtime._executor._s.field_provider_checkpoint_manifest)
         slots=collective_call(world,runtime.field_provider_slots)
@@ -78,7 +92,9 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
     restarted=collective_call(world,bind)
     collective_call(world,lambda:restarted.restart(checkpoint))
     runtime=restarted;capture('reloaded')
+    reload_witness=collective_call(world,runtime._executor._s._field_candidate_observations)
     with collective_check(world):
+        assert reload_witness==[], 'restart must not recreate or inherit a producer witness'
         same(images['accepted'],images['reloaded'])
         for old,new in zip(field_images['accepted'],field_images['reloaded'],strict=True):
             for a,b in zip(old,new,strict=True):

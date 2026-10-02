@@ -1623,6 +1623,50 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("_arm_accepted_halo_test_failure", &AmrSystem::arm_accepted_halo_test_failure,
            py::arg("request"))
       .def("_accepted_halo_test_failure_receipt", &AmrSystem::accepted_halo_test_failure_receipt)
+      .def("_enable_field_candidate_observation", [](AmrSystem& s, py::handle version) {
+        // Malformed local values enter the same Native preflight vote as valid peers;
+        // never throw on one Python rank while another enters the activation collective.
+        std::uint32_t parsed = 0;
+        if (PyLong_CheckExact(version.ptr()) && !PyBool_Check(version.ptr())) {
+          const auto value = PyLong_AsUnsignedLongLong(version.ptr());
+          if (PyErr_Occurred()) PyErr_Clear();
+          else if (value <= UINT32_MAX) parsed = static_cast<std::uint32_t>(value);
+        }
+        s.enable_field_candidate_observation(parsed);
+      }, py::arg("version"))
+      .def("_field_candidate_observations", [](const AmrSystem& s) {
+        py::list result;
+        for (const auto& witness : s.field_candidate_observations()) {
+          py::dict row, point;
+          row["schema"] = "pops.amr.field-candidate-observation@1";
+          row["status"] = "producer-completed-consumer-preparation-completed";
+          row["accepted_publication"] = false;
+          row["provider_slot"] = witness.provider_slot;
+          row["consumer_block"] = witness.consumer_block;
+          row["consumer_level"] = witness.consumer_level;
+          row["owner_macro_step"] = witness.owner_macro_step; row["owner_time"] = witness.owner_time;
+          row["configuration_identity"] = witness.configuration_identity;
+          row["provider_identity"] = witness.provider_identity; row["plan_identity"] = witness.plan_identity;
+          row["output_owner_identity"] = witness.output_owner_identity;
+          row["output_block"] = witness.output_block; row["output_key"] = witness.output_key;
+          row["topology_epoch"] = witness.topology_epoch;
+          row["materialization_generation"] = witness.materialization_generation;
+          point["clock"] = witness.point.clock; point["tick"] = witness.point.tick;
+          point["level"] = witness.point.level; point["substep"] = witness.point.substep;
+          point["stage"] = witness.point.stage;
+          point["fraction_numerator"] = witness.point.stage_fraction.numerator;
+          point["fraction_denominator"] = witness.point.stage_fraction.denominator;
+          point["dt"] = witness.point.dt; point["physical_time"] = witness.point.physical_time;
+          point["graph_identity"] = witness.point.graph_identity;
+          point["rate_identity"] = witness.point.rate_identity;
+          point["application_identity"] = witness.point.application_identity;
+          row["point"] = std::move(point);
+          row["carrier_bytes"] = py::bytes(reinterpret_cast<const char*>(witness.carrier_bytes.data()),
+                                           witness.carrier_bytes.size());
+          result.append(std::move(row));
+        }
+        return result;
+      })
       .def("checkpoint_tag_selection_contract", &AmrSystem::checkpoint_tag_selection_contract)
       .def("checkpoint_temporal_relations", &AmrSystem::checkpoint_temporal_relations)
       .def("set_temporal_relations", &AmrSystem::set_temporal_relations, py::arg("numerators"),
