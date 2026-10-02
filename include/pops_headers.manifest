@@ -94,6 +94,7 @@ test-only pops/numerics/elliptic/interface/elliptic_interface.hpp
 api pops/numerics/elliptic/interface/elliptic_problem.hpp
 api pops/numerics/elliptic/interface/elliptic_solver.hpp
 api pops/numerics/elliptic/interface/field_boundary_kernel.hpp
+api pops/numerics/elliptic/interface/field_newton_convergence_consensus.hpp
 api pops/numerics/elliptic/interface/field_newton_krylov.hpp
 api pops/numerics/elliptic/interface/full_residual_basis_lu.hpp
 api pops/numerics/elliptic/interface/field_nonlinear.hpp
