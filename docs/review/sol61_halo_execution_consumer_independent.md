@@ -47,3 +47,36 @@ Pending author's next gel: replay all24 counter-probes against that exact frozen
 source and affected existing suites. No approval on baseline e078.
 Reproduction: env -u PYTHONPATH pops interpreter, explicit private WT/python,
 pytest tests/review/test_sol61_halo_execution_consumer_independent.py.
+
+
+## Final review: closed Source
+
+Exact author chain f1b32ede15f5f4b0b2283c96fe94d8223903a41c +
+69ec8e3f6fd06dad20b8d4c2b27a49f2f61e754c, both replayed in this private
+review branch while preserving baseline failure probes. The first final pass on
+f1b correctly closed the initial24 cases, then found two int64-overflow ratios
+and absent runtime dimension still admitted (28PASS3FAIL1.84s with added probes).
+The author follow-up closes those without concurrent reviewer production edits.
+
+Final cohort:245PASS59.95s, zero skip:209 affected author tests plus36 independent.
+Native dimension is derived from the genuine normalized NativeSpatialLayout in
+the Source installer seam. New negatives include signed int64 wire overflow,
+missing/bool/out-of-range dimension, non-reduced ratios and disagreement with
+to_data authority. Reused-dict protocol drift is detected; installed halo data
+is detached and read-only. INT64_MAX numerator with denominators1 and MAX-1
+is admitted at the setter-spy boundary only, without scheduling/allocating an
+astronomical hierarchy. No artificial numeric limit or simulation is introduced.
+
+All validation precedes authority mutation and Native config construction. The
+Native hierarchy count is bounded before synchronous relation comprehension.
+Exact default v2 and opt-in v3 successes remain; checkpoint schemas8/9 reject
+noninteger versions and closed effect/point/component/extent-row corruptions.
+No further blocker identified within this reviewed execution-consumer scope.
+
+Reproduce using the private pops Source path inserted before importing pytest:
+pytest -q --tb=short tests/review/test_sol61_halo_execution_consumer_independent.py
+plus the eight affected author modules listed in sol61_amr_execution_v3_consumers.md.
+JUnit /tmp/sol61-halo-69ec-independent-final.xml and Source pins are recorded in
+sol61_halo_execution_consumer_independent.json. This is Source readiness only;
+ROOT must execute the true immutable SDK public bind/run and restart/rollback.
+No Native, SDK, ENV or Main was written by this reviewer.

@@ -28,7 +28,7 @@ def install(data, plan, monkeypatch):
     monkeypatch.setattr(authorities, "_install_boundary_authorities", lambda *_: calls.append("boundary"))
     monkeypatch.setattr(authorities, "_install_amr_provider_authorities", lambda *_: calls.append("providers"))
     # Real resolved layout/hierarchy/execution; omit bootstrap at this isolated seam.
-    projected = SimpleNamespace(artifact=SimpleNamespace(layout_plan=plan.layout_plan, plan=plan),
+    projected = SimpleNamespace(artifact=SimpleNamespace(layout_plan=plan.layout_plan, plan=plan, resolved_dimension=plan.layout_plan.layouts[0].native_spatial_layout.dimension),
         amr_execution=SimpleNamespace(runtime_execution_data=lambda: deepcopy(data)),
         resolved_hierarchy=plan.resolved_hierarchy, bootstrap_plan=None)
     engine = SimpleNamespace(set_temporal_relations=lambda *args: calls.append(("relations", args)))
@@ -105,3 +105,68 @@ def test_checkpoint_halo_closed_point_extent_contract(attack):
     elif attack == "extra-row": contract["accepted_halo"].append(row.copy())
     payload["amr_accepted_contract"] = np.array(json.dumps(contract))
     with pytest.raises(TypeError): _decode_contract(payload)
+
+
+@pytest.mark.parametrize("part", ("numerator", "denominator"))
+def test_native_int64_bound_precedes_authority_mutation(genuine_plan, monkeypatch, part):
+    data = deepcopy(genuine_plan.amr_execution.to_data())
+    data["mode"] = "subcycled"
+    ratio = {"numerator":1 << 63, "denominator":1 if part == "numerator" else 1 << 63}
+    data["relations"] = [{"parent_level":0,"child_level":1,"temporal_ratio":ratio,"remainder_policy":"integral_only"}]
+    calls, engine, projected = install(data, genuine_plan, monkeypatch)
+    with pytest.raises((ValueError,OverflowError)):
+        authorities.install_runtime_authorities(engine, projected)
+    assert calls == []
+
+
+def test_runtime_protocol_snapshot_and_detached_halo(genuine_plan, monkeypatch):
+    from pops.amr._execution_contract import runtime_execution_data
+    data = deepcopy(genuine_plan.amr_execution.to_data())
+    def drift():
+        data["accepted_halo"]["cells"] = 1 if data["accepted_halo"]["cells"] == 2 else 2
+        return data
+    with pytest.raises(TypeError):
+        runtime_execution_data(SimpleNamespace(runtime_execution_data=drift), dimension=2)
+    calls, engine, projected = install(genuine_plan.amr_execution.to_data(), genuine_plan, monkeypatch)
+    original = deepcopy(genuine_plan.amr_execution.to_data())
+    projected.amr_execution = SimpleNamespace(runtime_execution_data=lambda: original)
+    authorities.install_runtime_authorities(engine, projected)
+    original["accepted_halo"]["cells"] = 99
+    assert engine._amr_execution_authority["accepted_halo"]["cells"] == 1
+    with pytest.raises(TypeError): engine._amr_execution_authority["accepted_halo"]["cells"] = 9
+
+
+@pytest.mark.parametrize("dimension", (None, True, 0, 4))
+def test_runtime_dimension_is_mandatory(genuine_plan, monkeypatch, dimension):
+    calls, engine, projected = install(genuine_plan.amr_execution.to_data(), genuine_plan, monkeypatch)
+    projected.artifact.resolved_dimension = dimension
+    with pytest.raises((TypeError,ValueError)):
+        authorities.install_runtime_authorities(engine, projected)
+    assert calls == []
+
+
+@pytest.mark.parametrize("ratio", ((2,2),(2,4)))
+def test_noncanonical_ratio_refuses_before_mutation(genuine_plan, monkeypatch, ratio):
+    data = deepcopy(genuine_plan.amr_execution.to_data())
+    data["mode"] = "subcycled"
+    data["relations"] = [{"parent_level":0,"child_level":1,"temporal_ratio":{"numerator":ratio[0],"denominator":ratio[1]},"remainder_policy":"integral_only"}]
+    calls, engine, projected = install(data, genuine_plan, monkeypatch)
+    with pytest.raises(ValueError): authorities.install_runtime_authorities(engine, projected)
+    assert calls == []
+
+
+def test_declared_execution_and_runtime_projection_agree(genuine_plan, monkeypatch):
+    calls, engine, projected = install(genuine_plan.amr_execution.to_data(), genuine_plan, monkeypatch)
+    projected.amr_execution.to_data = AMRExecution.synchronous().to_data
+    with pytest.raises(ValueError): authorities.install_runtime_authorities(engine, projected)
+    assert calls == []
+
+
+@pytest.mark.parametrize("denominator", (1, (1 << 63)-2))
+def test_int64_boundary_admission_without_any_partition_allocation(genuine_plan, monkeypatch, denominator):
+    data = deepcopy(genuine_plan.amr_execution.to_data())
+    data["mode"] = "subcycled"
+    data["relations"] = [{"parent_level":0,"child_level":1,"temporal_ratio":{"numerator":(1 << 63)-1,"denominator":denominator},"remainder_policy":"explicit_final_substep"}]
+    calls, engine, projected = install(data, genuine_plan, monkeypatch)
+    authorities.install_runtime_authorities(engine, projected)
+    assert calls[2] == ("relations", ([(1 << 63)-1], [denominator], ["explicit_final_substep"]))

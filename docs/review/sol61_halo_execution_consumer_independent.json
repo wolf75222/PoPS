@@ -1,0 +1,24 @@
+{
+  "schema": "sol61.halo-execution-consumer-independent-source@1",
+  "author_commits": [
+    "f1b32ede15f5f4b0b2283c96fe94d8223903a41c",
+    "69ec8e3f6fd06dad20b8d4c2b27a49f2f61e754c"
+  ],
+  "tests": 245,
+  "independent_tests": 36,
+  "elapsed_seconds": 59.95,
+  "skips": 0,
+  "source_only": true,
+  "native_executed": false,
+  "xml": {
+    "path": "/tmp/sol61-halo-69ec-independent-final.xml",
+    "sha256": "fa45574ef6b2be6ff26a4259c9cdd33cc613817b1d957b0839aec43a31a51b4a"
+  },
+  "files": {
+    "python/pops/amr/_execution_contract.py": "316044a29f9068a385d56d06a41780a5b4d4b3d1a29334b632afe865696b4869",
+    "python/pops/runtime/_runtime_authorities.py": "e61e8ef24dd7a84456c685f418a3be37d06c7a377b61a43718314c00e20f4b54",
+    "python/pops/runtime/_amr_bind_lowering.py": "6c1980f5885f64f0248d135f02030b2f6a767a5cb66c0952c58e90aec39d3305",
+    "python/pops/runtime/_amr_checkpoint_contract.py": "84947083cfa36594af74640d2eb7309a1357e73dfd2afe74424ebc26471ac6f2",
+    "tests/review/test_sol61_halo_execution_consumer_independent.py": "8197a2272b57378bf1c061bed3484e058e9986cb0e27bd7bbe9b5cd1d78f0ced"
+  }
+}
