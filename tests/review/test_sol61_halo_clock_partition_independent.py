@@ -35,3 +35,31 @@ int main(){
  exe=tmp_path/'probe'
  subprocess.run([compiler,'-std=c++20','-Wall','-Wextra','-Werror','-I',str(ROOT/'include'),str(cpp),'-o',str(exe)],check=True,capture_output=True,text=True)
  subprocess.run([str(exe)],check=True,capture_output=True,text=True)
+
+def test_actual_primary_export_loader_preserves_nonfirst_and_legacy(tmp_path):
+ source=(ROOT/'include/pops/runtime/program/module_metadata.hpp').read_text()
+ start=source.index('using PrimaryClockFn =')
+ end=source.index('using TemporalProviderFn',start)
+ fragment=source[start:end]
+ cpp=tmp_path/'primary.cpp'
+ cpp.write_text(r"""
+#include <set>
+#include <string>
+#include <stdexcept>
+#include <cassert>
+const char* exported=nullptr;bool present=false;
+const char* primary(){return exported;}
+namespace pops::dynlib {void* sym(void*,const char*){return present?reinterpret_cast<void*>(&primary):nullptr;}}
+struct Metadata{std::string primary_clock_identity;};
+std::string load(){void* dl_handle=nullptr;Metadata metadata;std::set<std::string> logical_clocks{"a.secondary","z.primary"};
+ FRAGMENT
+ return metadata.primary_clock_identity;}
+int main(){assert(load().empty());present=true;exported="z.primary";assert(load()=="z.primary");
+ bool refused=false;exported="foreign";try{(void)load();}catch(const std::runtime_error&){refused=true;}assert(refused);
+ refused=false;exported=nullptr;try{(void)load();}catch(const std::runtime_error&){refused=true;}assert(refused);
+ refused=false;exported="";try{(void)load();}catch(const std::runtime_error&){refused=true;}assert(refused);}
+""".replace('FRAGMENT',fragment))
+ compiler=shutil.which('clang++') or shutil.which('c++');assert compiler
+ exe=tmp_path/'primary'
+ subprocess.run([compiler,'-std=c++20','-Wall','-Wextra','-Werror',str(cpp),'-o',str(exe)],check=True,capture_output=True,text=True)
+ subprocess.run([str(exe)],check=True,capture_output=True,text=True)
