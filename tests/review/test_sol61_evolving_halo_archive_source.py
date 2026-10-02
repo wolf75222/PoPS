@@ -1,6 +1,7 @@
 """Authentic archived CP copy, Source/offline only; no runtime or Native binding."""
 from pathlib import Path
 import json
+import hashlib
 import zipfile
 import numpy as np
 import pytest
@@ -25,6 +26,7 @@ def reviewed_budget(path):
 
 def test_actual_checkpoint_rewrite_reaches_carrier_decoder(tmp_path):
     assert ARCHIVE.is_file(),"authentic ROOT archive required, no synthetic replacement"
+    assert hashlib.sha256(ARCHIVE.read_bytes()).hexdigest()=="f85e1cb586f2ead68784c49d3342d279d51ec07fa821364757acce6ae96ba81f"
     old=decode_checkpoint_bytes(ARCHIVE.read_bytes(),reviewed_budget(ARCHIVE))
     inspect_checkpoint_payload_integrity(old,runtime_kind="amr")
     decode(old["state_carriers_checkpoint"])
