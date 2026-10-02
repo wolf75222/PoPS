@@ -138,3 +138,14 @@ def test_runtime_parameter_mutation_invalidates_observations():
     for operation in ("set_program_params", "seed_program_params"):
         body=cpp.split("void AmrSystem<Dim>::"+operation+"(",1)[1].split("template <int Dim>",1)[0]
         assert "field_candidate_observations.clear();" in body and "staged_field_candidate_observations.clear();" in body
+
+
+def test_activation_guard_refuses_bootstrap_and_restart_inside_voted_preflight():
+    cpp=(ROOT/"src/runtime/amr/amr_system.cpp").read_text()
+    body=cpp.split("void AmrSystem<Dim>::enable_field_candidate_observation(",1)[1].split("template <int Dim>",1)[0]
+    voted=body.split("try {",1)[1].split("} catch",1)[0]
+    assert "p_->bootstrap_transaction" in voted and "p_->restart_transaction" in voted
+    fixture=(ROOT/"tests/python/integration/amr/test_public_initial_field_ghost.py").read_text()
+    assert "NativeAMRBootstrapConsumer.__init__" in fixture
+    assert "def observing_init(owner,engine,*args,**kwargs):" in fixture
+    assert fixture.index("_enable_field_candidate_observation(1)")<fixture.index("return original_init(owner,engine,*args,**kwargs)")

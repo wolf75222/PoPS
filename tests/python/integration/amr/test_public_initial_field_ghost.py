@@ -32,14 +32,14 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
         assert {i['name'] for i in evidence['interfaces']}=={'ghost_boundary','accepted_initial_ghost'}
     artifact=compile_resolved_plan_once(world,plan,route=CONTRACT,compile_artifact=pops.compile)
     context=collective_call(world,lambda:artifact_execution_context(artifact))
-    # Private, explicit producer observation installed before the genuine Native finalizer.
+    # The real constructor opens the bootstrap transaction; enable before that constructor.
     # This wrapper neither solves nor replaces preparation; old binaries fail capability lookup.
     from pops.runtime._amr_bootstrap_execution import NativeAMRBootstrapConsumer
-    original_finalize=NativeAMRBootstrapConsumer.finalize_bootstrap
-    def observing_finalize(owner):
-        collective_call(world,lambda:owner._engine._s._enable_field_candidate_observation(1))
-        return original_finalize(owner)
-    monkeypatch.setattr(NativeAMRBootstrapConsumer,'finalize_bootstrap',observing_finalize)
+    original_init=NativeAMRBootstrapConsumer.__init__
+    def observing_init(owner,engine,*args,**kwargs):
+        collective_call(world,lambda:engine._s._enable_field_candidate_observation(1))
+        return original_init(owner,engine,*args,**kwargs)
+    monkeypatch.setattr(NativeAMRBootstrapConsumer,'__init__',observing_init)
     def bind():return pops.bind(artifact,resources={'execution_context':context})
     runtime=collective_call(world,bind)
     directory=collective_directory(world,tmp_path/'initial-field-ghost')

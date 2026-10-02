@@ -14157,8 +14157,8 @@ void AmrSystem<Dim>::enable_field_candidate_observation(std::uint32_t version) {
   try {
     if (version != 1 || !requests_accepted_halo_preparation() ||
         p_->automatic_bootstrap_complete || p_->macro_step != 0 ||
-        p_->accepted_transaction_active || step_transaction_depth() != 0 ||
-        p_->field_candidate_observation_enabled)
+        p_->accepted_transaction_active || p_->bootstrap_transaction || p_->restart_transaction ||
+        step_transaction_depth() != 0 || p_->field_candidate_observation_enabled)
       throw std::invalid_argument("field-candidate-observation@1 activation requires an idle pre-bootstrap owner");
     ExactContractBuilder exact;
     exact.text("pops.amr.field-candidate-observation@1").scalar(version)
