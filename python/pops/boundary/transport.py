@@ -1111,6 +1111,7 @@ class ResolvedTransportBoundarySet:
                     "producer": row.provider.qualified_id,
                     "geometry": row.geometry.canonical_identity(),
                     "type": (
+                        "external" if self.requires_expression_component(row) else
                         "characteristic_no_inflow"
                         if row.provider.dependencies.characteristic.mode
                         is not ClosureMode.NONE
@@ -1125,8 +1126,10 @@ class ResolvedTransportBoundarySet:
                         row, state)[0],
                     "converter": self._native_representation_contract(
                         row, state)[1],
+                    **({"value_protocol":"native-boundary-component-values@1"}
+                       if self.requires_expression_component(row) else {}),
                     "values": (
-                        [0.0]*ncomp
+                        []
                         if self.requires_expression_component(row)
                         else []
                         if row.condition_type in {"no_flux", "outflow"}

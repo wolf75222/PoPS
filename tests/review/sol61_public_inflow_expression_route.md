@@ -44,3 +44,14 @@ The dict merge in ab1d79a1 could erase a repeated explicit identity before the f
 The merge now preserves the original explicit tuple verbatim and appends inferred packages. A set serves only to reject generated versus explicit/generated identity conflicts, never to rewrite explicit inputs. Existing exact guards remain unchanged. Initial expected-final-guard probes failed their regex because the earlier guard fired; no duplicate public component was accepted in those probes.
 
 Delta verification uses the same Source command above narrowed to test_sol61_public_inflow_expression_route.py: **24 PASS16.18s**, including four current/frozen resolve probes and all previous generated-host/manifests checks. No Native/ENV or physics change.
+
+
+## Native SDK11 bind failure and explicit value delegation
+
+ROOT preserved the actual failed SDK11 public compile/publish/bind attempt (Source5cfc1558, DSOd96ee34f, installed1139). No Field runtime or successful Native Inflow is inferred from that failure. Its bind error is reproduced independently by CompiledBoundaryPlan.from_resolved(public resolved GhostPlan).runtime_boundary_data({}): numeric zero reservations on a Dirichlet face reach eval_expression_key and correctly fail `invalid pops.expr.key.v1 node`. The key validator is unchanged.
+
+Inferred expression faces now declare external execution plus `native-boundary-component-values@1`. GhostProducerPlan requires exactly the inferred BoundaryComponentBinding and component manifest, then attaches the exact delegate. Detached CompiledBoundaryPlan runtime metadata validation requires this exact protocol/external/empty-values shape, a matching complete binding and provider target, and exactly one matching complete face region (all binding fields, output State identity, axis/side ordinal). Only then are built-in numeric face placeholders emitted as external, with the original component region installed through the existing route. The complete AST/support/FP/evidence remains authenticated in the component manifest. No dynamic Field/time expression is evaluated as a BindSchema parameter expression.
+
+SOURCE cohort (same three-file command above): **82 PASS41.92s**. It includes the actual detached bind-metadata route and six delegation adversaries (missing delegate, changed manifest, foreign target, wrong region axis, wrong producer type, unknown protocol). A final strengthening compares every binding field in the region, followed by a focused seven-node rerun recorded below. No Native build/bind/runtime/ENV mutation was performed; the fresh SDK rebuild and true bind are still ROOT-owned and pending independent review.
+
+Final focused command: same interpreter/options, test_sol61_public_inflow_expression_route.py -k "component_values_bind or forged_component_value". **7 PASS19.69s**, 24 deselected.

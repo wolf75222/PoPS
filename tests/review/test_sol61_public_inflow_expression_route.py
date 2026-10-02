@@ -233,3 +233,35 @@ def test_frozen_prerequisite_resolve_refuses_same_explicit_duplicates(auto_ghost
     case,layout=build(ghost=auto_ghost);component=multi_component()
     with pytest.raises(ValueError,match="resolve components contain duplicate component_id"):
         namespace["resolve"](pops.validate(case),layout=layout,components=(component,component))
+
+
+def compiled_public_ghost_plan():
+    import pops
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+    from tests.python.support.public_inflow_field_case import build
+    case,layout=build(ghost=True)
+    plan=pops.resolve(pops.validate(case),layout=layout)
+    return CompiledBoundaryPlan.from_resolved(plan.blocks[0].numerics.boundaries[0])
+
+
+def test_public_component_values_bind_via_actual_detached_install_contract():
+    compiled=compiled_public_ghost_plan()
+    data=compiled.runtime_boundary_data({})
+    assert data["faces"][0]["type"]=="external"
+    assert data["faces"][0]["values"]==[0.,0.]
+    assert len(data["component_regions"])==1
+
+
+@pytest.mark.parametrize("mutation",["missing","manifest","target","region","type","protocol"])
+def test_forged_component_value_delegation_refused(mutation):
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+    data=compiled_public_ghost_plan().canonical_identity()["compile_data"]
+    face=data["faces"][0]
+    if mutation=="missing":del face["value_delegate"]
+    if mutation=="manifest":face["value_delegate"]["component_manifest_identity"]="forged"
+    if mutation=="target":face["value_delegate"]["target"]["qualified_id"]="foreign"
+    if mutation=="region":data["component_region_templates"][0]["region"]["axes"]=[1]
+    if mutation=="type":face["type"]="dirichlet"
+    if mutation=="protocol":face["value_protocol"]="unknown"
+    with pytest.raises(ValueError,match="component value delegation"):
+        CompiledBoundaryPlan(data).runtime_boundary_data({})

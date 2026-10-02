@@ -196,6 +196,20 @@ class CompiledBoundaryPlan:
                     "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall",
                     "external", "characteristic_no_inflow"}:
                 raise ValueError("compiled boundary face has no executable producer type")
+            if "value_protocol" in face or "value_delegate" in face:
+                delegate=face.get("value_delegate")
+                if face.get("value_protocol")!="native-boundary-component-values@1" or face["type"]!="external" or face.get("values")!=[] or not isinstance(delegate,dict):
+                    raise ValueError("compiled boundary component value delegation has an invalid contract")
+                if delegate not in data.get("component_bindings",[]) or delegate.get("target",{}).get("qualified_id")!=face.get("producer") or delegate.get("operation")!="apply_region_batch":
+                    raise ValueError("compiled boundary component value delegation lacks its exact binding")
+                regions=[row for row in data["component_region_templates"]
+                    if all(row.get(key)==value for key,value in delegate.items())
+                    and row.get("state_identity")==data["state"]["qualified_id"]
+                    and row.get("region",{}).get("kind")=="face"
+                    and row["region"].get("axes")==[int(face["ordinal"])//2]
+                    and row["region"].get("sides")==[-1 if int(face["ordinal"])%2==0 else 1]]
+                if len(regions)!=1:
+                    raise ValueError("compiled boundary component value delegation lacks its exact face region")
             representation = face.get("representation", "conservative")
             converter = face.get("converter")
             if representation not in {"conservative", "primitive"}:
