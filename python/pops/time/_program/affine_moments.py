@@ -26,6 +26,9 @@ def affine_moment_update(
         order = basis.order if basis is not None else 4
     if type(order) is not int or order < 1:
         raise ValueError("affine_moment_update order must be an exact positive integer")
+    # Bound native component representation before compatibility expands names/indices.
+    if (order + 1) * (order + 2) // 2 > 2147483647:
+        raise ValueError("affine moment cardinality exceeds native component index representation")
     if basis is not None and (basis.dimension != 2 or basis.order != order):
         raise ValueError("affine_moment_update requires a complete two-velocity basis at the declared order")
     if not isinstance(rotation, str) or rotation not in ("cayley", "exponential"):
@@ -66,7 +69,7 @@ def affine_moment_update(
     attrs = {"linear_operator": operator.name, "order": order, "theta_dt": coefficient}
     attrs['basis'] = basis.to_data()
     attrs['component_binding'] = list(binding)
-    # Keep existing Cayley IR/identity bytes unchanged, including an explicit default.
+    # Keep the default Cayley arithmetic; explicit binding changes identity to IR23.
     if rotation != "cayley":
         attrs["rotation"] = rotation
     return program._new(

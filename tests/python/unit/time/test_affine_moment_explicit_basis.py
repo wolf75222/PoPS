@@ -63,3 +63,14 @@ def test_compiler_refuses_absent_or_foreign_binding_before_kernel():
     for mutation in ({k:v for k,v in attrs.items() if k!='basis'},dict(attrs,component_binding=('foreign',)*6)):
         with pytest.raises(ValueError,match='basis|binding'):
             emit_affine_moment_kernel(lowered,mutation,'u0','u0','u1','status','active',0,provider_plans=None,consumer_qid='test')
+
+
+@pytest.mark.parametrize('order',[65535,2**31-1])
+def test_public_huge_order_refuses_before_compatibility_expansion(monkeypatch,order):
+    from pops.moments import model_builder
+    program=pops.Program('oversized')
+    def forbidden_expansion(*args,**kwargs):
+        pytest.fail('moment names expanded before native cardinality refusal')
+    monkeypatch.setattr(model_builder,'moment_names',forbidden_expansion)
+    with pytest.raises(ValueError,match='cardinality exceeds native component index'):
+        program.affine_moment_update(None,None,linear_operator=None,theta_dt=1,order=order)
