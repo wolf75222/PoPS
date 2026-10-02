@@ -29,3 +29,10 @@ def test_actual_public_layout_can_resolve_requested_policy(policy):
     assert layout.patch_layout.distribute_coarse==(policy!='replicated')
     plan=pops.resolve(pops.validate(case),layout=layout)
     assert plan is not None
+
+@pytest.mark.parametrize('key,value', [('dim',1),('real',32),('shard',0),('levels',1),('ranks',1),('blocks',['Q0','Q1'])])
+def test_fixture_partition_and_wire_authority_are_exact(key,value):
+    from tests.python.integration.runtime.test_amr_gather_object_bytes_runtime import validate_fixture_archive
+    a=dict(dim=2,real=64,shard=-1,levels=2,ranks=2,blocks=['Q0','Q1','forcing'])
+    validate_fixture_archive(a,2);a[key]=value
+    with pytest.raises(AssertionError):validate_fixture_archive(a,2)

@@ -25,6 +25,11 @@ def build_gather_case(policy):
     layout=AMR(**{k:getattr(base,k) for k in ('grid','hierarchy','tagging','regrid','transfer','execution','embedded_boundary','load_balance','tagger','clustering','reflux')},patch_layout=patches)
     return case,layout
 
+def validate_fixture_archive(archive,world_size):
+    assert archive['dim']==2 and archive['real']==64 and archive['shard']==-1
+    assert archive['levels']==2 and archive['ranks']==world_size
+    assert archive['blocks']==['Q0','Q1','forcing'], 'exact fixture block partition required'
+
 @pytest.mark.compiler
 @pytest.mark.native_loader
 @pytest.mark.parametrize('policy',('replicated','partitioned','empty-owner'))
@@ -47,7 +52,7 @@ def test_installed_amr_gather_preserves_object_bytes(policy,tmp_path,record_prop
     original=collective_call(world,engine.checkpoint_state_carriers)
     collective_call(world,lambda:(directory/('initial-rank%d.carriers'%world.rank)).write_bytes(original))
     archive=decode(np.frombuffer(original,dtype=np.uint8))
-    with collective_check(world):assert archive['levels']==2 and archive['ranks']==world.size
+    with collective_check(world):validate_fixture_archive(archive,world.size)
     # All destinations receive the same domain-sized array; existing write_field
     # writes only this rank's real valid Fabs. Ghost storage is not refreshed.
     for b,name in enumerate(archive['blocks']):
@@ -58,7 +63,9 @@ def test_installed_amr_gather_preserves_object_bytes(policy,tmp_path,record_prop
             collective_call(world,lambda name=name,level=level,values=values:engine.set_block_level_state(name,level,values))
     raw=collective_call(world,engine.checkpoint_state_carriers)
     collective_call(world,lambda:(directory/('written-rank%d.carriers'%world.rank)).write_bytes(raw))
-    written=decode(np.frombuffer(raw,dtype=np.uint8));files={name:hashlib.sha256((directory/name).read_bytes()).hexdigest() for name in ('initial-rank%d.carriers'%world.rank,'written-rank%d.carriers'%world.rank)};topologies=[]
+    written=decode(np.frombuffer(raw,dtype=np.uint8))
+    with collective_check(world):validate_fixture_archive(written,world.size)
+    files={name:hashlib.sha256((directory/name).read_bytes()).hexdigest() for name in ('initial-rank%d.carriers'%world.rank,'written-rank%d.carriers'%world.rank)};topologies=[]
     for b,name in enumerate(written['blocks']):
         for level in range(2):
             n=8*2**level;expected,covered=reconstruct_level(written,b,level,n)
@@ -66,6 +73,7 @@ def test_installed_amr_gather_preserves_object_bytes(policy,tmp_path,record_prop
             path=directory/('rank%d-block%d-level%d.npy'%(world.rank,b,level))
             collective_call(world,lambda path=path,actual=actual:np.save(path,actual,allow_pickle=False))
             with collective_check(world):
+                assert actual.dtype==np.float64 and actual.shape==expected.shape
                 assert actual.tobytes()==expected.tobytes(),'getter must match native valid bits; holes remain +0'
                 assert np.any(expected.view(np.uint64)==np.uint64(1<<63)),'real -0 witness required'
                 if level==1:assert np.any(covered==0) and np.any(covered==1),'partial fine topology required'
