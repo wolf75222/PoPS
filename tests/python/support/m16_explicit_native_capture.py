@@ -20,8 +20,30 @@ def dump_retained_program(program,directory):
     program.dump_ir(directory/'program.ir.json')
 
 
-def retain_provenance(artifact,resolved,native,directory):
-    row=select_layout_program(artifact,resolved)
+def select_partition_program(artifact,resolved,blocks):
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+    if type(artifact) is not CompiledSimulationArtifact:
+        raise TypeError('exact CompiledSimulationArtifact required')
+    artifact.verify()
+    if type(blocks) is not tuple or not blocks or len(set(blocks))!=len(blocks):
+        raise ValueError('exact distinct block partition required')
+    assignments=tuple(row for row in resolved.layout_plan.assignments if row.subject_kind=='block')
+    if {row.subject.local_id for row in assignments}!=set(blocks):
+        raise ValueError('resolved block partition differs')
+    ids={row.layout.qualified_id for row in assignments}
+    if len(ids)!=1 or len(resolved.layout_plan.layouts)!=1:
+        raise ValueError('fixture requires one full layout partition')
+    matches=tuple(row for row in artifact.layout_programs if row.layout_id in ids)
+    if len(matches)!=1 or len(artifact.layout_programs)!=1:
+        raise ValueError('compiled layout program is absent or ambiguous')
+    row,=matches;row.verify()
+    if row.target!='amr_system' or len(row.block_names)!=len(blocks) or set(row.block_names)!=set(blocks) or artifact.program is not row.program:
+        raise ValueError('compiled layout target/partition/program differs')
+    return row
+
+
+def retain_provenance(artifact,resolved,native,directory,*,blocks=None):
+    row=select_layout_program(artifact,resolved) if blocks is None else select_partition_program(artifact,resolved,blocks)
     program=row.program
     dump_retained_program(program,directory)
     (directory/'compiled-manifest.json').write_text(json.dumps(artifact.manifest().to_dict(),sort_keys=True,allow_nan=False)+'\n')
