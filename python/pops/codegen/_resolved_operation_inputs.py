@@ -336,7 +336,8 @@ def derive_inputs(module: Any, operator: Any, packs: Any, *, boundary_data: Any 
                          "balance_contribution")
     walk(boundary_data, "boundary", "physical_boundary")
     if operator.kind == "grid_operator":
-        walk(getattr(module, "_eigenvalues", None), sampling, "wave_speed")
+        from pops.model.flux_waves import flux_waves
+        walk(flux_waves(module, operator), sampling, "wave_speed")
     # Explicit provider requirements are additional native dependencies, not a
     # reason to retain every unused FieldSpace component of a transparent body.
     required = operator.requirements.get("aux", ())
@@ -496,7 +497,8 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
                 if dependency is not None:
                     visit(dependency)
         if declaration.kind == "grid_operator":
-            walk(getattr(module, "_eigenvalues", None), opaque=True)
+            from pops.model.flux_waves import flux_waves
+            walk(flux_waves(module, declaration), opaque=True)
 
     visit(operator)
     walk(boundary_data, opaque=True)

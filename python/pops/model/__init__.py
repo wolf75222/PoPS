@@ -135,3 +135,6 @@ __all__ = [
 
 from pops._ir.quantity import PhysicalDimension, PhysicalSupport
 __all__ += ["PhysicalDimension", "PhysicalSupport"]
+
+from .flux_waves import FluxWaveLaw
+__all__.append("FluxWaveLaw")

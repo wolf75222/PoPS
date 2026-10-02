@@ -185,6 +185,11 @@ def build_module_manifest(module: Any) -> ModuleManifest:
     has_eigenvalues = {
         axis: bool(values) for axis, values in (eigenvalues or {}).items()
     }
+    from .flux_waves import flux_waves
+    for operator in module.operator_registry():
+        if operator.kind == "grid_operator":
+            for axis, values in (flux_waves(module, operator) or {}).items():
+                has_eigenvalues[axis] = has_eigenvalues.get(axis, False) or bool(values)
     wave_speed_provider = getattr(module, "wave_speed_provider_kind", None)
     capabilities_provider = getattr(module, "capabilities", None)
     raw_capabilities = capabilities_provider() if callable(capabilities_provider) else {}

@@ -801,24 +801,17 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 (module, "_operator_binding_authorities"),
                 (self, "_fluxes"), (self, "_module_cache"),
             ):
+                from pops.model.flux_waves import FluxWaveLaw
+                wave_law = None if wave_values is None else FluxWaveLaw(state.space, {
+                    axis: tuple(self._to_expr(value) for value in values)
+                    for axis, values in wave_values.items()})
                 target = module.operator(
                     name=route,
                     kind="grid_operator",
                     signature=Signature(inputs, Rate(state.space)),
                     expr=expr,
+                    lowering={} if wave_law is None else {"flux_wave_law": wave_law},
                 )
-                if wave_values is not None:
-                    proposed = {
-                        axis: tuple(self._to_expr(value) for value in values)
-                        for axis, values in wave_values.items()
-                    }
-                    existing = module._eigenvalues
-                    if existing is not None and repr(existing) != repr(proposed):
-                        raise ValueError(
-                            "multi-species flux wave declarations must share one exact "
-                            "eigenvalue law"
-                        )
-                    module.eigenvalues(**proposed)
                 self._fluxes[name] = h
                 declarations = self._operator_binding_authority(module)
                 module._bind_operator(h, target, declarations=declarations)

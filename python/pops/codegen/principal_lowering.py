@@ -101,6 +101,7 @@ def prepare_principal_carrier(emitter, module, numerics):
             return substitute_quantities(expand_primitive_recipes(body, recipes), bindings)
 
         flux_rows = []
+        flux_names = []
         axes = None
         for rate in group.rates:
             operator = module.operator_registry().get(rate.registered_operator_name)
@@ -110,15 +111,18 @@ def prepare_principal_carrier(emitter, module, numerics):
             terms = tuple(view.occurrences)
             if len(terms) != 1 or terms[0].kind != "flux" or terms[0].coefficient != -1:
                 raise ValueError("principal transport requires one complete -div(flux) row")
+            flux_names.append(terms[0].payload.reg_name)
             body = module.operator_registry().get(terms[0].payload.reg_name).body
             if axes is None:
                 axes = tuple(body)
             if tuple(body) != axes:
                 raise ValueError("principal flux rows disagree on their physical ranked axes")
             flux_rows.append(native(body))
-        if module._eigenvalues is None:
+        from pops.model.flux_waves import common_flux_waves
+        common_waves = common_flux_waves(module, flux_names, global_authority=True)
+        if common_waves is None:
             raise ValueError("principal group requires its authored common wave-speed bound")
-        waves = native(module._eigenvalues)
+        waves = native(common_waves)
         if tuple(waves) != axes:
             raise ValueError("principal bound and physical flux axes disagree")
         method = group.methods[0]

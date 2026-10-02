@@ -222,7 +222,7 @@ def _module_to_model(module: Any, state_space: Any = None,
     }
     applicable_grid_names = {
         op.name for op in operators
-        if op.kind == "grid_operator" and (
+        if op.kind == "grid_operator" and op.signature.output.base_space == state and (
             not tuple(item for item in op.signature.inputs
                       if getattr(item, "kind", None) == "state")
             or state in op.signature.inputs)
@@ -493,17 +493,20 @@ def _module_to_model(module: Any, state_space: Any = None,
     # physical flux axes.  A Module deliberately stores those two declarations
     # independently, so materialize all grid operators before attaching the
     # exact-ranked eigenvalue provider.
-    # A multi-StateSpace Module retains the authored wave law at Module scope,
-    # while the exact operator signatures above select the grid fluxes for
-    # this compiler view. A different State's wave law must not be rebound
-    # into a storage-only view.
-    # Preserve the single-StateSpace validation of a wave declaration without
-    # a flux; that declaration remains an error instead of disappearing.
-    if (module._eigenvalues is not None and not principal_rates
+    # Select waves from the exact physical flux/output-State operators in this view.
+    # A shared legacy Module law is a fallback, never a first-State selection.
+    # The single-StateSpace no-flux validation remains fail-closed.
+    from pops.model.flux_waves import common_flux_waves
+    selected_waves = None
+    if applicable_grid_names:
+        selected_waves = common_flux_waves(module, applicable_grid_names)
+    elif len(states) == 1:
+        selected_waves = module._eigenvalues
+    if (selected_waves is not None and not principal_rates
             and (len(states) == 1 or applicable_grid_names)):
         m.eigenvalues(**{
             axis: _body_for_state(values)
-            for axis, values in module._eigenvalues.items()
+            for axis, values in selected_waves.items()
         })
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "lowered", ("dsl:eigenvalues",)))
