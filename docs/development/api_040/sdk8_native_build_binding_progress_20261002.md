@@ -56,8 +56,10 @@ tests/python/integration/runtime/test_public_newton_typed_original.py
 
 The earlier Tag attempts remain failed. No physical tolerance, equation, Q guard, full
 grown-carrier guard or scientific reader criterion was changed to obtain a pass.
-Evolving whole-grown halos with direct CP12/accepted9 captures and genuine carrier
-refusal, nonconstant N8/N16 profile @4, signed free transport and the remaining 94 obligations
-are still required. N16 will use a new reception profile @4; published N8 @3
-is preserved.
+Evolving whole-grown halos, carrier refusal, nonconstant N8/N16 profile @4 and
+signed free transport have fresh bounded receptions linked below. Published N8 @3
+is preserved. Halo-stage failed-attempt rollback, Field/GhostBC and the remaining
+full 94 obligations still require their own reception.
 GPU, ROMEO, other native dimensions and GitHub CI have no new qualification here.
+
+Réceptions complémentaires ROOT : [N8/N16 @4](sdk3d8481_spatial_v4_scientific_reception.md), [Halo évolutif et partition5/2](sdk3d8481_evolving_halo_reception.md), [transport signé M19](sdk3d8481_m19_freestreaming_reception.md). Le JSON conserve les échecs initiaux et pointe ces reçus distincts. Halo-stage failure, Field/GhostBC et modèles complets restent ouverts.

@@ -583,10 +583,11 @@
     "second installed Tag bind: runtime authority demanded execution v2; corrected shared contract in new build3d8481; original failed result retained"
   ],
   "pending": [
-    "evolving full-grown halo with directly captured CP12/accepted9 contracts and independent non-author oracle",
-    "nonconstant AMR N8/N16 new reader4 scientific reception; N8 reader3 received on Serial/MPI2",
-    "authentic M19 signed free-transport Native/restart",
-    "all remaining 94 obligations and backend qualification"
+    "after-preparation accepted-Halo failure rollback and successful retry on a fresh immutable SDK",
+    "Field/GhostBC/bootstrap authority, regrid, general AMR and candidate-dependent physics",
+    "full BGK/Vlasov-Poisson and remaining original models; core M16/M17 composition repairs",
+    "ROMEO CPU/GPU, dimensions1/3, OpenMPI, CI and comparable native cost reception",
+    "all remaining full94 obligations; bounded receptions do not close the whole mission"
   ],
   "retention": "Original attempted environment paths are timestamped provenance. Each successful build retains its immutable wheel and records its installed native member hash. Historical DSO33eed was superseded by DSO7fd8 only in the isolated target prefix. Preserved SDK2e4 and SDKbb416 remain distinct.",
   "actual_sdkbb416_preservation": {
@@ -645,5 +646,22 @@
     "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/sdk3d8481_spatial_n8_scientific_reception.json",
     "sha256": "5bde58d5e3f552f52c2058f17696d3a778467d9cc2e4abd75c763c2d15b96053",
     "bytes": 9329
+  },
+  "received_bounded_slices": {
+    "spatial_v4": {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/sdk3d8481_spatial_v4_scientific_reception.json",
+      "sha256": "150fedbe4a7ef198f89100ca43bd010f1f96b57998830624ad8423ebc3d898f1",
+      "bytes": 18744
+    },
+    "evolving_halo": {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/sdk3d8481_evolving_halo_reception.json",
+      "sha256": "62cdb88a8c2a22242ed6f1ae924b67aa722656e9dec5a5396f021dc931c63907",
+      "bytes": 14527
+    },
+    "signed_freestreaming": {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/sdk3d8481_m19_freestreaming_reception.json",
+      "sha256": "78c49a3591ed2a0528f29048c45dbc4af2be597ebd8946b7b96ccfd30f62b284",
+      "bytes": 13644
+    }
   }
 }

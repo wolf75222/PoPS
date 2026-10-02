@@ -1,0 +1,254 @@
+{
+  "schema": "root.api040.sdk8-m19-signed-freestreaming-reception@1",
+  "native_build_source_commit": "3d8481c9d5dc0f2aaa99764a2dd7662ef4e1d23c",
+  "native_abi": 8,
+  "uniform_payload": 8,
+  "program_serialization_version": 5,
+  "native_plan_ir_version": null,
+  "native_sha256": "7fd8c7fef0ff8d330422c763c8b51afb10d4fae25f096d38a4154cbc2f846a44",
+  "qualification": "signed-freestreaming-original-ssprk2-uniform@1",
+  "rows": {
+    "32x8-serial": {
+      "shape": "32x8",
+      "mode": "serial",
+      "ranks": 1,
+      "collective_cases": 1,
+      "source_commit": "471263bb15a1c589b506fe54b23adc2bf7a11ed1",
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srcm19provenance-m19-freestreaming-32x8-serial-dim2/result.json",
+        "sha256": "ebb716cc06a05a387856ed5b7029c9a727c2e090480043e4ae85f77c3996dde7",
+        "bytes": 1750
+      },
+      "fixture": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srcm19provenance-m19-freestreaming-32x8-serial-dim2/pytest-tmp/test_native_m19_signed_freestr0/m19-freestreaming/receipt.json",
+        "sha256": "cb4f7b26ba0f8c29878b0b6fdab0e33dc22b46001eb3ef53c81410d104c8654a",
+        "bytes": 18839
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srcm19provenance-m19-freestreaming-32x8-serial-dim2/pytest.xml",
+          "sha256": "9f0c556c96eea8175999d97b9a8e30b09380cb90122af00c80a2331f40f777ac",
+          "bytes": 971
+        }
+      ],
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srcm19provenance-m19-freestreaming-32x8-serial-dim2/identity.json",
+        "sha256": "a567a7557fb87d22fda90ae521a9374e045b23aad6cfa4b08d450423bf765731",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srcm19provenance-m19-freestreaming-32x8-serial-dim2/after/identity.json",
+        "sha256": "a567a7557fb87d22fda90ae521a9374e045b23aad6cfa4b08d450423bf765731",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srcm19provenance-m19-freestreaming-32x8-serial-dim2/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srcm19provenance-m19-freestreaming-32x8-serial-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "science": {
+        "contract": "sol61.m19-freestreaming-saved-audit@1",
+        "captured_science_and_payload_bits": true,
+        "native_authority_or_root_approval_verified": false
+      },
+      "harness_seconds": 54.93900570785627
+    },
+    "64x12-serial": {
+      "shape": "64x12",
+      "mode": "serial",
+      "ranks": 1,
+      "collective_cases": 1,
+      "source_commit": "471263bb15a1c589b506fe54b23adc2bf7a11ed1",
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-serial-dim2/result.json",
+        "sha256": "905ff6fb380ac8b8cc530fb4e8f24399089c263775c93b9b3b6b734baa243d54",
+        "bytes": 1739
+      },
+      "fixture": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-serial-dim2/pytest-tmp/test_native_m19_signed_freestr0/m19-freestreaming/receipt.json",
+        "sha256": "8ee608f46143c64ce2bcf476a70f8be765d8a1e6c8ee2a85567d4ab38a71fbe2",
+        "bytes": 18923
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-serial-dim2/pytest.xml",
+          "sha256": "cb45bde52c9f7052af5b47b07a42a8a0118688090d4d77c96c0aacabc268a4d6",
+          "bytes": 966
+        }
+      ],
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-serial-dim2/identity.json",
+        "sha256": "a567a7557fb87d22fda90ae521a9374e045b23aad6cfa4b08d450423bf765731",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-serial-dim2/after/identity.json",
+        "sha256": "a567a7557fb87d22fda90ae521a9374e045b23aad6cfa4b08d450423bf765731",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-serial-dim2/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-serial-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "science": {
+        "contract": "sol61.m19-freestreaming-saved-audit@1",
+        "captured_science_and_payload_bits": true,
+        "native_authority_or_root_approval_verified": false
+      },
+      "harness_seconds": 57.12534433417022
+    },
+    "32x8-mpi2": {
+      "shape": "32x8",
+      "mode": "mpi2",
+      "ranks": 2,
+      "collective_cases": 1,
+      "source_commit": "471263bb15a1c589b506fe54b23adc2bf7a11ed1",
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-32x8-mpi2-dim2/result.json",
+        "sha256": "238af593e73b291ca8064996a84406edb81cbc91b1b95de0284b944044ed4464",
+        "bytes": 2378
+      },
+      "fixture": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-32x8-mpi2-dim2/rank0-tmp/test_native_m19_signed_freestr0/m19-freestreaming/receipt.json",
+        "sha256": "d55cb5d747feff6f64def8f618da2b32985c2871cf5a292cb96ac9ff73b57899",
+        "bytes": 18719
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-32x8-mpi2-dim2/rank0.xml",
+          "sha256": "ba4ff0d14c99de6e894306dc1d7265bfeca63eea2987197b7adc6d1c20e97c09",
+          "bytes": 961
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-32x8-mpi2-dim2/rank1.xml",
+          "sha256": "0ffdc8c3c01738c664504e42044c863ce50788a1bd8fb64cff96867372e51871",
+          "bytes": 961
+        }
+      ],
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-32x8-mpi2-dim2/before/identity.json",
+        "sha256": "a567a7557fb87d22fda90ae521a9374e045b23aad6cfa4b08d450423bf765731",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-32x8-mpi2-dim2/after/identity.json",
+        "sha256": "a567a7557fb87d22fda90ae521a9374e045b23aad6cfa4b08d450423bf765731",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-32x8-mpi2-dim2/before/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-32x8-mpi2-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "science": {
+        "contract": "sol61.m19-freestreaming-saved-audit@1",
+        "captured_science_and_payload_bits": true,
+        "native_authority_or_root_approval_verified": false
+      },
+      "harness_seconds": 59.903616583906114
+    },
+    "64x12-mpi2": {
+      "shape": "64x12",
+      "mode": "mpi2",
+      "ranks": 2,
+      "collective_cases": 1,
+      "source_commit": "471263bb15a1c589b506fe54b23adc2bf7a11ed1",
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-mpi2-dim2/result.json",
+        "sha256": "f2e56f8b95b89eb9f03faa1ab9d221c8b7f92de1d85e338faec9ee14ddae3810",
+        "bytes": 2380
+      },
+      "fixture": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-mpi2-dim2/rank0-tmp/test_native_m19_signed_freestr0/m19-freestreaming/receipt.json",
+        "sha256": "afc5886577bff0f5ad70592ec8d6df6fe669f1e1cbf626329ff99bf72a9996fc",
+        "bytes": 18887
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-mpi2-dim2/rank0.xml",
+          "sha256": "68caeb746b79890b0cbc925da5aff663b7406df72caff0e47ebf740930830c9d",
+          "bytes": 963
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-mpi2-dim2/rank1.xml",
+          "sha256": "8b92550792fb434da3d44088b4f6ec3c7eb3f53799b0d9be52eb22a29afcafa0",
+          "bytes": 963
+        }
+      ],
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-mpi2-dim2/before/identity.json",
+        "sha256": "a567a7557fb87d22fda90ae521a9374e045b23aad6cfa4b08d450423bf765731",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-mpi2-dim2/after/identity.json",
+        "sha256": "a567a7557fb87d22fda90ae521a9374e045b23aad6cfa4b08d450423bf765731",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-mpi2-dim2/before/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src471263-m19-freestreaming-64x12-mpi2-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "science": {
+        "contract": "sol61.m19-freestreaming-saved-audit@1",
+        "captured_science_and_payload_bits": true,
+        "native_authority_or_root_approval_verified": false
+      },
+      "harness_seconds": 65.7191386250779
+    }
+  },
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/review/sol61_m19_freestreaming_saved_audit.py",
+    "sha256": "ed2b4aedfb44e939c8195335108634bdb9ccad996ad8aa757cc7e9e9d81c3208",
+    "bytes": 8280
+  },
+  "independent_review": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-m19-full-four-independent-reception.json",
+    "sha256": "ee4011a1ee1a51f5b7d7d18b245c3441082cbf7912ab4fc0859c3b1e04e76caf",
+    "bytes": 5485
+  },
+  "full_mission_received": false,
+  "bgk": false,
+  "vlasov_poisson": false,
+  "amr": false,
+  "gpu": false,
+  "cpp_to_dso_crypto_graph": false,
+  "model_cpp_retained": false,
+  "root_owner": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-m19-freestreaming-root-reception/root-owner1.json",
+    "sha256": "a985e14a545fd9a79a6764da4d4f49a3af39e337927b180063bd966bf84ff91c",
+    "bytes": 12829
+  },
+  "root_approval": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-m19-freestreaming-root-reception/root-approval1.json",
+    "sha256": "474f239d06cf46ebf4bbcde66b2523435153ff164127b448ed17e597157c0965",
+    "bytes": 324
+  },
+  "root_preparer": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/prepare_root_m19_sdk8_reception.py",
+    "sha256": "e82d2cda2828b8f1f2816477db40589f22795bcaf77c14487ac45569481d9508",
+    "bytes": 5947
+  }
+}

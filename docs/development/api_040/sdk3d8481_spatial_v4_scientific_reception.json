@@ -1,0 +1,340 @@
+{
+  "schema": "root.api040.sdk8-spatial-v4-scientific-reception@1",
+  "recorded_at": "2026-10-02T04:57:06.176659+00:00",
+  "native_build_source_commit": "3d8481c9d5dc0f2aaa99764a2dd7662ef4e1d23c",
+  "native_abi": 8,
+  "native_sha256": "7fd8c7fef0ff8d330422c763c8b51afb10d4fae25f096d38a4154cbc2f846a44",
+  "program_ir": 16,
+  "amr_payload": 12,
+  "accepted_state": 8,
+  "qualification": "nonconstant-original-composite-Q-tag-selection-periodic-strip@4",
+  "scope": "N8 and N16 width2 periodic full-y strips, constant signed D, Cartesian/no EB; two original macrosteps and fullgrown restart/replay",
+  "full_mission_received": false,
+  "cpp_to_dso_cryptographic_graph_proof": false,
+  "routes": {
+    "n8-serial": {
+      "cells": 8,
+      "mode": "serial",
+      "source_commit": "5af964e0d5ebccecdcea56117ff923698a54bfc4",
+      "owner": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n8-root-reception-serial/root-owner4.json",
+        "sha256": "75269a4bdb5587b1edca996202d2e9c1f4fa452a22564a3f9ba3a2466b55284f",
+        "bytes": 17496
+      },
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n8-root-reception-serial/root-approval4.json",
+        "sha256": "a06c56c7a4171272abe43ec4bd37fa9186638a81027de81d17daa7dc039ee596",
+        "bytes": 262
+      },
+      "science": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n8-root-reception-serial/receive.json",
+        "sha256": "afa740a724bb8e71378dae9785efe7ad057a15ec04ee3d4e4a997d9905ca5b60",
+        "bytes": 5011
+      },
+      "native_abi_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n8-root-reception-serial/runtime-native-abi.json",
+        "sha256": "e459a9c0e96e471c5dc02c2832d5a253784b4f72290237ae1b6639ea3622fda6",
+        "bytes": 474
+      },
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-amr12-nonconstant-v4-n8-serial-dim2/result.json",
+        "sha256": "5131bc2b135932e9fcbbae9259f3f10a981043fac4ba410ebf965e2ae0e2fe25",
+        "bytes": 1763
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-amr12-nonconstant-v4-n8-serial-dim2/identity.json",
+        "sha256": "a30d3625adbcc16f352d822cb8d01af38eb5ac1e3bac423e2649491bd09d4406",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-amr12-nonconstant-v4-n8-serial-dim2/after/identity.json",
+        "sha256": "a30d3625adbcc16f352d822cb8d01af38eb5ac1e3bac423e2649491bd09d4406",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-amr12-nonconstant-v4-n8-serial-dim2/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-amr12-nonconstant-v4-n8-serial-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "cases_per_backend": 1,
+      "ranks": 1,
+      "harness_seconds": 128.88597599999048,
+      "accepted_original_F_weighted_l2": 4.211236792117065e-11,
+      "accepted_native_original_F_triplets": [
+        {
+          "acceptance_ratio": 4.2112344066743426e-11,
+          "reference_residual_norm": 0.3630691185175441,
+          "rel_residual": 1.1598988159250038e-10,
+          "residual_norm": 4.2112344066743426e-11,
+          "stop_rule": "selectedNativeMixedRule@1"
+        }
+      ],
+      "limits": [
+        "periodic full-y strip, constant signed D and declared Cartesian/no EB; not arbitrary 2D AMR/candidate D/M06/M13/GPU",
+        "ROOT-attested source/native/package provenance; no reconstructed CPP-to-DSO crypto graph",
+        "opaque accepted-program/auxiliary bodies hash/replay-compared, not fully decoded; private leases not persisted"
+      ]
+    },
+    "n8-mpi2": {
+      "cells": 8,
+      "mode": "mpi2",
+      "source_commit": "66a1e5124b558c6d2ce5b44492d9800ff1efd854",
+      "owner": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n8-root-reception-mpi2/root-owner4.json",
+        "sha256": "1026887b3f2417b89829b9f80c79dc8469d296d802c1f6ff76637c460b3853c5",
+        "bytes": 17677
+      },
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n8-root-reception-mpi2/root-approval4.json",
+        "sha256": "7c002f07916f8f709d2a7d513bf8d61ff9f5c9c9ab0b50e68a53019e44ec947d",
+        "bytes": 262
+      },
+      "science": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n8-root-reception-mpi2/receive.json",
+        "sha256": "3396355ae85579f97fca1844e532f37dc786d01a4c37966ce299cd94a619c00a",
+        "bytes": 6128
+      },
+      "native_abi_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n8-root-reception-mpi2/runtime-native-abi.json",
+        "sha256": "e459a9c0e96e471c5dc02c2832d5a253784b4f72290237ae1b6639ea3622fda6",
+        "bytes": 474
+      },
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-amr12-nonconstant-v4-n8-mpi2-dim2/result.json",
+        "sha256": "28b13439d2061018e3ba5f82119e02a7e675ad89c8948019797fa47f5df75a4f",
+        "bytes": 2451
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-amr12-nonconstant-v4-n8-mpi2-dim2/before/identity.json",
+        "sha256": "0a0a895d9fa05ee6792ec364d56c5d6908dc3bc419397fc7c6d353fb0914928e",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-amr12-nonconstant-v4-n8-mpi2-dim2/after/identity.json",
+        "sha256": "0a0a895d9fa05ee6792ec364d56c5d6908dc3bc419397fc7c6d353fb0914928e",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-amr12-nonconstant-v4-n8-mpi2-dim2/before/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-amr12-nonconstant-v4-n8-mpi2-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "cases_per_backend": 1,
+      "ranks": 2,
+      "harness_seconds": 239.65104129188694,
+      "accepted_original_F_weighted_l2": 4.211237330332404e-11,
+      "accepted_native_original_F_triplets": [
+        {
+          "acceptance_ratio": 4.211237052650628e-11,
+          "reference_residual_norm": 0.3630691185175441,
+          "rel_residual": 1.1598995447053242e-10,
+          "residual_norm": 4.211237052650628e-11,
+          "stop_rule": "selectedNativeMixedRule@1"
+        },
+        {
+          "acceptance_ratio": 4.211237052650628e-11,
+          "reference_residual_norm": 0.3630691185175441,
+          "rel_residual": 1.1598995447053242e-10,
+          "residual_norm": 4.211237052650628e-11,
+          "stop_rule": "selectedNativeMixedRule@1"
+        }
+      ],
+      "limits": [
+        "periodic full-y strip, constant signed D and declared Cartesian/no EB; not arbitrary 2D AMR/candidate D/M06/M13/GPU",
+        "ROOT-attested source/native/package provenance; no reconstructed CPP-to-DSO crypto graph",
+        "opaque accepted-program/auxiliary bodies hash/replay-compared, not fully decoded; private leases not persisted"
+      ]
+    },
+    "n16-serial": {
+      "cells": 16,
+      "mode": "serial",
+      "source_commit": "5af964e0d5ebccecdcea56117ff923698a54bfc4",
+      "owner": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n16-root-reception-serial/root-owner4.json",
+        "sha256": "1f6b1b6c9492068bee46edaa71b0f4ac9ad8040f24c83be4d3e51aabff50d6c0",
+        "bytes": 17547
+      },
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n16-root-reception-serial/root-approval4.json",
+        "sha256": "5e29b08ccd795a69cd4bb812cdb07a7e5432145bbaaa7d9882e0215bd6e86263",
+        "bytes": 262
+      },
+      "science": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n16-root-reception-serial/receive.json",
+        "sha256": "609dd60b0f9022e5361c9b244a8ac27d1de7c3750b8c341fd0522c323849729c",
+        "bytes": 5004
+      },
+      "native_abi_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n16-root-reception-serial/runtime-native-abi.json",
+        "sha256": "e459a9c0e96e471c5dc02c2832d5a253784b4f72290237ae1b6639ea3622fda6",
+        "bytes": 474
+      },
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-amr12-nonconstant-v4-n16-serial-dim2/result.json",
+        "sha256": "96709c7d6c91633c5debc2c66ee37999a1959621768798c2b84e0c15dd324e87",
+        "bytes": 1766
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-amr12-nonconstant-v4-n16-serial-dim2/identity.json",
+        "sha256": "a30d3625adbcc16f352d822cb8d01af38eb5ac1e3bac423e2649491bd09d4406",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-amr12-nonconstant-v4-n16-serial-dim2/after/identity.json",
+        "sha256": "a30d3625adbcc16f352d822cb8d01af38eb5ac1e3bac423e2649491bd09d4406",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-amr12-nonconstant-v4-n16-serial-dim2/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-amr12-nonconstant-v4-n16-serial-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "cases_per_backend": 1,
+      "ranks": 1,
+      "harness_seconds": 150.19399820896797,
+      "accepted_original_F_weighted_l2": 4.236253752565298e-11,
+      "accepted_native_original_F_triplets": [
+        {
+          "acceptance_ratio": 4.236251524125182e-11,
+          "reference_residual_norm": 0.36309506110761286,
+          "rel_residual": 1.1667059064925304e-10,
+          "residual_norm": 4.236251524125182e-11,
+          "stop_rule": "selectedNativeMixedRule@1"
+        }
+      ],
+      "limits": [
+        "periodic full-y strip, constant signed D and declared Cartesian/no EB; not arbitrary 2D AMR/candidate D/M06/M13/GPU",
+        "ROOT-attested source/native/package provenance; no reconstructed CPP-to-DSO crypto graph",
+        "opaque accepted-program/auxiliary bodies hash/replay-compared, not fully decoded; private leases not persisted"
+      ]
+    },
+    "n16-mpi2": {
+      "cells": 16,
+      "mode": "mpi2",
+      "source_commit": "66a1e5124b558c6d2ce5b44492d9800ff1efd854",
+      "owner": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n16-root-reception-mpi2/root-owner4.json",
+        "sha256": "0a1a45fe109e8b10c099a90fdcbc76ebede03fe4a3ae9ca082e580717dc55658",
+        "bytes": 17729
+      },
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n16-root-reception-mpi2/root-approval4.json",
+        "sha256": "b1cc264ff6e3def2f7e79151246e76b24a0884988be927512cb417b4704d9bea",
+        "bytes": 262
+      },
+      "science": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n16-root-reception-mpi2/receive.json",
+        "sha256": "5ffc54bc3a5aa9300169ede718a956a8def7e3ae0b5d4e5e0642ebd5a5d2960e",
+        "bytes": 6133
+      },
+      "native_abi_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-spatial-v4-n16-root-reception-mpi2/runtime-native-abi.json",
+        "sha256": "e459a9c0e96e471c5dc02c2832d5a253784b4f72290237ae1b6639ea3622fda6",
+        "bytes": 474
+      },
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-amr12-nonconstant-v4-n16-mpi2-dim2/result.json",
+        "sha256": "ebdce13f588064364539cb2193ac61ef2ff806ec935a1abf7c117d061f19684d",
+        "bytes": 2455
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-amr12-nonconstant-v4-n16-mpi2-dim2/before/identity.json",
+        "sha256": "0a0a895d9fa05ee6792ec364d56c5d6908dc3bc419397fc7c6d353fb0914928e",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-amr12-nonconstant-v4-n16-mpi2-dim2/after/identity.json",
+        "sha256": "0a0a895d9fa05ee6792ec364d56c5d6908dc3bc419397fc7c6d353fb0914928e",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-amr12-nonconstant-v4-n16-mpi2-dim2/before/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-amr12-nonconstant-v4-n16-mpi2-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "cases_per_backend": 1,
+      "ranks": 2,
+      "harness_seconds": 409.42278854106553,
+      "accepted_original_F_weighted_l2": 4.2362546468295966e-11,
+      "accepted_native_original_F_triplets": [
+        {
+          "acceptance_ratio": 4.2362516460932756e-11,
+          "reference_residual_norm": 0.36309506110761286,
+          "rel_residual": 1.1667059400837594e-10,
+          "residual_norm": 4.2362516460932756e-11,
+          "stop_rule": "selectedNativeMixedRule@1"
+        },
+        {
+          "acceptance_ratio": 4.2362516460932756e-11,
+          "reference_residual_norm": 0.36309506110761286,
+          "rel_residual": 1.1667059400837594e-10,
+          "residual_norm": 4.2362516460932756e-11,
+          "stop_rule": "selectedNativeMixedRule@1"
+        }
+      ],
+      "limits": [
+        "periodic full-y strip, constant signed D and declared Cartesian/no EB; not arbitrary 2D AMR/candidate D/M06/M13/GPU",
+        "ROOT-attested source/native/package provenance; no reconstructed CPP-to-DSO crypto graph",
+        "opaque accepted-program/auxiliary bodies hash/replay-compared, not fully decoded; private leases not persisted"
+      ]
+    }
+  },
+  "independent_review": {
+    "audit.py": {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-spatial-v4-four-independent-20261002/audit.py",
+      "sha256": "a59fb6514e56a871c9eb4053be1c39d824045a91d44ae4fa972bf441ea561fee",
+      "bytes": 6713
+    },
+    "report.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-spatial-v4-four-independent-20261002/report.json",
+      "sha256": "f17352929b5950cea07792eaa04f556802a49d2e7dbdc84f530a04f9c9321252",
+      "bytes": 33940
+    },
+    "README.md": {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-spatial-v4-four-independent-20261002/README.md",
+      "sha256": "bbf0981ee850a513efaf6ff249d35a3a81084c0dff416f905f61c3a6742b540a",
+      "bytes": 2127
+    },
+    "pins.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-spatial-v4-four-independent-20261002/pins.json",
+      "sha256": "3a8d848ee3427a371a814297e89ce982d313a038fe9b60ba248d874786738f41",
+      "bytes": 5047
+    }
+  },
+  "root_preparation_script": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/prepare_root_spatial_sdk8_v4.py",
+    "sha256": "ad7921da1608ca1024e1768cea11f510331bdaa5df952c6917df3ef26eb18941",
+    "bytes": 6864
+  },
+  "source_only_review": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/spatial-v4-independent-integrated-5af964e0.xml",
+    "sha256": "adefcde8fa4e78cd99da48ba64a2517bb7144aac7b5068d372723fb3496a142f",
+    "bytes": 17500
+  },
+  "preservation": "Version3 fixture/reader are byte-exact and retained. Historical SDKbb nonconstant N8 failure and old owner-preparation failures remain failures. All @4 executions and owner4/approval4 receipts are fresh.",
+  "limits": [
+    "Original-F weighted L2 <=1e-10 and Q/restriction guards3e-8 unchanged; raw relative residual retained separately from selected mixed criterion.",
+    "Bounded periodic strip witnesses; no candidate-dependent D, general2DAMR, EB, fullM06/M13, othermodel, GPU, ROMEO or CI reception.",
+    "Opaque program/Aux payloads hash/replay checked, not a complete semantic decoder; no CPP-to-DSO cryptographic graph."
+  ]
+}
