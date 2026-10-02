@@ -3144,6 +3144,8 @@ struct AmrSystem<Dim>::Impl {
     std::vector<Real> boundary_parameters;
     std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel;
     std::optional<FieldLogicalTimePoint> boundary_point;
+    // Temporary numerical producer witness, assigned only after a real successful candidate solve.
+    std::optional<runtime::multiblock::BoundaryEvaluationPoint> accepted_halo_producer_point;
     std::optional<FieldNewtonOptions> newton;
 
     std::unique_ptr<exact_field_solver_type> prepared_solver;
@@ -3171,6 +3173,7 @@ struct AmrSystem<Dim>::Impl {
     }
 
     void discard_materialization() noexcept {
+      accepted_halo_producer_point.reset();
       prepared_solver.reset();
       accepted_potential.clear();
       for (auto& publication : candidate_provider_publications)
@@ -3280,6 +3283,7 @@ struct AmrSystem<Dim>::Impl {
     std::vector<std::vector<level_block_type>> block_levels;
     std::vector<std::vector<std::function<void(
         const runtime::multiblock::BoundaryEvaluationPoint&)>>> accepted_halo_boundary_preflight;
+    std::vector<std::vector<std::vector<std::string>>> accepted_halo_boundary_fields;
     std::vector<std::vector<std::optional<evaluation_type>>> block_evaluations;
     std::vector<std::vector<std::optional<evaluation_type>>> block_evaluation_candidates;
     std::vector<std::vector<bool>> block_evaluation_published;
@@ -3581,6 +3585,7 @@ struct AmrSystem<Dim>::Impl {
   mutable std::set<std::pair<std::string, int>> bootstrap_materialized_actions;
   mutable bool automatic_bootstrap_complete = false;
   bool accepted_transaction_active = false;
+  const runtime::multiblock::BoundaryEvaluationPoint* active_accepted_halo_point = nullptr;
 
   struct AcceptedSnapshot {
     std::optional<typename engine_type::Snapshot> engine;
@@ -7326,6 +7331,7 @@ struct AmrSystem<Dim>::Impl {
       candidate->embedded_boundary.resize(level_count);
       candidate->block_levels.resize(prepared_blocks.size());
       candidate->accepted_halo_boundary_preflight.resize(prepared_blocks.size());
+      candidate->accepted_halo_boundary_fields.resize(prepared_blocks.size());
       candidate->block_evaluations.resize(prepared_blocks.size());
       candidate->block_evaluation_candidates.resize(prepared_blocks.size());
       candidate->block_evaluation_published.resize(prepared_blocks.size());
@@ -7334,6 +7340,7 @@ struct AmrSystem<Dim>::Impl {
       for (std::size_t block = 0; block < prepared_blocks.size(); ++block) {
         candidate->block_levels[block].reserve(level_count);
         candidate->accepted_halo_boundary_preflight[block].reserve(level_count);
+        candidate->accepted_halo_boundary_fields[block].reserve(level_count);
         candidate->block_evaluations[block].resize(level_count);
         candidate->block_evaluation_candidates[block].resize(level_count);
         candidate->block_evaluation_published[block].assign(level_count, false);
@@ -7934,6 +7941,17 @@ struct AmrSystem<Dim>::Impl {
           for (const auto& invocation : prepared_external.ghosts)
             prepared_ghosts.push_back(
                 {invocation.provider, invocation.session, invocation.dependencies});
+          std::set<std::string> halo_fields;
+          for (const auto& invocation : prepared_ghosts)
+            for (const auto* dependency : invocation.dependencies->field_plans) {
+              const auto slot = std::find_if(field_plans.begin(), field_plans.end(),
+                  [&](const auto& entry) { return &entry.second == dependency; });
+              if (slot == field_plans.end())
+                throw std::logic_error("accepted halo BC field dependency lost its exact provider slot");
+              halo_fields.insert(slot->first);
+            }
+          candidate->accepted_halo_boundary_fields[block_index].emplace_back(
+              halo_fields.begin(), halo_fields.end());
           candidate->accepted_halo_boundary_preflight[block_index].push_back(
               [providers = prepared_ghosts](const runtime::multiblock::BoundaryEvaluationPoint& point) {
                 for (const auto& invocation : providers) {
@@ -7943,18 +7961,15 @@ struct AmrSystem<Dim>::Impl {
                     throw std::invalid_argument(
                         "accepted halo typed GhostBoundary lacks an authenticated positive initial interval");
                   const auto& dependencies = *invocation.dependencies;
-                  if (!dependencies.field_plans.empty() && dependencies.clock_identity != point.clock)
-                    throw std::invalid_argument("accepted halo BC field clock authority differs");
                   for (const auto* plan : dependencies.field_plans) {
-                    if (plan == nullptr || !plan->boundary_point)
-                      throw std::invalid_argument("accepted halo BC field lacks candidate point authority");
-                    const auto& field_point = *plan->boundary_point;
-                    if (field_point.time != point.physical_time || field_point.dt != point.dt ||
-                        field_point.step != point.tick || field_point.stage_slot != point.stage ||
-                        field_point.substep != point.substep ||
-                        field_point.stage_fraction_numerator != point.stage_fraction.numerator ||
-                        field_point.stage_fraction_denominator != point.stage_fraction.denominator)
-                      throw std::invalid_argument("accepted halo BC field candidate point is stale");
+                    if (plan == nullptr || !plan->accepted_halo_producer_point)
+                      throw std::invalid_argument("accepted halo BC field lacks its real producer witness");
+                    const auto& produced = *plan->accepted_halo_producer_point;
+                    if (produced.clock != point.clock || produced.level != point.level ||
+                        produced.physical_time != point.physical_time || produced.dt != point.dt ||
+                        produced.tick != point.tick || produced.stage != point.stage ||
+                        produced.substep != point.substep || produced.stage_fraction != point.stage_fraction)
+                      throw std::invalid_argument("accepted halo BC field real producer point is stale");
                   }
                 }
               });
@@ -9810,6 +9825,153 @@ struct AmrSystem<Dim>::Impl {
         }
     }
     return shards;
+  }
+
+  void prepare_accepted_halo_field_dependencies(
+      std::size_t block, std::size_t level,
+      const runtime::multiblock::BoundaryEvaluationPoint& point) {
+    const auto& requested = prepared_hierarchy->accepted_halo_boundary_fields.at(block).at(level);
+    if (requested.empty()) return;
+    const auto& lane = *prepared_hierarchy->lane;
+    struct ActivePoint {
+      const runtime::multiblock::BoundaryEvaluationPoint*& slot;
+      const runtime::multiblock::BoundaryEvaluationPoint* prior;
+      ActivePoint(decltype(slot) target, const runtime::multiblock::BoundaryEvaluationPoint& value)
+          : slot(target), prior(target) { slot = &value; }
+      ~ActivePoint() { slot = prior; }
+    } active(active_accepted_halo_point, point);
+    const auto order = facade->prepare_topology_field_order("accepted_halo_prepare", point);
+    std::set<std::string> needed;
+    std::set<std::string> field_output_providers;
+    std::exception_ptr error;
+    try {
+      needed.insert(requested.begin(), requested.end());
+      // Close only the exact requested producer DAG; names are identities, not model selectors.
+      std::map<std::pair<std::string, std::string>, std::string> outputs;
+      std::map<std::string, std::string> provider_outputs;
+      const auto& registry = prepared_hierarchy->auxiliary_registries.front();
+      for (const auto& [slot, plan] : field_plans) {
+        outputs.emplace(std::make_pair(plan.output_block, plan.output_key), slot);
+        if (plan.output && !plan.output_keys.empty())
+          provider_outputs.emplace(registry.provider_for_key(plan.output_keys.front()).identity(), slot);
+      }
+      for (const auto& [identity, source] : provider_outputs) field_output_providers.insert(identity);
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        const auto prior = needed;
+        for (const auto& slot : prior) {
+          const auto& plan = field_plans.at(slot);
+          for (std::size_t index = 0; index < plan.boundary_field_blocks.size(); ++index) {
+            const auto found = outputs.find({plan.boundary_field_blocks[index], plan.boundary_field_keys[index]});
+            if (found == outputs.end())
+              throw std::invalid_argument("accepted halo Field producer dependency is unresolved");
+            changed = needed.insert(found->second).second || changed;
+          }
+          for (const auto& provider : plan.providers)
+            for (const auto& [identity, source] : provider_outputs) {
+              const auto downstream = registry.dependent_provider_identities({identity});
+              if (provider.identity == identity ||
+                  std::find(downstream.begin(), downstream.end(), provider.identity) != downstream.end())
+                changed = needed.insert(source).second || changed;
+            }
+        }
+      }
+    } catch (...) { error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "accepted halo Field dependency closure failed collectively");
+    for (const auto& slot : order) {
+      if (!needed.contains(slot)) continue;
+      std::vector<const field_type*> states;
+      error = {};
+      try { states.resize(blocks.size(), nullptr); }
+      catch (...) { error = std::current_exception(); }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          error, &lane, "accepted halo Field simultaneous source allocation failed collectively");
+      runtime::system::AuxiliaryEvaluationPoint input_point;
+      error = {};
+      try {
+        const auto& providers = field_plans.at(slot).providers;
+        dirty_auxiliary_providers.reserve(checked_size_sum(dirty_auxiliary_providers.size(),
+            providers.size(), "accepted halo Field input identity capacity exceeds size_t"));
+        for (const auto& provider : providers)
+          if (!field_output_providers.contains(provider.identity) &&
+              std::find(dirty_auxiliary_providers.begin(), dirty_auxiliary_providers.end(), provider.identity) ==
+                  dirty_auxiliary_providers.end()) dirty_auxiliary_providers.push_back(provider.identity);
+        input_point.clock = point.clock;
+        input_point.accepted_step = static_cast<std::uint64_t>(point.tick);
+        input_point.layout_generation = engine->materialization_generation();
+        input_point.level = point.level; input_point.substep = point.substep; input_point.stage = point.stage;
+        input_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+      } catch (...) { error = std::current_exception(); }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          error, &lane, "accepted halo Field input authority allocation failed collectively");
+      if (!dirty_auxiliary_providers.empty()) facade->refresh_auxiliary_on_prepared_lane(input_point);
+      auto outcome = facade->solve_program_field_from_blocks_on_prepared_lane(
+          point, slot, static_cast<int>(level), states);
+      if (!outcome.report().solved_value_available()) {
+        (void)consume_solve_outcome(std::move(outcome)); // Solver-authored failure, never a fallback.
+        throw std::logic_error("unreachable accepted halo Field failed solve");
+      }
+      auto& plan = field_plans.at(slot);
+      error = {};
+      try {
+        validate_field_candidate();
+        plan.accepted_halo_producer_point = point; // Real solved candidate, not a setter witness.
+        dirty_auxiliary_providers.reserve(checked_size_sum(dirty_auxiliary_providers.size(),
+            plan.stale_auxiliary_providers.size(), "accepted halo Field dirty identity capacity exceeds size_t"));
+      } catch (...) { error = std::current_exception(); }
+      const auto discard_candidate = [&] {
+        (void)outcome.consume(SolveConsumption::kDiscardCandidate);
+        rollback_active_field_candidate_collectively(lane, "accepted halo temporary producer discard");
+      };
+      if (all_reduce_max(error ? 1L : 0L, lane)) {
+        discard_candidate();
+        if (lane.size() == 1 && error) std::rethrow_exception(error);
+        throw std::runtime_error("accepted halo Field candidate preflight failed collectively");
+      }
+      error = {};
+      try {
+        for (std::size_t image_level = 0; image_level < plan.accepted_potential.size(); ++image_level) {
+          copy_full_field_in_place(plan.prepared_solver->candidate_level(static_cast<int>(image_level)),
+                                   *plan.accepted_potential[image_level]);
+          if (plan.output)
+            copy_auxiliary_groups_in_place(*plan.candidate_provider_storage[image_level],
+                                           *prepared_hierarchy->provider_storage[image_level]);
+        }
+        Kokkos::fence();
+      } catch (...) { error = std::current_exception(); }
+      if (all_reduce_max(error ? 1L : 0L, lane)) {
+        discard_candidate();
+        if (lane.size() == 1 && error) std::rethrow_exception(error);
+        throw std::runtime_error("accepted halo Field temporary copy/fence failed collectively");
+      }
+      error = {};
+      try {
+        for (auto& publication : plan.candidate_provider_publications)
+          if (publication) publication->accept();
+        for (const auto& identity : plan.stale_auxiliary_providers)
+          if (std::find(dirty_auxiliary_providers.begin(), dirty_auxiliary_providers.end(), identity) ==
+              dirty_auxiliary_providers.end()) dirty_auxiliary_providers.push_back(identity);
+      } catch (...) { error = std::current_exception(); }
+      discard_candidate();
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          error, &lane, "accepted halo Field temporary provenance failed collectively");
+      if (!dirty_auxiliary_providers.empty()) {
+        runtime::system::AuxiliaryEvaluationPoint auxiliary;
+        error = {};
+        try {
+          auxiliary.clock = point.clock;
+          auxiliary.accepted_step = static_cast<std::uint64_t>(point.tick);
+          auxiliary.layout_generation = engine->materialization_generation();
+          auxiliary.level = point.level; auxiliary.substep = point.substep; auxiliary.stage = point.stage;
+          auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::after_regrid;
+        } catch (...) { error = std::current_exception(); }
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            error, &lane, "accepted halo Field auxiliary point allocation failed collectively");
+        facade->refresh_auxiliary_on_prepared_lane(auxiliary);
+      }
+    }
   }
 
   using AcceptedHaloPointPack =
@@ -13751,9 +13913,13 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
   if (!requests_accepted_halo_preparation()) return;
   p_->ensure_engine();
   const auto& lane = *p_->prepared_hierarchy->lane;
-  const auto communicator = lane.communicator();
   std::vector<const std::vector<MultiFab<Dim>>*> prior, bindings;
   std::vector<std::vector<MultiFab<Dim>>> accepted_backup;
+  std::map<std::string, std::vector<MultiFab<Dim>>> field_backup;
+  std::shared_ptr<const typename Impl::provider_snapshot_type> provider_backup;
+  std::vector<typename Impl::auxiliary_registry_type> registry_backup;
+  std::vector<std::string> dirty_backup;
+  bool has_field_dependencies = false;
   std::string request_contract;
   std::exception_ptr error;
   try {
@@ -13762,8 +13928,6 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
       throw std::invalid_argument("accepted halo preparation requires its enclosing rollback transaction");
     if (candidates.size() != p_->blocks.size() || points.size() != candidates.size())
       throw std::invalid_argument("accepted halo preparation requires every exact block candidate");
-    if (!p_->dirty_auxiliary_providers.empty())
-      throw std::invalid_argument("accepted halo preparation lacks fresh field/auxiliary authorities");
     ExactContractBuilder exact;
     exact.text("pops.amr.accepted-halo-preparation-request").scalar(std::uint32_t{1})
         .bytes(p_->multiblock_hierarchy->collective_contract())
@@ -13797,7 +13961,8 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
         if (p_->prepared_hierarchy->accepted_halo_boundary_preflight.size() != candidates.size() ||
             p_->prepared_hierarchy->accepted_halo_boundary_preflight[block].size() != levels)
           throw std::invalid_argument("accepted halo preparation lost typed boundary preflight authorities");
-        p_->prepared_hierarchy->accepted_halo_boundary_preflight[block][level](point);
+        if (point.dt == 0)
+          p_->prepared_hierarchy->accepted_halo_boundary_preflight[block][level](point);
         for (int axis = 0; axis < Dim; ++axis)
           if (field.ghosts()[axis] != request.extent[axis])
             throw std::invalid_argument("accepted halo extent differs from declared carrier storage");
@@ -13807,6 +13972,18 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
             .scalar(point.dt).scalar(point.physical_time);
       }
     }
+    for (const auto& block : p_->prepared_hierarchy->accepted_halo_boundary_fields)
+      for (const auto& fields : block) has_field_dependencies = has_field_dependencies || !fields.empty();
+    request_contract = std::move(exact).release();
+  } catch (...) { error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "accepted halo candidate preflight/allocation failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"accepted-halo-request", request_contract}}, lane))
+    throw std::invalid_argument("accepted halo candidate request differs between ranks");
+  if (has_field_dependencies)
+    p_->materialize_all_fields_atomically(); // Collective, after all local request errors are voted.
+  error = {};
+  try {
     std::size_t backup_bytes = 0;
     for (const auto& block : candidates)
       for (const auto& field : block)
@@ -13815,6 +13992,21 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
               backup_bytes, checked_size_product(field.fab(local).storage().size(), sizeof(Real),
                   "accepted halo snapshot bytes exceed size_t"),
               "accepted halo snapshot pack bytes exceed size_t");
+    const auto count_extra_image = [&](const MultiFab<Dim>& image) {
+      for (std::size_t local = 0; local < image.local_size(); ++local)
+        backup_bytes = checked_size_sum(backup_bytes,
+            checked_size_product(image.fab(local).storage().size(), sizeof(Real),
+                "accepted halo dependency snapshot bytes exceed size_t"),
+            "accepted halo complete snapshot bytes exceed size_t");
+    };
+    if (has_field_dependencies)
+      for (const auto& [slot, plan] : p_->field_plans)
+        for (const auto& image : plan.accepted_potential) {
+          if (!image) throw std::logic_error("accepted halo Field backup lacks materialized potential");
+          count_extra_image(*image);
+        }
+    for (const auto& level : p_->prepared_hierarchy->provider_storage)
+      for (const auto& [identity, image] : level->groups) count_extra_image(image);
     (void)backup_bytes; // Exact allocated local-pack bound; Kokkos allocation failures are voted.
     accepted_backup.resize(candidates.size());
     for (std::size_t block = 0; block < candidates.size(); ++block) {
@@ -13822,33 +14014,58 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
       for (std::size_t level = 0; level < levels; ++level)
         accepted_backup[block].emplace_back(p_->block_state(block, level));
     }
+    if (has_field_dependencies) {
+      for (const auto& [slot, plan] : p_->field_plans) {
+        auto& images = field_backup[slot];
+        images.reserve(plan.accepted_potential.size());
+        for (const auto& image : plan.accepted_potential) {
+          if (!image) throw std::logic_error("accepted halo Field backup lacks materialized potential");
+          images.emplace_back(*image);
+        }
+      }
+    }
+    provider_backup = p_->snapshot_provider_storage();
+    registry_backup = p_->prepared_hierarchy->auxiliary_registries;
+    dirty_backup = p_->dirty_auxiliary_providers;
     Kokkos::fence();
     prior = p_->program_hierarchy_candidates;
     bindings.resize(candidates.size(), nullptr);
     for (std::size_t block = 0; block < candidates.size(); ++block)
       bindings[block] = &candidates[block];
-    request_contract = std::move(exact).release();
   } catch (...) { error = std::current_exception(); }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-      error, &lane, "accepted halo candidate preflight/allocation failed collectively");
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"accepted-halo-request", request_contract}}, lane))
-    throw std::invalid_argument("accepted halo candidate request differs between ranks");
+      error, &lane, "accepted halo complete backup allocation failed collectively");
   struct RestoreBindings {
     decltype(p_->program_hierarchy_candidates)& slot;
     decltype(prior)& saved;
     ~RestoreBindings() { slot.swap(saved); }
   } restore{p_->program_hierarchy_candidates, prior};
   p_->program_hierarchy_candidates.swap(bindings);
+  if (has_field_dependencies) p_->dirty_auxiliary_providers.clear();
   const auto restore_accepted = [&] {
     std::exception_ptr restore_error;
     try {
       for (std::size_t block = 0; block < accepted_backup.size(); ++block)
         for (std::size_t level = 0; level < accepted_backup[block].size(); ++level)
           copy_full_field_in_place(accepted_backup[block][level], p_->block_state(block, level));
+      if (has_field_dependencies) {
+        for (const auto& [slot, images] : field_backup) {
+          auto& plan = p_->field_plans.at(slot);
+          for (std::size_t level = 0; level < images.size(); ++level)
+            copy_full_field_in_place(images[level], *plan.accepted_potential[level]);
+          plan.accepted_halo_producer_point.reset();
+        }
+      }
+      for (std::size_t level = 0; level < provider_backup->size(); ++level)
+        copy_auxiliary_groups_in_place((*provider_backup)[level],
+                                       *p_->prepared_hierarchy->provider_storage[level]);
       Kokkos::fence();
     } catch (...) { restore_error = std::current_exception(); }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         restore_error, &lane, "accepted halo staging restoration failed collectively");
+    for (std::size_t level = 0; level < registry_backup.size(); ++level)
+      p_->prepared_hierarchy->auxiliary_registries[level].swap_accepted_publication(registry_backup[level]);
+    p_->dirty_auxiliary_providers.swap(dirty_backup);
   };
   try {
     // All block/level valid states are candidates while typed BCs execute, including cross-block
@@ -13866,6 +14083,8 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
       for (std::size_t block = 0; block < candidates.size(); ++block) {
         error = {};
         try {
+          p_->prepare_accepted_halo_field_dependencies(block, level, points[block][level]);
+          p_->prepared_hierarchy->accepted_halo_boundary_preflight[block][level](points[block][level]);
           prepare_generated_amr_block_level_state(static_cast<int>(block), points[block][level],
                                                   candidates[block][level]);
           copy_full_field_in_place(candidates[block][level], p_->block_state(block, level));
@@ -16751,11 +16970,13 @@ std::vector<std::string> AmrSystem<Dim>::prepare_topology_field_order(
         accepted_point.clock == p_->program.checkpoint_metadata_.primary_clock_identity &&
         accepted_point.tick == p_->macro_step && accepted_point.physical_time == p_->accepted_time &&
         accepted_point.dt == static_cast<double>(p_->program.last_dt_);
+    const bool exact_candidate_point = reason == "accepted_halo_prepare" &&
+        p_->active_accepted_halo_point == &accepted_point && requests_accepted_halo_preparation();
     if (reason.empty() ||
-        (accepted_point.clock != expected_clock && !exact_requested_clock) || accepted_point.tick < 0 ||
-        accepted_point.level != 0 || accepted_point.substep != 0 || accepted_point.stage != 0 ||
-        accepted_point.stage_fraction.numerator != 0 ||
-        accepted_point.stage_fraction.denominator != 1 || !std::isfinite(accepted_point.dt) ||
+        (accepted_point.clock != expected_clock && !exact_requested_clock && !exact_candidate_point) || accepted_point.tick < 0 ||
+        (!exact_candidate_point && (accepted_point.level != 0 || accepted_point.substep != 0 ||
+        accepted_point.stage != 0 || accepted_point.stage_fraction.numerator != 0 ||
+        accepted_point.stage_fraction.denominator != 1)) || !std::isfinite(accepted_point.dt) ||
         accepted_point.dt < 0.0 || (accepted_point.dt == 0.0 && !honest_initial_point) ||
         !std::isfinite(accepted_point.physical_time))
       throw std::logic_error(
