@@ -39,7 +39,7 @@ FIELD_FORCING_BOUND=2*(1+DT)/ALPHA
 FIELD_RESIDUAL_BUDGET=ORIGINAL_F_BOUND/8
 FIELD_RELATIVE_TOL=FIELD_RESIDUAL_BUDGET/FIELD_FORCING_BOUND
 
-def build(*,ghost=True):
+def build(*,ghost=True,boundary_composer=None):
     frame=Rectangle('initial field ghost',(0.,0.),(1.,1.)).frame(Cartesian2D())
     model=pops.Model('growth with screened field',frame=frame)
     threshold=model.param(RuntimeParam('tag_threshold',default=.7))
@@ -59,7 +59,8 @@ def build(*,ghost=True):
     numerics.rates.add(rate,FiniteVolume(flux=flux,variables=variables.Conservative(state),reconstruction=reconstruction.FirstOrder(),riemann=riemann.Rusanov()))
     conditions={boundary:Outflow(state=block[state]) for boundary in (frame.boundaries.x_min,frame.boundaries.x_max,frame.boundaries.y_min,frame.boundaries.y_max)}
     if ghost:conditions[frame.boundaries.x_min]=Inflow(state=block[state],value=(interior_trace(block[state],'c'),ValueExpr(block[phi])+1+logical_time()))
-    numerics.boundaries.add(TransportBoundarySet(conditions))
+    boundaries=TransportBoundarySet(conditions)
+    numerics.boundaries.add(boundaries if boundary_composer is None else boundary_composer(boundaries))
     case.numerics(numerics,block=block)
     program=ForwardEuler(block[state],rate=rate,fields=field,solve_action=FailRun())
     program.step_strategy(FixedDt(DT));case.program(program)
