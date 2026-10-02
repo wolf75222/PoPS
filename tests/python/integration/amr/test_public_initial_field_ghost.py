@@ -41,16 +41,18 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
     images={};field_images={}
     def capture(phase):
         image=observe(world,runtime);publish(world,directory,phase,image)
+        before_manifest=collective_call(world,runtime.field_provider_checkpoint_manifest)
         slots=collective_call(world,runtime.field_provider_slots)
         with collective_check(world):assert len(slots)==1
         fields=[]
         for level in range(len(image[1])):
             values=collective_call(world,lambda level=level:runtime.field_potential_level_global(slots[0],level))
-            fields.append((np.asarray(values).copy(),image[1][level][1].copy()))
+            fields.append((np.asarray(values).reshape(image[1][level][1].shape).copy(),image[1][level][1].copy()))
         inspection=collective_call(world,lambda:runtime.inspect().to_dict())
         with collective_check(world):
             if world.rank==0:
                 np.savez(directory/(phase+'-fields.npz'),**{f'{level}-{part}':a for level,row in enumerate(fields) for part,a in enumerate(row)})
+                (directory/(phase+'-pre-field-manifest.json')).write_text(json.dumps(before_manifest,indent=2)+'\n')
                 (directory/(phase+'-inspect.json')).write_text(json.dumps(inspection,indent=2,default=str)+'\n')
         images[phase]=image;field_images[phase]=fields
     capture('initial')
@@ -65,7 +67,7 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
                 assert int(archive['pops_amr_checkpoint_version'])==12 and accepted['schema_version']==9
             proof={'contract':CONTRACT,'component_signature':dict(component.component_manifest.signature),
                    'checkpoint':{'path':str(checkpoint),'sha256':hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()},
-                   'native_path':native.__file__,'python_path':pops.__file__,'proof_scope':'uniform screened Field, physical xmin Ghost, synchronous two levels'}
+                   'potential_accessor_may_materialize':True,'native_path':native.__file__,'python_path':pops.__file__,'proof_scope':'uniform screened Field, physical xmin Ghost, synchronous two levels'}
             (directory/'provenance.json').write_text(json.dumps(proof,indent=2,default=str)+'\n')
         assert report.accepted_steps==1 and report.rejected_steps==0
         assert images['initial'][2][-1][:2]==(0.,0)
