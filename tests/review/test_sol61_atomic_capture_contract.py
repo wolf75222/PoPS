@@ -10,6 +10,38 @@ from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture,C
 from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step,layout_program_json_identity
 
 
+def test_bind_failure_journals_cause_then_reraises_same_object(tmp_path):
+    from tests.python.support.atomic_native_capture import execute_captured_bind
+    cause=ValueError('finite coefficient cannot be represented')
+    original=RuntimeError('genuine bind refusal')
+    original.__cause__=cause
+    retained=tmp_path/'program.cpp';retained.write_text('retained before bind')
+    events=[]
+    def fail():raise original
+    def record(chain,failures):
+        events.append('record')
+        (tmp_path/'bind.json').write_text(json.dumps({'chain':chain,'failures':failures}))
+    def receipt():events.append('receipt')
+    with pytest.raises(RuntimeError) as caught:execute_captured_bind(None,fail,record,receipt)
+    assert caught.value is original and caught.value.__cause__ is cause
+    evidence=json.loads((tmp_path/'bind.json').read_text())
+    assert evidence['chain']==[{'type':'RuntimeError','message':'genuine bind refusal','next':'cause'},
+        {'type':'ValueError','message':'finite coefficient cannot be represented','next':None}]
+    assert events==['record','receipt'] and retained.read_text()=='retained before bind'
+
+
+def test_bind_journal_io_failure_does_not_replace_original_and_success_is_unchanged():
+    from tests.python.support.atomic_native_capture import execute_captured_bind
+    original=RuntimeError('bind rejected')
+    def fail():raise original
+    def io(*args):raise OSError('journal unavailable')
+    with pytest.raises(RuntimeError) as caught:execute_captured_bind(None,fail,io,io)
+    assert caught.value is original
+    assert any('journal unavailable' in note for note in original.__notes__)
+    runtime=object()
+    assert execute_captured_bind(None,lambda:runtime,io,io) is runtime
+
+
 def test_parametric_native_fixture_keeps_initial_capture_before_attempt():
     source=Path('tests/python/integration/runtime/test_atomic_cubature_parametric_refusal_runtime.py').read_text()
     tree=ast.parse(source)

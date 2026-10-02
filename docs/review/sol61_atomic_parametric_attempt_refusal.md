@@ -23,6 +23,27 @@ No accepted first step is claimed. An earlier bind refusal leaves the test
 failed and cannot qualify a stage refusal. Histories, checkpoint/restart,
 GPU, whole M17 and performance are outside this node's scope.
 
+Early bind failures now write `bind-failure-rankR.json` with the actual
+type/message and explicit cause/context chain on each rank. A collective
+vote follows these writes before the root receipt pins the files. The
+receipt records `bind-failed`, and the original local exception object is
+re-raised; journal/receipt I/O failures are notes, never replacement causes.
+This remains a failed experiment, with `native_stage_refusal_proved=false`.
+The previously retained C++/IR/manifest are preserved.
+
+Future ROOT commands, after the corrected generic parameter routing is in
+the installed SDK (no execution by this reviewer):
+
+```sh
+env -u PYTHONPATH "$SDK_ENV/bin/python" -m pytest tests/python/integration/runtime/test_atomic_cubature_parametric_refusal_runtime.py -q
+env -u PYTHONPATH mpiexec -n 2 "$SDK_ENV/bin/python" -m pytest tests/python/integration/runtime/test_atomic_cubature_parametric_refusal_runtime.py -q
+```
+
+ROOT must use its normal native-test resource environment and isolated
+cache/identity protocol. These commands are test nodes, not scientific
+reception commands; a bind failure remains red and its journals must be
+retained before deciding whether a different finite parameter is needed.
+
 The public parameter ownership Source counterexample remains red at gel
 7865a008 until the independent core author's generic routing correction.
 The Native node must not run before that correction is received. No Native,

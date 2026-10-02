@@ -6,7 +6,7 @@ import pops
 import pytest
 from tests.python.support.atomic_cubature_path_case import make_case
 from tests.python.support.atomic_cubature_fv_oracle import DT,initial_averages,authenticate_carrier_values
-from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step,layout_program_json_identity
+from tests.python.support.atomic_native_capture import select_layout_program,save_phase,execute_captured_step,layout_program_json_identity,execute_captured_bind
 from tests.python.support.collective_checks import collective_call,collective_check,collective_attempt
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -53,8 +53,15 @@ def test_installed_atomic_cubature_finite_parameter_attempt_refusal(tmp_path,rec
     collective_call(world,provenance)
     record_property('atomic_parametric_refusal_receipt',str(directory/'receipt.json'))
     subject=resolved.initial_condition_plan.bindings[0].subject
-    runtime=collective_call(world,lambda:pops.bind(artifact,params={parameter:1.e308},
-        initial_values={subject:initial_averages()},resources={'execution_context':artifact_execution_context(artifact)}))
+    def bind_failure(local_error,failures):
+        rank=0 if world is None else int(world.rank)
+        evidence={'schema':'pops.atomic-native-bind-failure@1','phase':'bind-failed',
+            'rank':rank,'local_exception_chain':local_error,'collective_failures':failures,
+            'native_stage_refusal_proved':False}
+        (directory/('bind-failure-rank'+str(rank)+'.json')).write_text(json.dumps(evidence,sort_keys=True,allow_nan=False)+'\n')
+        proof['phase']='bind-failed';proof['bind_failures']=failures
+    runtime=execute_captured_bind(world,lambda:pops.bind(artifact,params={parameter:1.e308},
+        initial_values={subject:initial_averages()},resources={'execution_context':artifact_execution_context(artifact)}),bind_failure,persist)
     before=capture(world,runtime)
     collective_call(world,lambda:save_phase(directory,'initial',before) if world is None or world.rank==0 else None)
     proof['phase']='initial-captured';collective_call(world,persist)

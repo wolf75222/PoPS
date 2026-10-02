@@ -70,3 +70,39 @@ def layout_program_json_identity(row):
     row.verify()
     return {'layout_id':row.layout_id,'target':row.target,'block_names':list(row.block_names),
             'identity_token':row.identity.token}
+
+
+def exception_evidence(error):
+    """JSON-safe actual exception chain, retaining explicit cause/context choice."""
+    if error is None:return None
+    rows=[];seen=set()
+    while error is not None:
+        if id(error) in seen:
+            rows.append({'cycle':True});break
+        seen.add(id(error))
+        cause=error.__cause__
+        link='cause' if cause is not None else 'context' if not error.__suppress_context__ and error.__context__ is not None else None
+        rows.append({'type':type(error).__name__,'message':str(error),'next':link})
+        error=cause if cause is not None else error.__context__ if link=='context' else None
+    return rows
+
+
+def execute_captured_bind(world,operation,on_failure,on_recorded=lambda:None):
+    """Journal genuine bind failures collectively, then rethrow the local object."""
+    from tests.python.support.collective_checks import collective_attempt
+    original=None
+    def invoke():
+        nonlocal original
+        try:return operation()
+        except Exception as error:
+            original=error;raise
+    runtime,failures=collective_attempt(world,invoke)
+    if not any(failures):return runtime
+    _,io_failures=collective_attempt(world,lambda:on_failure(exception_evidence(original),failures))
+    _,receipt_failures=collective_attempt(world,on_recorded)
+    if original is not None:
+        original.add_note('collective bind failures: '+repr(failures))
+        if any(io_failures):original.add_note('bind evidence persistence failures: '+repr(io_failures))
+        if any(receipt_failures):original.add_note('bind receipt persistence failures: '+repr(receipt_failures))
+        raise original
+    raise RuntimeError('peer bind failed: '+repr(failures)+'; persistence failures: '+repr((io_failures,receipt_failures)))
