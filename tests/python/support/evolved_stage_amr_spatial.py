@@ -309,7 +309,7 @@ def check_saved(rows, cells, width, previous, step, initial):
     # Fixed pre-native discriminator, distinct from the scientific error guard.
     assert np.max(np.abs(jensen_gap)) > 1e-10
     amounts, diffusion_amounts = np.zeros(2), np.zeros(2)
-    residual, projection, flux_activity = 0., 0., 0.
+    residual, projection, flux_activity, original_squared, reference_squared = 0., 0., 0., 0., 0.
     references = []
     for level, row in enumerate(rows):
         n, active = cells*2**level, row["active"]
@@ -319,6 +319,10 @@ def check_saved(rows, cells, width, previous, step, initial):
         projection = max(projection, float(np.max(np.abs((q[level]-accumulation(t))[:, active]))))
         flux_activity = max(flux_activity, float(np.max(np.abs(diff[:, active]))))
         measure = row["cartesian_cell_volume"]*row["declared_no_EB_kappa"]
+        original = accumulation(t)-qprev[level]-DT*(diff+forcing[level])
+        z_error = row["z"].reshape(n,n)-.25*t[0]-.5*t[1]
+        original_squared += float(np.sum(original[:,active]**2*measure[active])+np.sum(z_error[active]**2*measure[active]))
+        reference_squared += float(np.sum((qprev[level]+DT*forcing[level])[:,active]**2*measure[active]))
         amounts += np.sum(q[level][:, active]*measure[active], axis=1)
         diffusion_amounts += np.sum(diff[:, active]*measure[active], axis=1)
         references.append({"independent_divergence":diff.copy(), "independent_x_face_flux_density":faces[level].copy(),
@@ -331,7 +335,7 @@ def check_saved(rows, cells, width, previous, step, initial):
     assert np.max(np.abs(diffusion_amounts)) <= ACCEPTANCE
     assert np.max(np.abs(balance)) <= ACCEPTANCE
     assert abs(np.sum(amounts-initial_amount)) <= ACCEPTANCE
-    return {"original_F_composite_linf":residual, "Q_projection_active_linf":projection,
+    return {"original_F_composite_linf":residual, "original_F_weighted_l2":float(np.sqrt(original_squared)), "original_F_zero_seed_reference_l2":float(np.sqrt(reference_squared)), "Q_projection_active_linf":projection,
         "constraint_linf":constraint, "Q_balance":balance.tolist(), "Q_amounts":amounts.tolist(),
         "closed_diffusion_amounts":diffusion_amounts.tolist(), "flux_activity_linf":flux_activity,
         "restriction_Jensen_gap_linf":float(np.max(np.abs(jensen_gap)))}, references

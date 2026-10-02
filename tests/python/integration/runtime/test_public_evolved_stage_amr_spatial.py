@@ -8,6 +8,7 @@ import sys
 import numpy as np
 import pops
 import pytest
+from tests.python.support.original_field_acceptance import selected_native_mixed_rule, STOP_RULE
 from pops._native_collectives import allgather_value
 
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
@@ -150,10 +151,12 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
                         np.savez(path, **row)
                         reference_files.append({"path":str(path), "sha256":hashlib.sha256(bounded_bytes(path)).hexdigest()})
                 if phase != "initial":
-                    original = [(name, value) for name, value in image[1][2] if name.endswith(".rel_residual")]
-                    assert len(original) == 1 and np.isfinite(original[0][1])
-                    assert 0 <= original[0][1] <= CONTROLS["tolerance"]
-                    metrics["native_original_F_composite_relative"] = original[0][1]
+                    original = selected_native_mixed_rule(image[1][2], CONTROLS["tolerance"])
+                    assert metrics["original_F_weighted_l2"] <= CONTROLS["tolerance"]*max(1., original["reference_residual_norm"])
+                    if metrics["original_F_zero_seed_reference_l2"] < 1.:
+                        assert metrics["original_F_weighted_l2"] <= CONTROLS["tolerance"]
+                    metrics["native_original_F_triplet"] = original
+                    metrics["native_original_F_composite_relative"] = original["rel_residual"]
                 for level, row in enumerate(reloaded_rows):
                     np.testing.assert_array_equal(row["forcing"], initial[0][level]["forcing"])
                 observations[phase] = {"levels":files, "independent_references":reference_files, "checks":metrics, "metadata":image[1]}
@@ -162,7 +165,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
             assert {Path(row["path"]).resolve() for row in checkpoints.values()}.isdisjoint(
                 {Path(row["path"]).resolve() for phase in observations.values()
                     for row in (*phase["levels"], *phase["independent_references"])})
-            receipt = {"fixture_schema":"pops.evolved-stage-amr-spatial-native-fixture@2", "carrier_registry":registry_pin, "artifact":artifact.artifact_identity.token,
+            receipt = {"fixture_schema":"pops.evolved-stage-amr-spatial-native-fixture@3", "stop_rule":STOP_RULE, "carrier_registry":registry_pin, "artifact":artifact.artifact_identity.token,
                 "dimension":2, "rank":world.rank, "size":world.size, "cells":cells, "width":width,
                 "qualification":"nonconstant periodic full-y strips; composite flux and nonlinear restriction",
                 "initial_temperature":{"T0":[.15, .02, "cos(2*pi*x)"], "T1":[.25, .015, "sin(2*pi*x)"]},
