@@ -83,7 +83,8 @@ def amr_lowering_coverage(
             targets=("amr-runtime-bootstrap:%s" % bootstrap_identity,),
         ),
     ]
-    if execution.accepted_halo is not None:
+    from pops.amr._execution_contract import runtime_execution_data
+    if runtime_execution_data(execution).get("accepted_halo") is not None:
         rows.append(LoweringCoverageRow(
             source="amr-accepted-halo-preparation:%s" % execution_identity,
             disposition="lowered",

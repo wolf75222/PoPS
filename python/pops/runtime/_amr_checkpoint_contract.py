@@ -171,7 +171,7 @@ def _decode_contract(payload):
     contract = strict_json_loads(
         str(payload["amr_accepted_contract"]), where="AMR accepted-state contract"
     )
-    if not isinstance(contract, dict) or contract.get("schema_version") not in (8, 9) or set(contract) != (_CONTRACT_KEYS | {"accepted_halo"} if contract.get("schema_version") == 9 else _CONTRACT_KEYS):
+    if not isinstance(contract, dict) or type(contract.get("schema_version")) is not int or contract.get("schema_version") not in (8, 9) or set(contract) != (_CONTRACT_KEYS | {"accepted_halo"} if contract.get("schema_version") == 9 else _CONTRACT_KEYS):
         raise TypeError("restart: AMR accepted-state contract has an invalid exact schema")
     if contract.get("schema_version") == 9:
         rows = contract["accepted_halo"]

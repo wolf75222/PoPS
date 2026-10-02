@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 import math
 import struct
 from typing import Any
@@ -15,11 +16,15 @@ def _runtime_data(layout: Any) -> dict[str, Any]:
             "adaptive runtime layouts must implement runtime_layout_data(); "
             "concrete layout classes are not dispatched centrally"
         )
-    first, second = protocol(), protocol()
-    if type(first) is not dict or first != second:
+    first = deepcopy(protocol())
+    second = protocol()
+    if type(first) is not dict or type(second) is not dict or first != second:
         raise TypeError("runtime_layout_data() must return one deterministic dict")
     if first.get("schema_version") != 1 or first.get("layout_type") != "adaptive_cartesian":
         raise ValueError("adaptive runtime layout uses an unsupported protocol schema")
+    from pops.amr._execution_contract import validate_execution_data
+    first = dict(first)
+    first["execution"] = validate_execution_data(first["execution"])
     return first
 
 
@@ -229,6 +234,8 @@ def amr_config_from_layout(
 
     data = _runtime_data(layout)
     cells, lower, upper, periodicity = _native_amr_grid_values(native_layout)
+    from pops.amr._execution_contract import validate_execution_data
+    data["execution"] = validate_execution_data(data["execution"], dimension=len(cells))
     if type(hierarchy) is not ResolvedHierarchy:
         raise TypeError("adaptive runtime requires an exact resolved hierarchy")
     from pops.mesh._amr.hierarchy_native import lower_native_hierarchy

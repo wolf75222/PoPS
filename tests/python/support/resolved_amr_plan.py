@@ -44,6 +44,7 @@ def resolved_amr_plan(
     auxiliary_names=(),
     cells=8,
     name="phase-record-amr",
+    execution=None,
 ):
     """Resolve one complete public AMR case with one conservative state per block.
 
@@ -161,7 +162,8 @@ def resolved_amr_plan(
         ),
         regrid=AMRRegrid(schedule=every(1, clock=program.clock)),
         transfer=transfer,
-        execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+        execution=(AMRExecution.subcycled((AMRClockRelation(0, 1, 2),))
+                   if execution is None else execution),
     )
     return pops.resolve(
         pops.validate(case),

@@ -1252,28 +1252,16 @@ def finalize_layout_runtime_authorities(engine: Any, authority_plan: Any) -> Non
 
 def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
     """Install every pre-build authority carried by one normalized install plan."""
-    _install_boundary_authorities(engine, install_plan)
     adaptive = {row.adaptive for row in install_plan.artifact.layout_plan.layouts}
     if adaptive == {False}:
+        _install_boundary_authorities(engine, install_plan)
         return
     if adaptive != {True}:
         raise ValueError("runtime authorities require one coherent layout capability")
 
-    _install_amr_provider_authorities(engine, install_plan)
-
-    execution = install_plan.amr_execution
-    protocol = getattr(execution, "runtime_execution_data", None)
-    if not callable(protocol):
-        raise TypeError("adaptive execution authority must implement runtime_execution_data()")
-    first, second = protocol(), protocol()
-    if (
-        type(first) is not dict
-        or first != second
-        or set(first) != {"schema_version", "authority_type", "mode", "relations"}
-        or first.get("schema_version") != 2
-        or first.get("authority_type") != "amr_execution"
-    ):
-        raise TypeError("AMR runtime_execution_data() must return one deterministic v2 dict")
+    from pops.amr._execution_contract import runtime_execution_data
+    first = runtime_execution_data(
+        install_plan.amr_execution, dimension=install_plan.artifact.resolved_dimension)
     relations = first["relations"]
     if not isinstance(relations, list):
         raise TypeError("AMR execution relations must be a list")
@@ -1293,40 +1281,17 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
     expected = len(install_plan.resolved_hierarchy.plan.transitions)
     if len(relations) != expected:
         raise ValueError("AMR execution requires one temporal relation per hierarchy transition")
-    for index, row in enumerate(relations):
-        if not isinstance(row, dict) or set(row) != {
-            "parent_level",
-            "child_level",
-            "temporal_ratio",
-            "remainder_policy",
-        }:
-            raise ValueError("AMR execution temporal relation has incomplete keys")
-        ratio = row["temporal_ratio"]
-        if (
-            row["parent_level"] != index
-            or row["child_level"] != index + 1
-            or not isinstance(ratio, dict)
-            or set(ratio) != {"numerator", "denominator"}
-            or isinstance(ratio["numerator"], bool)
-            or not isinstance(ratio["numerator"], int)
-            or isinstance(ratio["denominator"], bool)
-            or not isinstance(ratio["denominator"], int)
-            or ratio["denominator"] <= 0
-            or ratio["numerator"] < ratio["denominator"]
-            or row["remainder_policy"] not in {"integral_only", "explicit_final_substep"}
-        ):
-            raise ValueError("AMR execution temporal relation is not canonical")
-        if (
-            ratio["numerator"] % ratio["denominator"] != 0
-            and row["remainder_policy"] == "integral_only"
-        ):
-            raise ValueError("non-integral AMR temporal relation requires an explicit remainder")
+    # All execution/effect/hierarchy checks precede any native authority installation.
+    _install_boundary_authorities(engine, install_plan)
+    _install_amr_provider_authorities(engine, install_plan)
     engine.set_temporal_relations(
         [int(row["temporal_ratio"]["numerator"]) for row in relations],
         [int(row["temporal_ratio"]["denominator"]) for row in relations],
         [str(row["remainder_policy"]) for row in relations],
     )
     installed_execution = dict(first)
+    if "accepted_halo" in first:
+        installed_execution["accepted_halo"] = MappingProxyType(dict(first["accepted_halo"]))
     installed_execution["relations"] = [
         {
             **row,

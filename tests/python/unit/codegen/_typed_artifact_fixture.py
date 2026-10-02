@@ -71,7 +71,7 @@ class CompiledComponent:
 
 
 def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=None,
-                     parameters=(), tag_parameter=None):
+                     parameters=(), tag_parameter=None, execution=None):
     if target == "amr_system":
         if bind_schema is not None:
             raise TypeError(
@@ -82,6 +82,7 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
             parameters=parameters,
             tag_parameter=tag_parameter,
             name="typed-artifact",
+            execution=execution,
         )
         components = tuple(
             CompiledComponent(
