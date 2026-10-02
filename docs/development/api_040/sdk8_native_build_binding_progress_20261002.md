@@ -18,7 +18,8 @@ remains open. The following are separate, bounded results:
 | Shared execution contract, `f1b32ede + 69ec8e3f` | 245 Source PASS independently | Exact v2/v3, validation before callbacks, declared/runtime drift, detached metadata, integer checkpoint schemas, dimension and native integer bounds; no runtime qualification from spies. |
 | Build `3d8481c9` | PASS | Corrected Python chain installed: 1,136 authenticated sources, unchanged DSO `7fd8c7fe`. |
 | Public periodic Tag, current SDK | 8 Serial PASS; 8 MPI2 cases PASS on each rank | Both transfer choices, buffer 0/1 and shapes 8×8/8×12; complete grown constant preserved. Representative received independently from actual saved carrier captures. |
-| Public typed Original Newton, current SDK | 8 Serial PASS | Relative, RelativeWithFloor, Absolute and overflowing Relative, Uniform and AMR; real compile/bind/run, original residual checks and exact rollback. MPI2 reception in progress. |
+| Public typed Original Newton, current SDK | 8 Serial PASS; 8 MPI2 cases PASS on each rank | Relative, RelativeWithFloor, Absolute and overflowing Relative, Uniform and AMR; real compile/bind/run, original residual checks and exact rollback. |
+| Nonconstant N8 AMR, original Q/field | 1 Serial and 1 MPI2 case scientifically received | [Independent saved-state reception](sdk3d8481_spatial_n8_scientific_reception.md); CP12/default accepted8. Original thresholds retained; opt-in accepted9 and N16 separate. |
 
 The independent SDK audit verifies the actual ABI8 import, setters and 1,135
 installed source files. The primary-clock symbol is confirmed by `nm` in the
@@ -55,8 +56,8 @@ tests/python/integration/runtime/test_public_newton_typed_original.py
 
 The earlier Tag attempts remain failed. No physical tolerance, equation, Q guard, full
 grown-carrier guard or scientific reader criterion was changed to obtain a pass.
-Typed Newton MPI2, evolving whole-grown halos with direct CP12/accepted9 captures,
-nonconstant N8/N16 AMR, signed free transport and the remaining 94 obligations
+Evolving whole-grown halos with direct CP12/accepted9 captures and genuine carrier
+refusal, nonconstant N8/N16 profile @4, signed free transport and the remaining 94 obligations
 are still required. N16 will use a new reception profile @4; published N8 @3
 is preserved.
 GPU, ROMEO, other native dimensions and GitHub CI have no new qualification here.

@@ -524,6 +524,56 @@
           "bytes": 3058
         }
       ]
+    },
+    "typed_original_policies_mpi2": {
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-mpi2-dim2/result.json",
+        "sha256": "4d15fdfb7e21297fe69a9e5817cc3c151e5d8d6c6b1e0e7041f63e02fbb91b26",
+        "bytes": 4575
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-mpi2-dim2/rank0.xml",
+          "sha256": "f4fda3743315e51c73f3cc1f9ebb1eadd28d9123ce6a09f720e6b62689304241",
+          "bytes": 3885
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-mpi2-dim2/rank1.xml",
+          "sha256": "152bf121b3a0ff6c089418d6cfd207426809a045ebb5f77c15cae37073e51c4a",
+          "bytes": 3885
+        }
+      ],
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-mpi2-dim2/before/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-mpi2-dim2/after/identity.json",
+        "sha256": "894f6850d2dbdc5ed8c976554e01dcbf61c4fb56830cc926c3a5dcb133298f01",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-mpi2-dim2/before/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-mpi2-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "test_sources": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-typed-original-policies-mpi2-dim2/test-sources.json",
+        "sha256": "211424a8fe31762c45eedf07518974e7c3cedfe48e32cef01ebd7cd32d575326",
+        "bytes": 394
+      },
+      "status": "passed",
+      "distinct_cases": 8,
+      "ranks": 2,
+      "rank_counts_not_summed": true,
+      "scope": "Uniform/AMR Relative, RelativeWithFloor, Absolute, overflow; original residual and exact rollback",
+      "scientific_owner_seal": false
     }
   },
   "failures": [
@@ -533,9 +583,8 @@
     "second installed Tag bind: runtime authority demanded execution v2; corrected shared contract in new build3d8481; original failed result retained"
   ],
   "pending": [
-    "typed Original Newton variants and overflow rollback MPI2",
     "evolving full-grown halo with directly captured CP12/accepted9 contracts and independent non-author oracle",
-    "nonconstant AMR N8 reader3 and N16 new reader4 scientific reception",
+    "nonconstant AMR N8/N16 new reader4 scientific reception; N8 reader3 received on Serial/MPI2",
     "authentic M19 signed free-transport Native/restart",
     "all remaining 94 obligations and backend qualification"
   ],
@@ -583,12 +632,18 @@
       }
     ]
   },
-  "updated_at": "2026-10-02T03:44:15.117937+00:00",
+  "updated_at": "2026-10-02T04:09:26.765165+00:00",
   "bounded_public_reception": {
     "tag_cases_per_backend": 8,
     "tag_mpi_ranks": 2,
     "typed_original_serial_cases": 8,
     "rank_counts_not_summed": true,
-    "full_scientific_reception": false
+    "full_scientific_reception": false,
+    "typed_original_mpi_cases_per_rank": 8
+  },
+  "bounded_scientific_reception": {
+    "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/sdk3d8481_spatial_n8_scientific_reception.json",
+    "sha256": "5bde58d5e3f552f52c2058f17696d3a778467d9cc2e4abd75c763c2d15b96053",
+    "bytes": 9329
   }
 }
