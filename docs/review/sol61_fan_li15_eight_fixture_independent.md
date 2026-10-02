@@ -18,10 +18,13 @@ and annotate persistence failures. Rejected attempts are separately labelled.
 Every model is required to provide public C25 complete provenance and actual
 source before bind; exact layout/program verification precedes those exports.
 
-Two review findings on the author freeze are recorded without silently changing
-its claim: Program dump_cpp has an advanced regeneration fallback and should be
-preceded by the existing dump_retained_program guard; the fixture itself does
-not compare Gauss4/GL48 on saved faces. The independent reader already enforces
+Two scope observations are recorded without silently changing the author claim.
+Program dump_cpp has an advanced regeneration fallback, but the actual public
+root-publisher _compiled_handle supplies generated_cpp=src on both fresh/cache
+routes (the existing _compile_drivers.py 619–645). Thus no missing-source defect
+was reproduced on this fixture route; dump_retained_program would be defensive
+witness hardening, not a demonstrated production blocker. The fixture itself
+does not compare Gauss4/GL48 on saved faces. The independent reader already enforces
 the latter original guard, together with Wick/Gram reconstruction, SPD,
 GL24/48, SSPRK2, ten inventories and final DOP853. Cross-node permutation 1e-12
 is a reception operation (compare_permutation), not proved by two independent
@@ -41,3 +44,25 @@ disable bytecode/cache, use the existing ir17 interpreter, and import no Native.
 The two genuine public validate/resolve/emit Source nodes are separately replayed;
 final results and any author corrective delta are recorded in the subsequent
 review update. Main/Native/ENV/ROMEO and raw receipts are untouched.
+
+## Final followup and verdict
+
+Author followup dc11a3ef9895e8897f702557cb367673fa8a10b7 is reviewed clean.
+It uses the existing dump_retained_program gate, refuses absent/empty/non-text
+advanced handles before dumping, and explicitly assigns Gauss4/GL48 and
+cross-campaign permutation to independent reception. No production/math/method
+change is introduced. Its seven non-emission Source tests independently pass
+in 3.65s. The unchanged public canonical/reverse validate/resolve/emit nodes of
+02cd independently pass: 2 PASS, 3 deselected, 413.86s. Native is not loaded.
+
+The independent reader now also checks GL24/48 at the ninth saved state, in
+addition to Gauss4/GL48; all nine saved faces are covered without changing the
+3e-8 guard. Reader/wire coherent rerun: 17 PASS in 14.67s, zero skip. The prior
+0ad preparation is preserved in Git. Total independently completed checks are
+26 Source/offline tests across these three commands; these are not GitHub CI.
+
+Verdict: favourable bounded Source preparation for 02cd + dc11. Future actual
+reception still requires nine authentic exports, external pins/provenance,
+all original guards, independently joined canonical/reverse results, and
+ROOT approval. Uniform full carriers, ghosts, checkpoint, restart, AMR/GPU,
+other truncations and performance are unreceived.

@@ -120,7 +120,8 @@ def audit_states(states,clocks,order):
     final=canonical[-1];right=np.roll(final,-1,axis=1)
     final48=np.stack([path(final[:,i],right[:,i],48) for i in range(N)],axis=1)
     final4=np.stack([path(final[:,i],right[:,i],4) for i in range(N)],axis=1)
-    require(np.max(abs(final48-final4))<3e-8,'final saved-face Gauss4/48 guard violated')
+    final24=np.stack([path(final[:,i],right[:,i],24) for i in range(N)],axis=1)
+    require(np.max(abs(final48-final4))<3e-8 and np.max(abs(final48-final24))<3e-8,'final saved-face quadrature guards violated')
     from scipy.integrate import solve_ivp
     reference=solve_ivp(lambda t,u:rhs(u.reshape(15,N),24).ravel(),(0.,STEPS*DT),seed.ravel(),method='DOP853',rtol=2e-12,atol=2e-14)
     require(reference.success and np.all(np.isfinite(reference.y[:,-1])),'independent DOP853 failed')
