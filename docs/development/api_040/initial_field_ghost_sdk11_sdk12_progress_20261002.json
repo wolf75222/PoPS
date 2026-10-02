@@ -1,12 +1,43 @@
 {
-  "current_blockage": "Source initialField authority958c4b8b and independent8b805b59 integrated; genuine SDK13 build002860fe running, actual public run and native failure/restart/MPI receipt pending.",
+  "checkpoint_capacity_consensus_followup": "abf96b28ab770afb69bacb54614dc80b02d645e7",
+  "checkpoint_capacity_independent_review": "10053d60f8be786197b6ef367e9a63be6090a456",
+  "checkpoint_capacity_source": "a2d5f7d4ed354938d87e50ddf52d497af36df604",
+  "checkpoint_consensus_review_correction": "Old initializer_list/string_view/span overload did not allocate vector/string. Allocation allegation withdrawn; new named container is explicitly prepared under vote.",
+  "current_blockage": "SDK13 authentic failures preserved. Exact CP12 member+structural capacity and explicit voted container integrated and independently reviewed (44 Source/host PASS). FAC realization and initial fault preparation integrated (37 Source/host PASS). Getter temporal interpretation clarified; full Field actually consumed by Ghost requires a generic optional candidate observation now being implemented. SDK14 clone complete, fresh build/run/restart/fault/MPI2 pending.",
+  "fac_explicit_realization_source": "5065539483fb2ffc2bf223f163811f0d24f9b269",
+  "fac_independent_review": "e390e3a121994e84fdc1e7ea777ab1115d72864e",
+  "field_observation_decision": "Implement optional generic owned candidate observation before Ghost, exact qualified slot/invocation/point/topology; preserve warm-start and FE, never trigger a getter solve. Source implementation in progress, no Native proof.",
   "inferred_bind_correction_source": "ee21c042592dfa1881a0f7a140f1c00291f07ec2",
   "inferred_bind_independent_review": "eb4ad0c9c9ddbd73e2004f55d20f8e54ca31553e",
   "initial_field_authority_independent_review": "8b805b5945975aa7a18f2002904344ba5cbb270f",
   "initial_field_authority_source": "958c4b8bb712bd07411b917a393662517b9c8f00",
+  "initial_ghost_fault_independent_review": "7e1a500c",
+  "initial_ghost_fault_source": "6698efa2",
+  "integrated_fac_and_initial_fault_source_host": {
+    "bytes": 1181,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-integrated-fac-and-initial-fault-source-receipt.json",
+    "sha256": "456d84a9ad6864f9d49ec07878a0524706dec625b23bfa94dbc2ef896519f1d8"
+  },
+  "integrated_state_carrier_capacity_source_host": {
+    "bytes": 1258,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-integrated-state-carrier-capacity-source-receipt.json",
+    "sha256": "90b8187061e8ad095d345678b91f25909fbe573d8fb70b24862cfd168a7ca3ca"
+  },
+  "native_limits": [
+    "SDK13 actual arm64 CPU OpenMP/MPICH Dim2 Serial only.",
+    "Initial and accepted raw State/Ghost captures exist, but no full scientific receipt.",
+    "No completed checkpoint, restart, fault-injection or MPI2 for this SDK13 case.",
+    "No implicit getter solve or changed FE schedule is authorized to make an endpoint oracle pass."
+  ],
+  "preserved_contracts": {
+    "accepted_amr": 9,
+    "checkpoint_amr": 12,
+    "native_abi": 8,
+    "original_F_linf_limit": 1e-10
+  },
   "public_example_independent_review": "3ec0b8596dfd6407e2ee073d1ec4a87681497e3b",
   "public_example_source": "016dc020b70417f9b63a4382745ec46ee139d15f",
-  "schema": "root.api040.initial-field-ghost-progress@2",
+  "schema": "root.api040.initial-field-ghost-progress@3",
   "scoped_native_received": false,
   "sdk11_failed_attempt": {
     "bytes": 2615,
@@ -23,11 +54,37 @@
     "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk12-initial-field-ghost-failed-field-point-root-receipt.json",
     "sha256": "982714b7c9d4e192254da9d6671484662b930bb16d4fee63cf24d9506fc5677d"
   },
+  "sdk13_build": {
+    "bytes": 4234,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-sdk13-initial-field-ghost-dim2-002860fe/build-reception.json",
+    "sha256": "a80f3b9068b9f76e09a1d540c6b604c2baa1065cd5282b836e436f72565c0d42"
+  },
   "sdk13_build_source_commit": "002860fea6f23469b172d74cc8733d409a4dcdcd",
+  "sdk13_checkpoint_math_failure": {
+    "bytes": 12220,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk13-initial-field-ghost-checkpoint-and-math-failure-root-receipt.json",
+    "sha256": "c344b877f4d1817e6dca932d2f371448e6099f82f1f6977e558b736240a2222a"
+  },
   "sdk13_dependency_clone": {
     "bytes": 551,
     "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk12-dependency-clone-initial13/result.json",
     "sha256": "e8baa574fee4e24a46c2cdb415b584d633349c59bc88d352cd4a2a2e921b03c1"
   },
+  "sdk13_first_capture_failure": {
+    "bytes": 4516,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk13-initial-field-ghost-first-capture-failure-root-receipt.json",
+    "sha256": "4c4245fe399870a213bde52de934d821c273130177b0f23f01555d26467ef801"
+  },
+  "sdk13_independent_partial_math": {
+    "bytes": 3397,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-initial-field-ghost-sdk13-partial-math-independent.json",
+    "sha256": "db1da5414a233b10a0b4ecbc5500c381c784f1141649587bd298deea3f8c5cc9"
+  },
+  "sdk14_dependency_clone": {
+    "bytes": 551,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk13-dependency-clone-initial14/result.json",
+    "sha256": "ddc51c0b2b3ea69177465148621fee1ebb562d88f82be0dcb01857a025e1a2d9"
+  },
+  "updated_at_utc": "2026-10-02T11:05:05.961600+00:00",
   "whole_mission_received": false
 }

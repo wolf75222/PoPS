@@ -1,4 +1,50 @@
-# Field→Ghost initial — vrais SDK11/12 et échecs conservés
+# Field→Ghost initial — SDK11–14, preuves et échecs conservés
+
+Actualisation ROOT : SDK13 Source002860fe a terminé sa vraie construction, 28 TU,
+wheel/install/doctor rc0, 1 140 fichiers installés, DSOdf7e5a87 et SDK180a9615.
+Le premier essai atteint Field/Ghost puis échoue sur un diagnostic absent de
+la façade Python (1 FAIL80,38 s). Le correctif test-only e659 utilise le vrai
+propriétaire natif const. Le second essai exécute bind, Field/Ghost initial et
+une étape FE acceptée ; il échoue au checkpoint CP12, dont le budget omet le
+membre des carriers AMR (1 FAIL65,60 s). Les 1 140 sources et DSO sont exacts
+avant/après les deux essais. Journaux, XML et captures ne sont pas rescellés.
+
+La contre-revue des données sauvegardées trouve OriginalF initial jusqu'à
+1,0327e−8 pour une garde inchangée de1e−10. Le contrat FAC composite par défaut
+(rel_tol1e−9, forcing16) autorise1,6e−8 ; son diagnostic interne n'a pas été
+sauvegardé. La réalisation explicite publique maintenant intégrée demande
+rel_tol7,6923e−13, soit cutoff≤1,25e−11 pour le forcing maximal16,25 de cette
+tranche. Elle ne modifie ni l'équation, ni le maillage, ni les seuils indépendants.
+La fixture scientifique est versionnée @2. Une marge de budget ne garantit pas
+à elle seule une qualification Native : le nouvel essai reste nécessaire.
+
+Les ghosts xmin acceptés valent3,046875 à m2,03125 et t1/64. Le getter Field
+retient pourtant phi≈2. ForwardEuler résout au stage t_n : ce getter peut
+observer le dernier SolveOutcome/warm-start, alors que Ghost consomme une
+solution temporaire endpoint. Le point d'observation doit donc être authentifié.
+Aucune publication supplémentaire ou solve déclenché par un getter n'est ajouté
+pour satisfaire une assertion. La vraie image consommée, son point exact et
+le cache checkpoint sont des preuves distinctes encore en réception.
+
+SDK14 est un clone offline de62 paquets, avec SDK13 préservé. FAC et injections
+Ghost préparées sont intégrées, 37 contrôles Source/host passent16,62 s sans
+skip. Le correctif budget dérive une capacité structurale des formes/ghosts/
+composants configurés ; sa contre-revue finale et44 tests Source/host passent.
+La première hypothèse d’allocation est retirée : l’ancienne surcharge utilisait
+des vues string_view/span sans copie. Le nouveau conteneur est explicitement
+préparé sous vote et sa durée de vie vérifiée. Les injections utilisent
+un vrai composant natif, sa table ABI et le propriétaire AMR ; elles restent
+préparées Source seulement. Reconstruction, observation scientifique exacte,
+checkpoint/restart, injection puis Serial/MPI2 restent obligatoires. Aucune
+réception complète ou fermeture globale94 n'est affirmée.
+
+Les détails et pins actuels figurent dans le
+[reçu de progression @3](initial_field_ghost_sdk11_sdk12_progress_20261002.json).
+Le [plan SDK14](../../../tests/review/sol61_sdk14_initial_field_ghost_plan.md)
+conserve les commandes installauth, le monde MPI réel et le contrôle après
+un échec. Les paragraphes ci-dessous sont l'historique SDK11/12, daté avant
+les résultats SDK13 ; leurs reçus immuables restent valides dans leur portée.
+
 
 La composition publique `Inflow((interior_trace(U,"c"), phi+1+logical_time()))`
 est abaissée en un composant authentifié depuis ses expressions et dépendances.
