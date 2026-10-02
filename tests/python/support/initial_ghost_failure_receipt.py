@@ -5,7 +5,7 @@ from pathlib import Path
 def save_early_bind_receipt(directory, *, rank, world_size, failures, owner_count, image_count, target_count, native, artifact_identity, component_manifest):
     if type(world_size) is not int or world_size < 1 or type(rank) is not int or not 0 <= rank < world_size:
         raise ValueError('invalid early bind rank authority')
-    if type(failures) is not list or len(failures) != world_size:
+    if type(failures) not in (tuple,list) or len(failures) != world_size:
         raise ValueError('early bind failures must contain every rank')
     for failure in failures:
         if failure is not None and (type(failure) not in (tuple,list) or len(failure)!=3 or type(failure[0]) is not str or type(failure[1]) is not str or type(failure[2]) is not bool):

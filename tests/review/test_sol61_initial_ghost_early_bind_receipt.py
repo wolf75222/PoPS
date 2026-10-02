@@ -25,3 +25,14 @@ def test_fixture_persists_before_existing_snapshot_assertions():
     source=(Path(__file__).resolve().parents[2]/'tests/python/integration/amr/test_public_initial_field_ghost_failure.py').read_text()
     assert source.index('_,failures=collective_attempt')<source.index('save_early_bind_receipt(directory')<source.index('assert len(images)==1 and len(owners)==1')
     assert "assert before==after" in source and "assert all(failures)" in source
+
+
+def test_receipt_accepts_real_collective_attempt_failure_tuple(tmp_path):
+    from tests.python.support.collective_checks import collective_attempt
+    def fail():raise RuntimeError('observed Source-only bind refusal')
+    _,failures=collective_attempt(None,fail)
+    assert type(failures) is tuple and type(failures[0]) is tuple
+    a=args();a.update(world_size=1,failures=failures)
+    receipt=json.loads(save_early_bind_receipt(tmp_path,**a).read_text())
+    assert receipt['failures']==[['RuntimeError','observed Source-only bind refusal',True]]
+    assert receipt['observed_counts']['images']==0
