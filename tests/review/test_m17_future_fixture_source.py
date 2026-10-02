@@ -35,3 +35,20 @@ def test_actual_public_original_case_resolves_new_method():
     source=emit_cpp_program(plan.time,model=emitter,target='amr_system')
     assert source.count('ctx.stage_path_rhs(')==2
     assert source.count('ctx.publish_staged_path_rhs(')==2
+
+
+def test_actual_compiled_wrapper_metadata_json_roundtrip(monkeypatch):
+    import json
+    import pytest
+    from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture,CanonicalValue
+    from tests.python.integration.runtime.test_fan_li15_public_composition_runtime import select_program,layout_program_json_identity
+    # Actual wrapper classes, Source metadata-only components; no DSO/SDK loaded.
+    monkeypatch.setattr('pops.codegen._compiled_artifact._common_platform_manifest',lambda **kwargs:CanonicalValue('SOURCE_ONLY_NO_NATIVE'))
+    artifact=artifact_fixture(target='amr_system',block_names=('gas',))
+    row=select_program(artifact,artifact.plan)
+    with pytest.raises(TypeError):json.dumps(row.to_data())
+    data={'layout_program':layout_program_json_identity(row),'artifact_identity':artifact.artifact_identity.token}
+    restored=json.loads(json.dumps(data,sort_keys=True,allow_nan=False))
+    assert restored['layout_program']['identity_token']==row.identity.token
+    assert restored['layout_program']['block_names']==['gas']
+    assert restored['artifact_identity']==artifact.artifact_identity.token

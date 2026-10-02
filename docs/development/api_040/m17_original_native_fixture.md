@@ -35,3 +35,7 @@ env -u PYTHONPATH python -m pytest tests/python/integration/runtime/test_fan_li1
 ```
 
 Le corpus original authentifié a été relu dans `original-handoff-readable-copy-20261002/context/CORPUS_ORIGINAL.md`135–170 : chemin explicite, régularisation différentielle réelle, rangement/ordre sans émetteur dédié. La réception scientifique exige les nouveaux résultats authentiques sauvegardés ; elle n'est pas déduite de cette validation Source.
+
+## Delta JSON strict
+
+Le véritable `CompiledLayoutProgram.to_data()` contient un digest bytes32. Le témoin ne l'encode pas avec `default=str` : il persiste explicitement layout_id, target, block_names, identity.token et artifact.artifact_identity.token, après vérification de la ligne. Un test sur les vraies classes wrapper, composants explicitement Source metadata-only, reproduit le refus de json.dumps(row.to_data()) puis vérifie le roundtrip du nouveau contrat. Aucun SDK/DSO n'est chargé par ce test.

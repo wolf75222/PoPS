@@ -33,6 +33,12 @@ def select_program(artifact,resolved):
     return row
 
 
+def layout_program_json_identity(row):
+    row.verify()
+    return {'layout_id':row.layout_id,'target':row.target,'block_names':list(row.block_names),
+            'identity_token':row.identity.token}
+
+
 @pytest.mark.parametrize('permuted',[False,True],ids=['canonical','reverse'])
 def test_installed_fan_li15_public_composition(permuted,tmp_path,record_property,
         isolated_native_cache,native_cxx,kokkos_root):
@@ -71,7 +77,7 @@ def test_installed_fan_li15_public_composition(permuted,tmp_path,record_property
                 'ranks':1 if world is None else int(world.size),'package':str(Path(pops.__file__).resolve()),
                 'native':{'path':str(Path(native.__file__).resolve()),'sha256':digest(native.__file__)},
                 'program':{'path':str(Path(program.so_path).resolve()),'sha256':digest(program.so_path),
-                    'abi_key':program.abi_key,'problem_hash':program.problem_hash,'cache_key':program.cache_key,'layout_program':row.to_data()},
+                    'abi_key':program.abi_key,'problem_hash':program.problem_hash,'cache_key':program.cache_key,'layout_program':layout_program_json_identity(row),'artifact_identity':artifact.artifact_identity.token},
                 'files':{p.name:digest(p) for p in sorted(directory.iterdir()) if p.is_file() and p.name!='receipt.json'},
                 'full_M17_qualification':False,'root_scientific_approval':False}
             (directory/'receipt.json').write_text(json.dumps(data,sort_keys=True,allow_nan=False)+'\n')
