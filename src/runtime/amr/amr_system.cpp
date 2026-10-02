@@ -13954,10 +13954,11 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
   std::vector<typename Impl::auxiliary_registry_type> registry_backup;
   std::vector<std::string> dirty_backup;
   bool has_field_dependencies = false;
+  std::size_t levels = 0;
   std::string request_contract;
   std::exception_ptr error;
   try {
-    const auto levels = p_->engine->hierarchy().num_levels();
+    levels = p_->engine->hierarchy().num_levels();
     if (!p_->bootstrap_transaction && !p_->accepted_transaction_active && step_transaction_depth() == 0)
       throw std::invalid_argument("accepted halo preparation requires its enclosing rollback transaction");
     if (candidates.size() != p_->blocks.size() || points.size() != candidates.size())
