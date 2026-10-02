@@ -22,6 +22,8 @@ class AcceptedStateStorageObservation:
 
         if type(data) is not dict or set(data) != {"contract","dimension","time","macro_step","rank_local","complete"}:
             raise TypeError("storage observation requires one exact native record")
+        if type(data["contract"]) is not str:
+            raise TypeError("storage observation contract must be exact str")
         if data["contract"] != "accepted-state-storage-observation@1":
             raise ValueError("unknown storage observation contract")
         if type(data["dimension"]) is not int or data["dimension"] not in (1,2,3):

@@ -40,3 +40,17 @@ def test_actual_source_origin_without_extension_native():
     assert Path(pops.__file__).resolve()==root/"python/pops/__init__.py"
     assert not any(isinstance(getattr(getattr(module,"__spec__",None),"loader",None),importlib.machinery.ExtensionFileLoader)
                    for name,module in sys.modules.items() if name.rsplit(".",1)[-1].startswith("_pops"))
+
+
+@pytest.mark.parametrize("route",["direct","from_native"])
+@pytest.mark.parametrize("kind",["custom_equality","str_subclass"])
+def test_contract_cannot_retain_custom_equality_or_string_subclass(route,kind):
+    class EqualContract:
+        def __eq__(self,other):return True
+        def __ne__(self,other):return False
+    class DerivedString(str):pass
+    data=record()
+    data["contract"]=(EqualContract() if kind=="custom_equality" else DerivedString(data["contract"]))
+    with pytest.raises(TypeError,match="exact str"):
+        if route=="direct":Observation(**data)
+        else:Observation.from_native(data)
