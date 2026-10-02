@@ -36,7 +36,7 @@ from tests.python.support.atomic_native_capture import save_phase,execute_captur
 from tests.python.support.m16_explicit_native_capture import retain_provenance,persisted_capture
 
 pytestmark=[pytest.mark.compiler,pytest.mark.native_loader]
-SCHEMA='pops.program-affine-explicit-native-fixture@2'
+SCHEMA='pops.program-affine-explicit-native-fixture@3'
 DEGREE,N,DT,OMEGA=5,4,.125,16./3.
 INDICES=tuple((p,q) for q in range(DEGREE+1) for p in range(DEGREE+1-q))
 # Independent permutations of basis indices and actual State slot names.
@@ -58,11 +58,14 @@ def atom_moments(step=0):
     return np.array([by_index[index] for name in NAMES for index in INDICES if BINDING[index]==name])
 
 
-def build(mode):
+def build(mode, *, with_parameter=False):
     if mode not in ('success','nonfinite','overflow'): raise ValueError('unknown fixture mode')
     frame=Rectangle('monomial_box',(0.,0.),(1.,1.)).frame(Cartesian2D())
     model=pops.Model('explicit_polynomial',frame=frame)
     state=model.state('unlabelled_population',components=NAMES)
+    if mode=='nonfinite':
+        gain=model.param(RuntimeParam('endpoint_gain',default=0.))
+        fault=model.source('endpoint_scaling_fault',on=state,value=tuple(model.value(gain)*v for v in state))
     flux=model.flux('zero_transport',state=state,frame=frame,
                     components={axis:tuple(0*v for v in state) for axis in frame.axes},
                     waves={axis:(0.,)*len(NAMES) for axis in frame.axes})
@@ -79,8 +82,9 @@ def build(mode):
                            solver=DenseLU()).consume(action=FailRun())
     mean=program.value('endpoint',2*midpoint-q.n,at=q.n.point)
     if mode=='nonfinite':
-        # Initial values remain finite; the real compiled expression overflows density.
-        mean=program.value('nonfinite_endpoint',1.e308*mean,at=q.n.point)
+        # Compile a finite public default; only the authenticated bind override
+        # makes the endpoint arithmetic overflow during the Native run.
+        mean=program.value('nonfinite_endpoint',mean+program.dt*program.source(model.module.operator_handle(fault.reg_name),mean),at=q.n.point)
     pushed=program.affine_moment_update(q.n,mean,linear_operator=operator,theta_dt=program.dt/2,
                                       basis=BASIS,components=BINDING)
     program.commit(q.next,program.value('accepted',pushed+program.dt*rate(pushed),at=q.next.point))
@@ -93,7 +97,7 @@ def build(mode):
         tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])[BINDING[(0,0)]]>case.value(threshold)),Buffer(cells=0)),
             hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(100,clock=program.clock)),transfer=transfer,execution=AMRExecution.synchronous())
-    return case,layout
+    return (case,layout,block[gain] if mode=='nonfinite' else None) if with_parameter else (case,layout)
 
 
 def initial(mode):
@@ -123,8 +127,10 @@ def test_installed_program_explicit_monomial_binding(mode,tmp_path,record_proper
     world=native.mpi_world() if native_mpi_communicator(native)=='MPI_COMM_WORLD' else None
     with collective_check(world):
         assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()),'installed package required'
-    case,layout=collective_call(world,lambda:build(mode))
-    resolved=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout))
+    case,layout,gain=collective_call(world,lambda:build(mode,with_parameter=True))
+    validated=collective_call(world,lambda:pops.validate(case))
+    resolved=collective_call(world,lambda:pops.resolve(validated,layout=layout))
+    gain=None if gain is None else validated.resolve(gain)
     artifact=(collective_call(world,lambda:pops.compile(resolved)) if world is None else
               compile_resolved_plan_once(world,resolved,route='explicit-affine-'+mode,compile_artifact=pops.compile))
     directory=collective_directory(world,tmp_path/'explicit-affine')
@@ -134,6 +140,7 @@ def test_installed_program_explicit_monomial_binding(mode,tmp_path,record_proper
     collective_call(world,lambda:retain_provenance(artifact,resolved,native,directory) if root() else None)
     subject=resolved.initial_condition_plan.bindings[0].subject
     runtime=collective_call(world,lambda:pops.bind(artifact,initial_values={subject:initial(mode)},
+                params={} if gain is None else {gain:1.e308},
                 resources={'execution_context':artifact_execution_context(artifact)}))
     attempts=[];phases=[];capture_failures=[];images={}
     def persist_receipt(status):
@@ -143,6 +150,7 @@ def test_installed_program_explicit_monomial_binding(mode,tmp_path,record_proper
             'basis':BASIS.to_data(),'binding':[[list(i),BINDING[i]] for i in INDICES],
             'phases':list(phases),'clocks':{phase:images[phase][2] for phase in phases},
             'attempts':attempts,'capture_failures':capture_failures,
+            'runtime_endpoint_gain':1.e308 if gain is not None else None,
             'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(directory.iterdir())
                      if p.is_file() and p.name!='receipt.json'},'root_scientific_approval':False}
         (directory/'receipt.json').write_text(json.dumps(receipt,sort_keys=True,allow_nan=False)+'\n')

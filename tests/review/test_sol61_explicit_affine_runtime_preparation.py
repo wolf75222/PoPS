@@ -43,3 +43,33 @@ def test_overflow_seed_actual_header_refuses_before_output(tmp_path):
         'for(double v:out)if(v!=7)return 2;return 0;}')
     subprocess.run(['c++','-std=c++20','-I'+str(root/'include'),str(cpp),'-o',str(executable)],check=True,capture_output=True,text=True)
     subprocess.run([str(executable)],check=True,capture_output=True,text=True)
+
+
+def test_nonfinite_endpoint_uses_authenticated_runtime_parameter_not_huge_literal():
+    from pops.time._program.detach import detach_compiled_program
+    case, layout, gain = fixture.build('nonfinite', with_parameter=True)
+    validated = pops.validate(case)
+    resolved = pops.resolve(validated, layout=layout)
+    qualified = validated.resolve(gain)
+    assert qualified is not None
+    from pops._balance_due_contract import BalanceDueContract
+    from pops.codegen._shared_interface_evidence import _issue_shared_interface_codegen_evidence
+    from pops.codegen.program_graph_lowering import _emit_resolved_program_graph
+    from pops.codegen.program_models import ProgramModelGraph
+    detached = detach_compiled_program(resolved.time)
+    cpp = _emit_resolved_program_graph(detached.to_graph(), lowering_program=detached,
+        model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks), field_plans=resolved.field_plans,
+        balance_due_contract=BalanceDueContract.from_consumer_graph(resolved.consumer_graph),
+        shared_interface_codegen_evidence=_issue_shared_interface_codegen_evidence(resolved))
+    assert 'affine_velocity_push_forward<5>' in cpp
+    serialized = detached._serialize()
+    import json
+    wire = json.dumps(serialized, sort_keys=True)
+    model_wire = json.dumps(next(block for block in resolved.blocks if block.name=='population').model.module.manifest().to_dict(), sort_keys=True)
+    assert 'endpoint_gain' in model_wire
+    assert 'endpoint_scaling_fault' in wire
+    assert '1e+308' not in model_wire
+    assert '1e+308' not in wire and '1.0e+308' not in wire
+    assert np.isfinite(fixture.initial('nonfinite')).all()
+    with np.errstate(over='ignore'):
+        assert np.isinf(np.float64(1.e308) * fixture.atom_moments()[fixture.NAMES.index(fixture.BINDING[(0,0)])])
