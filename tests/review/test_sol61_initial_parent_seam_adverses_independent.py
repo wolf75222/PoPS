@@ -16,7 +16,7 @@ def test_failed_target_admission_cannot_enter_original_transition(monkeypatch,fa
     monkeypatch.setattr(selection,'select_xmin_owner',refuse if failure_at=='selection' else lambda *args:{'target':0})
     monkeypatch.setattr(selection,'require_selection_agreement',refuse if failure_at=='agreement' else lambda *args:{})
     monkeypatch.setattr(collectives,'allgather_value',lambda world,row:[row])
-    scope=dict(original=lambda *args:calls.append('original'),image=lambda owner:{'blob':b'SourceOnly'},
+    scope=dict(original=lambda *args:calls.append('original'),image=lambda owner,phase:{'blob':b'SourceOnly'},
         images=[],owners=[],targets=[],observed_actions=[],world=SimpleNamespace(size=1),
         collective_call=lambda world,fn:fn(),collective_check=lambda world:__import__('contextlib').nullcontext(),monkeypatch=monkeypatch)
     exec(compile(ast.Module(body=[wrapper],type_ignores=[]),'<actual wrapper>','exec'),scope)
