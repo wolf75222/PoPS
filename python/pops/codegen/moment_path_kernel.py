@@ -233,6 +233,7 @@ def emit_moment_path_kernel(plan: dict, name: str) -> list[str]:
             lines.append(f"    if (!std::isfinite({value})) {{ result.status = pops::PathStatus::NonFiniteResult; return result; }}")
         for slot, (value, _, _) in enumerate(values):
             lines.append(f"    result.integral[{slot}] = reverse ? -{value} : {value};")
+        lines.append("    return result;")
     lines += ["  }", "};"]
     if used_nodes != set(range(len(plan["nodes"]))):
         raise ValueError("arithmetic graph contains unreachable operations")
