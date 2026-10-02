@@ -25,3 +25,22 @@ No production files, Main/Native/ENV/ROMEO, historical captures or seals changed
 The final verdict on the profile requires review of that corrective freeze;
 this report does not grant a favourable fullgrown shard-authentication verdict
 for af66 alone.
+
+## Corrective final review
+
+Corrective author freeze 92d29838a73952f6e29a1aeb3ef0d901bc8a2024 closes the
+finding. Exact integer rank/world and shard identifiers, common envelope and
+dimension, and the complete list of owner-qualified patches are checked. The
+patch records include full grown object bits, so equality does not discard or
+normalize ghost values. Replicated owners (-1) and empty partitioned owner ranks
+are supported. The guard executes inside the existing collective_check after
+the real phase files have been persisted; a refusal leaves that evidence intact.
+The historical @1 fixture and all production DTO/C++ files remain unchanged.
+
+Independent frozen Source tests: three PASS in 0.15s (the preserved old-gap
+witness, corrected stale-grown refusal, Boolean/negative/out-of-range/mismatched
+rank-world/shard refusals, replicated and empty-rank positives). Corrective author
+persistence cohort independently replayed: three PASS in 0.20s. No Native was
+loaded or executed. Verdict: favourable bounded Source preparation for af66 +
+92d29838; authentic Serial/MPI storage observations and separate ROOT authority
+are still required. No step, rollback, restart or Ghost equation is qualified.
