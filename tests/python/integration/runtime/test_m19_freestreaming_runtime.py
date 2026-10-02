@@ -127,6 +127,42 @@ def _compare_restored_payload(accepted, restored):
     return {"exact_payload": True, "keys": keys}
 
 
+def _capture_components(artifact, directory):
+    """Capture retained handles only; never regenerate a missing translation unit."""
+    binaries, programs, model_sources, model_manifests = [], [], [], []
+    components = [("block-"+row.name, row.model) for row in artifact.blocks]
+    components += [("program-"+row.layout_id, row.program) for row in artifact.layout_programs]
+    for ordinal, (name, component) in enumerate(components):
+        binary = Path(component.so_path)
+        sidecar = Path(str(binary)+".pops-artifact.json")
+        assert sidecar.is_file(), "actual component sidecar required"
+        binaries.append({"component": name, "binary": _pin(binary), "sidecar": _pin(sidecar)})
+        if name.startswith("block-"):
+            source = getattr(component, "_generated_cpp", None)
+            assert source is None or type(source) is str
+            # The current model driver may not retain its translation unit. Record
+            # that gap explicitly instead of regenerating a falsely compiled source.
+            retained = None
+            if source is not None:
+                path = directory/("model-%d.cpp" % ordinal)
+                path.write_text(source)
+                retained = _pin(path)
+            model_sources.append({"component": name, "cpp": retained})
+            assert component.module_manifest is not None
+            path = directory/("model-%d.manifest.json" % ordinal)
+            path.write_text(json.dumps(component.module_manifest.to_dict(),
+                                       indent=2, sort_keys=True, allow_nan=False)+"\n")
+            model_manifests.append({"component": name, "manifest": _pin(path)})
+        if name.startswith("program-"):
+            assert type(getattr(component, "_generated_cpp", None)) is str, "retain compiler source, never re-emit"
+            cpp = Path(component.dump_cpp(directory/("program-%d.cpp" % ordinal)))
+            ir = Path(component.dump_ir(directory/("program-%d.ir.json" % ordinal)))
+            assert type(component.program_hash) is str and component.program_hash, "actual Program IR hash required"
+            programs.append({"component": name, "cpp": _pin(cpp), "ir": _pin(ir),
+                             "program_hash": component.program_hash})
+    return binaries, programs, model_sources, model_manifests
+
+
 @pytest.mark.compiler
 @pytest.mark.native_loader
 @pytest.mark.parametrize("nx,nv", CASES)
@@ -189,36 +225,7 @@ def test_native_m19_signed_freestreaming_exact_restart(nx, nv, tmp_path, record_
         restored_equivalence = collective_call(world, lambda: _compare_restored_payload(
             rows["accepted"][2], rows["restored"][2]))
         if _root(world):
-            binaries, programs, model_sources, model_manifests = [], [], [], []
-            components = [("block-"+row.name, row.model) for row in artifact.blocks]
-            components += [("program-"+row.layout_id, row.program) for row in artifact.layout_programs]
-            for ordinal, (name, component) in enumerate(components):
-                binary = Path(component.so_path)
-                sidecar = Path(str(binary)+".pops-artifact.json")
-                assert sidecar.is_file(), "actual component sidecar required"
-                binaries.append({"component": name, "binary": _pin(binary), "sidecar": _pin(sidecar)})
-                if name.startswith("block-"):
-                    source = component._generated_cpp
-                    assert source is None or type(source) is str
-                    # The current model driver may not retain its translation unit. Record
-                    # that gap explicitly instead of regenerating a falsely compiled source.
-                    retained = None
-                    if source is not None:
-                        path = directory/("model-%d.cpp" % ordinal)
-                        path.write_text(source)
-                        retained = _pin(path)
-                    model_sources.append({"component": name, "cpp": retained})
-                    assert component.module_manifest is not None
-                    path = directory/("model-%d.manifest.json" % ordinal)
-                    path.write_text(json.dumps(component.module_manifest.to_data(),
-                                               indent=2, sort_keys=True, allow_nan=False)+"\n")
-                    model_manifests.append({"component": name, "manifest": _pin(path)})
-                if name.startswith("program-"):
-                    assert component._generated_cpp is not None, "retain compiler source, never re-emit"
-                    cpp = Path(component.dump_cpp(directory/("program-%d.cpp" % ordinal)))
-                    ir = Path(component.dump_ir(directory/("program-%d.ir.json" % ordinal)))
-                    programs.append({"component": name, "cpp": _pin(cpp), "ir": _pin(ir),
-                                     "program_hash": component.program_hash})
+            binaries, programs, model_sources, model_manifests = _capture_components(artifact, directory)
             from tests.python.support import m19_freestreaming as physical_source
             from tests.review import sol61_m19_freestreaming_oracle as scientific_source
             receipt = {"schema": SCHEMA, "dimension": 2, "rank": 0,
