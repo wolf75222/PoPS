@@ -284,6 +284,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         native: Any = _System
         return native.abi_key()
 
+    def observe_accepted_state_storage(self) -> Any:
+        # Deliberately avoid __getattr__: observation never commits pending packages.
+        return self._s.observe_accepted_state_storage()
+
     def __getattr__(self, attr: Any) -> Any:
         # 'amr' is an AmrSystem-only inspection handle; the System @property raises AttributeError,
         # which routes here -- intercept it so the clear message surfaces instead of the raw _pops

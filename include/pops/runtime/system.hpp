@@ -1489,6 +1489,10 @@ class System {
   /// @{
   std::vector<double> density_global(
       const std::string& name) const;  ///< comp0, global cell product
+  /// accepted-state-storage-observation@1: [rank-local, complete] POPSCAR1 bytes.
+  /// Collective, accepted idle only; copies actual grown storage without refresh or fill.
+  [[nodiscard]] POPS_EXPORT std::vector<std::vector<std::uint8_t>>
+  observe_accepted_state_storage() const;
   std::vector<double> state_global(
       const std::string& name) const;      ///< U, ncomp*global cell product
   std::vector<double> potential_global();  ///< phi, global cell product

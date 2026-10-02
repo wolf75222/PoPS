@@ -25,6 +25,7 @@ from pops.output._consumer_contracts import (
     ScheduleCursor,
     SkipSampleReported,
 )
+from ._state_storage_observation import AcceptedStateStorageObservation
 from ._consumer_planning import next_consumer_deadline, plan_accepted_side_effects
 from ._consumer_transaction import (
     ConsumerCursorAuthority, ConsumerTransaction, ConsumerTransactionReport,
@@ -705,6 +706,17 @@ class RuntimeInstance:
 
     def macro_step(self) -> int:
         return int(self._executor.macro_step())
+
+    def observe_accepted_state_storage(self) -> AcceptedStateStorageObservation:
+        """Collectively observe all actual accepted Uniform storage, including ghosts.
+
+        Every rank calls this bulk readonly effect. The immutable result retains its
+        local shard and the complete POPSCAR1 image; no halo preparation occurs.
+        """
+        provider = getattr(type(self._executor), "observe_accepted_state_storage", None)
+        if provider is None:
+            raise TypeError("runtime executor lacks accepted-state-storage-observation@1")
+        return provider(self._executor)
 
     def integral_state(self, state) -> float:
         """Read one installed Program's persistent scalar integral from native accepted state."""

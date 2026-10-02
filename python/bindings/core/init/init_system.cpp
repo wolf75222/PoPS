@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cmath>
+#include <pops/parallel/collective_exception.hpp>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -1416,6 +1417,24 @@ void bind_system_data(py::class_<System>& cls) {
             return to_ranked_field(s.density_global(name), s.spatial_shape());
           },
           py::arg("name"))
+      .def("observe_accepted_state_storage", [](const System& s) {
+        const auto images = s.observe_accepted_state_storage();
+        py::object result;
+        std::exception_ptr error;
+        try {
+          py::dict record;
+          record["contract"] = "accepted-state-storage-observation@1";
+          record["dimension"] = pops::kNativeDimension;
+          record["time"] = s.time(); record["macro_step"] = s.macro_step();
+          record["rank_local"] = py::bytes(reinterpret_cast<const char*>(images.at(0).data()), images.at(0).size());
+          record["complete"] = py::bytes(reinterpret_cast<const char*>(images.at(1).data()), images.at(1).size());
+          result = py::module_::import("pops.runtime._state_storage_observation")
+              .attr("AcceptedStateStorageObservation").attr("from_native")(record);
+        } catch (...) { error = std::current_exception(); }
+        pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
+            "accepted state storage Python result staging");
+        return result;
+      }, "Collectively copy accepted grown storage; never fill, refresh or restore.")
       .def(
           "state_global",
           [](const System& s, const std::string& name) {

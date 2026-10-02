@@ -5,6 +5,9 @@
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
+#include <pops/runtime/checkpoint/state_carriers.hpp>
+#include <pops/parallel/collective_exception.hpp>
+#include <bit>
 #include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/program/collective_step_rejection.hpp>
@@ -251,6 +254,117 @@ void System<Dim>::stage_program_exchanges(std::span<runtime::program::ExchangeRe
 template <int Dim>
 std::vector<runtime::program::ExchangeRecord> System<Dim>::program_exchange_records() const {
   return p_->program_.accepted_exchanges_.records();
+}
+
+
+template <int Dim>
+std::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_storage() const {
+  const auto& lane = prepared_boundary_execution_lane();
+  using namespace runtime::checkpoint;
+  using Bits = std::conditional_t<sizeof(Real) == 8, std::uint64_t, std::uint32_t>;
+  std::string shard;
+  std::exception_ptr error;
+  std::string invocation;
+  std::vector<ExactOrderedBytePair> authority;
+  try {
+    const auto phase = p_->lifecycle_.state(p_->macro_step_);
+    if (step_transaction_depth() != 0 || p_->external_restart_transaction_ ||
+        (phase != "bound" && phase != "running" && phase != "checkpointed"))
+      throw std::logic_error("accepted state storage observation requires bound accepted idle state");
+    StateCarrierArchive<Dim> image;
+    image.real_bits = sizeof(Real) * 8;
+    image.ranks = lane.size(); image.shard = lane.rank(); image.levels = 1;
+    image.blocks = p_->blocks_.names();
+    if (image.blocks.empty())
+      throw std::logic_error("accepted state storage observation has no installed blocks");
+    if (!std::isfinite(p_->t) || p_->macro_step_ < 0)
+      throw std::logic_error("accepted state storage observation has an invalid clock");
+    ExactContractBuilder contract;
+    contract.text("accepted-state-storage-observation@1").scalar(std::int32_t{Dim})
+        .scalar(p_->t).scalar(std::int64_t{p_->macro_step_});
+    for (const auto& name : image.blocks) contract.text(name);
+    invocation = std::move(contract).release();
+    authority.emplace_back("accepted-state-storage-observation", invocation);
+    Kokkos::fence();
+    for (std::size_t block = 0; block < image.blocks.size(); ++block) {
+      const auto& field = p_->find(image.blocks[block]).U;
+      for (std::size_t local = 0; local < field.local_size(); ++local) {
+        const auto& fab = field.fab(local);
+        StateCarrierPatch<Dim> row;
+        row.block = block; row.level = 0; row.patch = field.global_index(local);
+        row.components = field.ncomp();
+        row.owner = field.distribution().replicated() ? -1 : lane.rank();
+        for (int axis = 0; axis < Dim; ++axis) {
+          row.lo[axis] = fab.box().lo[axis]; row.hi[axis] = fab.box().hi[axis];
+          row.grown_lo[axis] = fab.grown_box().lo[axis];
+          row.grown_hi[axis] = fab.grown_box().hi[axis];
+        }
+        auto host = fab.create_host_mirror(); fab.copy_to_host(host);
+        row.bits.reserve(host.size());
+        for (std::size_t value = 0; value < host.size(); ++value)
+          row.bits.push_back(std::bit_cast<Bits>(host(value)));
+        image.patches.push_back(std::move(row));
+      }
+    }
+    const auto encoded = encode_state_carriers(image);
+    shard.assign(reinterpret_cast<const char*>(encoded.data()), encoded.size());
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "accepted state storage observation staging");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(authority, lane))
+    throw std::runtime_error("accepted state storage observation differs across ranks");
+  // ExecutionLane owns the authenticated runtime communicator. Its byte broadcast primitive
+  // chunks at the MPI count boundary; ObserverMpiLane::allgather_bytes is not a runtime API.
+  std::vector<std::string> shards;
+  error = {};
+  try { shards.resize(static_cast<std::size_t>(lane.size())); }
+  catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "state carrier source-shard allocation");
+  for (int source = 0; source < lane.size(); ++source) {
+    std::array<char, 8> length_bytes{};
+    error = {};
+    try {
+      if (lane.rank() == source) {
+        if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t))
+          if (shard.size() > std::numeric_limits<std::uint64_t>::max())
+            throw std::length_error("state carrier source shard exceeds uint64 wire capacity");
+        const auto length = static_cast<std::uint64_t>(shard.size());
+        for (unsigned byte = 0; byte < 8; ++byte)
+          length_bytes[byte] = static_cast<char>(length >> (8 * byte));
+      }
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "state carrier source-shard length staging");
+    broadcast_bytes_inplace(length_bytes.data(), length_bytes.size(), lane, source);
+    std::uint64_t length = 0;
+    for (unsigned byte = 0; byte < 8; ++byte)
+      length |= std::uint64_t(static_cast<unsigned char>(length_bytes[byte])) << (8 * byte);
+    error = {};
+    try {
+      if (length > std::numeric_limits<std::size_t>::max())
+        throw std::length_error("state carrier source shard exceeds destination size_t capacity");
+      auto& destination = shards[static_cast<std::size_t>(source)];
+      if (lane.rank() == source) destination = shard;
+      else destination.resize(static_cast<std::size_t>(length));
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "state carrier source-shard payload staging");
+    auto& destination = shards[static_cast<std::size_t>(source)];
+    broadcast_bytes_inplace(destination.data(), destination.size(), lane, source);
+  }
+  std::vector<std::uint8_t> result;
+  error = {};
+  try {
+    auto image = merge_state_carrier_shards<Dim>(shards);
+    validate_complete_state_carriers(image);
+    result = encode_state_carriers(image);
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "state carrier capture canonicalization");
+  std::vector<std::vector<std::uint8_t>> observation;
+  error = {};
+  try {
+    observation.emplace_back(shard.begin(), shard.end());
+    observation.push_back(std::move(result));
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "accepted state storage observation result allocation");
+  return observation;
 }
 
 template <int Dim>
@@ -924,3 +1038,7 @@ template std::vector<std::string> System<kNativeDimension>::block_names() const;
 template EffectiveOptionsReport System<kNativeDimension>::effective_options_report() const;
 
 }  // namespace pops
+
+namespace pops {
+template std::vector<std::vector<std::uint8_t>> System<kNativeDimension>::observe_accepted_state_storage() const;
+}
