@@ -51,3 +51,44 @@ Source synthetic checks:11 PASS .18s, no PoPS import, no native evidence minted.
 Actual private Source import asserted; _pops absent. Affected Source plus offline
 cohort32 PASS8.31s, zero skips. Native reception
 remains ROOT's future execution after its immutable Halo batch closes.
+
+## Bounded independent corrective review
+
+Base author6c04ca5b. Independent reading of actual public transport fixture confirms
+physical v nativeaxis0, x axis1, no-flux velocity and periodic position, signed
+HLL explicit(v,v), FirstOrder and SSPRK2. Fourier eigenvalue is the upwind signed
+velocity symbol, growth1+dtλ+(dtλ)^2/2. Continuum expression independently averages
+f0(x-vt,v); centered velocity first moment contributes the positive sine term.
+CellMidpoint realization versus original continuum averaging remains distinct.
+No equation, Frame, Core, FD/guard, model or native source changed.
+
+Real reader holes corrected: duplicate JSON keys/phase records were silently
+collapsed by json.loads; boolean axes and float rational controls compared equal
+to integers; CP{}==CP{} could claim payload equality with no physical state.
+Strict JSON/type checks, five unique receipt/state/checkpoint paths, exact phase
+state members and Aux-capture flag now reject those. Current UniformCP8 scalar
+type/clock/version, actual state_kinetic bytes versus saved physical NPZ and
+POPSAUX2 rank/type/minimum prefix are checked; manifest must cover payload keys.
+This is a structural/projection check, not a POPSAUX2 complete semantic decoder or
+a restart identity/hash reconstruction. Native authority/root approval remains
+explicitlyFalse in output; no qualification or real captures are synthesized.
+The existing native fixture already authenticates checkpoints at capture/restored
+and proves separate checkpoint paths; ROOT must run it and audit actual evidence.
+
+Independent coherent Source command: env-uPYTHONPATH PYTHONDONTWRITEBYTECODE1
+ir17python -m pytest --noconftest -pno:cacheprovider -opythonpath=python
+tests/review/test_sol61_m19_freestreaming_saved_audit.py
+tests/review/test_sol61_m19_freestreaming_source.py:53PASS9.25s zeroSkip. Labelled
+synthetic positive/negative CP projection cases are algebra/parser checks only.
+Duplicate/missing phases, signedzero payload, negativevelocity/euler/stationary,
+dtype/NaN/transpose, rationaltype, empty/truncated/duplicate NPZ and corrupt CP
+physical state/clock/version/Aux/manifest coverage are refused. No Native/JIT/build.
+
+Principles→decision→file→oracle→command→status:1.1 physical equations authority→
+independent Fourier/continuum signs retained→saved_audit.science→wrong sign/time
+order negatives→53Source→PASS;1.3 generic mechanisms→typed JSON/phase/archive
+protocol guards→saved_audit metadata/checkpoint_projection→bool/duplicate/emptyCP
+counterexamples→same command→PASS;1.6 real public lifecycle→Source validates
+but does not attest Native authenticity→native fixture snapshots→ROOT future
+actual capture/read→NOT RUN;1.8 new extension counterexample→strict projection
+and phase coverage→new reader guards→labelled corruption cases→SourcePASS.

@@ -3,6 +3,7 @@ import argparse
 import hashlib
 from io import BytesIO
 import json
+import re
 from pathlib import Path
 import numpy as np
 
@@ -13,8 +14,47 @@ def need(ok, message):
     if not ok:
         raise ValueError(message)
 
+def strict_json(raw):
+    def pairs(entries):
+        result={}
+        for key,value in entries:
+            need(key not in result,"duplicate JSON member: "+key)
+            result[key]=value
+        return result
+    return json.loads(raw,object_pairs_hook=pairs,parse_constant=lambda value:need(False,"nonfinite JSON token"))
+
+def metadata(r):
+    need(type(r) is dict,"receipt mapping")
+    nx,nv=r["nx"],r["nv"]
+    need(type(nx) is int and type(nv) is int and (nx,nv) in ((32,8),(64,12)),"case")
+    need(type(r["native_axes"]) is dict and set(r["native_axes"])=={"velocity","position"}
+         and all(type(v) is int for v in r["native_axes"].values()),"axes exact integers")
+    for key in ("dt","final_time"):
+        need(type(r[key]) is list and len(r[key])==2 and all(type(v) is int for v in r[key]),"rational exact integers")
+    need(type(r["phases"]) is dict and set(r["phases"])==set(PHASES),"five phases required")
+    return nx,nv
+
+def checkpoint_projection(cp,state,steps,nx,nv):
+    need({"pops_checkpoint_version","t","macro_step","state_kinetic",
+          "pops_checkpoint_manifest","pops_restart_identity","auxiliary_checkpoint"}<=cp.keys(),"checkpoint payload incomplete")
+    for key,dtype,value in (("pops_checkpoint_version","int64",8),("macro_step","int64",steps),("t","float64",steps/(4*nx))):
+        a=cp[key];need(a.dtype==np.dtype(dtype) and a.shape==() and a.item()==value,"checkpoint scalar type/clock/version")
+    a=cp["state_kinetic"];b=state["population"]
+    need(a.dtype==np.dtype("float64") and a.size==nx*nv and np.isfinite(a).all()
+         and a.tobytes()==b.tobytes(),"checkpoint physical state projection differs")
+    aux=cp["auxiliary_checkpoint"]
+    need(aux.dtype==np.dtype("uint8") and aux.ndim==1 and aux.size>8
+         and aux.tobytes().startswith(b"POPSAUX2"),"checkpoint auxiliary payload type/truncation")
+    for key in ("pops_checkpoint_manifest","pops_restart_identity"):
+        need(cp[key].shape==() and cp[key].dtype.kind=="U","checkpoint reserved scalar type")
+    manifest=strict_json(str(cp["pops_checkpoint_manifest"]))
+    need(type(manifest) is dict and manifest.get("runtime_kind")=="uniform","checkpoint manifest kind")
+    need(set(manifest.get("arrays",{}))==cp.keys()-{"pops_checkpoint_manifest","pops_restart_identity"},"checkpoint manifest payload coverage")
+
 def pinned(pin):
     need(type(pin) is dict and set(pin) == {"path", "sha256"}, "file pin shape")
+    need(type(pin["path"]) is str and pin["path"] and type(pin["sha256"]) is str
+         and re.fullmatch("[0-9a-f]{64}",pin["sha256"]),"file pin exact types")
     raw = Path(pin["path"]).read_bytes()
     need(hashlib.sha256(raw).hexdigest() == pin["sha256"], "file digest differs")
     return raw
@@ -52,10 +92,9 @@ def science(value, seed, nx, nv, steps):
         need(abs(np.sum((value-seed)*v[None,None,:]**k)*2/(nx*nv)) <= 3e-12, "moment conservation")
 
 def audit(path, sha):
-    r=json.loads(pinned({"path":str(path),"sha256":sha}))
+    r=strict_json(pinned({"path":str(path),"sha256":sha}))
     need(r["schema"] == "pops.m19-freestreaming-native-fixture@1", "fixture version")
-    nx,nv=r["nx"],r["nv"]
-    need(type(nx) is int and type(nv) is int and (nx,nv) in ((32,8),(64,12)), "case")
+    nx,nv=metadata(r)
     need(type(r["dimension"]) is int and r["dimension"] == 2 and r["native_axes"] == {"velocity":0,"position":1}
          and r["dt"] == [1,4*nx] and r["final_time"] == [1,8]
          and r["temporal"] == "SSPRK2"
@@ -63,15 +102,24 @@ def audit(path, sha):
          and r["discretization"] == "ConservativeCellAverage/FirstOrder/HLLExplicitPair(v,v)", "axes/time/physics")
     need(set(r["phases"]) == set(PHASES), "five phases required")
     states,cps={},{}
+    paths={"receipt":set(),"state":set(),"checkpoint":set()}
     for phase in PHASES:
-        row=json.loads(pinned(r["phases"][phase])); need(row["phase"] == phase,"phase")
+        row=strict_json(pinned(r["phases"][phase])); need(row["phase"] == phase,"phase")
+        for kind,pin in (("receipt",r["phases"][phase]),("state",row["state"]),("checkpoint",row["checkpoint"])):
+            canonical=str(Path(pin["path"]).resolve())
+            need(canonical not in paths[kind],"duplicate captured phase path: "+kind)
+            paths[kind].add(canonical)
         states[phase]=arrays(pinned(row["state"])); cps[phase]=arrays(pinned(row["checkpoint"]))
         steps={"initial":0,"accepted":nx//2,"continuous":nx,"restored":nx//2,"replay":nx}[phase]
         need(states[phase]["time"].dtype == np.dtype("float64") and states[phase]["time"].shape == ()
              and float(states[phase]["time"]) == steps/(4*nx)
              and states[phase]["step"].dtype == np.dtype("int64") and states[phase]["step"].shape == ()
-             and int(states[phase]["step"]) == steps and row["macro_step"] == steps
+             and int(states[phase]["step"]) == steps and type(row["macro_step"]) is int and row["macro_step"] == steps
              and row["time_hex"] == (steps/(4*nx)).hex(), "phase clock")
+        need(set(states[phase])==({"population","time","step"} |
+             ({"velocity_coordinate_native"} if phase!="initial" else set())),"phase state members differ")
+        need(type(row["auxiliary_captured"]) is bool and row["auxiliary_captured"]==(phase!="initial"),"phase Aux capture authority")
+        checkpoint_projection(cps[phase],states[phase],steps,nx,nv)
         if phase != "initial":
             aux=states[phase]["velocity_coordinate_native"]
             need(aux.dtype == np.dtype("float64") and aux.shape == (nx,nv)
