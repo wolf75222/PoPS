@@ -398,14 +398,25 @@ TEST(AmrSpatialMaterialization, PendingProofSurvivesPublicationAndRejectsRankLoc
 #endif  // POPS_NATIVE_DIM == 2
 
 
-TEST(AmrSpatialNorm, TypedCutoffOneRankOverflowVotesBeforeKrylov) {
+TEST(AmrSpatialNorm, ConvergenceDriftAndOverflowVoteBeforeKrylov) {
   using namespace pops;
   const auto lane = ExecutionLane::world("test.typed-cutoff.rank-local-failure");
   auto state = field(false, false), mask = field(false, false);
   state.set_val(Real(0)); mask.set_val(Real(1));
+  for (int attack = 0; attack < 5; ++attack) {
   FieldNewtonOptions options;
-  options.convergence = {FieldNewtonConvergenceKind::kRelative,
-      my_rank() == 0 ? std::numeric_limits<Real>::max() : Real(.1), Real(0)};
+  if (attack == 0)
+    options.convergence = {FieldNewtonConvergenceKind::kRelative, std::numeric_limits<Real>::max(), Real(0)};
+  else if (attack == 1)
+    options.convergence = {my_rank() == 0 ? FieldNewtonConvergenceKind::kLegacy : FieldNewtonConvergenceKind::kAbsolute, Real(0), my_rank() == 0 ? Real(0) : Real(.1)};
+  else if (attack == 2)
+    options.convergence = {FieldNewtonConvergenceKind::kRelative, my_rank() == 0 ? Real(.1) : Real(.2), Real(0)};
+  else if (attack == 3)
+    options.tolerance = my_rank() == 0 ? Real(.1) : Real(.2);
+  else
+    options.convergence = {FieldNewtonConvergenceKind::kRelative, my_rank() == 0 ? std::numeric_limits<Real>::max() : Real(.1), Real(0)};
+  if (n_ranks() == 1 && attack != 0) continue; // Cross-rank tests require ROOT's actual MPI execution.
+
   int derivatives = 0;
   const auto residual = [](const auto&, auto& output, int) { output.set_val(Real(2)); };
   const auto derivative = [&](const auto&, const auto&, auto&, int) { ++derivatives; };
@@ -421,4 +432,5 @@ TEST(AmrSpatialNorm, TypedCutoffOneRankOverflowVotesBeforeKrylov) {
       derivative, [](auto&) {}, lane, false));
   EXPECT_EQ(derivatives, 0);
   EXPECT_EQ(reduce_norm_inf(state), Real(0));
+  }
 }

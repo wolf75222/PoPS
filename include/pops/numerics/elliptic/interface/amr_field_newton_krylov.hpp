@@ -7,6 +7,7 @@
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/collective_exception.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
+#include <pops/numerics/elliptic/interface/field_newton_convergence_consensus.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 
 #include <algorithm>
@@ -154,17 +155,8 @@ class AmrFieldNewtonKrylovWorkspace final {
                          "amr_field_newton_non_finite_initial_residual");
       return report;
     }
-    Real nonlinear_stop = Real(0);
-    if (options_.convergence.kind == FieldNewtonConvergenceKind::kLegacy) {
-      nonlinear_stop = field_newton_stop_tolerance(options_, report.reference_residual_norm);
-    } else {
-      std::exception_ptr cutoff_error;
-      try { nonlinear_stop = field_newton_stop_tolerance(options_, report.reference_residual_norm); }
-      catch (...) { cutoff_error = std::current_exception(); }
-      // This vote is mandatory even when optional local-algebra guards are disabled.
-      // All ranks reject before initial admission or the next Krylov collective.
-      collectively_rethrow_exception(cutoff_error, lane, "typed Original Newton computed cutoff");
-    }
+    const Real nonlinear_stop =
+        collective_field_newton_stop_tolerance(options_, report.reference_residual_norm, lane);
     if (initial_norm <= nonlinear_stop) {
       report.rel_residual = Real(0);
       copy_to_external_(iterate_, destination);

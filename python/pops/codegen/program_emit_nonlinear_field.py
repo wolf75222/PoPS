@@ -228,9 +228,7 @@ def emit_nonlinear_field(program: Any, value: Any, variables: Any, lines: list,
                       if "if (!std::isfinite(original_norm)" in lines[index])
         lane = "*%s_lane" % stem if guarded else "ctx.prepared_execution_lane()"
         lines[offset:offset+1] = [
-            "    pops::Real original_stop = 0;", "    std::exception_ptr cutoff_error;",
-            "    try { original_stop = %s; } catch (...) { cutoff_error = std::current_exception(); }" % recheck_stop,
-            '    pops::collectively_rethrow_exception(cutoff_error, %s, "typed Original Newton recheck cutoff");' % lane,
+            "    const pops::Real original_stop = pops::collective_field_newton_stop_tolerance(%s, %s.reference_residual_norm, %s);" % (controls, report, lane),
             "    if (!std::isfinite(original_norm) || original_norm > original_stop)"]
     if guarded:
         solve_offset = next(index for index in range(len(lines)-1, -1, -1)

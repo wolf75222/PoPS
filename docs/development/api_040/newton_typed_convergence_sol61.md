@@ -74,7 +74,23 @@ overflow throws before initial admission. Both Newton engines perform a mandator
 collective failure vote for this calculation even with optional algebra guards off,
 before any subsequent Krylov collective. Uniform and AMR Original rechecks likewise
 vote cutoff failures before continuation/publication. No new residual evaluation or
-norm reduction is added; explicit typed policies add this one small failure vote.
+norm reduction is added; all kinds add the exact consensus and failure votes described below.
 Legacy numeric calculation and emitted bytes remain unchanged, including its
 historical arithmetic behavior. This is a typed-policy representability boundary,
 not a physical/model tolerance limit or a Schur-residual criterion.
+
+
+### ABI8 all-kind collective preflight
+
+ROOT additionally requires standalone engine convergence consensus. Every kind now
+enters identical fixed-stack byte MIN/MAX operations on the ExecutionLane before
+admission, comparing the kind and pertinent IEEE coefficients: legacy tolerance,
+Relative relative+floor, or Absolute absolute. There is no object padding or hash
+surrogate. Every kind then enters the same voted cutoff calculation. This catches
+finite cross-rank kind/coefficient drift as well as overflow without optional-guard
+bypass. Legacy controls/IR/emitted C++ and arithmetic stay unchanged; backend
+communication is intentionally changed (two tiny byte collectives plus the failure
+vote per cutoff). No F evaluation or norm reduction is added. Ordinary Native plan
+consensus still authenticates the other seven method controls before workspace use.
+The genuine MPI source test covers Legacy/Absolute kind drift, finite relative and
+legacy tolerance drift, and overflow. Actual MPI execution remains ROOT's obligation.

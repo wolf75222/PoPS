@@ -23,7 +23,7 @@ def test_complete_original_public_route(tol):
     args = mixed_case(solver=Newton(tolerance=tol))
     code = finish(*args)
     assert "pops::FieldNewtonConvergence{" in code
-    assert "pops::field_newton_stop_tolerance(" in code
+    assert "pops::collective_field_newton_stop_tolerance(" in code
     assert "original_field_residual_recheck_failed" in code
     assert args[2]._serialize()["version"] == 22
 
