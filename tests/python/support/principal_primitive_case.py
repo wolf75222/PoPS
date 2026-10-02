@@ -42,13 +42,15 @@ def primitive_case(widths=(1,1),*,reverse=False,coordinates=True,map_reverse=Fal
         np.diag(1.+.1*np.arange(count))+.025*(row+col+1),
         np.diag(-.5-.05*np.arange(count))-.015*(row+col+1)))
     waves=tuple(float(np.max(np.sum(abs(a),axis=1))) for a in matrices)
+    # One joint principal group has one explicitly authored common bound.
+    # Its value is the same full-matrix row-sum bound as the historical witness.
+    model.module.eigenvalues(**{axis:(bound,)*count for axis,bound in zip(("x","y"),waves)})
     fluxes=[];rates=[]
     for i,state in enumerate(states):
         flux=model.flux('flux%d'%i,frame=frame,state=state,
             components={axis:tuple(sum(float(a[k,j])*(inverse[j] if coordinates else q[j]) for j in range(count))
                                    for k in range(starts[i],starts[i+1]))
-                        for axis,a in zip(frame.axes,matrices)},
-            waves=({axis:(bound,)*widths[0] for axis,bound in zip(frame.axes,waves)} if i==0 else None))
+                        for axis,a in zip(frame.axes,matrices)})
         fluxes.append(flux)
         rates.append(model.rate('rate%d'%i,equation=ddt(state)==-div(flux)))
     case=pops.Case('joint_primitive')
