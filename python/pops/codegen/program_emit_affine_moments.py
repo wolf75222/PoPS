@@ -16,6 +16,8 @@ def emit_affine_moment_kernel(
 ) -> list[str]:
     impl = _model_impl(model)
     order = attrs["order"]
+    if type(order) is not int or order < 1:
+        raise ValueError("affine_moment_update order must be an exact positive integer")
     rotation = attrs.get("rotation", "cayley")
     if not isinstance(rotation, str) or rotation not in ("cayley", "exponential"):
         raise ValueError("affine_moment_update rotation must be 'cayley' or 'exponential'")
@@ -23,10 +25,23 @@ def emit_affine_moment_kernel(
     if rotation == "exponential":
         template += ", pops::moments::AffineVelocityRotation::exponential"
     count = (order + 1) * (order + 2) // 2
+    if count > 2147483647:
+        raise ValueError("affine moment cardinality exceeds native component index representation")
     if len(impl.cons_names) != count:
         raise ValueError("affine_moment_update model does not own the declared complete moment basis")
+    from collections.abc import Mapping
+    from pops.moments.basis import CartesianMonomialBasis
+    descriptor = attrs.get('basis')
+    binding = attrs.get('component_binding')
+    if not isinstance(descriptor, Mapping) or set(descriptor) != {'schema', 'indices'} or descriptor['schema'] != 'pops.cartesian-monomial-basis@1':
+        raise ValueError("affine_moment_update basis descriptor differs")
+    basis = CartesianMonomialBasis(descriptor['indices'])
+    if basis.dimension != 2 or basis.order != order or type(binding) not in (list, tuple) or len(binding) != count or any(type(name) is not str for name in binding) or len(set(binding)) != count or set(binding) != set(impl.cons_names):
+        raise ValueError("affine_moment_update basis/State binding differs")
+    names = dict(zip(basis.indices, binding, strict=True))
+    slots = tuple(impl.cons_names.index(names[(p, q)]) for q in range(order + 1) for p in range(order + 1 - q))
     rows = _linear_source_rows(impl, attrs["linear_operator"])
-    x, y = 1, order + 1
+    x, y = slots[1], slots[order + 1]
     entries = (rows[x][x], rows[x][y], rows[y][x], rows[y][y])
     provider = _provider_binding(impl, entries, provider_plans, consumer_qid)
     impl.assign_runtime_indices()
@@ -51,8 +66,8 @@ def emit_affine_moment_kernel(
         body.append("    const pops::Real %s = %s;" % (label, _checked_inline_expr(expression)))
     body.append("    pops::Real old_moments[%d], endpoint[%d], mapped[%d];" % (count, count, count))
     for component in range(count):
-        body.append("    old_moments[%d] = %sA(index, %d);" % (component, old, component))
-        body.append("    endpoint[%d] = meanA(index, %d);" % (component, component))
+        body.append("    old_moments[%d] = %sA(index, %d);" % (component, old, slots[component]))
+        body.append("    endpoint[%d] = meanA(index, %d);" % (component, slots[component]))
     body.extend([
         "    const bool skew = std::isfinite(jxy) && jxx == pops::Real(0)"
         " && jyy == pops::Real(0) && jyx == -jxy;",
@@ -62,6 +77,6 @@ def emit_affine_moment_kernel(
     ])
     for component in range(count):
         body.append("    outA(index, %d) = valid ? mapped[%d] : old_moments[%d];"
-                    % (component, component, component))
+                    % (slots[component], component, component))
     body.extend(_kernel_close())
     return body

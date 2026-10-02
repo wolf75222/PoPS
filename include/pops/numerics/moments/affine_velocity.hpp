@@ -3,16 +3,20 @@
 #include <pops/core/foundation/types.hpp>
 
 #include <cmath>
+#include <limits>
 
 namespace pops::moments {
 
 /// Complete two-velocity raw moments, ordered by y degree, then x degree.
 template <int Order>
 struct CartesianMomentBasis {
-  static_assert(Order >= 1 && Order <= 4, "affine moments support complete orders one to four");
-  static constexpr int size = (Order + 1) * (Order + 2) / 2;
+  static_assert(Order >= 1, "affine moments require a positive total degree");
+  static constexpr std::int64_t cardinality = (std::int64_t(Order) + 1) * (std::int64_t(Order) + 2) / 2;
+  static_assert(cardinality <= std::numeric_limits<int>::max(),
+                "affine moment cardinality exceeds native component index representation");
+  static constexpr int size = static_cast<int>(cardinality);
   POPS_HD static constexpr int index(int p, int q) {
-    return q * (Order + 1) - q * (q - 1) / 2 + p;
+    return static_cast<int>(std::int64_t(q) * (std::int64_t(Order) + 1) - std::int64_t(q) * (q - 1) / 2 + p);
   }
 };
 

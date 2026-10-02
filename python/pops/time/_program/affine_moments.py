@@ -13,13 +13,21 @@ from pops.time.values import ProgramValue
 
 def affine_moment_update(
     program: Any, state: Any, mean: Any, *, linear_operator: Any,
-    theta_dt: Any, order: int, name: Any, rotation: str = "cayley",
+    theta_dt: Any, order: int | None, name: Any, rotation: str = "cayley",
+    basis: Any = None, components: Any = None,
 ) -> Any:
     """Author the kernel; model/frame/AMR validation remains explicit and fail-closed."""
     from pops.moments.model_builder import moment_names
 
-    if isinstance(order, bool) or not isinstance(order, int) or not 1 <= order <= 4:
-        raise ValueError("affine_moment_update order must be an integer from one to four")
+    from pops.moments.basis import CartesianMonomialBasis
+    if basis is not None and type(basis) is not CartesianMonomialBasis:
+        raise TypeError("affine_moment_update basis must be an exact CartesianMonomialBasis")
+    if order is None:
+        order = basis.order if basis is not None else 4
+    if type(order) is not int or order < 1:
+        raise ValueError("affine_moment_update order must be an exact positive integer")
+    if basis is not None and (basis.dimension != 2 or basis.order != order):
+        raise ValueError("affine_moment_update requires a complete two-velocity basis at the declared order")
     if not isinstance(rotation, str) or rotation not in ("cayley", "exponential"):
         raise ValueError("affine_moment_update rotation must be 'cayley' or 'exponential'")
     for label, value in (("state", state), ("mean", mean)):
@@ -30,8 +38,25 @@ def affine_moment_update(
     if state.block != mean.block:
         raise ValueError("affine_moment_update inputs must belong to the same block")
     require_compatible_spaces(state.space, mean.space, "affine_moment_update", typed_pair=True)
-    if tuple(state.space.components) != tuple(moment_names(order)):
-        raise ValueError("affine_moment_update requires the complete canonical 2V raw-moment basis")
+    binding = None
+    if basis is None:
+        if components is not None:
+            raise ValueError("affine_moment_update explicit components require an explicit basis")
+        if tuple(state.space.components) != tuple(moment_names(order)):
+            raise ValueError("affine_moment_update requires the complete canonical 2V raw-moment basis or an explicit basis binding")
+        # Compatibility is authored here, never inferred by the compiler.
+        basis = CartesianMonomialBasis((p, q) for q in range(order + 1) for p in range(order + 1 - q))
+        binding = tuple(state.space.components)
+    else:
+        from collections.abc import Mapping
+        if not isinstance(components, Mapping):
+            raise TypeError("affine_moment_update components must explicitly map multi-indices to State names")
+        keys = tuple(components)
+        if any(type(key) is not tuple or len(key) != 2 or any(type(n) is not int or n < 0 for n in key) for key in keys) or set(keys) != set(basis.indices):
+            raise ValueError("affine_moment_update component binding must cover the exact basis")
+        binding = tuple(components[index] for index in basis.indices)
+        if any(type(name) is not str for name in binding) or len(set(binding)) != len(binding) or set(binding) != set(state.space.components):
+            raise ValueError("affine_moment_update component binding must cover the exact State once")
     if program._recording:
         raise ValueError("affine_moment_update must be authored at module-scope Program level")
     operator = resolve_operator_handle(
@@ -39,6 +64,8 @@ def affine_moment_update(
         expected_kinds="local_linear_operator", values=(state, mean))
     coefficient = program._coeff_dict(theta_dt, "theta_dt", "affine_moment_update")
     attrs = {"linear_operator": operator.name, "order": order, "theta_dt": coefficient}
+    attrs['basis'] = basis.to_data()
+    attrs['component_binding'] = list(binding)
     # Keep existing Cayley IR/identity bytes unchanged, including an explicit default.
     if rotation != "cayley":
         attrs["rotation"] = rotation
@@ -54,9 +81,17 @@ class _ProgramAffineMoments:
     @atomic_authoring
     def affine_moment_update(
         self, state: Any, mean: Any, *, linear_operator: Any,
-        theta_dt: Any, order: int = 4, rotation: str = "cayley", name: Any = None,
+        theta_dt: Any, order: int | None = None, rotation: str = "cayley", name: Any = None,
+        basis: Any = None, components: Any = None,
     ) -> Any:
         """Push one common affine velocity map through all 2V raw moments.
+
+        ``basis=CartesianMonomialBasis(indices)`` and ``components={index: name}``
+        explicitly bind raw monomials to any permutation/names of the State.
+        Their complete two-velocity rank is a mathematical rotation contract,
+        independent of the spatial dimension, model or species. Omitting both
+        constructs the historical canonical binding in this Python library; the
+        compiler always receives the explicit authenticated descriptor.
 
         ``mean`` is the actual first-moment endpoint from the electric/magnetic
         solve, in the same complete state space as ``state``. Its density must be
@@ -65,8 +100,8 @@ class _ProgramAffineMoments:
         interval and may depend on ``Program.dt``. Both first moments are copied
         exactly; higher moments follow the same affine velocity map.
 
-        ``rotation="cayley"`` preserves the existing CN rotation and program
-        identity. ``rotation="exponential"`` uses the exact centered gyro phase
+        ``rotation="cayley"`` preserves the existing CN arithmetic. Explicit binding uses IR23;
+        previous programs must be reauthored. ``rotation="exponential"`` uses the exact centered gyro phase
         ``2*Omega*theta_dt`` for the represented inputs, with a compensated
         product. The full interval and phase product must be finite; an
         unsupported phase is refused without falling back to Cayley. This
@@ -81,7 +116,8 @@ class _ProgramAffineMoments:
         """
         return affine_moment_update(
             self, state, mean, linear_operator=linear_operator,
-            theta_dt=theta_dt, order=order, name=name, rotation=rotation)
+            theta_dt=theta_dt, order=order, name=name, rotation=rotation,
+            basis=basis, components=components)
 
 
 def validate_affine_moment_prefix(program: Any) -> None:
