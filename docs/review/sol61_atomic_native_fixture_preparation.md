@@ -59,3 +59,33 @@ Final coherent Source/actual-header results:12PASS31.97s, zero skips. The synthe
 codec test is explicitly synthetic and checks saved-gather/carrier bit linkage,
 valid-cell poisoning and truncation refusal; it creates no Native receipt.
 Native collection:2 nodes0.94s, no test execution.
+
+## Corrective capture delta (before any Native execution)
+
+The public compile result is the actual CompiledSimulationArtifact wrapper, not
+CompiledProblem. The fixture now authenticates artifact.verify(), the exact
+population LayoutPlan assignment, singleton layout coverage, CompiledLayoutProgram
+identity/target/partition, and its program pointer. Retained C++/IR/DSO details
+come from that exact selected program; no first-entry or regeneration fallback.
+The wrapper remains the authority for the aggregate artifact manifest.
+
+Program provenance is saved before bind. Each real initial/accepted/continuous
+capture is saved immediately, before another run or science assertion. The receipt
+records partial-captures, native-run-failed, captures-complete or fixture-guards-passed;
+capture-time phase records explicitly say science assertions have not yet run.
+On a run error, collective failure diagnostics are written before another native
+operation, rollback capture is attempted consistently, and the original local
+exception object/type is re-raised. Peers without a local exception report the
+actual collective diagnostics. Capture/I/O failures cannot replace the original
+run exception. This helper cannot repair a deadlock inside a native collective.
+
+New tests exercise the genuine Source wrapper and actual layout-program classes
+with repository metadata-only components. Only platform metadata lookup is isolated
+(no selected SDK); no fake runtime or Native receipt results. A synthetic Source
+callback failure exercises the actual capture orchestration helper and proves
+accepted files survive, failure is written before rollback capture, and the original
+exception object survives. It does not qualify Native rollback.
+
+Final affected cohort:15PASS30.38s, zero skips. Native collect-only:2 nodes0.89s.
+No Native/JIT/ENV execution or mutation occurred. Earlier preparation bd1c3a59
+remains historical; these tests are a correction required before Root execution.
