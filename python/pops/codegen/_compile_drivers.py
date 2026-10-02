@@ -308,6 +308,7 @@ def compile_model(
     else:
         so_path = _artifact_distinct_so_path(so_path, spec_identity)
     with _artifact_cache_lock(so_path):
+        if model_source_policy == "recompile": guard_recompile(so_path)
         staging = _artifact_cache_staging_path(so_path)
         try:
             return _compile_and_authenticate(staging, so_path)

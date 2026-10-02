@@ -351,6 +351,7 @@ class _FacadeCompileMixin(_FacadeModel):
         else:
             # An explicit user destination still forces compilation on every call.
             with _artifact_cache_lock(so_path):
+                if model_source_policy == "recompile": guard_recompile(so_path)
                 out_path = _compile_to(so_path)
                 read(out_path, require=model_source_policy != "allow_missing")
                 binary_identity, final_artifact_identity = write_artifact_sidecar(

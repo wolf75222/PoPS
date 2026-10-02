@@ -32,6 +32,11 @@ class CompiledModel:
         """
         if type(require_complete) is not bool:
             raise TypeError('require_complete must be an exact boolean')
+        from .cache import _artifact_cache_lock
+        with _artifact_cache_lock(self.so_path):
+            return self._source_provenance_locked(require_complete=require_complete)
+
+    def _source_provenance_locked(self, *, require_complete):
         from .model_compile_evidence import read
         evidence = read(self.so_path, require=require_complete)
         if evidence['complete']:
@@ -39,18 +44,27 @@ class CompiledModel:
             sidecar = read_artifact_sidecar(self.so_path)
             if sidecar is None or sidecar['protocol'] != 'pops.artifact-sidecar.v2':
                 raise ValueError('actual model TU lacks committed provenance authority')
+            for key in ('semantic_identity', 'artifact_spec_identity', 'binary_identity', 'artifact_identity'):
+                attached = getattr(self, key, None)
+                if attached is not None and attached.token != sidecar[key]:
+                    raise ValueError('actual model source authority differs from compiled handle')
         return evidence
 
     def dump_cpp(self, path: Any) -> None:
         """Write verified actual compiler input; refuse missing legacy evidence."""
         from pathlib import Path
         from .model_compile_evidence import source
-        Path(path).write_bytes(source(self.so_path).encode('utf-8'))
+        from .cache import _artifact_cache_lock
+        with _artifact_cache_lock(self.so_path):
+            self.source_provenance(require_complete=True)
+            Path(path).write_bytes(source(self.so_path).encode('utf-8'))
 
     @property
     def _generated_cpp(self):
         from .model_compile_evidence import source
-        return source(self.so_path) if self.source_provenance()['complete'] else None
+        from .cache import _artifact_cache_lock
+        with _artifact_cache_lock(self.so_path):
+            return source(self.so_path) if self.source_provenance()['complete'] else None
 
     def __init__(self, so_path: Any, backend: Any, cons_names: Any, cons_roles: Any,
                  prim_names: Any, n_vars: Any, gamma: Any, n_aux: Any, params: Any, caps: Any,

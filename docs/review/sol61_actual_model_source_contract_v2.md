@@ -79,3 +79,18 @@ The emitter-only return mutation changes the source-authority digest while
 relocation and bytecode changes preserve it. Real tiny compiler input/output,
 poisoned companions, legacy refusal, all-model public policy, foreign semantic
 identity, nested publication lock and commit ordering are covered.
+
+Independent findings follow-up: both explicit destination routes now apply
+`recompile` refusal before compiler entry. Retention checks that the declared
+TU occurs uniquely in the compiler arguments and the command output matches
+the declared binary. Inspection compares all attached handle identities with
+the committed sidecar. Public inspection/export acquires the publication lock;
+export additionally hashes the exact bytes it returns, refusing a change after
+authentication instead of exporting a second unverified read.
+
+Replay of the six unchanged non-author probes plus the coherent 32 checks:
+38 passed, one Native-authority node deselected, 19.89 s. The external test file
+was selected from Hooke's WT; `pythonpath` must use absolute paths to this
+checkout. A preceding relative-path run loaded the sibling's old 06bd source
+and reproduced its five failures; that run is not evidence against this delta.
+No Native runtime or MPI result is inferred.

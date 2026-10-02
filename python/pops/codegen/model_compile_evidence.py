@@ -30,6 +30,16 @@ def _write(path,data):
 
 def retain(binary,source,command,header_signature,original):
     """Retain input before the unchanged compiler call; seal only its successful output."""
+    if type(command) not in (list, tuple) or not command or any(type(v) is not str for v in command):
+        raise ValueError('actual TU command must be explicit strings')
+    if str(source) not in command or command.count(str(source)) != 1:
+        raise ValueError('actual TU source is not the unique compiler input')
+    outputs = [command[i+1] for i,v in enumerate(command[:-1]) if v == '-o']
+    outputs += [v[4:] for v in command if v.startswith('/Fe:')]
+    if outputs != [str(binary)]:
+        raise ValueError('actual TU command output differs')
+    if type(header_signature) is not str or not header_signature:
+        raise ValueError('actual TU header signature unavailable')
     compiler=shutil.which(command[0])
     if compiler is None:raise ValueError('actual compiler executable unavailable')
     compiler=Path(compiler).resolve();compiler_hash=sha(compiler)
@@ -86,8 +96,11 @@ def source(binary):
     sidecar=read_artifact_sidecar(binary)
     if sidecar is None or sidecar['protocol']!='pops.artifact-sidecar.v2':
         raise ValueError('actual model source lacks committed provenance authority')
-    read(binary,require=True)
-    return paths(binary)[0].read_bytes().decode('utf-8')
+    evidence=read(binary,require=True)
+    raw=paths(binary)[0].read_bytes()
+    if hashlib.sha256(raw).hexdigest()!=evidence['source_sha256']:
+        raise ValueError('actual TU changed before export')
+    return raw.decode('utf-8')
 
 def publish(staging,destination):
     for old,new in zip(paths(staging),paths(destination)):
