@@ -1,0 +1,50 @@
+{
+  "native_script_sha256": "ff2f056d2d50619a3c02d40d70b2a3e66cd8547e4fcacb122a42f73ca04977d6",
+  "receipts": [
+    {
+      "name": "root-sdk19-build-reception-732041.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-build-reception-732041.json",
+      "schema": "root.sdk19.build-install-reception@1",
+      "sha256": "5e48488724fc719ad3e4febf394ea3867e34f55fe1975242d16ada1c9e199566"
+    },
+    {
+      "name": "root-sdk19-source-terminal-negative-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-source-terminal-negative-reception.json",
+      "schema": "root.sdk19.source-terminal-negative-reception@1",
+      "sha256": "3ca97a43cfdd1e8463a2c21f872195ca45e2046fd1b178aa1836d153046af6b2"
+    },
+    {
+      "name": "root-uniform-observation-source-reviews-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-uniform-observation-source-reviews-reception.json",
+      "schema": "root.uniform-observation-source-reviews-reception@1",
+      "sha256": "9e81df7f27d31d2358e20f7b387695a9a06733f07cedd76e36396f722627decd"
+    },
+    {
+      "name": "root-sdk19-m16-state2-cpu-scientific-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-m16-state2-cpu-scientific-reception.json",
+      "schema": "root.sdk19-m16-state2-cpu-scoped-scientific-reception@1",
+      "sha256": "26aa6c1eb3c7b14bcde113ec9919333b945def7d9c29406dbe2d048d9f270dd6"
+    },
+    {
+      "name": "root-sdk19-m16-state2-mpi2-scientific-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-m16-state2-mpi2-scientific-reception.json",
+      "schema": "root.sdk19-m16-state2-mpi2-scoped-scientific-reception@1",
+      "sha256": "2c934f52047920336f5255c3c1f53479683c7487fd9087fd3e7e52a015cb2de3"
+    },
+    {
+      "name": "root-sdk19-uniform-storage-cpu-engineering-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-uniform-storage-cpu-engineering-reception.json",
+      "schema": "root.sdk19-uniform-storage-cpu-engineering-reception@1",
+      "sha256": "34a7e8a09cd1e16040b325ccf965618df929cebe2a5fa2e8c40f8557715a924d"
+    },
+    {
+      "name": "root-sdk19-uniform-storage-mpi2-engineering-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-uniform-storage-mpi2-engineering-reception.json",
+      "schema": "root.sdk19-uniform-storage-mpi2-engineering-reception@1",
+      "sha256": "653c815e36d02f0677eca7f27c2399a40ecf514e7faa80e34e742e89da039d1f"
+    }
+  ],
+  "schema": "root.sdk19-compact-receipt-copies@1",
+  "scope": "exact compact copies; full archives, source inventories, DSOs and independent readers retained at external immutable origins",
+  "source_freeze": "1b64477d2f1c93e856e996a4c83e506fcc91b386"
+}
