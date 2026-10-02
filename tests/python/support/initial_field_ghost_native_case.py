@@ -25,11 +25,19 @@ from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.solvers.elliptic import GeometricMG
+from pops.solvers.options import CompositeFAC
+from tests.python.support.initial_field_ghost_native_oracle import ORIGINAL_F_BOUND
 from pops.time import FailRun,FixedDt,every
 from pops.fields.boundary_values import logical_time
 
 DT=1/64
 ALPHA=1/8
+# Static FAC measures Original R(0) in global Linf. This board covers initial
+# and one FE step: max |m/alpha|=2*(1+DT)/alpha. Reserve 7/8 of the independent
+# residual guard for postsolve operator/reflux/roundoff; do not loosen that guard.
+FIELD_FORCING_BOUND=2*(1+DT)/ALPHA
+FIELD_RESIDUAL_BUDGET=ORIGINAL_F_BOUND/8
+FIELD_RELATIVE_TOL=FIELD_RESIDUAL_BUDGET/FIELD_FORCING_BOUND
 
 def build(*,ghost=True):
     frame=Rectangle('initial field ghost',(0.,0.),(1.,1.)).frame(Cartesian2D())
@@ -46,7 +54,7 @@ def build(*,ghost=True):
     block=case.block('marker',model)
     field=case.field(operator,FieldDiscretization(method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(AllPhysicalBoundaries(),Neumann(0.)),),
-        solver=GeometricMG(),hierarchy_policy=CompositeHierarchySolve()))
+        solver=GeometricMG(fac=CompositeFAC(rel_tol=FIELD_RELATIVE_TOL)),hierarchy_policy=CompositeHierarchySolve()))
     numerics=DiscretizationPlan()
     numerics.rates.add(rate,FiniteVolume(flux=flux,variables=variables.Conservative(state),reconstruction=reconstruction.FirstOrder(),riemann=riemann.Rusanov()))
     conditions={boundary:Outflow(state=block[state]) for boundary in (frame.boundaries.x_min,frame.boundaries.x_max,frame.boundaries.y_min,frame.boundaries.y_max)}

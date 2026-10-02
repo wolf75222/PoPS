@@ -2,7 +2,7 @@
 import numpy as np
 from tests.review.sol61_amr_full_carrier_offline import decode
 
-CONTRACT='accepted-initial-field-ghost-public@1'
+CONTRACT='accepted-initial-field-ghost-public@2'
 DT=1/64
 ORIGINAL_F_BOUND=1e-10
 FIELD_BOUND=1e-10  # fixed pre-execution uniform Helmholtz absolute error guard
