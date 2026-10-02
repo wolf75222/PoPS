@@ -34,12 +34,14 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
     # All ranks must enter component loading collectives consistently.
     case,layout=collective_call(world,lambda:build(boundary_composer=lambda base:InitialFailureBoundary(base,component)))
     plan=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout,components=(component,)))
-    artifact=compile_resolved_plan_once(world,plan,route='initial-ghost-failure-parent-transition@3',compile_artifact=pops.compile)
+    artifact=compile_resolved_plan_once(world,plan,route='initial-ghost-failure-bootstrap-abort@4',compile_artifact=pops.compile)
     context=collective_call(world,lambda:artifact_execution_context(artifact))
     monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_LOG',str(directory/'callback'))
     from pops.runtime._amr_bootstrap_execution import NativeAMRBootstrapConsumer
     original=NativeAMRBootstrapConsumer.consume_bootstrap_action
-    images=[];owners=[];targets=[];observed_actions=[]
+    original_init=NativeAMRBootstrapConsumer.__init__
+    original_abort=NativeAMRBootstrapConsumer.abort_bootstrap
+    images=[];owners=[];targets=[];observed_actions=[];bootstrap_baselines=[];transition_images=[]
     def image(owner):
         engine=owner._engine;native_owner=engine._s
         # Raw checkpoint carriers/registries only: no Field accessor, solve, refresh or publication.
@@ -54,7 +56,6 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
         if action.operation!='create_level':return original(owner,action)
         if observed_actions:raise AssertionError('fault fixture must reach only one parent transition')
         observed_actions.append({'operation':action.operation,'level':action.level,'identity':action.identity.token})
-        owners.append(owner._engine)
         before=image(owner)
         from tests.python.support.initial_ghost_failure_selection import select_xmin_owner,require_selection_agreement
         from pops._native_collectives import allgather_value
@@ -68,11 +69,25 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
             with collective_check(world):monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',str(selected['target']))
             return original(owner,action)
         except Exception:
-            after=image(owner);images.append((before,after));raise
+            after=image(owner);transition_images.append((before,after));raise
         finally:
             with collective_check(world):
                 if old_target is None:monkeypatch.delenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',raising=False)
                 else:monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_TARGET_RANK',old_target)
+    def observed_init(owner,engine,*args,**kwargs):
+        # The bound engine exists before the genuine constructor starts its Native snapshot.
+        owner._engine=engine
+        owners.append(engine)
+        bootstrap_baselines.append(image(owner))
+        return original_init(owner,engine,*args,**kwargs)
+    def observed_abort(owner):
+        result=original_abort(owner) # Genuine transaction restoration; never a replacement.
+        after=image(owner)
+        assert len(bootstrap_baselines)==1
+        images.append((bootstrap_baselines[0],after))
+        return result
+    monkeypatch.setattr(NativeAMRBootstrapConsumer,'__init__',observed_init)
+    monkeypatch.setattr(NativeAMRBootstrapConsumer,'abort_bootstrap',observed_abort)
     monkeypatch.setattr(NativeAMRBootstrapConsumer,'consume_bootstrap_action',observed)
     _,failures=collective_attempt(world,lambda:pops.bind(artifact,resources={'execution_context':context}))
     # Persist the real collective refusal even when bind never reaches our finalizer.
@@ -90,11 +105,14 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
         (directory/f'before-rank{world.rank}.bin').write_bytes(before['blob'])
         (directory/f'after-rank{world.rank}.bin').write_bytes(after['blob'])
         metadata={phase:{k:v for k,v in value.items() if k!='blob'} for phase,value in [('before',before),('after',after)]}
-        proof={'schema':'sol61.initial-ghost-failure-parent-transition@3','rank':world.rank,'world_size':world.size,'scope':'same-owner parent transition rejection; not full bootstrap construction','observed_actions':observed_actions,'target_selection':targets,'failures':failures,'metadata':metadata,'native':{'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},'component_manifest':component.component_manifest.to_data(),'artifact_identity':artifact.artifact_identity.token,'observer_only':True,'outer_bootstrap_abort_not_certified':True}
-        (directory/f'proof-rank{world.rank}.json').write_text(json.dumps(proof,indent=2,default=str)+'\n')
+        proof={'schema':'sol61.initial-ghost-failure-bootstrap-abort@4','rank':world.rank,'world_size':world.size,'scope':'actual outer bootstrap abort; not successful construction or nested parent rollback','observed_actions':observed_actions,'transition_diagnostic':[{phase:{k:v for k,v in value.items() if k!='blob'} for phase,value in [('before',pair[0]),('after',pair[1])]} for pair in transition_images],'target_selection':targets,'failures':failures,'metadata':metadata,'native':{'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},'component_manifest':component.component_manifest.to_data(),'artifact_identity':artifact.artifact_identity.token,'observer_only':True,'actual_outer_bootstrap_abort_observed':True,'nested_parent_rollback_not_certified':True}
+        for index,(parent_before,parent_after) in enumerate(transition_images):
+            (directory/f'parent-before-rank{world.rank}-{index}.bin').write_bytes(parent_before['blob'])
+            (directory/f'parent-after-rank{world.rank}-{index}.bin').write_bytes(parent_after['blob'])
+        (directory/f'proof-rank{world.rank}.json').write_text(json.dumps(proof,indent=2,allow_nan=False)+'\n')
         assert all(failures) and len(failures)==world.size
         assert all('independent initial Ghost rank-local failure' in failure[1] for failure in failures)
-        assert before==after, 'initial candidate failure changed same-owner prepublication state'
+        assert before==after, 'actual outer bootstrap abort changed its same-owner baseline'
         log=directory/f'callback-rank{world.rank}.log'
         events=log.read_text() if log.exists() else ''
         reads=[line for line in events.splitlines() if line.startswith('field-before-write ')]

@@ -50,3 +50,19 @@ The second genuine SDK14 diagnostic identified initial-entry dt=+0/time=+0/targe
 The new receipt route/schema is initial-ghost-failure-parent-transition@3. It requires before/after one live parent level, exact bytes/registries/Field manifests/clocks, real Field read and tentative write at t0, and the targeted Native refusal. This scope is rejection of parent preparation before first fine creation, not full bootstrap construction/final accepted Halo. The actual next run must demonstrate the callback occurs inside this bracket; an earlier or absent callback continues to fail strict assertions and exports the early diagnostic.
 
 Source lifecycle probe executes the exact wrapper AST and genuine consumer constructor/create action with explicit Source-only native-engine stand-ins; it verifies snapshot→arm→actual action dispatch→read/write/reject/rollback→snapshot, then environment restoration before outer abort. This is not a Native rollback proof. Affected eight-file Source/host cohort24PASS10.93s; no PoPS Native/JIT run by the author.
+
+## Actual parent failure and outer-abort contract @4
+
+Native b9c9592d reached the real callback at dt/time+0 with Field2, tentative scratch write and targeted injected failure. Before/after immediate-parent images differ by48 scalar bits, all grown-only:24 marker and24 mass on non-xmin physical faces (y-low/y-high/x-high), zero→ordinary extrapolated values. Valid cells and geometry are exact, injected−1234 is absent. The grown-payload registry hash differs accordingly; Field manifest/time/tick/level count are unchanged. These differences are retained evidence, never rewritten or accepted as rollback.
+
+Source contract: regrid_parent calls execute_tagging without a local accepted snapshot; bootstrap_next_level calls it directly. begin_bootstrap_plan owns the outer snapshot before initialization/recompute actions. execute_bootstrap catches the failure and invokes genuine abort_bootstrap → rollback_bootstrap_level → AcceptedSnapshot.restore. Thus @3's immediate-parent comparison tested a boundary with no nested rollback promise. No Core transaction patch follows from this evidence.
+
+@4 captures the preexisting bound engine immediately before original constructor/begin (the same carrier baseline authenticated by Native snapshot), then calls the original abort and captures the restored same owner. Strict before==after now tests that actual outer authority, including full-grown bytes, registry, Field manifest, clocks and one-level geometry. The parent bracket still arms before source Ghost, retains its own before/after binary diagnostics, and proves Field read/write/failure; it does not claim nested rollback or successful full construction. No comparison guard is loosened, and no callback/Field/Ghost fallback is added. Source stand-in probes execute the exact constructor/abort wrappers and genuine runtime methods; they cannot certify Native restoration. Root's next real run must establish @4.
+
+Raw @3 originals:
+
+- before-rank0.bin: 47fb4a70795b47c808f465e4e9ea23bc55e75d1639f043527f69ec3cb06bf82b
+- after-rank0.bin: b1c784dc496378eab8a73868b7e5069d824accffc42c1c30275e98b25629c2f4
+- proof-rank0.json: 93ba54a59523ba1cea37fb792349d6e6927b314904fb9e1cfd8b913287764d3e
+
+Final @4 Source/host cohort:27PASS10.28s across the eight affected files, zero skips. The genuine abort-failure adversary propagates failure without post-restore capture. New proof JSON preserves typed data with allow_nan=False, without default=str. No author Native/JIT/ENV run; next actual Native run remains required.
