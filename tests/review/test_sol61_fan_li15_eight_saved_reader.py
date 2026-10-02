@@ -13,7 +13,6 @@ def test_wick_gram_flux_independent_of_generating_function():
     theta=np.array([[.8,.17],[.17,1.2]])
     assert r.wick(theta,2,2)==pytest.approx(.8*1.2+2*.17**2)
     assert r.wick(theta,3,0)==0
-    assert not any(name=='_pops' or name.startswith('pops.') for name in sys.modules)
 
 def test_domain_and_terminal_support_mutants():
     q=r.initial()[:,0]
@@ -97,3 +96,26 @@ def test_disabled_regularization_is_a_different_pde_not_an_oracle_fallback():
     states,clocks=fake_states()
     states[1]=np.broadcast_to(disabled[:,None,:],(15,r.N,r.N)).copy()
     with pytest.raises(ValueError,match='SSPRK2'):r.audit_states(states,clocks,r.INDICES)
+
+
+def _pure_reader_probe(prefix=''):
+    """A child checks its own imports; the caller's cohort modules are untouched."""
+    import os, subprocess
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[2]
+    code=prefix+"\nfrom tests.review import sol61_fan_li15_eight_saved_reader\nimport sys\nassert not any(name in ('pops','_pops') or name.startswith(('pops.','_pops.')) for name in sys.modules), 'reader imported forbidden PoPS/Native module'\n"
+    env=dict(os.environ);env.pop('PYTHONPATH',None);env['PYTHONDONTWRITEBYTECODE']='1'
+    return subprocess.run([sys.executable,'-c',code],cwd=root,env=env,text=True,capture_output=True)
+
+
+def test_reader_import_purity_in_isolated_process():
+    result=_pure_reader_probe()
+    assert result.returncode==0,result.stderr
+
+
+def test_reader_purity_rejects_explicit_source_import_of_pops(tmp_path):
+    # A minimal temporary Source module, not a runtime/backend or fabricated receipt.
+    (tmp_path/'pops.py').write_text("SOURCE_TEST_ONLY = True\n")
+    prefix="import sys\nsys.path.insert(0,"+repr(str(tmp_path))+")\nimport pops\nassert pops.SOURCE_TEST_ONLY is True\n"
+    result=_pure_reader_probe(prefix)
+    assert result.returncode!=0 and 'forbidden PoPS/Native module' in result.stderr
