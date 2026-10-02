@@ -496,7 +496,8 @@ def compile(plan: Any) -> Any:
     from pops.codegen._orchestration_compile import compile_install_models
 
     models = compile_install_models(plan, plan.compile_options)
-    from pops.codegen._compile_drivers import _compile_resolved_problem, compile_problem
+    from pops.codegen._compile_drivers import (
+        _compile_resolved_problem, _program_compile_options, compile_problem)
     from pops.codegen._compiled_artifact import CompiledLayoutProgram
 
     program = None
@@ -514,9 +515,7 @@ def compile(plan: Any) -> Any:
         from pops.codegen.program_balance_due import validate_balance_due_contract
         from pops._balance_due_contract import BalanceDueContract
 
-        options = dict(plan.compile_options)
-        options.pop('model_source_policy', None)  # applies to all models, not Program compilation
-        options["libraries"] = plan.libraries
+        options = _program_compile_options(plan)
         balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
         validate_balance_due_contract(plan.time, balance_due_contract)
 

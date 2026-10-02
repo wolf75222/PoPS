@@ -373,6 +373,19 @@ def compile_problem(
     )
 
 
+def _program_compile_options(plan: Any) -> dict[str, Any]:
+    """Project authenticated options to the Program compiler's authority.
+
+    Model TU admission is applied to every block by compile_install_models;
+    it is retained in the resolved plan but is not a Program compiler option.
+    Both single-layout and sliced-layout routes must use this same projection.
+    """
+    options = dict(plan.compile_options)
+    options.pop("model_source_policy", None)
+    options["libraries"] = plan.libraries
+    return options
+
+
 def _compile_resolved_problem(plan: Any) -> Any:
     """Compile only the route authenticated by one exact resolved plan."""
     from pops.codegen._plans import ResolvedSimulationPlan
@@ -390,8 +403,7 @@ def _compile_resolved_problem(plan: Any) -> Any:
 
     balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
     validate_balance_due_contract(plan.time, balance_due_contract)
-    options = dict(plan.compile_options)
-    options["libraries"] = plan.libraries
+    options = _program_compile_options(plan)
     return _compile_problem_impl(
         model_graph=build_program_model_graph(plan),
         time=plan.time,
