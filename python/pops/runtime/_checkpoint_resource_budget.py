@@ -562,6 +562,7 @@ def _checkpoint_member_names(
     from pops.runtime._checkpoint_embedded_boundary import EMBEDDED_BOUNDARY_CONTRACT_KEY
     from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
     from pops.runtime._checkpoint_spatial import SPATIAL_CONTRACT_KEY
+    from pops.runtime._checkpoint_state_carriers import STATE_CARRIERS_KEY
 
     cadence = (
         "program_cadence_substeps",
@@ -625,6 +626,7 @@ def _checkpoint_member_names(
             "field_provider_manifest",
             SPATIAL_CONTRACT_KEY,
             *cadence,
+            STATE_CARRIERS_KEY,
             "program_accepted_state_source_authority",
             "program_history_flux_snapshot_state",
             "program_history_flux_snapshot_offsets",
@@ -669,6 +671,7 @@ def _common_budget(
     program: Any,
     block_nvars_by_name: dict[str, int],
     field_names: tuple[str, ...],
+    state_carriers_bytes: int = 0,
 ) -> CheckpointResourceBudget:
     from pops.identity import make_identity
     from pops.output._checkpoint_collective import _NPY_HEADER_BUDGET, _manifest_character_budget
@@ -676,6 +679,10 @@ def _common_budget(
     if runtime_kind not in {"uniform", "amr"}:
         raise ValueError("checkpoint common budget requires Uniform or AMR")
     rank_capacity = _capacity(rank_capacity, where="checkpoint rank capacity", positive=True)
+    state_carriers_bytes = _capacity(state_carriers_bytes,
+        where="checkpoint full-state carrier byte capacity", positive=runtime_kind == "amr")
+    if runtime_kind == "uniform" and state_carriers_bytes != 0:
+        raise ValueError("Uniform checkpoint cannot carry an AMR state carrier capacity")
     block_names = tuple(block_nvars_by_name)
     block_nvars = tuple(block_nvars_by_name[name] for name in block_names)
     total_cells = _sum(cells, where="checkpoint configured cell capacity")
@@ -748,6 +755,7 @@ def _common_budget(
     payload_bytes = 0
     for addition in (
         scientific_bytes,
+        state_carriers_bytes,
         history_bytes,
         cache_bytes,
         auxiliary_bytes,
@@ -797,6 +805,9 @@ def _common_budget(
         "cells": list(cells),
         "rank_capacity": rank_capacity,
     }
+    if runtime_kind == "amr":
+        control_data["state_carriers_capacity_contract"] = "pops.amr.state-carriers-capacity@1"
+        control_data["state_carriers_bytes"] = state_carriers_bytes
     control_characters = len(
         json.dumps(control_data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     )
@@ -957,6 +968,11 @@ def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> Non
         2 * 8,
         where="history-flux snapshot archive capacity",
     )
+    carrier_capacity = getattr(owner._s, "_checkpoint_state_carriers_byte_capacity", None)
+    if not callable(carrier_capacity):
+        raise TypeError("AMR native full-state carrier checkpoint capacity is unavailable")
+    state_carriers_bytes = _capacity(
+        carrier_capacity(), where="native full-state carrier byte capacity", positive=True)
     artifact = install_plan.artifact
     field_slots, field_manifest_characters, field_manifest_bytes = (
         _amr_field_provider_manifest_capacity(owner, configured_levels=configured_levels)
@@ -1013,6 +1029,7 @@ def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> Non
         program=program,
         block_nvars_by_name=block_nvars,
         field_names=field_slots,
+        state_carriers_bytes=state_carriers_bytes,
     )
     existing = getattr(owner, "_checkpoint_resource_budget", None)
     if existing is not None and existing != candidate:

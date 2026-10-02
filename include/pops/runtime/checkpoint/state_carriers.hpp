@@ -34,6 +34,55 @@ template <int Dim> struct StateCarrierArchive {
   std::vector<StateCarrierPatch<Dim>> patches;
 };
 
+/// Configured storage envelope for the existing POPSCAR1 wire, capacity contract@1.
+template <int Dim> struct StateCarrierStorageCapacity {
+  std::string name;
+  std::uint64_t components = 0;
+  std::array<std::uint64_t, Dim> ghosts{};
+};
+
+template <int Dim>
+std::uint64_t state_carriers_byte_capacity(std::span<const std::uint64_t> level_cells,
+    std::span<const StateCarrierStorageCapacity<Dim>> blocks) {
+  static_assert(Dim >= 1 && Dim <= 3);
+  const auto add = [](std::uint64_t a, std::uint64_t b) {
+    if (a > std::numeric_limits<std::uint64_t>::max() - b)
+      throw std::length_error("state carrier capacity addition overflows");
+    return a + b;
+  };
+  const auto mul = [](std::uint64_t a, std::uint64_t b) {
+    if (b && a > std::numeric_limits<std::uint64_t>::max() / b)
+      throw std::length_error("state carrier capacity multiplication overflows");
+    return a * b;
+  };
+  if (level_cells.empty() || blocks.empty())
+    throw std::invalid_argument("state carrier capacity requires configured levels and blocks");
+  std::uint64_t cells = 0;
+  for (auto count : level_cells) {
+    if (!count) throw std::invalid_argument("state carrier capacity level is empty");
+    cells = add(cells, count);
+  }
+  // Magic + six authority words + patch count; each name is size-prefixed.
+  std::uint64_t bytes = 8 + 7 * 8;
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    const auto& block = blocks[i];
+    if (block.name.empty() || !block.components)
+      throw std::invalid_argument("state carrier capacity block authority is empty");
+    for (std::size_t j = 0; j < i; ++j)
+      if (block.name == blocks[j].name)
+        throw std::invalid_argument("state carrier capacity block authority is duplicated");
+    bytes = add(bytes, add(8, block.name.size()));
+    std::uint64_t grown_per_valid = block.components;
+    for (auto ghost : block.ghosts)
+      grown_per_valid = mul(grown_per_valid, add(1, mul(2, ghost)));
+    // Each disjoint patch contains >=1 valid cell. For any side L>=1,
+    // L+2g <= L*(1+2g); this includes maximal one-cell fragmentation.
+    const auto patch_bytes = add((6 + 4 * Dim) * 8, mul(grown_per_valid, 8));
+    bytes = add(bytes, mul(cells, patch_bytes));
+  }
+  return bytes;
+}
+
 namespace state_carrier_detail {
 inline std::uint64_t product(std::uint64_t a, std::uint64_t b) {
   if (b && a > std::numeric_limits<std::uint64_t>::max() / b)

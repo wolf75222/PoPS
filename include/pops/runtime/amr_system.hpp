@@ -927,6 +927,8 @@ class AmrSystem {
   capture_auxiliary_checkpoint_accepted_state() const;
   /// Canonical all-source-patch POPSCAR1 image, including every accepted ghost bit.
   [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_state_carriers() const;
+  /// Configured POPSCAR1 maximum bytes from sealed block storage and ranked hierarchy; collective.
+  [[nodiscard]] POPS_EXPORT std::uint64_t checkpoint_state_carriers_byte_capacity() const;
   /// Schema/source coverage validation before target hierarchy rebuild. Collective, nonmutating.
   POPS_EXPORT void validate_checkpoint_state_carriers(
       std::span<const std::uint8_t> (*producer)(const void*), const void* context) const;

@@ -849,6 +849,8 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
            "Collective-free exact rank-local carrier and auxiliary-registry rollback witness.")
       .def("dirty_auxiliary_provider_identities", &AmrSystem::dirty_auxiliary_provider_identities,
            "Exact pending auxiliary-provider identities retained by rollback.")
+      .def("_checkpoint_state_carriers_byte_capacity", &AmrSystem::checkpoint_state_carriers_byte_capacity,
+           "Configured full-grown POPSCAR1 byte capacity@1, exact sealed storage authority.")
       .def("_checkpoint_auxiliary_level_capacity", &AmrSystem::checkpoint_auxiliary_level_capacity,
            "Return the sealed AMR per-level auxiliary metadata/scalar checkpoint capacity.")
       .def(

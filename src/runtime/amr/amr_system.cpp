@@ -11530,6 +11530,64 @@ std::vector<std::uint8_t> AmrSystem<Dim>::checkpoint_state_carriers() const {
 }
 
 template <int Dim>
+std::uint64_t AmrSystem<Dim>::checkpoint_state_carriers_byte_capacity() const {
+  const auto& lane = p_->require_package_assembly_lane();
+  std::uint64_t result = 0;
+  std::string contract;
+  std::exception_ptr error;
+  try {
+    if (p_->cfg.level_count < 1 || p_->blocks.empty() ||
+        p_->cfg.transition_ratios.size() < static_cast<std::size_t>(p_->cfg.level_count - 1))
+      throw std::invalid_argument("state carrier capacity lacks configured hierarchy authority");
+    std::array<std::uint64_t, Dim> shape{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (p_->cfg.shape[axis] < 1)
+        throw std::invalid_argument("state carrier capacity configured shape is empty");
+      shape[axis] = static_cast<std::uint64_t>(p_->cfg.shape[axis]);
+    }
+    std::vector<std::uint64_t> levels;
+    for (int level = 0; level < p_->cfg.level_count; ++level) {
+      std::uint64_t cells = 1;
+      for (auto side : shape) cells = runtime::checkpoint::state_carrier_detail::product(cells, side);
+      levels.push_back(cells);
+      if (level + 1 < p_->cfg.level_count)
+        for (int axis = 0; axis < Dim; ++axis) {
+          const auto ratio = p_->cfg.transition_ratios[level][axis];
+          if (ratio < 1) throw std::invalid_argument("state carrier capacity ratio is invalid");
+          shape[axis] = runtime::checkpoint::state_carrier_detail::product(shape[axis], ratio);
+        }
+    }
+    std::vector<runtime::checkpoint::StateCarrierStorageCapacity<Dim>> storage;
+    ExactContractBuilder exact;
+    exact.text("pops.amr.state-carriers-capacity@1").scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim}).scalar(static_cast<std::uint64_t>(levels.size()))
+        .scalar(static_cast<std::uint64_t>(p_->blocks.size()));
+    for (auto cells : levels) exact.scalar(cells);
+    for (const auto& block : p_->blocks) {
+      runtime::checkpoint::StateCarrierStorageCapacity<Dim> row;
+      row.name = block.name;
+      if (block.ncomp < 1) throw std::invalid_argument("state carrier capacity has invalid components");
+      row.components = static_cast<std::uint64_t>(block.ncomp);
+      exact.text(row.name).scalar(row.components);
+      for (int axis = 0; axis < Dim; ++axis) {
+        if (block.ghosts[axis] < 0) throw std::invalid_argument("state carrier capacity ghosts are invalid");
+        row.ghosts[axis] = static_cast<std::uint64_t>(block.ghosts[axis]);
+        exact.scalar(row.ghosts[axis]);
+      }
+      storage.push_back(std::move(row));
+    }
+    result = runtime::checkpoint::state_carriers_byte_capacity<Dim>(levels, storage);
+    exact.scalar(result);
+    contract = std::move(exact).release();
+  } catch (...) { error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "state carrier capacity preflight failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"state-carriers-capacity", contract}}, lane))
+    throw std::invalid_argument("state carrier capacity differs between RuntimeInstance ranks");
+  return result;
+}
+
+template <int Dim>
 void AmrSystem<Dim>::validate_checkpoint_state_carriers(
     std::span<const std::uint8_t> (*producer)(const void*), const void* context) const {
   const auto& lane = p_->require_package_assembly_lane();
@@ -23575,6 +23633,7 @@ template void AmrSystem<kNativeDimension>::publish_program_field_components(
 template std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>>
 AmrSystem<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
 template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::checkpoint_state_carriers() const;
+template std::uint64_t AmrSystem<kNativeDimension>::checkpoint_state_carriers_byte_capacity() const;
 template void AmrSystem<kNativeDimension>::validate_checkpoint_state_carriers(
     std::span<const std::uint8_t> (*)(const void*), const void*) const;
 template void AmrSystem<kNativeDimension>::restore_checkpoint_state_carriers(
