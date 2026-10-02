@@ -33,3 +33,17 @@ def test_genuine_field_action_failure_aborts_before_finalizer(tmp_path,recompute
     assert events[-2:]==[('recompute',recompute_level),('abort',None)]
     assert ('finalize',None) not in events
     assert 'pops._pops' not in sys.modules
+
+
+def test_diagnostic_accepts_genuine_collective_attempt_shape(tmp_path):
+    from tests.python.support.collective_checks import collective_attempt
+    from tests.python.support.initial_ghost_failure_receipt import save_early_bind_receipt
+    def refused():raise RuntimeError('independent genuine helper refusal')
+    _,failures=collective_attempt(None,refused)
+    assert type(failures) is tuple
+    path=save_early_bind_receipt(tmp_path,rank=0,world_size=1,failures=failures,
+        owner_count=0,image_count=0,target_count=0,
+        native={'path':'SourceOnly','sha256':'SourceOnly'},
+        artifact_identity='SourceOnly',component_manifest={'scope':'SourceOnly'})
+    import json
+    assert json.loads(path.read_text())['failures']==[['RuntimeError','independent genuine helper refusal',True]]
