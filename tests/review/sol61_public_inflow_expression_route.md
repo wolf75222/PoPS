@@ -55,3 +55,13 @@ Inferred expression faces now declare external execution plus `native-boundary-c
 SOURCE cohort (same three-file command above): **82 PASS41.92s**. It includes the actual detached bind-metadata route and six delegation adversaries (missing delegate, changed manifest, foreign target, wrong region axis, wrong producer type, unknown protocol). A final strengthening compares every binding field in the region, followed by a focused seven-node rerun recorded below. No Native build/bind/runtime/ENV mutation was performed; the fresh SDK rebuild and true bind are still ROOT-owned and pending independent review.
 
 Final focused command: same interpreter/options, test_sol61_public_inflow_expression_route.py -k "component_values_bind or forged_component_value". **7 PASS19.69s**, 24 deselected.
+
+
+## Detached delegated-binding uniqueness
+
+Independent red gel1f6099b1 found that appending a duplicate identical component_bindings row was accepted by f45c54c2, despite unique region checking (1 FAIL/3 PASS). The runtime metadata guard now requires exactly one binding for the provider's qualified target and that complete row must equal the delegate. An identical duplicate or competing component for that same target is rejected. AST, equations, interfaces, external routing and native code are unchanged.
+
+Own targeted final command uses the same Source interpreter/options and `-k "component_values_bind or forged_component_value"`: **9 PASS24.97s**, 28 deselected (includes four independent cases excluded by this filter; they are run separately below). The independent test file is read unchanged from Banach's WT, never copied or edited. No Native bypass, pipeline reception or scientific qualification is inferred.
+
+
+The first direct external-file pytest invocation selected the independent WT's old Source and reproduced **1 FAIL/3 PASS12.28s**; it is not a final-corrective result. Final independent run explicitly inserted this private `python` and repository root, imported compiled_plan and asserted its absolute __file__, then called pytest.main with --rootdir equal to this private WT and the unchanged external independent test path. Result **4 PASS11.31s** with actual tested Source printed `/Users/romaindespoulain/dev/tmp/PoPS-sol61-public-inflow-expression/python/pops/mesh/boundaries/compiled_plan.py`. This closes only the detached Source ambiguity; non-author final-review and genuine SDK bind remain separately required.

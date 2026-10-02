@@ -252,7 +252,7 @@ def test_public_component_values_bind_via_actual_detached_install_contract():
     assert len(data["component_regions"])==1
 
 
-@pytest.mark.parametrize("mutation",["missing","manifest","target","region","type","protocol"])
+@pytest.mark.parametrize("mutation",["missing","manifest","target","region","type","protocol","duplicate_binding","competing_binding"])
 def test_forged_component_value_delegation_refused(mutation):
     from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
     data=compiled_public_ghost_plan().canonical_identity()["compile_data"]
@@ -263,5 +263,10 @@ def test_forged_component_value_delegation_refused(mutation):
     if mutation=="region":data["component_region_templates"][0]["region"]["axes"]=[1]
     if mutation=="type":face["type"]="dirichlet"
     if mutation=="protocol":face["value_protocol"]="unknown"
+    if mutation in {"duplicate_binding","competing_binding"}:
+        from copy import deepcopy
+        binding=deepcopy(data["component_bindings"][0])
+        if mutation=="competing_binding":binding["component_id"]="another-component"
+        data["component_bindings"].append(binding)
     with pytest.raises(ValueError,match="component value delegation"):
         CompiledBoundaryPlan(data).runtime_boundary_data({})

@@ -200,7 +200,9 @@ class CompiledBoundaryPlan:
                 delegate=face.get("value_delegate")
                 if face.get("value_protocol")!="native-boundary-component-values@1" or face["type"]!="external" or face.get("values")!=[] or not isinstance(delegate,dict):
                     raise ValueError("compiled boundary component value delegation has an invalid contract")
-                if delegate not in data.get("component_bindings",[]) or delegate.get("target",{}).get("qualified_id")!=face.get("producer") or delegate.get("operation")!="apply_region_batch":
+                bindings=[row for row in data.get("component_bindings",[])
+                    if isinstance(row,dict) and row.get("target",{}).get("qualified_id")==face.get("producer")]
+                if len(bindings)!=1 or bindings[0]!=delegate or delegate.get("target",{}).get("qualified_id")!=face.get("producer") or delegate.get("operation")!="apply_region_batch":
                     raise ValueError("compiled boundary component value delegation lacks its exact binding")
                 regions=[row for row in data["component_region_templates"]
                     if all(row.get(key)==value for key,value in delegate.items())
