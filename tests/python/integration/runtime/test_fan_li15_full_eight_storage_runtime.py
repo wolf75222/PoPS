@@ -102,28 +102,21 @@ def test_installed_original_fan_li_eight_storage(permuted,tmp_path,record_proper
     def capture():
         values=collective_call(world,lambda:np.array(runtime.state_global('gas'),copy=True).reshape(15,support.N,support.N))
         clock=collective_call(world,lambda:(runtime.time(),runtime.macro_step()))
-        from tests.python.support.fan_li15_storage_capture import observe_storage,validate_storage
+        from tests.python.support.fan_li15_storage_capture import observe_storage
         storage=collective_call(world,lambda:observe_storage(runtime))
-        collective_call(world,lambda:validate_storage(storage,values,clock,rank=0 if world is None else world.rank,ranks=1 if world is None else world.size))
         return values,clock,storage
     def save(phase,image):
-        values,clock,storage=image
-        rank=0 if world is None else world.rank
-        collective_call(world,lambda:(directory/(phase+'.rank'+str(rank)+'.carriers')).write_bytes(storage.rank_local))
-        def save_global():
-            if root():
-                (directory/(phase+'.complete.carriers')).write_bytes(storage.complete)
-                save_phase(directory,phase,(values,clock))
-                metadata={'contract':storage.contract,'dimension':storage.dimension,'time':storage.time,
-                    'macro_step':storage.macro_step,'ranks':1 if world is None else world.size,
-                    'complete':{'file':phase+'.complete.carriers','sha256':digest(directory/(phase+'.complete.carriers'))},
-                    'rank_local':[{'file':phase+'.rank'+str(r)+'.carriers','sha256':digest(directory/(phase+'.rank'+str(r)+'.carriers'))} for r in range(1 if world is None else world.size)]}
-                (directory/(phase+'.storage.json')).write_text(json.dumps(metadata,sort_keys=True,allow_nan=False)+'\n')
-        collective_call(world,save_global)
+        from tests.python.support.fan_li15_storage_capture import persist_storage_phase
+        persist_storage_phase(world,directory,phase,image,lambda p,i:save_phase(directory,p,i))
+        values,clock,_=image
         images[phase]=(values,clock)
         collective_call(world,lambda:receipt('partial-captures'))
     def failed(phase,failures):capture_errors.append({'phase':phase,'failures':failures});receipt('capture-failed')
-    def retained(phase):return persisted_capture(world,capture,lambda image:save(phase,image),lambda failures:failed(phase,failures))
+    def retained(phase):
+        from tests.python.support.fan_li15_storage_capture import guard_persisted_storage
+        image=persisted_capture(world,capture,lambda image:save(phase,image),lambda failures:failed(phase,failures))
+        guard_persisted_storage(world,image,lambda failures:failed(phase,failures))
+        return image
     retained('initial')
     for step in range(1,STEPS+1):
         def attempt(failures):attempts.append({'step':step,'failures':failures});receipt('run-failed' if any(failures) else 'run-returned')

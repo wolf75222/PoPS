@@ -20,3 +20,5 @@ tests/python/integration/runtime/test_fan_li15_full_eight_storage_runtime.py::te
 ```
 
 The Native campaign must authenticate the newly rebuilt artifact and receive Serial/MPI2 independently. The current preparation executes no Native compile/bind/run. SDK19 build identity is not inherited from SDK18.
+
+Raw-evidence ordering followup: capture performs only bulk reads. All rank-local/complete bytes, valid NPY, clocks, storage metadata and SHA receipt are persisted first. Only then does a voted integrity guard run, before any following Native step. A refusal retains the partial images and records capture-failed separately. Genuine immutable DTO/independent-codec Source adversaries mutate a grown-only local bit, a complete valid bit and a world envelope; each retains exact raw files and prevents a future run. No Native storage defect is alleged by these synthetic adversaries.
