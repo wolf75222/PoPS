@@ -18,6 +18,8 @@ from tests.python.integration.mpi._compile_once import compile_resolved_plan_onc
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.review.sol61_amr_full_carrier_offline import decode
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
+from tests.python.support.evolving_accepted_halo_oracle import full_carrier,halo_rows
+from tests.review.sol61_tag_selection_oracle import receive
 
 def observe(world,runtime):
     blob=collective_call(world,lambda:bytes(runtime._executor.checkpoint_state_carriers()))
@@ -93,14 +95,17 @@ def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache
     # Preserve all captures before the scientific/exact assertions.
     with collective_check(world):
         same(images["accepted"],images["reloaded"]);same(images["continuous"],images["replay"])
-        for phase,step in (("accepted",1),("continuous",2)):
+        initial_archive=decode(np.frombuffer(images["initial"][0],dtype=np.uint8))
+        boxes=images["initial"][2][-1][2]
+        coarse,fine=receive(boxes,(8,8),0)
+        assert len(images["initial"][1])==2
+        np.testing.assert_array_equal(images["initial"][1][0][1],coarse)
+        np.testing.assert_array_equal(images["initial"][1][1][1],fine)
+        for phase,step in (("initial",0),("accepted",1),("continuous",2),("reloaded",1),("replay",2)):
             image=images[phase];assert image[2][-1][:2]==(step*DT,step)
-            assert image[2][2],"accepted halo authority must be exported"
+            halo_rows(image[2][2])
             archive=decode(np.frombuffer(image[0],dtype=np.uint8))
-            for patch in archive["patches"]:
-                values=np.asarray(patch["bits"],dtype=np.uint64).view(np.float64).reshape(2,-1)
-                assert np.isfinite(values).all()
-                np.testing.assert_array_equal(values[1 if subcycled else 0],np.ones(values.shape[1]))
+            full_carrier(initial_archive,archive,boxes,step*DT,step,1 if subcycled else 0)
             for (current,mask),(initial,oldmask) in zip(image[1],images["initial"][1],strict=True):
                 np.testing.assert_array_equal(mask,oldmask)
                 current=current.reshape(2,*mask.shape);initial=initial.reshape(2,*mask.shape)
@@ -111,7 +116,9 @@ def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache
                 assert np.max(np.abs(current[0 if subcycled else 1][mask]-initial[0 if subcycled else 1][mask]-step*DT))<=gamma*(np.max(np.abs(initial[0 if subcycled else 1][mask]))+step*DT+1)
         if world.rank==0:
             assert int(payload["pops_amr_checkpoint_version"])==AMR_CHECKPOINT_PAYLOAD_VERSION==12
-            assert contract["schema_version"]==9 and contract["accepted_halo"]
+            assert type(contract["schema_version"]) is int and contract["schema_version"]==9
+            halo_rows(contract["accepted_halo"])
+            assert contract["accepted_halo"]==images["accepted"][2][2]
             assert payload["state_carriers_checkpoint"].dtype==np.uint8
             payload["state_carriers_checkpoint"]=payload["state_carriers_checkpoint"][:-1]
             bad=directory/"truncated-carrier-checkpoint.npz";np.savez(bad,**payload)
