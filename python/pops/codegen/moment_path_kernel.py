@@ -170,12 +170,15 @@ def emit_moment_path_kernel(plan: dict, name: str) -> list[str]:
     if poly:
         raise ValueError("speed must be scalar")
     speed_lines = list(endpoint.lines)
+    used_nodes = set(endpoint.memo)
     endpoint = _ArithmeticEmitter(order, indices, plan["nodes"], capacity)
     flux = [endpoint.emit(value) for value in plan["flux"]]
     if any(value[1] for value in flux):
         raise ValueError("endpoint flux must be scalar")
     path = _ArithmeticEmitter(order, indices, plan["nodes"], capacity, path=True)
     integrands = [path.emit(value) for value in plan["integrands"]]
+    used_nodes.update(endpoint.memo)
+    used_nodes.update(path.memo)
     lines = [f"struct {name} {{", "  using Real = pops::Real;", "  using Direction = std::array<Real, 2>;",
              f"  using Recovered = pops::moments::NormalizedRawMoments<{order}>;",
              f"  using Poly = pops::moments::Polynomial<{capacity}>;", "  template<class State>",
@@ -186,7 +189,7 @@ def emit_moment_path_kernel(plan: dict, name: str) -> list[str]:
     lines += [f"    raw[{k}] = input[{indices.index(index)}];" for k, index in enumerate(canonical)]
     lines += [f"    return pops::moments::recover_raw_moments<{order}>(raw, state);", "  }", "  template<class State>",
               "  POPS_HD static pops::PathStatus admissibility(const State& input) {", "    Recovered state; return recover(input, state);", "  }",
-              "  POPS_HD static Real speed_bound(const Recovered& state, const Direction& g) {", "    (void)state; (void)g;", *speed_lines, f"    return {speed};", "  }",
+              "  template<class State>", "  POPS_HD static Real speed_bound(const State& raw, const Recovered& state, const Direction& g) {", "    (void)raw; (void)state; (void)g;", *speed_lines, f"    return {speed};", "  }",
               "  template<class State>", f"  POPS_HD pops::PathFluxResult<{n}> path_directional_flux(const State& raw, const Direction& g) const {{",
               f"    pops::PathFluxResult<{n}> result;", "    Recovered state; result.status = recover(raw, state);",
               "    if (!result.succeeded()) return result;", "    for (auto value : g) if (!std::isfinite(value)) {",
@@ -210,13 +213,14 @@ def emit_moment_path_kernel(plan: dict, name: str) -> list[str]:
     else:
         analytic = _ArithmeticEmitter(order, indices, plan["nodes"], capacity, endpoint_integral=True)
         values = [analytic.emit(value) for value in plan["integral"]]
+        used_nodes.update(analytic.memo)
         if any(value[1] for value in values):
             raise ValueError("analytic endpoint integral must be scalar")
         lines += [f"    pops::PathIntegralResult<{n}> result;", "    Recovered first, second;",
                   "    result.status = recover(left, first); if (!result.succeeded()) { result.input_side = 0; return result; }",
                   "    result.status = recover(right, second); if (!result.succeeded()) { result.input_side = 1; return result; }",
                   "    for (auto value : g) if (!std::isfinite(value)) { result.status = pops::PathStatus::NonFiniteDirection; return result; }",
-                  "    const Real speed_first = speed_bound(first, g), speed_second = speed_bound(second, g);",
+                  "    const Real speed_first = speed_bound(left, first, g), speed_second = speed_bound(right, second, g);",
                   "    if (!std::isfinite(speed_first) || !std::isfinite(speed_second) || speed_first < Real(0) || speed_second < Real(0)) {",
                   "      result.status = pops::PathStatus::NonFiniteResult; return result; }",
                   "    result.speed_bound = speed_first > speed_second ? speed_first : speed_second;",
@@ -230,4 +234,6 @@ def emit_moment_path_kernel(plan: dict, name: str) -> list[str]:
         for slot, (value, _, _) in enumerate(values):
             lines.append(f"    result.integral[{slot}] = reverse ? -{value} : {value};")
     lines += ["  }", "};"]
+    if used_nodes != set(range(len(plan["nodes"]))):
+        raise ValueError("arithmetic graph contains unreachable operations")
     return lines

@@ -42,8 +42,9 @@ struct Kernel {
   POPS_HD static pops::PathStatus admissibility(const State& input) {
     Recovered state; return recover(input, state);
   }
-  POPS_HD static Real speed_bound(const Recovered& state, const Direction& g) {
-    (void)state; (void)g;
+  template<class State>
+  POPS_HD static Real speed_bound(const State& raw, const Recovered& state, const Direction& g) {
+    (void)raw; (void)state; (void)g;
     const Real a0 = Real(6);
     const Real a1 = Real(10);
     const Real a2 = std::sqrt(a1);

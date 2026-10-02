@@ -37,7 +37,7 @@ def test_authored_degree_two_integral_and_permuted_support():
     assert "analytic_endpoint" == plan["integral_mode"]
 
 
-@pytest.mark.parametrize("mutation", ("cycle", "bool_ref", "degree", "op", "missing_flux", "forged_capacity"))
+@pytest.mark.parametrize("mutation", ("cycle", "bool_ref", "degree", "op", "missing_flux", "forged_capacity", "unused_op"))
 def test_graph_contract_rejects_malformed_operations(mutation):
     plan = deepcopy(fan_li15_native_plan())
     target = plan["flux"][0]
@@ -52,6 +52,9 @@ def test_graph_contract_rejects_malformed_operations(mutation):
         node["op"] = "hermite_closure"
     elif mutation == "missing_flux":
         plan["flux"] = plan["flux"][:-1]
+    elif mutation == "unused_op":
+        plan["nodes"] += ({"op": "hermite_closure", "args": (), "degree": 6, "polynomial": True},)
+        plan["polynomial_degree"] = 6
     else:
         plan["polynomial_degree"] = 6
     with pytest.raises((ValueError, TypeError)):

@@ -36,8 +36,14 @@ POPS_HD PathIntegralResult<CartesianMomentBasis<Order>::size> integrate_normaliz
     }
     zero_direction = zero_direction && component == Real(0);
   }
-  const Real speed_left = law.speed_bound(left, direction),
-             speed_right = law.speed_bound(right, direction);
+  const auto endpoint_speed = [&](const auto& raw, const auto& recovered) {
+    if constexpr (requires { law.speed_bound(raw, recovered, direction); })
+      return law.speed_bound(raw, recovered, direction);
+    else
+      return law.speed_bound(recovered, direction);
+  };
+  const Real speed_left = endpoint_speed(raw_left, left),
+             speed_right = endpoint_speed(raw_right, right);
   const Real speed = speed_left > speed_right ? speed_left : speed_right;
   if (!std::isfinite(speed_left) || !std::isfinite(speed_right) || speed_left < Real(0) ||
       speed_right < Real(0)) {

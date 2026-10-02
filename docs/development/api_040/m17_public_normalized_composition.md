@@ -116,3 +116,9 @@ without expressions is now refused by the independent Source-only witness.
 
 Non-author structural composition, final Source results and Root's rebuilt
 Native/scientific/performance evidence remain separate gates.
+
+## Contrôle strict du graphe et des entrées de vitesse
+
+La borne de vitesse reçoit explicitement le même état brut que la récupération normalisée, avec la liaison exacte des composantes. Le noyau commun conserve le protocole historique à deux arguments pour les lois existantes. Aucun nœud non atteignable depuis les sorties déclarées n'est accepté : une opération inconnue, cyclique ou falsifiée ne peut donc être cachée dans une capacité supplémentaire.
+
+Delta Source/host : 12 tests passent en 2.93 s ; les neuf adversaires indépendants de Galileo passent en 0.72 s, dont la compilation réelle de la vitesse dépendant d'un moment brut. La précédente cohorte au gel7541 est incomplète : ENOSPC aux probes finales et à l'écriture XML. Elle ne constitue pas un reçu positif. La cohorte finale complète est relancée sur ce correctif. Aucun résultat Native, GPU, MPI ou performance n'est déduit de ces contrôles.
