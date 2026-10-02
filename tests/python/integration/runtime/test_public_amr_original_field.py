@@ -47,7 +47,7 @@ DIFFUSION = np.array(((.04, .006, 0.), (-.003, .05, 0.), (0., 0., .03)))
 DT, TOL = .01, 3e-8
 
 
-def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditioner=None):
+def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditioner=None, solver=None, physical_seed=None):
     width = len(order)
     frame = Rectangle("closed-original-field-box", lower=(0, 0), upper=(1, 1)).frame(Cartesian2D())
     fluid = pops.Model("actual-field-consumer", frame=frame)
@@ -94,7 +94,7 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
         case.numerics(numerical, block=block)
         blocks.append(block)
     realization = {} if right_preconditioner is None else {"right_preconditioner": right_preconditioner}
-    solver = Newton(tolerance=1e-10, max_iterations=20, linear_tolerance=1e-8,
+    solver = solver if solver is not None else Newton(tolerance=1e-10, max_iterations=20, linear_tolerance=1e-8,
                      linear_max_iterations=240, restart=60, **realization)
     field = case.field(problem, FieldDiscretization(method=CellCenteredNonlinearCoupled(
         finite_difference_step=1e-6), boundaries=(), solver=solver))
@@ -102,12 +102,22 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
     current, load, coefficient = (program.state(block[handle]) for block, handle in
         zip(blocks, (state, forcing, parameter), strict=True))
     program.store_history("accepted-response", current.n, depth=1)
+    original_point = (coefficient.n.point if physical_seed is not None else program.stage("original-field", c=0))
     request = field.bind_program_inputs(program=program,
         values={blocks[1][forcing]: load.n, blocks[2][parameter]: coefficient.n},
-        at=program.stage("original-field", c=0), solver=solver)
+        at=original_point, solver=solver)
     if seed:
         declared_seed = program.scalar_field("declared-zero-seed", ncomp=width)
         request = replace(request, seeds={"field_tuple": declared_seed})
+    if physical_seed is not None:
+        from pops.model.spaces import FieldSpace
+        from pops._ir.quantity import PhysicalDimension
+        space = FieldSpace("declared-original-physical-seed",
+            components=tuple(unknowns[i].local_id for i in order), representation="physical-mixed",
+            sampling="cell_value", units=(PhysicalDimension(),)*width,
+            frame=state.space.frame, clock=state.space.clock, support=state.space.support)
+        request = request.seed_product(program=program, space=space, name="declared-original-seed",
+            expressions=tuple(0 * coefficient.n[0] + physical_seed for _ in order))
     observed = field.observe(program.solve(request, solver=solver).consume(action=FailRun()))
     outputs = tuple(observed[field[unknown]] for unknown in unknowns)
     module = fluid.module
@@ -155,9 +165,9 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
     return case, layout
 
 
-def bind_case(world, cells, order, *, guarded=False, seed=False, right_preconditioner=None):
+def bind_case(world, cells, order, *, guarded=False, seed=False, right_preconditioner=None, solver=None, physical_seed=None):
     case, layout = collective_call(world, lambda: build(cells, order, guarded=guarded, seed=seed,
-                                                      right_preconditioner=right_preconditioner))
+                                                      right_preconditioner=right_preconditioner, solver=solver, physical_seed=physical_seed))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
     artifact = compile_resolved_plan_once(world, resolved, route="original nonlinear composite AMR field", compile_artifact=pops.compile)
     context = collective_call(world, lambda: artifact_execution_context(artifact))

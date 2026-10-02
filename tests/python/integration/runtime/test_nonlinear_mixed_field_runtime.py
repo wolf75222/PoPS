@@ -73,7 +73,7 @@ def original_lhs(values, parameter):
     return np.stack(local) - np.einsum("ij,jyx->iyx", DIFFUSION[:len(values), :len(values)], laplacian)
 
 
-def prepared_case(order, *, failure=None):
+def prepared_case(order, *, failure=None, solver=None):
     width = len(order)
     frame = CartesianDomain("original-product-box", lower=(0., 0.), upper=LENGTHS).frame(Cartesian2D())
     model = pops.Model("captured-equation-data", frame=frame)
@@ -104,7 +104,7 @@ def prepared_case(order, *, failure=None):
     problem = FieldProblem("uncondensed-equations", unknowns=tuple(unknowns[i] for i in order),
         equations=tuple(equations[i] for i in order), boundaries=tuple(FieldBoundary(
             unknowns[i], bcs.BoundaryCondition(bcs.AllPhysicalBoundaries(), bcs.Periodic())) for i in order))
-    solver = Newton(tolerance=1e-11, max_iterations=1 if failure == "iterations" else 20,
+    solver = solver if solver is not None else Newton(tolerance=1e-11, max_iterations=1 if failure == "iterations" else 20,
                     linear_tolerance=1e-9, linear_max_iterations=150, restart=60)
     field = case.field(problem, FieldDiscretization(method=CellCenteredNonlinearCoupled(
         finite_difference_step=1e-7), boundaries=(), solver=solver))
@@ -130,8 +130,8 @@ def prepared_case(order, *, failure=None):
     return pops.resolve(pops.validate(case), layout=layout), block[forcing], parameter_block[parameter]
 
 
-def bind_native(world, native, order, failure=None):
-    resolved, forcing, parameter = collective_call(world, lambda: prepared_case(order, failure=failure))
+def bind_native(world, native, order, failure=None, *, solver=None):
+    resolved, forcing, parameter = collective_call(world, lambda: prepared_case(order, failure=failure, solver=solver))
     artifact = compile_resolved_plan_once(world, resolved, route="original nonlinear spatial field",
                                         compile_artifact=pops.compile)
     context = collective_call(world, lambda: artifact_execution_context(artifact))
