@@ -1295,6 +1295,7 @@ std::size_t offset(const Index<Dim>& index, const Box<Dim>& box) {
 template <int Dim>
 struct PreparedFieldGather {
   std::vector<double> values;
+  std::size_t bytes = 0;
   std::string exact_contract;
 };
 
@@ -1311,6 +1312,8 @@ PreparedFieldGather<Dim> prepare_field_gather(const MultiFab<Dim>& field, const 
   prepared.values.assign(checked_size_product(static_cast<std::size_t>(components), domain_cells,
                                               "AmrSystem gather buffer exceeds size_t"),
                          0.0);
+  prepared.bytes = checked_size_product(prepared.values.size(), sizeof(double),
+                                        "AmrSystem gather byte count exceeds size_t");
   const int rank = lane.rank();
   const bool contributes = !field.distribution().replicated() || rank == 0;
   for (std::size_t local = 0; contributes && local < field.local_size(); ++local) {
@@ -1332,7 +1335,7 @@ PreparedFieldGather<Dim> prepare_field_gather(const MultiFab<Dim>& field, const 
   }
   ExactContractBuilder exact;
   exact.text("pops.amr-field-gather")
-      .scalar(std::uint32_t{1})
+      .scalar(std::uint32_t{2})
       .scalar(std::int32_t{Dim})
       .text(semantic_identity)
       .scalar(components)
@@ -1359,7 +1362,11 @@ PreparedFieldGather<Dim> prepare_field_gather(const MultiFab<Dim>& field, const 
 
 template <int Dim>
 void execute_field_gather(PreparedFieldGather<Dim>& prepared, const ExecutionLane& lane) {
-  all_reduce_sum_inplace(prepared.values.data(), prepared.values.size(), lane);
+  // Disjoint valid boxes and the canonical replicated contributor provide one
+  // source for every covered cell. Uncovered fine-level cells remain +0.
+  // Transport their object bytes: floating SUM changes stored -0 to +0 even
+  // when every other rank contributes an empty (+0) buffer.
+  all_reduce_or_inplace(reinterpret_cast<char*>(prepared.values.data()), prepared.bytes, lane);
 }
 
 template <int Dim>
