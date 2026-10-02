@@ -75,20 +75,32 @@ void destroy(void* p){auto* s=static_cast<State*>(p);if(s){event("destroy",s->ra
 int ordinary(void*,const PopsGhostBoundaryRequestV1*,PopsComponentStatusV1* status){
  *status={sizeof(PopsComponentStatusV1),61,POPS_COMPONENT_ABORT_RUN_V1,"failure board forbids a positive callback before initial fault"};return 0;
 }
+int rejected(PopsComponentStatusV1* status,int code,const char* reason){
+ if(status)*status={sizeof(PopsComponentStatusV1),code,POPS_COMPONENT_ABORT_RUN_V1,reason};
+ return code;
+}
 int initial(void* p,const PopsAcceptedInitialGhostRequestV1* r,PopsComponentStatusV1* status){
- auto* s=static_cast<State*>(p);if(!s||!r||!status)return 52;
+ auto* s=static_cast<State*>(p);
+ if(s&&r){
+  const char* base=std::getenv("POPS_TEST_INITIAL_GHOST_LOG");
+  if(base){char path[4096];std::snprintf(path,sizeof path,"%s-rank%d.log",base,s->rank);
+   FILE* f=std::fopen(path,"a");if(f){const auto& point=r->region_request.logical_time;
+    std::fprintf(f,"initial-entry rank=%d size=%d dt=%a time=%a target=%s\n",s->rank,s->size,point.dt,point.physical_time,
+      std::getenv("POPS_TEST_INITIAL_GHOST_TARGET_RANK")?"present":"absent");std::fclose(f);}}
+ }
+ if(!s||!r||!status)return rejected(status,52,"initial Ghost callback missing prepared state/request/status");
  const char* text=std::getenv("POPS_TEST_INITIAL_GHOST_TARGET_RANK");
- if(!text||!*text)return 55;
+ if(!text||!*text)return rejected(status,55,"initial Ghost fault target is not armed before callback");
  // Canonical decimal integer only; no sign, whitespace, partial parse or overflow.
- if((text[0]=='0'&&text[1])||text[0]<'0'||text[0]>'9')return 55;
- for(const char* at=text;*at;++at)if(*at<'0'||*at>'9')return 55;
+ if((text[0]=='0'&&text[1])||text[0]<'0'||text[0]>'9')return rejected(status,55,"initial Ghost fault target has invalid canonical rank authority");
+ for(const char* at=text;*at;++at)if(*at<'0'||*at>'9')return rejected(status,55,"initial Ghost fault target has invalid canonical rank authority");
  errno=0;char* end=nullptr;const long target=std::strtol(text,&end,10);
- if(errno==ERANGE||!end||*end||target<0||target>=s->size)return 55;
+ if(errno==ERANGE||!end||*end||target<0||target>=s->size)return rejected(status,55,"initial Ghost fault target has invalid canonical rank authority");
  const auto& q=r->region_request;
- if(r->point_contract_version!=1||q.logical_time.tick!=0||q.logical_time.dt!=0.||!q.dependencies||!q.ghosts.data)return 53;
+ if(r->point_contract_version!=1||q.logical_time.tick!=0||q.logical_time.dt!=0.||!q.dependencies||!q.ghosts.data)return rejected(status,53,"initial Ghost callback point/dependency/output contract is invalid");
  const PopsQualifiedConstFieldV1* field=nullptr;
  for(std::size_t i=0;i<q.dependency_count;++i)if(q.dependencies[i].present&&q.dependencies[i].values.component_count==1)field=&q.dependencies[i];
- if(!field||!field->values.data)return 54;
+ if(!field||!field->values.data)return rejected(status,54,"initial Ghost callback has no scalar Field dependency");
  std::ptrdiff_t offset=0;for(int axis=0;axis<field->values.dimension;++axis)offset+=field->values.ghost_lower[axis]*field->values.axis_strides[axis];
  const double phi=static_cast<const double*>(field->values.data)[offset];
  event("field-before-write",s->rank,s->size,phi,q.logical_time.physical_time);
