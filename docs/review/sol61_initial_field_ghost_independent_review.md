@@ -1,0 +1,9 @@
+# Initial Field→Ghost independent review — SOURCE/host only
+
+Exact author gel 4e8b4b0d41e0523d1b01197ad80da0811204f12e, parent5582d98a, WT PoPS-sol61-initial-field-ghost. No Source blocker found in bounded review.
+
+Principles1.1/1.3/1.4/1.6 → non-integrating initial point with existing physical clock authority → additive interfaceID11/version1; ordinary GhostBoundaryV1 remains separate and requires dt>0. Initial point requires tick/substep/stage0, fraction0/1, positive-zero dt and finite physical time (finite nonzero origins permitted). Existing table layouts unchanged; catalog/header signature changes require fresh SDK build. Capability preflight precedes Field preparation; full producer-point equality (clock/level/time/dt/tick/stage/substep/fraction) follows genuine Field preparation before Ghost. Candidate preparation/copy/fence is voted; outer restoration remains before accepted publication. Existing opaque prepared provider state is borrowed; exact prepare/destroy function equality prevents incompatible lifecycle tables. No model/name/formula whitelist added.
+
+Independent author suite:6 PASS6.94s (actual complete consumer headers Dim1/2/3 plus Source routing). Additional complete-header host probe:1 PASS1.09s, finite negative/nonzero time origin accepted, dtnegative/positive/inf/NaN refused, mismatched prepare function and absent initial callback refused. Synthetic ABI tables are host metadata only, not Native simulation. Source tests cover stale producer witness comparisons; actual Field rollback, MPI collective liveness and physical ghosts remain unexecuted.
+
+No Native build/JIT/ENV mutation; no public Python lowering or runtime qualification claimed. Source APIs do not carry Python bool types; typed Python lowering and public dtbool preflight belong to its separate review. Full amr_system.cpp syntax under actual flags and fresh SDK/public reception remain ROOT work.
