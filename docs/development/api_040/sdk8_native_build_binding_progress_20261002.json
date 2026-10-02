@@ -59,6 +59,19 @@
       "source": "3d8481c9d5dc0f2aaa99764a2dd7662ef4e1d23c",
       "returncode": 0,
       "native_scientific_acceptance": false
+    },
+    {
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-sdk8-halo-stage-dim2-eef92c68/build-reception.json",
+        "sha256": "91c61ff53590cf46f069bfdcb162256f72691ae62077f4261fb558c331641948",
+        "bytes": 4145
+      },
+      "source": "eef92c681e4df85497cebda9ec4fe154242fd316",
+      "returncode": 0,
+      "native_scientific_acceptance": false,
+      "verified_installed_source_files": 1137,
+      "native_sha256": "8acd46dd8148d5fee647135cc99b0710bb812786c18e997b802aec78387471d7",
+      "isolated_environment": "pops-api040-halo10"
     }
   ],
   "independent_sdk_audit": {
@@ -583,7 +596,7 @@
     "second installed Tag bind: runtime authority demanded execution v2; corrected shared contract in new build3d8481; original failed result retained"
   ],
   "pending": [
-    "after-preparation accepted-Halo failure rollback and successful retry on a fresh immutable SDK",
+    "populated Field/GhostBC initial-point pipeline and rollback; MPI transport failure distinct from after-fence injection",
     "Field/GhostBC/bootstrap authority, regrid, general AMR and candidate-dependent physics",
     "full BGK/Vlasov-Poisson and remaining original models; core M16/M17 composition repairs",
     "ROMEO CPU/GPU, dimensions1/3, OpenMPI, CI and comparable native cost reception",
@@ -596,8 +609,8 @@
     "bytes": 860
   },
   "independent_execution_source_review": "f1b32ede + 69ec8e3f / review6b3b10fd: 245 passes, no Native execution",
-  "latest_built_source": "3d8481c9d5dc0f2aaa99764a2dd7662ef4e1d23c",
-  "latest_verified_installed_source_files": 1136,
+  "latest_built_source": "eef92c681e4df85497cebda9ec4fe154242fd316",
+  "latest_verified_installed_source_files": 1137,
   "independent_tag_representative": {
     "scope": "periodic stationary Tag; all grown constant exact and physical strip selection; no CP12/accepted9 wire receipt, Field, GhostBC or subcycling qualification",
     "pins": [
@@ -633,14 +646,30 @@
       }
     ]
   },
-  "updated_at": "2026-10-02T04:09:26.765165+00:00",
+  "updated_at": "2026-10-02T06:59:19.998919+00:00",
   "bounded_public_reception": {
     "tag_cases_per_backend": 8,
     "tag_mpi_ranks": 2,
     "typed_original_serial_cases": 8,
     "rank_counts_not_summed": true,
     "full_scientific_reception": false,
-    "typed_original_mpi_cases_per_rank": 8
+    "typed_original_mpi_cases_per_rank": 8,
+    "tag_and_typed_original_native_source": "3d8481c9d5dc0f2aaa99764a2dd7662ef4e1d23c",
+    "tag_and_typed_original_native_sha256": "7fd8c7fef0ff8d330422c763c8b51afb10d4fae25f096d38a4154cbc2f846a44",
+    "halo_stage_failure_sdk_eef92c": {
+      "collective_cases_per_backend": 1,
+      "backends": [
+        "serial",
+        "mpi2"
+      ],
+      "ranks_not_summed": true,
+      "receipt": {
+        "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/sdkeef92c_halo_stage_failure_reception.json",
+        "sha256": "770521e63c0360f2935a1a37d13a4178316124fc5b572d048ab2fdd6b28b66bb",
+        "bytes": 41463
+      },
+      "prior_sdk_results_inherited": false
+    }
   },
   "bounded_scientific_reception": {
     "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/sdk3d8481_spatial_n8_scientific_reception.json",
@@ -662,6 +691,16 @@
       "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/sdk3d8481_m19_freestreaming_reception.json",
       "sha256": "78c49a3591ed2a0528f29048c45dbc4af2be597ebd8946b7b96ccfd30f62b284",
       "bytes": 13644
+    },
+    "halo_stage_failure_v2": {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/sdkeef92c_halo_stage_failure_reception.json",
+      "sha256": "770521e63c0360f2935a1a37d13a4178316124fc5b572d048ab2fdd6b28b66bb",
+      "bytes": 41463
     }
+  },
+  "independent_halo_stage_root_document_review": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-halo-stage-root-document-independent-review.json",
+    "sha256": "812c4a6111f981c24f775ef354580a6913b18a0950cc1ba535a16bbdf837016c",
+    "bytes": 711
   }
 }

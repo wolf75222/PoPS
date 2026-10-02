@@ -1,6 +1,6 @@
 # Integration checkpoint — 2026-10-01
 
-Actualisation ROOT 2026-10-02 — [N8/N16 @4 reçus Serial/MPI2](sdk3d8481_spatial_v4_scientific_reception.md), [Halo évolutif et ratio5/2 exécutés](sdk3d8481_evolving_halo_reception.md), [M19 transport signé32x8/64x12 reçu Serial/MPI2](sdk3d8481_m19_freestreaming_reception.md). Tous utilisent le paquet construit3d/ABI8/DSO7fd8, 1 136 sources exactes ; les versions et limites sont dans chaque reçu. Relais privé version1 pour Halo-stage failed-attempt sous contre-revue, prochain rebuild immuable distinct du SDK conservé. La mission complète94 demeure active.
+Actualisation ROOT 2026-10-02 — [Halo-stage failure/reprise @2 reçus Serial/MPI2](sdkeef92c_halo_stage_failure_reception.md), vrai nouveau build eef92c/ABI8/DSO8acd, 1 137 sources exactes avant/après. Échec @1 et ordinaux causaux conservés, trois owners réels et contre-revue indépendante, sceaux ROOT bornés. Prochaine tranche obligatoire : Field frais puis Ghost au vrai point initial, contrat distinct ; transport MPI en échec et Ghost/Field peuplés non reçus. [N8/N16 @4](sdk3d8481_spatial_v4_scientific_reception.md), [Halo évolutif/ratio5/2](sdk3d8481_evolving_halo_reception.md) et [M19 transport signé](sdk3d8481_m19_freestreaming_reception.md) gardent le SDK3d/DSO7fd8 et leurs 1 136 sources ; aucune réception transférée au nouveau DSO. La mission complète94 demeure active.
 
 ## Actual SDK8 build and bind results -- 2026-10-02
 

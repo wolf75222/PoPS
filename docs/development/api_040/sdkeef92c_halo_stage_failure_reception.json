@@ -1,0 +1,572 @@
+{
+  "schema": "root.api040.sdkeef92c-halo-stage-failure-reception@2",
+  "owner": "/root",
+  "scope": "accepted-halo-fenced-test-failure-rollback-retry-three-owner@2",
+  "recorded_at": "2026-10-02T06:54:53.457357+00:00",
+  "build": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-sdk8-halo-stage-dim2-eef92c68/build-reception.json",
+    "sha256": "91c61ff53590cf46f069bfdcb162256f72691ae62077f4261fb558c331641948",
+    "bytes": 4145
+  },
+  "native_sha256": "8acd46dd8148d5fee647135cc99b0710bb812786c18e997b802aec78387471d7",
+  "native_build_source_commit": "eef92c681e4df85497cebda9ec4fe154242fd316",
+  "test_source_commit": "5582d98ad49dd5d93d5ededa43448fb9c54e8cd4",
+  "native_abi": 8,
+  "amr_payload": 12,
+  "accepted_state": 9,
+  "execution_contract": 3,
+  "private_failure_request_receipt_version": 1,
+  "routes": {
+    "serial": {
+      "collective_cases": 1,
+      "ranks": 1,
+      "target_rank": 0,
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/result.json",
+        "sha256": "4d7eaca953e150c5cebb0d7bd3f2004a76cb4ceb6801551b3868e9c60f0617f2",
+        "bytes": 1760
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/identity.json",
+        "sha256": "d3abb856f1f5aaa7b0d56f278788d5980c590b73d6ca28a955e909cd4dd36b76",
+        "bytes": 2939
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/after/identity.json",
+        "sha256": "d3abb856f1f5aaa7b0d56f278788d5980c590b73d6ca28a955e909cd4dd36b76",
+        "bytes": 2939
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/source-files.json",
+        "sha256": "d8528b43fde48a22e2a0c37f93c00b876582e86215698341dfc7da457203279b",
+        "bytes": 133041
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/after/source-files.json",
+        "sha256": "d8528b43fde48a22e2a0c37f93c00b876582e86215698341dfc7da457203279b",
+        "bytes": 133041
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest.xml",
+          "sha256": "43d4592ed1ba01eaa962a262a69e0408ec1ae01939039927a3cce206485d571c",
+          "bytes": 840
+        }
+      ],
+      "captures": {
+        "after-failure-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/after-failure-carriers.bin",
+          "sha256": "a409c545b5a29115cf30f83efafe193525ab38b0145f17eba2e69e4c5a744cc1",
+          "bytes": 4798
+        },
+        "after-failure-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/after-failure-checkpoint.npz",
+          "sha256": "db62544ecf3e52a674e56ac326e4c2c795f09965e6b8953f74adc7081fcd997e",
+          "bytes": 35052
+        },
+        "after-failure-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/after-failure-metadata.json",
+          "sha256": "c9c34c86cb9a18937816d6df2e0689e6e44fdff7249ab3d9dcf168f7d378eaef",
+          "bytes": 1703
+        },
+        "after-failure-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/after-failure-valid.npz",
+          "sha256": "d1cd40503002ada6bb0ec03cef744d3e27b2422782d7dcb9600e9c8d10dbddc4",
+          "bytes": 6414
+        },
+        "aligned-after-failure-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-after-failure-carriers.bin",
+          "sha256": "a409c545b5a29115cf30f83efafe193525ab38b0145f17eba2e69e4c5a744cc1",
+          "bytes": 4798
+        },
+        "aligned-after-failure-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-after-failure-checkpoint.npz",
+          "sha256": "db62544ecf3e52a674e56ac326e4c2c795f09965e6b8953f74adc7081fcd997e",
+          "bytes": 35052
+        },
+        "aligned-after-failure-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-after-failure-metadata.json",
+          "sha256": "f47f83a7d13ff7975c4568b792313a313cb7711831d244b6bd96bf4e2f00b3cf",
+          "bytes": 1711
+        },
+        "aligned-after-failure-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-after-failure-valid.npz",
+          "sha256": "d1cd40503002ada6bb0ec03cef744d3e27b2422782d7dcb9600e9c8d10dbddc4",
+          "bytes": 6414
+        },
+        "aligned-before-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-before-carriers.bin",
+          "sha256": "a409c545b5a29115cf30f83efafe193525ab38b0145f17eba2e69e4c5a744cc1",
+          "bytes": 4798
+        },
+        "aligned-before-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-before-checkpoint.npz",
+          "sha256": "c987373c9f145fa13471678e31dc5dd92502f9d74d84c99b55d289b764d75674",
+          "bytes": 35055
+        },
+        "aligned-before-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-before-metadata.json",
+          "sha256": "8b29fafb9dcbc09561cdf4c5274e176349d8053782e0e39964c7c64841e101f7",
+          "bytes": 1704
+        },
+        "aligned-before-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-before-valid.npz",
+          "sha256": "d1cd40503002ada6bb0ec03cef744d3e27b2422782d7dcb9600e9c8d10dbddc4",
+          "bytes": 6414
+        },
+        "aligned-failure-proof.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-failure-proof.json",
+          "sha256": "0d51b57d2eda2ba47040982319f3cdea139c88b22ba86f23ac41575d9eea2d55",
+          "bytes": 509
+        },
+        "aligned-retry-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-retry-carriers.bin",
+          "sha256": "2c204125d822dc39e90a9399be903aa5a151679d0a3451e5e1f9bec999d9663b",
+          "bytes": 4798
+        },
+        "aligned-retry-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-retry-checkpoint.npz",
+          "sha256": "57058d9fbbd0042213ba508d1f4730f5c5824ea11571ad6471c212912c62411f",
+          "bytes": 35482
+        },
+        "aligned-retry-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-retry-metadata.json",
+          "sha256": "f8453742f0e2579ab570d26c53bfb5276a170db6c0148bed6d321a1a109dfac8",
+          "bytes": 1701
+        },
+        "aligned-retry-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-retry-valid.npz",
+          "sha256": "8d630170ff5e69d4ab448d4e36cf7bc26e6c4431569565e2db729df7b6e53239",
+          "bytes": 6414
+        },
+        "before-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/before-carriers.bin",
+          "sha256": "a409c545b5a29115cf30f83efafe193525ab38b0145f17eba2e69e4c5a744cc1",
+          "bytes": 4798
+        },
+        "before-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/before-checkpoint.npz",
+          "sha256": "c987373c9f145fa13471678e31dc5dd92502f9d74d84c99b55d289b764d75674",
+          "bytes": 35055
+        },
+        "before-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/before-metadata.json",
+          "sha256": "cc11f25d39fd8a965f256e26b19e85da3a3ec891ebf0a99dcebb30897b761b38",
+          "bytes": 1696
+        },
+        "before-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/before-valid.npz",
+          "sha256": "d1cd40503002ada6bb0ec03cef744d3e27b2422782d7dcb9600e9c8d10dbddc4",
+          "bytes": 6414
+        },
+        "continuous-before-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-before-carriers.bin",
+          "sha256": "a409c545b5a29115cf30f83efafe193525ab38b0145f17eba2e69e4c5a744cc1",
+          "bytes": 4798
+        },
+        "continuous-before-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-before-checkpoint.npz",
+          "sha256": "c987373c9f145fa13471678e31dc5dd92502f9d74d84c99b55d289b764d75674",
+          "bytes": 35055
+        },
+        "continuous-before-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-before-metadata.json",
+          "sha256": "6f3eaa153dff6a00d43dfefacf5c5598b20a32ef0eaa61089dbbbd53086a2f08",
+          "bytes": 1707
+        },
+        "continuous-before-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-before-valid.npz",
+          "sha256": "d1cd40503002ada6bb0ec03cef744d3e27b2422782d7dcb9600e9c8d10dbddc4",
+          "bytes": 6414
+        },
+        "continuous-control-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-control-carriers.bin",
+          "sha256": "2c204125d822dc39e90a9399be903aa5a151679d0a3451e5e1f9bec999d9663b",
+          "bytes": 4798
+        },
+        "continuous-control-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-control-checkpoint.npz",
+          "sha256": "735357267eef137c882429624fa85b92704bd0878171321f00efa66b60bec9a4",
+          "bytes": 35476
+        },
+        "continuous-control-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-control-metadata.json",
+          "sha256": "f12450fb94b32bcbd40c0dbfae645d5dcfce56dc25ff9fee86d1988764bab293",
+          "bytes": 1706
+        },
+        "continuous-control-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-control-valid.npz",
+          "sha256": "8d630170ff5e69d4ab448d4e36cf7bc26e6c4431569565e2db729df7b6e53239",
+          "bytes": 6414
+        },
+        "failure-proof.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/failure-proof.json",
+          "sha256": "55a7d3b0a3e32f22aa7163ea7ef56fe82c2514f359e3430c638fc991a09395ad",
+          "bytes": 1930
+        },
+        "retry-aligned-control-checkpoint-proof.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-aligned-control-checkpoint-proof.json",
+          "sha256": "c5bc790ce49a6b9733acd7eff623283bb579def12c70fcdccbce686298790abe",
+          "bytes": 954
+        },
+        "retry-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-carriers.bin",
+          "sha256": "2c204125d822dc39e90a9399be903aa5a151679d0a3451e5e1f9bec999d9663b",
+          "bytes": 4798
+        },
+        "retry-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-checkpoint.npz",
+          "sha256": "57058d9fbbd0042213ba508d1f4730f5c5824ea11571ad6471c212912c62411f",
+          "bytes": 35482
+        },
+        "retry-continuous-checkpoint-differences.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-continuous-checkpoint-differences.json",
+          "sha256": "176e0482ce12103f828d65ddebd4c0ca051f5a2cff736da783072e092270040c",
+          "bytes": 1134
+        },
+        "retry-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-metadata.json",
+          "sha256": "a61eda31e2319f2de88f42156df9cdbb31eb25907e86ed637a122e8778aa5d9e",
+          "bytes": 1693
+        },
+        "retry-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/pytest-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-valid.npz",
+          "sha256": "8d630170ff5e69d4ab448d4e36cf7bc26e6c4431569565e2db729df7b6e53239",
+          "bytes": 6414
+        }
+      },
+      "harness_seconds": 46.90924279089086,
+      "root_offline_replay": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-serial-dim2/root-offline-replay-v2.json",
+        "sha256": "bb14b420a9414ceec7034300a8fcc729b3798cc8a67a3b49b9165527a2e1fc91",
+        "bytes": 254
+      },
+      "reader_result": {
+        "contract": "independent.acceptedHaloStageFailure@2",
+        "capture_rollback_retry_exact": true,
+        "root_approval": false,
+        "divergent_request_proof_persisted": true,
+        "retry_control_full_checkpoint_claim": true,
+        "wholegrown_formula_claim": false
+      }
+    },
+    "mpi2": {
+      "collective_cases": 1,
+      "ranks": 2,
+      "target_rank": 1,
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/result.json",
+        "sha256": "c52c9f8f28e916f4acfc7c735909545156dc900e18fc6972d4894bead3dd9e48",
+        "bytes": 2443
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/before/identity.json",
+        "sha256": "d3abb856f1f5aaa7b0d56f278788d5980c590b73d6ca28a955e909cd4dd36b76",
+        "bytes": 2939
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/after/identity.json",
+        "sha256": "d3abb856f1f5aaa7b0d56f278788d5980c590b73d6ca28a955e909cd4dd36b76",
+        "bytes": 2939
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/before/source-files.json",
+        "sha256": "d8528b43fde48a22e2a0c37f93c00b876582e86215698341dfc7da457203279b",
+        "bytes": 133041
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/after/source-files.json",
+        "sha256": "d8528b43fde48a22e2a0c37f93c00b876582e86215698341dfc7da457203279b",
+        "bytes": 133041
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0.xml",
+          "sha256": "b12a5403054f19c306f6fc71e5444f900ce70ef4cd3349ec39c2bb5502985ca6",
+          "bytes": 837
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank1.xml",
+          "sha256": "f116caa4383b02dd66460022607cc1add8993d92ad5b63607661bae47a512f58",
+          "bytes": 837
+        }
+      ],
+      "captures": {
+        "after-failure-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/after-failure-carriers.bin",
+          "sha256": "b4b55ba69db4993aa70cb4acfb23fe31307a437f623ba4f25f7e25a80ca2c903",
+          "bytes": 4798
+        },
+        "after-failure-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/after-failure-checkpoint.npz",
+          "sha256": "0423baa65001ddf4bece87ddbf26b257bde4b53cfc3e7d0289e9221fb36bb590",
+          "bytes": 35096
+        },
+        "after-failure-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/after-failure-metadata.json",
+          "sha256": "369c591d63acbcad694d3812555ccc2d8203d0752c7b762db2fd0401df539c18",
+          "bytes": 1703
+        },
+        "after-failure-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/after-failure-valid.npz",
+          "sha256": "d1cd40503002ada6bb0ec03cef744d3e27b2422782d7dcb9600e9c8d10dbddc4",
+          "bytes": 6414
+        },
+        "aligned-after-failure-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-after-failure-carriers.bin",
+          "sha256": "b4b55ba69db4993aa70cb4acfb23fe31307a437f623ba4f25f7e25a80ca2c903",
+          "bytes": 4798
+        },
+        "aligned-after-failure-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-after-failure-checkpoint.npz",
+          "sha256": "0423baa65001ddf4bece87ddbf26b257bde4b53cfc3e7d0289e9221fb36bb590",
+          "bytes": 35096
+        },
+        "aligned-after-failure-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-after-failure-metadata.json",
+          "sha256": "b4f01ddb02b92e53f4c09d5e3bf5387aabdca33e6fd8c71cb6e7baee268aafc4",
+          "bytes": 1711
+        },
+        "aligned-after-failure-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-after-failure-valid.npz",
+          "sha256": "d1cd40503002ada6bb0ec03cef744d3e27b2422782d7dcb9600e9c8d10dbddc4",
+          "bytes": 6414
+        },
+        "aligned-before-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-before-carriers.bin",
+          "sha256": "b4b55ba69db4993aa70cb4acfb23fe31307a437f623ba4f25f7e25a80ca2c903",
+          "bytes": 4798
+        },
+        "aligned-before-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-before-checkpoint.npz",
+          "sha256": "57561c58e90a09801bd2e15cd434bd89de70f52701a0e85a433b61760e6c0908",
+          "bytes": 35098
+        },
+        "aligned-before-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-before-metadata.json",
+          "sha256": "66944f02dacdf48669b80a15655e44b94629df6cd1bca23ed648a9a713c679e6",
+          "bytes": 1704
+        },
+        "aligned-before-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-before-valid.npz",
+          "sha256": "d1cd40503002ada6bb0ec03cef744d3e27b2422782d7dcb9600e9c8d10dbddc4",
+          "bytes": 6414
+        },
+        "aligned-failure-proof.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-failure-proof.json",
+          "sha256": "4cac00c55d31de8b6d2e88c47d7ed0e9fd0027f5661de5e47729bcfd995040fc",
+          "bytes": 2134
+        },
+        "aligned-retry-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-retry-carriers.bin",
+          "sha256": "e66bcd7430a986e366cfe8abc913f23fa54ef0d3e1f7a3d6c71cb19485b89180",
+          "bytes": 4798
+        },
+        "aligned-retry-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-retry-checkpoint.npz",
+          "sha256": "846193985994d9d7599804d50944a651862e1819d564078b62647721c16f6e4b",
+          "bytes": 35529
+        },
+        "aligned-retry-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-retry-metadata.json",
+          "sha256": "057533e65a8d799933f147653b83280aa8e146ef56ade847d2b2e301b9f28deb",
+          "bytes": 1701
+        },
+        "aligned-retry-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/aligned-retry-valid.npz",
+          "sha256": "8d630170ff5e69d4ab448d4e36cf7bc26e6c4431569565e2db729df7b6e53239",
+          "bytes": 6414
+        },
+        "before-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/before-carriers.bin",
+          "sha256": "b4b55ba69db4993aa70cb4acfb23fe31307a437f623ba4f25f7e25a80ca2c903",
+          "bytes": 4798
+        },
+        "before-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/before-checkpoint.npz",
+          "sha256": "57561c58e90a09801bd2e15cd434bd89de70f52701a0e85a433b61760e6c0908",
+          "bytes": 35098
+        },
+        "before-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/before-metadata.json",
+          "sha256": "d0a019e602ccf5adf52ad1aef31459040d52287afd0b8dedde7875e3c8f15382",
+          "bytes": 1696
+        },
+        "before-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/before-valid.npz",
+          "sha256": "d1cd40503002ada6bb0ec03cef744d3e27b2422782d7dcb9600e9c8d10dbddc4",
+          "bytes": 6414
+        },
+        "continuous-before-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-before-carriers.bin",
+          "sha256": "b4b55ba69db4993aa70cb4acfb23fe31307a437f623ba4f25f7e25a80ca2c903",
+          "bytes": 4798
+        },
+        "continuous-before-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-before-checkpoint.npz",
+          "sha256": "57561c58e90a09801bd2e15cd434bd89de70f52701a0e85a433b61760e6c0908",
+          "bytes": 35098
+        },
+        "continuous-before-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-before-metadata.json",
+          "sha256": "9e6c39daf6854723dce6a571a9ec97609acc5d47f2d5e67bff6770a692b45541",
+          "bytes": 1707
+        },
+        "continuous-before-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-before-valid.npz",
+          "sha256": "d1cd40503002ada6bb0ec03cef744d3e27b2422782d7dcb9600e9c8d10dbddc4",
+          "bytes": 6414
+        },
+        "continuous-control-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-control-carriers.bin",
+          "sha256": "e66bcd7430a986e366cfe8abc913f23fa54ef0d3e1f7a3d6c71cb19485b89180",
+          "bytes": 4798
+        },
+        "continuous-control-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-control-checkpoint.npz",
+          "sha256": "7ff0b7977dce85ec94aa477c655c30c3b25c352f68047816fc06435b2cd580d3",
+          "bytes": 35530
+        },
+        "continuous-control-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-control-metadata.json",
+          "sha256": "6aae412dfb6aba116612f07cc6fc8a07d00ac32507f69efa62ab8bc0124d430c",
+          "bytes": 1706
+        },
+        "continuous-control-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/continuous-control-valid.npz",
+          "sha256": "8d630170ff5e69d4ab448d4e36cf7bc26e6c4431569565e2db729df7b6e53239",
+          "bytes": 6414
+        },
+        "failure-proof.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/failure-proof.json",
+          "sha256": "23bd2d8bb2da0874e971c9a79a539fe2a3d8be0a7cc93bf729216c8259d98c24",
+          "bytes": 6053
+        },
+        "retry-aligned-control-checkpoint-proof.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-aligned-control-checkpoint-proof.json",
+          "sha256": "6e8897d53f26c2bd85d3b67e1a9b2350dd2050446a349e5b7020cc5a6f776fb8",
+          "bytes": 948
+        },
+        "retry-carriers.bin": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-carriers.bin",
+          "sha256": "e66bcd7430a986e366cfe8abc913f23fa54ef0d3e1f7a3d6c71cb19485b89180",
+          "bytes": 4798
+        },
+        "retry-checkpoint.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-checkpoint.npz",
+          "sha256": "846193985994d9d7599804d50944a651862e1819d564078b62647721c16f6e4b",
+          "bytes": 35529
+        },
+        "retry-continuous-checkpoint-differences.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-continuous-checkpoint-differences.json",
+          "sha256": "89d423ab4385edf6b70eeb8e46a54cf5df1e96a582e9171b154fd1eab63308f3",
+          "bytes": 1128
+        },
+        "retry-metadata.json": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-metadata.json",
+          "sha256": "a801e3b3ce609879f59f4a4f7a8c14d81c14f556d8727852cb177e6f944ebc73",
+          "bytes": 1693
+        },
+        "retry-valid.npz": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/rank0-tmp/test_public_accepted_halo_rank0/halo-stage-failure/retry-valid.npz",
+          "sha256": "8d630170ff5e69d4ab448d4e36cf7bc26e6c4431569565e2db729df7b6e53239",
+          "bytes": 6414
+        }
+      },
+      "harness_seconds": 51.361650875071064,
+      "root_offline_replay": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-src5582d98-halo-stage-failure-v2-mpi2-dim2/root-offline-replay-v2.json",
+        "sha256": "4570a5b36ff60fe72151f5aae7f2190d2654045ad649d89546d5e9447119c868",
+        "bytes": 254
+      },
+      "reader_result": {
+        "contract": "independent.acceptedHaloStageFailure@2",
+        "capture_rollback_retry_exact": true,
+        "root_approval": false,
+        "divergent_request_proof_persisted": true,
+        "retry_control_full_checkpoint_claim": true,
+        "wholegrown_formula_claim": false
+      }
+    }
+  },
+  "independent_review": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-halo-stage-failure-v2-both-independent.json",
+    "sha256": "3453e60247e9d4a1a6e2161b702d6e096ab6ec094cb53acb5312e0810c772a7d",
+    "bytes": 5383
+  },
+  "independent_serial_review": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-halo-stage-failure-v2-serial-independent.json",
+    "sha256": "a4fd247933c100d7071c9997f99bda87dc85ec5b148923ef76ec97a1067ad0dc",
+    "bytes": 4688
+  },
+  "offline_reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/review/sol61_halo_stage_failure_saved_audit_v2.py",
+    "sha256": "1fe949fd1e66b6603a188e3728898b1cd0b5c71adda1b867d1efa5475d140870",
+    "bytes": 8252
+  },
+  "typed_attempt_wire_reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-20261001/tests/review/sol61_popsand9_attempt_spans.py",
+    "sha256": "0af75682f392b085344a6d9ada9b0626e6b5df1b94c5f0cb04737e65952820b0",
+    "bytes": 2039
+  },
+  "positive_disabled_hook_nonregression": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-public-halo-temporal-discriminator-serial-dim2/result.json",
+    "sha256": "0d814d0cbada6ff825b95c0be3a906448a3e5c245b211c73a5187e89cd3067df",
+    "bytes": 1746
+  },
+  "source_cohort_38_pass": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/halo-stage-three-owner-v2-source-integrated.xml",
+    "sha256": "b760e89db1021b968025635514a237d97b10a5810083c09bc9f2afaf4bd4deaa",
+    "bytes": 5922
+  },
+  "preserved_failed_v1": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkeef92c-srcc7bc402-halo-stage-failure-serial-dim2/result.json",
+    "sha256": "bfe1cb332155ace3835b81828a10b681dac03d3edea2ff4d68ef8b6ca6f282f1",
+    "bytes": 1754
+  },
+  "failed_v1_diagnosis": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-halo-stage-failure-actual-serial-independent-diagnosis.json",
+    "sha256": "704ff92146192cfa0ed97e44e3794a3ca347e2f55eeac54ca5a90efeed578572",
+    "bytes": 1738
+  },
+  "failed_v1_typed_attempt_differences": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-halo-stage-failure-typed-attempt-diff.json",
+    "sha256": "c1662edd2d1b3d791d992f71e8433fb5531a4c8c691326a03d4c40252d904551",
+    "bytes": 706
+  },
+  "sdk9_preserved_before": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-preservation-before-halo-stage-sdk10.json",
+    "sha256": "b14a406b33b4f88b60cd218ee6feb4e1f4fc5890a207a7a4cfa2ff41e8bc8f97",
+    "bytes": 411
+  },
+  "sdk9_preserved_after": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk3d8481-preservation-after-halo-stage-sdk10.json",
+    "sha256": "b14a406b33b4f88b60cd218ee6feb4e1f4fc5890a207a7a4cfa2ff41e8bc8f97",
+    "bytes": 411
+  },
+  "full_mission_received": false,
+  "field_dependency_rollback_verified": false,
+  "wholegrown_formula_verified": false,
+  "mpi_transport_fault_verified": false,
+  "authority_hash_mathematical_verification": false,
+  "cpp_to_dso_cryptographic_graph_proof": false,
+  "limits": [
+    "Dim2 CPU Kokkos/OpenMP OMP1; Serial and actual MPICH MPI2 only.",
+    "Periodic8x8, two levels, ForwardEuler dm/dt=m, dc/dt=0, zero flux, ratio5/2 ExplicitRemainder.",
+    "Fenced preparation has finished before injected error: MPI transport failure is distinct.",
+    "Only lifecycle seals excluded from full same-owner rollback and attempt-aligned retry CP comparison.",
+    "Uninterrupted control differs in 113 typed attempt identifiers3vs2, derived source authority and two lifecycle seals; these are preserved.",
+    "No populated Field/GhostBC, initial point, regrid/generalAMR, Dim1/Dim3, GPU, ROMEO science or GitHubCI qualification."
+  ],
+  "root_owner": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkeef92c-halo-stage-v2-root-reception/root-owner1.json",
+    "sha256": "241fee1cdea3b2a44a01d103659a8d43edd1cc9a4789b648716746c75acee206",
+    "bytes": 40858
+  },
+  "root_approval": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkeef92c-halo-stage-v2-root-reception/root-approval1.json",
+    "sha256": "4d8ffb48327633919c5992b0070af02dff5f13d08068781da1e9e60cb592242c",
+    "bytes": 525
+  },
+  "bounded_runtime_received": true
+}
