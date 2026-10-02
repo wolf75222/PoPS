@@ -41,7 +41,8 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
     images={};field_images={}
     def capture(phase):
         image=observe(world,runtime);publish(world,directory,phase,image)
-        before_manifest=collective_call(world,runtime.field_provider_checkpoint_manifest)
+        # Observe the const native manifest before the potential accessor can materialize a Field.
+        before_manifest=collective_call(world,runtime._executor._s.field_provider_checkpoint_manifest)
         slots=collective_call(world,runtime.field_provider_slots)
         with collective_check(world):assert len(slots)==1
         fields=[]
