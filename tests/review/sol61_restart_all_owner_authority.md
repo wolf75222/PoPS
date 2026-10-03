@@ -1,0 +1,7 @@
+# Restart all-owner authority follow-up — Source @1
+
+Parent ff4c is preserved with its original 13-PASS preparation and the independent child-authority RED. Its continuation token covered the parent only. This correction authenticates every owner prior run and prior lineage, including None, as exact Identity objects in domain run. Root path is (), nested child paths are tuples of exact string layout IDs; traversal sorts these keys and is independent of mapping insertion order. No model/slot names or indices identify owners. Cyclic/shared owner graphs fail closed before mutation rather than ambiguously publishing one owner twice.
+
+The complete envelope enters the existing deterministic checkpoint_restart_epoch@1 payload and its token consensus before native transaction begin. Preparation only snapshots; child publication and outer rollback retain the existing recursive snapshots. Cursor revision, diagnostics and geometry cache transaction remain unchanged. No native ABI, checkpoint wire, equations, threshold, consumer ledger or closed-run refusal change.
+
+20 Source checks PASS (2.17s), including the unchanged independent child RED, seven initial epoch probes, six new canonical/type/cycle checks and six existing policy/preflight checks. No skips/exclusions in this selection. The previous broad exploratory 26F/20P error XML is retained, not requalified. No MPI/Native execution or SDK qualification; independent review and official rebuild/replay required.

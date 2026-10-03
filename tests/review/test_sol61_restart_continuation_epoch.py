@@ -110,3 +110,39 @@ def test_peer_continuation_disagreement_precedes_native_begin(monkeypatch):
             prepare_outer_state=lambda:"owned-epoch",after_native_apply=lambda result:None,
             rollback_after_native_apply=lambda:None)
     assert calls==["native"] # preflight only; no transaction begin
+
+
+def test_owner_paths_are_canonical_not_mapping_insertion_order(monkeypatch):
+    epochs=[]
+    for keys in (("z", "a"), ("a", "z")):
+        owner,parent,source,_=fixture(monkeypatch)
+        parent._engines={key:SimpleNamespace(_last_run_manifest=None,
+            _last_run_identity=make_identity("run",{"layout":key}),
+            _restart_lineage_identity=source) for key in keys}
+        RuntimeInstance.restart(owner,"metadata-only-checkpoint")
+        epochs.append(parent._restart_lineage_identity)
+    assert epochs[0]==epochs[1]
+
+
+@pytest.mark.parametrize("field", ["_last_run_identity", "_restart_lineage_identity"])
+@pytest.mark.parametrize("invalid", ["token", make_identity("bind",{"foreign":1})])
+def test_child_authority_is_typed_before_mutation(monkeypatch,field,invalid):
+    owner,parent,source,_=fixture(monkeypatch)
+    child=SimpleNamespace(_last_run_manifest=None,_last_run_identity=source,
+                          _restart_lineage_identity=source)
+    setattr(child,field,invalid)
+    parent._engines={"selected":child}
+    with pytest.raises(TypeError,match="exact domain"):
+        RuntimeInstance.restart(owner,"metadata-only-checkpoint")
+    assert parent._last_run_identity==source and getattr(child,field)==invalid
+
+
+def test_nonstring_layout_and_cyclic_owner_fail_before_mutation(monkeypatch):
+    owner,parent,source,_=fixture(monkeypatch)
+    parent._engines={1:parent}
+    with pytest.raises(TypeError,match="exact strings"):
+        RuntimeInstance.restart(owner,"metadata-only-checkpoint")
+    parent._engines={"cycle":parent}
+    with pytest.raises(TypeError,match="cycle"):
+        RuntimeInstance.restart(owner,"metadata-only-checkpoint")
+    assert parent._last_run_identity==source

@@ -2396,37 +2396,51 @@ class RuntimeInstance:
         stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         from ._checkpoint_manifest import checkpoint_run_identity
 
-        def snapshot_run_authorities(executor: Any) -> tuple[tuple[Any, tuple[Any, ...]], ...]:
+        def snapshot_run_authorities(executor: Any) -> tuple[tuple[Any, tuple[Any, ...], tuple[str, ...]], ...]:
             names = (
                 "_last_run_manifest",
                 "_last_run_identity",
                 "_restart_lineage_identity",
             )
             snapshots = []
+            seen_owners: set[int] = set()
 
-            def capture(current: Any) -> None:
+            from pops.identity import Identity
+
+            def capture(current: Any, path: tuple[str, ...]) -> None:
+                if id(current) in seen_owners:
+                    raise TypeError("restart executor owner graph contains a cycle or shared owner")
+                seen_owners.add(id(current))
                 if any(not hasattr(current, name) for name in names):
                     raise TypeError(
                         "restart executor lacks a restorable authenticated run-identity envelope"
                     )
-                snapshots.append((current, tuple(getattr(current, name) for name in names)))
+                values = tuple(getattr(current, name) for name in names)
+                for identity in values[1:]:
+                    if identity is not None and (
+                        type(identity) is not Identity or identity.domain != "run"
+                    ):
+                        raise TypeError("restart prior authority requires exact domain-'run' Identity")
+                snapshots.append((current, values, path))
                 children = getattr(current, "_engines", None)
                 if children is not None:
                     if not isinstance(children, Mapping):
                         raise TypeError("restart executor child engines must be a mapping")
-                    for child in children.values():
-                        capture(child)
+                    if any(type(key) is not str for key in children):
+                        raise TypeError("restart executor layout keys must be exact strings")
+                    for key in sorted(children):
+                        capture(children[key], (*path, key))
 
-            capture(executor)
+            capture(executor, ())
             return tuple(snapshots)
 
-        def restore_run_authorities(snapshot: tuple[tuple[Any, tuple[Any, ...]], ...]) -> None:
+        def restore_run_authorities(snapshot: tuple[tuple[Any, tuple[Any, ...], tuple[str, ...]], ...]) -> None:
             names = (
                 "_last_run_manifest",
                 "_last_run_identity",
                 "_restart_lineage_identity",
             )
-            for current, values in snapshot:
+            for current, values, _path in snapshot:
                 if len(values) != len(names):
                     raise RuntimeError("restart run-identity envelope snapshot is malformed")
                 for name, value in zip(names, values, strict=True):
@@ -2463,12 +2477,24 @@ class RuntimeInstance:
             }
             from pops.identity import make_identity
 
-            prior = prepared_snapshot["run_authorities"][0][1]
+            from pops.identity import Identity
+
+            if source_run_identity is not None and (
+                type(source_run_identity) is not Identity or source_run_identity.domain != "run"
+            ):
+                raise TypeError("restart source authority requires exact domain-'run' Identity")
+            owner_authorities = [
+                {
+                    "owner_path": path,
+                    "previous_owner_run": None if values[1] is None else values[1].to_data(),
+                    "previous_owner_lineage": None if values[2] is None else values[2].to_data(),
+                }
+                for _current, values, path in prepared_snapshot["run_authorities"]
+            ]
             epoch = make_identity("run", {
                 "continuation": "checkpoint_restart_epoch@1",
                 "source_run_identity": None if source_run_identity is None else source_run_identity.to_data(),
-                "previous_owner_run": None if prior[1] is None else prior[1].to_data(),
-                "previous_owner_lineage": None if prior[2] is None else prior[2].to_data(),
+                "owner_authorities": owner_authorities,
             })
             prepared_snapshot["continuation_epoch"] = epoch
             outer_snapshot.clear()
@@ -2535,7 +2561,7 @@ class RuntimeInstance:
                                                 else restored_run_identity.to_data()),
                     },
                 )
-            for current, _values in outer_snapshot["run_authorities"]:
+            for current, _values, _path in outer_snapshot["run_authorities"]:
                 current._restart_lineage_identity = epoch
 
         def rollback_outer_state() -> None:

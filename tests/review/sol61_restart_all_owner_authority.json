@@ -1,0 +1,12 @@
+{
+  "schema": "pops.restart-all-owner-source-proof@1",
+  "parent": "ff4c3a454b9d467926a59fc312e9765eb8f7648e",
+  "scope": "SOURCE_ONLY",
+  "passed": 20,
+  "skipped": 0,
+  "xml": "/Users/romaindespoulain/dev/tmp/sol61-restart-all-owner-coherent.xml",
+  "xml_sha256": "dd8f93d0705cc4269518f86ba45f07ba78664feefdba696fc55eddc6784d1374",
+  "independent_red_path": "/Users/romaindespoulain/dev/tmp/sol61-restart-epoch-independent-20261003/test_child_authority.py",
+  "native_qualification": false,
+  "root_approval": false
+}
