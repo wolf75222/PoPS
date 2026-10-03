@@ -25,7 +25,59 @@ from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
 
 
-def checkpoint_provenance(runtime, path):
+def checkpoint_restart_authority(runtime):
+    """Persist the live pre-restart owner envelope; never infer it from replay."""
+    from pops.identity import Identity
+    rows, seen = [], set()
+    def visit(owner, path):
+        assert id(owner) not in seen
+        seen.add(id(owner))
+        values = []
+        for name in ("_last_run_identity", "_restart_lineage_identity"):
+            identity = getattr(owner, name)
+            assert identity is None or (type(identity) is Identity and identity.domain == "run")
+            values.append(None if identity is None else identity.token)
+        rows.append({"owner_path": list(path), "previous_owner_run": values[0],
+                     "previous_owner_lineage": values[1]})
+        children = getattr(owner, "_engines", {})
+        assert isinstance(children, dict) and all(type(key) is str for key in children)
+        for key in sorted(children):
+            visit(children[key], (*path, key))
+    visit(runtime._executor, ())
+    return {"contract": "pops.evolved-stage-restart-authority@1", "owners": rows}
+
+
+def authenticate_replay_continuation(accepted, replay, authority):
+    """Independent consumer reconstruction of the public restart epoch contract."""
+    from pops.identity import Identity, make_identity
+    assert type(authority) is dict and set(authority) == {"contract", "owners", "restored_source_run"}
+    assert authority["contract"] == "pops.evolved-stage-restart-authority@1"
+    assert authority["restored_source_run"] == accepted.run_identity.token
+    rows = authority["owners"]
+    assert type(rows) is list and rows
+    canonical, paths = [], []
+    for row in rows:
+        assert type(row) is dict and set(row) == {"owner_path", "previous_owner_run", "previous_owner_lineage"}
+        path = row["owner_path"]
+        assert type(path) is list and all(type(key) is str for key in path)
+        paths.append(tuple(path))
+        entry = {"owner_path": tuple(path)}
+        for name in ("previous_owner_run", "previous_owner_lineage"):
+            token = row[name]
+            identity = None if token is None else Identity.from_token(token)
+            assert identity is None or (identity.domain == "run" and identity.token == token)
+            entry[name] = None if identity is None else identity.to_data()
+        canonical.append(entry)
+    assert paths[0] == () and paths == sorted(set(paths))
+    assert all(not path or path[:-1] in paths for path in paths)
+    expected = make_identity("run", {"continuation": "checkpoint_restart_epoch@1",
+        "source_run_identity": accepted.run_identity.to_data(), "owner_authorities": canonical})
+    assert replay.continuation_identity == expected
+    assert replay.run_identity != accepted.run_identity
+    return expected
+
+
+def checkpoint_provenance(runtime, path, *, restart_authority=None):
     """Authenticate the file against its live creator before another run/restart."""
     from pops.runtime._checkpoint_manifest import (
         MANIFEST_KEY, authenticate_checkpoint_payload,
@@ -36,10 +88,61 @@ def checkpoint_provenance(runtime, path):
     run = runtime.last_run_manifest
     assert run is not None and run.run_identity == runtime.last_run_identity
     semantic, artifact, bind = runtime._checkpoint_identities()
-    return {"semantic": semantic.token, "artifact": artifact.token, "bind": bind.token,
+    result = {"semantic": semantic.token, "artifact": artifact.token, "bind": bind.token,
         "run": runtime.last_run_identity.token, "run_manifest": run.to_dict(),
         "last_restart": None if runtime.last_restart_identity is None else runtime.last_restart_identity.token,
         "restart": restart.token, "clock": {"time": runtime.time().hex(), "macro_step": runtime.macro_step()}}
+
+    if restart_authority is not None:
+        result["restart_authority"] = restart_authority
+    return result
+
+
+def compare_checkpoint_replay_v2(paths, provenance):
+    """Exact physical checkpoint equality with authenticated continuation identities."""
+    from pops.runtime._checkpoint_manifest import (
+        IDENTITY_KEY, MANIFEST_KEY, _identity_from_json, inspect_checkpoint_payload_integrity,
+    )
+    from pops.runtime._run_manifest import RunManifest
+    payloads, manifests, runs = {}, {}, {}
+    for phase in ("accepted", "continuous", "replay"):
+        with np.load(BytesIO(bounded_bytes(paths[phase])), allow_pickle=False) as stored:
+            payload = {key: stored[key].copy() for key in stored.files}
+        raw = json.loads(str(payload[MANIFEST_KEY]))
+        manifest, restart = inspect_checkpoint_payload_integrity(payload, runtime_kind=raw["runtime_kind"])
+        authority = provenance[phase]
+        run = RunManifest.from_dict(authority["run_manifest"])
+        assert run.run_identity.token == authority["run"]
+        assert _identity_from_json(manifest["run_identity"]) == run.run_identity
+        assert run.bind_identity.token == authority["bind"]
+        for name in ("semantic", "artifact", "bind"):
+            assert _identity_from_json(manifest[name+"_identity"]).token == authority[name]
+        assert restart.token == authority["restart"]
+        assert manifest["clock"] == authority["clock"]
+        payloads[phase], manifests[phase], runs[phase] = payload, manifest, run
+    assert runs["accepted"].continuation_identity is None
+    assert runs["continuous"].continuation_identity is None
+    assert provenance["accepted"]["last_restart"] is None
+    assert provenance["continuous"]["last_restart"] is None
+    authenticate_replay_continuation(runs["accepted"], runs["replay"],
+                                    provenance["replay"]["restart_authority"])
+    assert provenance["replay"]["last_restart"] == provenance["accepted"]["restart"]
+    for attribute in ("bind_identity", "start_time", "start_macro_step", "controls"):
+        assert getattr(runs["continuous"], attribute) == getattr(runs["replay"], attribute)
+    assert runs["continuous"].start_time.hex() == provenance["accepted"]["clock"]["time"]
+    assert runs["continuous"].start_macro_step == provenance["accepted"]["clock"]["macro_step"]
+    left, right = payloads["continuous"], payloads["replay"]
+    assert left.keys() == right.keys()
+    for key in left.keys()-{MANIFEST_KEY, IDENTITY_KEY}:
+        assert left[key].dtype == right[key].dtype and left[key].shape == right[key].shape, key
+        assert left[key].tobytes(order="C") == right[key].tobytes(order="C"), key
+    def comparable(manifest):
+        return {key: value for key, value in manifest.items()
+            if key not in {"run_identity", "restart_identity"}}
+    assert comparable(manifests["continuous"]) == comparable(manifests["replay"])
+    return {"contract": "pops.evolved-stage-checkpoint-equivalence@2",
+        "exact_payload_and_manifest": True, "provenance": provenance}
+
 
 
 def compare_checkpoint_replay(paths, provenance):
@@ -195,7 +298,9 @@ def test_public_evolved_original_stage_saved_and_exact_replay(
     checkpoint_authorities["continuous"] = collective_call(world, lambda: checkpoint_provenance(runtime, continuous_checkpoint))
     continuous = capture(world, runtime, cells, width, dt, 2)
     restored = collective_call(world, bind)
+    restart_authority = collective_call(world, lambda: checkpoint_restart_authority(restored))
     collective_call(world, lambda: restored.restart(checkpoint))
+    restart_authority["restored_source_run"] = collective_call(world, lambda: restored.last_run_identity.token)
     reloaded = capture(world, restored, cells, width, dt, 1)
     with collective_check(world):
         same_images(reloaded, accepted)
@@ -203,7 +308,7 @@ def test_public_evolved_original_stage_saved_and_exact_replay(
     replay_checkpoint = collective_call(world, lambda: restored.checkpoint(directory/"replay-checkpoint"))
     checkpoint_hashes["replay"] = collective_call(world, lambda:
         hashlib.sha256(bounded_bytes(replay_checkpoint)).hexdigest())
-    checkpoint_authorities["replay"] = collective_call(world, lambda: checkpoint_provenance(restored, replay_checkpoint))
+    checkpoint_authorities["replay"] = collective_call(world, lambda: checkpoint_provenance(restored, replay_checkpoint, restart_authority=restart_authority))
     replay = capture(world, restored, cells, width, dt, 2)
     checkpoint_files = (("accepted", checkpoint), ("continuous", continuous_checkpoint), ("replay", replay_checkpoint))
     with collective_check(world):
@@ -212,7 +317,7 @@ def test_public_evolved_original_stage_saved_and_exact_replay(
         for index in range(width):
             np.testing.assert_array_equal(continuous[0]["T%d-previous" % index], accepted[0]["T%d" % index])
         if world.rank == 0:
-            checkpoint_equivalence = compare_checkpoint_replay(dict(checkpoint_files), checkpoint_authorities)
+            checkpoint_equivalence = compare_checkpoint_replay_v2(dict(checkpoint_files), checkpoint_authorities)
             initial_path = directory/"initial.npz"
             np.savez(initial_path, **initial, initial_temperature=initial_t, first_target=target, cell_volumes=volumes)
             phases = {}

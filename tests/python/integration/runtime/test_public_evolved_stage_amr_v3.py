@@ -12,7 +12,7 @@ import pytest
 from pops._native_collectives import allgather_value
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.integration.runtime.test_public_captured_diffusion import bounded_bytes
-from tests.python.integration.runtime.test_public_evolved_original_stage import checkpoint_provenance, compare_checkpoint_replay
+from tests.python.integration.runtime.test_public_evolved_original_stage import checkpoint_provenance, compare_checkpoint_replay_v2 as compare_checkpoint_replay, checkpoint_restart_authority
 from tests.python.support.amr_snapshots import composite_active_mask
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.evolved_stage_amr import (
@@ -57,7 +57,9 @@ def test_public_evolved_stage_amr_c25_and_initial_carrier(isolated_native_cache,
     for phase, owner in (("accepted", runtime), ("continuous", runtime), ("replay", None)):
         if phase == "replay":
             owner = collective_call(world, bind)
+            restart_authority = collective_call(world, lambda: checkpoint_restart_authority(owner))
             collective_call(world, lambda owner=owner: owner.restart(paths["accepted"]))
+            restart_authority["restored_source_run"] = collective_call(world, lambda: owner.last_run_identity.token)
             reloaded = capture(world, owner, width)
             with collective_check(world):
                 same_images(reloaded, phases["accepted"])
@@ -68,7 +70,8 @@ def test_public_evolved_stage_amr_c25_and_initial_carrier(isolated_native_cache,
         collective_call(world, lambda owner=owner, end=end: pops.run(owner, t_end=end, max_steps=1, console=False))
         path = collective_call(world, lambda owner=owner, phase=phase: owner.checkpoint(directory/(phase+"-checkpoint")))
         seals[phase] = collective_call(world, lambda path=path: hashlib.sha256(bounded_bytes(path)).hexdigest())
-        authorities[phase] = collective_call(world, lambda owner=owner, path=path: checkpoint_provenance(owner, path))
+        authorities[phase] = collective_call(world, lambda owner=owner, path=path: checkpoint_provenance(owner, path,
+            restart_authority=restart_authority if phase == "replay" else None))
         paths[phase] = path
         phases[phase] = capture(world, owner, width)
         registry_phases[phase] = {"rows_by_rank": collective_call(world,
