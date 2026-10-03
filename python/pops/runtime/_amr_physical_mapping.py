@@ -26,8 +26,12 @@ def physical_amr_spec(plan: Any, requirement: Any, source_engine: Any, target_en
         return cells
     source = capacity(requirement.source_layout)
     target = capacity(requirement.target_layout)
-    budget = source_engine._native_step_target()._layout_transfer_capacity_budget(
-        target_engine._native_step_target(), source_block, target_block, source, target)
+    scalar = requirement.source_port.representation.value == "pops://representations/cell-field-observation@1"
+    engine = source_engine._native_step_target()
+    capacity_method = (engine._layout_transfer_scalar_capacity_budget if scalar
+                       else engine._layout_transfer_capacity_budget)
+    budget = capacity_method(target_engine._native_step_target(), source_block, target_block,
+                             source, target)
     if any(type(value) is not int or value < 1 or value > (1 << 63) - 1
            for value in budget.values()):
         raise OverflowError("physical AMR transfer capacity exceeds signed native size limits")

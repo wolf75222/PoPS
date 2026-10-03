@@ -345,8 +345,8 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
         raise ValueError("layout Transfer requires matching resolved native execution targets")
     adaptive = source_target == "amr_system"
     mapped_field = transfer.source_representation_uri == "pops://representations/cell-field-observation@1"
-    if mapped_field and (adaptive or not program_invocation):
-        raise NotImplementedError("mapped consumed Field output requires a Uniform program-point invocation")
+    if mapped_field and not program_invocation:
+        raise NotImplementedError("mapped consumed Field output requires a program-point invocation")
     if transfer.operation_abi in (2, 3):
         requirement = next(row.requirement for row in plan.artifact.layout_plan.mappings
                            if row.requirement.qualified_id == transfer.mapping_id)

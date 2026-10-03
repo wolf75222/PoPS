@@ -15,8 +15,8 @@ def scalar_candidate_rows(token, value_id, subslot, prototype):
 
 
 def emit_mapped_field_pack(value, var, lines, *, target):
-    if target != "system":
-        raise NotImplementedError("mapped consumed Field output requires Uniform storage")
+    if target not in ("system", "amr_system"):
+        raise NotImplementedError("mapped consumed Field output requires a native System hierarchy")
     _component, exact_factor, _solve = validate_pack(value)
     source = value.inputs[0]
     if var.get(("field_observation", source.id)) != source.attrs["field_problem_identity"]:

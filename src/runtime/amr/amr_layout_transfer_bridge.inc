@@ -30,6 +30,7 @@ struct PreparedAmrSystemLayoutTransfer<Dim>::Impl {
   std::optional<AmrLayoutTransferReceipt> expected_receipt;
   std::uint64_t expected_attempt = 0;
   bool ports_released = false;
+  mutable std::vector<MultiFab<Dim>> source_scalar_geometry, target_scalar_geometry;
 
   bool uses_stage_ports() const noexcept { return !spec.authentication.program_invocation.empty(); }
 
@@ -81,21 +82,37 @@ struct PreparedAmrSystemLayoutTransfer<Dim>::Impl {
   }
 
   AmrTransferEndpoint<Dim> endpoint(AmrSystem<Dim>& system, bool input,
-                                    bool require_stage = true) const {
+                                    bool require_stage = true, bool geometry_budget_only = false) const {
     const auto& impl = *system.p_;
     if (!impl.engine || !impl.prepared_hierarchy || !impl.prepared_hierarchy->lane)
       throw std::logic_error("AMR transfer endpoint requires a materialized hierarchy");
     const auto& name = input ? spec.authentication.source_block : spec.authentication.target_block;
-    const auto block = impl.block_index(name);
+    const bool scalar = spec.authentication.mapped_field_components == 1;
+    const auto block = scalar ? std::size_t(0) : impl.block_index(name);
     AmrTransferEndpoint<Dim> result;
     result.layout_identity = input ? spec.authentication.source_layout_identity
                                    : spec.authentication.target_layout_identity;
-    result.state_identity = impl.boundary_registry.state_route(name);
+    result.state_identity = scalar ? name : impl.boundary_registry.state_route(name);
     result.hierarchy_identity = prefixed_sha256("pops.amr-layout-transfer.hierarchy.v1:sha256:",
                                                 impl.engine->spatial_contract());
     result.hierarchy_generation = impl.engine->materialization_generation();
     result.periodicity = impl.cfg.periodicity;
     const auto count = impl.engine->hierarchy().num_levels();
+    auto& templates = input ? source_scalar_geometry : target_scalar_geometry;
+    if (scalar && !geometry_budget_only) {
+      if (spec.authentication.program_invocation.empty())
+        throw std::invalid_argument("AMR scalar Field endpoint requires a Program invocation");
+      templates.resize(count);
+      for (std::size_t level = 0; level < count; ++level) {
+        const auto& layout = impl.engine->hierarchy().layout(level);
+        const auto rank = impl.prepared_hierarchy->active_coverage[level]->local_rank();
+        if (templates[level].ncomp() != 1 || templates[level].layout() != layout.patches() ||
+            templates[level].distribution() != layout.distribution() ||
+            templates[level].local_rank() != rank || templates[level].ncomp() != 1)
+          templates[level] = MultiFab<Dim>(layout.patches(), layout.distribution(), rank, 1,
+                                          Extent<Dim>{});
+      }
+    }
     const std::vector<MultiFab<Dim>*>* stages = nullptr;
     if (require_stage && uses_stage_ports()) {
       const auto& invocation = spec.authentication.program_invocation;
@@ -106,7 +123,7 @@ struct PreparedAmrSystemLayoutTransfer<Dim>::Impl {
       result.stage_identity = invocation + (input ? "::source" : "::target");
       for (std::size_t level = 0; level < count; ++level) {
         const auto* field = (*stages)[level];
-        if (!field || !same_field_contract(*field, impl.block_state(block, level)))
+        if (!field || !same_field_contract(*field, scalar ? templates[level] : impl.block_state(block, level)))
           throw std::invalid_argument("AMR Program map field differs from its exact block/level");
         for (std::size_t other = 0; other < level; ++other)
           if ((*stages)[other] == field)
@@ -134,7 +151,10 @@ struct PreparedAmrSystemLayoutTransfer<Dim>::Impl {
           {static_cast<int>(level),
            Geometry<Dim>::from_bounds(impl.engine->hierarchy().layout(level).domain(),
                                       impl.cfg.lower, impl.cfg.upper),
-           stages ? (*stages)[level] : &impl.block_state(block, level),
+           stages ? (*stages)[level] : (scalar
+               ? (geometry_budget_only ? impl.prepared_hierarchy->active_coverage[level].get()
+                                       : &templates[level])
+               : &impl.block_state(block, level)),
            impl.prepared_hierarchy->active_coverage[level].get(), active, measure});
     }
     return result;
@@ -190,6 +210,28 @@ AmrLayoutTransferBudget PreparedAmrSystemLayoutTransfer<Dim>::capacity_budget(
     result = PreparedAmrLayoutTransfer<Dim>::capacity_budget(
         endpoint_reader.endpoint(source, true), endpoint_reader.endpoint(target, false),
         source_cells, target_cells, source_block.size(), target_block.size());
+  });
+  return result;
+}
+
+template <int Dim>
+AmrLayoutTransferBudget PreparedAmrSystemLayoutTransfer<Dim>::scalar_capacity_budget(
+    AmrSystem<Dim>& source, AmrSystem<Dim>& target, const std::string& source_field,
+    const std::string& target_field, std::size_t source_cells, std::size_t target_cells) {
+  source.p_->ensure_engine();
+  target.p_->ensure_engine();
+  const auto& lane = source.p_->require_prepared_engine_lane("AMR scalar Transfer capacity");
+  AmrLayoutTransferBudget result;
+  amr_layout_transfer_bridge_detail::collective(lane, "AMR scalar capacity preparation", [&] {
+    AmrPhysicalTransferSpec<Dim> spec;
+    spec.authentication.source_block = source_field;
+    spec.authentication.target_block = target_field;
+    spec.authentication.mapped_field_components = 1;
+    spec.authentication.program_invocation = "geometry-only-capacity";
+    Impl endpoint_reader(source, target, nullptr, std::move(spec), {});
+    result = PreparedAmrLayoutTransfer<Dim>::capacity_budget(
+        endpoint_reader.endpoint(source, true, false, true), endpoint_reader.endpoint(target, false, false, true),
+        source_cells, target_cells, source_field.size(), target_field.size());
   });
   return result;
 }
@@ -319,7 +361,8 @@ AmrLayoutTransferReceipt PreparedAmrSystemLayoutTransfer<Dim>::apply(std::uint64
   auto& target = *p_->target;
   std::size_t block = 0;
   amr_layout_transfer_bridge_detail::collective(lane, "AMR target block authority", [&] {
-    block = target.p_->block_index(p_->spec.authentication.target_block);
+    if (p_->spec.authentication.mapped_field_components == 0)
+      block = target.p_->block_index(p_->spec.authentication.target_block);
   });
   const ExecutionLane& target_lane =
       target.p_->require_prepared_engine_lane("AMR transfer covered-cell synchronization");
@@ -379,9 +422,24 @@ AmrLayoutTransferReceipt PreparedAmrSystemLayoutTransfer<Dim>::apply(std::uint64
         });
   }
   // Every level passes model recovery before the first accepted-state publication.
-  for (std::size_t level = 0; level < candidates.size(); ++level)
-    target.validate_prepared_amr_state_publication_candidate(
-        static_cast<int>(block), static_cast<int>(level), candidates[level]);
+  if (p_->spec.authentication.mapped_field_components == 0) {
+    for (std::size_t level = 0; level < candidates.size(); ++level)
+      target.validate_prepared_amr_state_publication_candidate(
+          static_cast<int>(block), static_cast<int>(level), candidates[level]);
+  } else {
+    Real invalid = 0;
+    amr_layout_transfer_bridge_detail::collective(lane, "AMR scalar candidate finiteness", [&] {
+      for (const auto& candidate : candidates)
+        for (std::size_t local = 0; local < candidate.local_size(); ++local) {
+          auto host = candidate.fab(local).create_host_mirror();
+          candidate.fab(local).copy_to_host(host);
+          for (std::size_t i = 0; i < host.size(); ++i)
+            if (!std::isfinite(host(i))) invalid = 1;
+        }
+    });
+    if (all_reduce_max(invalid, lane) != 0)
+      throw std::invalid_argument("AMR mapped Field candidate is nonfinite");
+  }
 
   amr_layout_transfer_bridge_detail::collective(lane, "AMR transfer receipt authentication", [&] {
     if (!receipt.transfer.applied || !Impl::same_receipt_contract(receipt, expected))

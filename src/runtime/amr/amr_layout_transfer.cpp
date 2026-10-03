@@ -500,12 +500,20 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
          {&map.mapping_identity, &map.provider_identity, &map.provider_component_identity,
           &map.provider_manifest_identity, &map.source_block, &map.target_block})
       require_text(*id);
+    const bool scalar = map.mapped_field_components != 0;
+    if (scalar && (map.mapped_field_components != 1 || components != 1 ||
+                   map.program_invocation.empty() ||
+                   map.synchronization_identity != "pops://synchronization/program-point@1"))
+      throw std::invalid_argument("AMR scalar endpoint@1 requires a scalar Program-point candidate");
+    const std::string_view representation = scalar
+        ? "pops://representations/cell-field-observation@1"
+        : "pops://representations/cell-average@1";
     if (!map.physical_contract || map.source_layout_identity != source.layout_identity ||
         map.target_layout_identity != target.layout_identity ||
         source.layout_identity == target.layout_identity ||
         components != target_levels.front().components ||
-        map.source_representation != "pops://representations/cell-average@1" ||
-        map.target_representation != "pops://representations/cell-average@1" ||
+        map.source_representation != representation ||
+        map.target_representation != representation ||
         spec.quadrature_identity != "pops://measure/piecewise-constant-base-bins@1")
       throw std::invalid_argument(
           "AMR physical transfer authentication/representation is incomplete");
@@ -872,6 +880,10 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
     text(result, a.program_invocation);
     integer(result, a.operation);
     integer(result, a.physical_contract);
+    if (a.mapped_field_components != 0) {
+      text(result, "pops.amr.scalar-field-endpoint@1");
+      integer(result, a.mapped_field_components);
+    }
     for (int axis = 0; axis < Dim; ++axis) {
       integer(result, a.refinement_ratio[axis]);
       integer(result, a.physical_source_to_target[axis]);

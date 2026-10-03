@@ -15,16 +15,19 @@ from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, PeriodicAxes, LayoutPlanBuilder, LayoutRepresentation, LayoutMappingOperation, LayoutSynchronization, PhysicalSupportMap, native_physical_mapping
 
 
-def route(tmp_path):
+def route(tmp_path, *, adaptive=False):
     unit = PhysicalDimension()
     x = PhysicalSupport((("x", "shared interval"),))
     xy = PhysicalSupport((("x", "shared interval"), ("eta", "laminate")))
     frame = Rectangle("native", (0,0), (1,1)).frame(Cartesian2D())
     case = pops.Case("equation-owned mapped outputs")
-    src = Module("equation input")
+    if adaptive:
+        from pops.params import RuntimeParam
+        threshold = case.param(RuntimeParam("refinement threshold", default=-1.))
+    src = Module("equation input", **({"frame": frame} if adaptive else {}))
     su = src.state_space("load", ("a", "b"), support=x, units=(unit,unit), sampling="cell_average")
     sb = case.block("material", src)
-    dst = Module("independent destination")
+    dst = Module("independent destination", **({"frame": frame} if adaptive else {}))
     du = dst.state_space("evolved", ("s", "t", "u"), support=xy, units=(unit,unit,unit), sampling="cell_average")
     df = dst.field_space("temperature input", ("mapped",), support=xy, units=(unit,), sampling="cell")
     @dst.operator("consume", signature=(du,df) >> Rate(du), kind="local_source")
@@ -39,8 +42,13 @@ def route(tmp_path):
         boundaries=(FieldBoundary(phi,bcs.BoundaryCondition(bcs.AllPhysicalBoundaries(),bcs.Periodic())),),
         unknown_spaces={phi:FieldSpace("physical temperature", ("temperature",),support=x,units=(unit,),sampling="cell")},
         coordinate_units=(unit,))
+    if adaptive:
+        from pops.solvers import CompositeFieldGMRES
+        solver = CompositeFieldGMRES(max_iter=100, restart=25)
+    else:
+        solver = CG(max_iter=100,rel_tol=1e-10,abs_tol=1e-12)
     field = case.field(physical, FieldDiscretization(method=CellCenteredSecondOrder(), boundaries=(),
-        observation_axes=(0,),solver=CG(max_iter=100,rel_tol=1e-10,abs_tol=1e-12)))
+        observation_axes=(0,),solver=solver))
     p = pops.Program("solve map publish")
     a,b = p.state(state),p.state(out)
     solved = field.observe(p.solve(field,values={state:a.n},at=a.n.point).consume(action=FailRun()))
@@ -52,9 +60,29 @@ def route(tmp_path):
     p.commit(b.next,p.value("evolve",b.n+p.dt*rhs,at=b.next.point))
     p.commit(a.next,p.value("retain",1*a.n,at=a.next.point))
     p.step_strategy(FixedDt(.01));case.program(p)
+    if adaptive:
+        from pops.initial import InitialCondition
+        from pops.lib.initial import Constant
+        from pops.projection import ConservativeCellAverage
+        for handle, values in ((state, (2., 3.)), (out, (5., 6., 7.))):
+            case.initials.add(InitialCondition(state=handle, value=Constant(values),
+                                              projection=ConservativeCellAverage()))
     validated=pops.validate(case);subjects=validated.layout_subjects()
     builder=LayoutPlanBuilder(validated.owner_path.canonical())
     descriptors=(Uniform(CartesianGrid(frame=frame,cells=(8,1),periodic=PeriodicAxes(frame.axes))),Uniform(CartesianGrid(frame=frame,cells=(8,4),periodic=PeriodicAxes(frame.axes))))
+    if adaptive:
+        from pops.layouts import AMR
+        from pops.amr import AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer, AMRExecution, Tag, Buffer, Hysteresis, EqualityPolicy, ConflictPolicy
+        from pops.lib.amr import StateTransfer
+        transfers = []
+        for handle in (state, out):
+            transfer = AMRTransfer(); transfer.state(handle, StateTransfer()); transfers.append(transfer)
+        descriptors = tuple(AMR(grid=descriptor.mesh, hierarchy=AMRHierarchy(max_levels=2,
+            ratios=((2, 1) if index == 0 else (2, 2),)), tagging=AMRTagging(rules=(Tag(__import__("pops.math", fromlist=["ValueExpr"]).ValueExpr((state,out)[index])[("a","s")[index]] > validated.value(threshold)), Buffer(cells=0)),
+            hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
+            regrid=AMRRegrid.frozen(), transfer=transfers[index], execution=AMRExecution.synchronous())
+            for index, descriptor in enumerate(descriptors))
+        descriptors = tuple(descriptor.resolve_for_case(validated.resolve) for descriptor in descriptors)
     layouts=(builder.layout("source storage",descriptors[0]),builder.layout("destination storage",descriptors[1]))
     for block in subjects.blocks:builder.assign_block(block,layouts[block.local_id=="destination"])
     for row in subjects.states:builder.assign_state(row,layouts[row.block_ref.local_id=="destination"])

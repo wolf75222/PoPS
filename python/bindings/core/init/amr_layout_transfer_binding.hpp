@@ -1,6 +1,9 @@
 #pragma once
 
 #include <pops/runtime/amr/amr_layout_transfer_bridge.hpp>
+#include <pops/parallel/world_communicator.hpp>
+#include <optional>
+#include <exception>
 
 namespace amr_layout_transfer_binding {
 using Spec = pops::SystemLayoutTransferSpec<pops::kNativeDimension>;
@@ -17,7 +20,16 @@ inline void exact_keys(const py::dict& row, std::initializer_list<const char*> e
       throw py::value_error(std::string(context) + " is missing " + key);
 }
 
-inline Spec specification(const py::dict& row) {
+inline Spec specification(const py::dict& input) {
+  py::dict row(input);
+  int scalar = 0;
+  if (row.contains("mapped_field_components")) {
+    const auto value = row["mapped_field_components"];
+    if (!PyLong_CheckExact(value.ptr()) || py::cast<int>(value) != 1)
+      throw py::value_error("AMR mapped Field width must be exact integer one");
+    scalar = 1;
+    row.attr("pop")("mapped_field_components");
+  }
   exact_keys(row,
              {"mapping_identity", "provider_identity", "provider_component_identity",
               "provider_manifest_identity", "source_layout_identity", "target_layout_identity",
@@ -27,6 +39,7 @@ inline Spec specification(const py::dict& row) {
               "program_invocation"},
              "AMR transfer spec");
   Spec spec;
+  spec.mapped_field_components = scalar;
   spec.mapping_identity = py::cast<std::string>(row["mapping_identity"]);
   spec.provider_identity = py::cast<std::string>(row["provider_identity"]);
   spec.provider_component_identity = py::cast<std::string>(row["provider_component_identity"]);
@@ -155,6 +168,21 @@ inline void bind(py::module_& module, py::class_<pops::AmrSystem<pops::kNativeDi
       .def("reject_attempt", &Session::reject_attempt, py::arg("generation"), py::arg("attempt"))
       .def("finalize_transaction", &Session::finalize_transaction, py::arg("generation"))
       .def("rollback_transaction", &Session::rollback_transaction, py::arg("generation"));
+  cls.def("_layout_transfer_scalar_capacity_budget",
+          [](pops::AmrSystem<pops::kNativeDimension>& source,
+             pops::AmrSystem<pops::kNativeDimension>& target, const std::string& source_field,
+             const std::string& target_field, std::size_t source_cells, std::size_t target_cells) {
+            const auto budget = Session::scalar_capacity_budget(
+                source, target, source_field, target_field, source_cells, target_cells);
+            py::dict result;
+            result["destination_cells"] = budget.destination_cells;
+            result["intersection_probes"] = budget.intersection_probes;
+            result["canonical_jobs"] = budget.canonical_jobs;
+            result["transported_elements"] = budget.transported_elements;
+            result["prepared_bytes"] = budget.prepared_bytes;
+            return result;
+          }, py::arg("target"), py::arg("source_field"), py::arg("target_field"),
+          py::arg("source_cells"), py::arg("target_cells"));
   cls.def("_layout_transfer_capacity_budget",
           [](pops::AmrSystem<pops::kNativeDimension>& source,
              pops::AmrSystem<pops::kNativeDimension>& target, const std::string& source_block,
@@ -175,8 +203,24 @@ inline void bind(py::module_& module, py::class_<pops::AmrSystem<pops::kNativeDi
          pops::AmrSystem<pops::kNativeDimension>& target,
          std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& spec,
          const py::dict& context, const py::dict& physical) {
+        std::optional<PhysicalSpec> prepared_spec;
+        std::optional<pops::SystemLayoutTransferExecution> prepared_execution;
+        std::exception_ptr error;
+        try {
+          prepared_spec.emplace(physical_specification(spec, physical));
+          prepared_execution.emplace(execution(context));
+        } catch (...) { error = std::current_exception(); }
+#ifdef POPS_HAS_MPI
+        const auto& world = pops::WorldCommunicator::world();
+        if (pops::all_reduce_max(error ? 1L : 0L, world.communicator()) != 0) {
+          if (world.size() == 1 && error) std::rethrow_exception(error);
+          throw std::runtime_error("AMR transfer DTO preparation failed collectively");
+        }
+#else
+        if (error) std::rethrow_exception(error);
+#endif
         return Session::prepare(source, target, std::move(component),
-                                physical_specification(spec, physical), execution(context));
+                                std::move(*prepared_spec), std::move(*prepared_execution));
       },
       py::arg("target"), py::arg("component"), py::arg("spec"), py::arg("execution"),
       py::arg("physical"), py::keep_alive<0, 1>(), py::keep_alive<0, 2>());

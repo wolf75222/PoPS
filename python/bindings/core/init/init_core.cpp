@@ -310,6 +310,7 @@ py::dict module_capabilities_to_dict(const pops::ModuleCapabilities& c,
   py::dict d;
   d["abi_version"] = c.abi_version;
   d["mapped_consumed_field_output"] = c.mapped_consumed_field_output;
+  d["mapped_consumed_field_output_amr"] = c.mapped_consumed_field_output_amr;
   d["supports_uniform"] = c.supports_uniform;
   d["supports_amr"] = c.supports_amr;
   d["supports_mpi"] = c.supports_mpi;
