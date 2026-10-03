@@ -416,11 +416,34 @@ def build_compiled_manifest(compiled):
     """Build a rich manifest from a compiled handle's inert metadata."""
     from pops.codegen._artifact_models import primary_artifact_model
 
-    model = primary_artifact_model(compiled)
+    return _build_compiled_manifest(compiled, primary_artifact_model(compiled),
+                                    _caps_flags(compiled))
+
+
+def build_component_manifest(compiled):
+    """Build the same rich report for one exact low-level component handle.
+
+    The component metadata route validates its unique model/program route; it
+    never selects a representative model from a whole simulation artifact.
+    """
+    from pops.codegen._artifact_models import component_model_metadata
+
+    rows = component_model_metadata(compiled)
+    model = rows[0].model if len(rows) == 1 else None
+    caps = {
+        output: (None if not rows or any(key not in row.capabilities for row in rows)
+                 else all(row.capabilities[key] for row in rows))
+        for output, key in (("supports_uniform", "cpu"), ("supports_amr", "amr"),
+                            ("supports_mpi", "mpi"), ("supports_gpu", "gpu"))
+    }
+    return _build_compiled_manifest(compiled, model, caps, component_rows=rows)
+
+
+def _build_compiled_manifest(compiled, model, caps_flags, *, component_rows=None):
     abi_key = getattr(compiled, "abi_key", None)
     model_name = getattr(compiled, "program_name", None) or getattr(model, "name", None)
 
-    args = compiled.arguments() if hasattr(compiled, "arguments") else None
+    args = compiled.arguments() if component_rows is None and hasattr(compiled, "arguments") else None
     if args is not None:
         blocks = sorted(args.instances)
         aux_required = sorted(args.aux)
@@ -439,6 +462,15 @@ def build_compiled_manifest(compiled):
         blocks = aux_required = params_const = params_runtime = params_derived = field_outputs = []
         ghost_depth = None
         ghost_depth_by_block = {}
+        if component_rows is not None:
+            from pops.codegen.inspect_compiled import _parameter_arguments, _build_aux_arguments
+
+            blocks = [row.block_name or "block" for row in component_rows]
+            aux_required = sorted(_build_aux_arguments(component_rows, {}))
+            params = _parameter_arguments(compiled, component_rows)
+            params_const = sorted(name for name, slot in params.items() if slot.get("kind") == "const")
+            params_runtime = sorted(name for name, slot in params.items() if slot.get("kind") == "runtime")
+            params_derived = sorted(name for name, slot in params.items() if slot.get("kind") == "derived")
 
     variables = list(getattr(model, "cons_names", []) or [])
     raw_roles = getattr(model, "cons_roles", None)
@@ -451,7 +483,6 @@ def build_compiled_manifest(compiled):
     bind_schema_artifact_hash = (
         bind_schema.artifact_hash if bind_schema is not None else None)
 
-    caps_flags = _caps_flags(compiled)
     return CompiledArtifactManifest(
         model_name=model_name,
         abi_key=abi_key,
@@ -605,5 +636,5 @@ def check_layout_supported(manifest, layout_kind):
     return Availability.yes("%s=true" % flag_name)
 
 
-__all__ = ["CompiledArtifactManifest", "build_compiled_manifest", "check_layout_supported",
+__all__ = ["CompiledArtifactManifest", "build_compiled_manifest", "build_component_manifest", "check_layout_supported",
            "apply_native_manifest", "ARTIFACT_MANIFEST_SCHEMA_VERSION"]

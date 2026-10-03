@@ -359,8 +359,8 @@ class CompiledProblem(CompiledProblemDumpMixin):
         model + ``abi_key``); it binds, dlopens and runs nothing. The widening of the thin
         :class:`pops.external.CompiledManifest` (a brick-id / category list) into the full
         artifact self-description Spec 5 sec.13.12 requires."""
-        from pops.external.artifact_manifest import build_compiled_manifest
-        return build_compiled_manifest(self)
+        from pops.external.artifact_manifest import build_component_manifest
+        return build_component_manifest(self)
 
     def estimate_memory(self, mesh: Any, *, platform: Any = None, layout: Any = None) -> Any:
         """A FORMULA-based memory estimate on ``mesh`` (Spec 5 sec.12.3, #46).

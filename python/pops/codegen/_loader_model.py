@@ -370,9 +370,9 @@ class CompiledModel:
 
     def manifest(self) -> Any:
         """Return the rich manifest consumed by the pre-bind refusal gates."""
-        from pops.external.artifact_manifest import build_compiled_manifest
+        from pops.external.artifact_manifest import build_component_manifest
 
-        return build_compiled_manifest(self)
+        return build_component_manifest(self)
 
     def estimate_memory(self, mesh: Any, *, platform: Any = None, layout: Any = None) -> Any:
         """A FORMULA-based memory estimate for this AMR-route artifact on ``mesh`` (sec.12.3, ADC-515).
