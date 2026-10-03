@@ -42,14 +42,18 @@ def test_installed_checkpoint_effect_failure_restores_full_uniform_state(tmp_pat
     runtime=collective_call(world,lambda:pops.bind(artifact,initial_values=initial_values_for_bindings(resolved.initial_condition_plan.bindings,initial),resources={'execution_context':artifact_execution_context(artifact)}))
     def capture(label):
         image=collective_call(world,runtime.observe_accepted_state_storage);clock=(runtime.time,runtime.macro_step)
+        cursors=runtime.consumer_cursors.to_data()
+        collective_call(world,lambda:save_json(directory/(label+'.rank%d.cursors.json'%rank),cursors))
         values=capture_valid_incrementally(world,runtime,directory,label,rank,ranks,image,clock,tuple(initial))
         collective_call(world,lambda:validate_phase(image,clock,values,rank=rank,ranks=ranks))
-        return image.complete,clock,runtime.consumer_cursors.to_data()
+        return image.complete,clock,cursors
     before=capture('before');events=[];targets=[]
     original=_RestartSnapshot.publish
     def failed_publication(snapshot,target):
         published=original(snapshot,target)  # genuine CP9 capture and owned final publication
         targets.append(Path(published))
+        provisional_cursors=runtime.consumer_cursors.to_data()
+        collective_call(world,lambda:save_json(directory/('provisional.rank%d.cursors.json'%rank),provisional_cursors))
         _,refusals=collective_attempt(world,runtime.observe_accepted_state_storage)
         with collective_check(world):
             assert all(row is not None and 'accepted idle state' in row[1] for row in refusals)
