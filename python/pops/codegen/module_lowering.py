@@ -487,8 +487,15 @@ def _module_to_model(module: Any, state_space: Any = None,
     retain_recipes(model_native_roots(m._m))
     from pops.codegen.diffusion_lowering import prepare_diffusion_carrier
     prepare_diffusion_carrier(m, module)
-    from pops.codegen.state_storage_lowering import prepare_source_storage_carrier
+    from pops.codegen.state_storage_lowering import (
+        prepare_local_state_storage_carrier, prepare_source_storage_carrier,
+    )
     prepare_source_storage_carrier(m, module, state_space=state)
+    # Source-only operator Modules have no physical flux axis authority. Their
+    # explicit Module frame and the exact selected StateSpace admit the existing
+    # Program-owned storage carrier; no transport law or backend rank is invented.
+    prepare_local_state_storage_carrier(
+        m, module, getattr(module, "frame", None), state_space=state)
     # The executable DSL validates the spectrum against the already-selected
     # physical flux axes.  A Module deliberately stores those two declarations
     # independently, so materialize all grid operators before attaching the
