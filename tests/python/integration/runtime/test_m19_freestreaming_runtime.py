@@ -15,14 +15,18 @@ import pops
 import pytest
 
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
-from tests.python.integration.runtime.test_public_evolved_original_stage import checkpoint_provenance, compare_checkpoint_replay
+from tests.python.integration.runtime.test_public_evolved_original_stage import (
+    checkpoint_provenance,
+    checkpoint_restart_authority,
+    compare_checkpoint_replay_v2,
+)
 from tests.python.support.collective_checks import collective_call, collective_check, state_snapshots
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.m19_freestreaming import CASES, FINAL_TIME, FRAME, MODULE, build
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.review.sol61_m19_freestreaming_oracle import cell_centers, initial, moments, receive
 
-SCHEMA = "pops.m19-freestreaming-native-fixture@1"
+SCHEMA = "pops.m19-freestreaming-native-fixture@2"
 PHASES = ("initial", "accepted", "continuous", "restored", "replay")
 
 
@@ -63,7 +67,7 @@ def _velocity_snapshot(runtime):
     return runtime._executor.auxiliary_component(key)
 
 
-def _snapshot(world, runtime, directory, phase, nx, nv, *, auxiliary=False):
+def _snapshot(world, runtime, directory, phase, nx, nv, *, auxiliary=False, restart_authority=None):
     values = state_snapshots(runtime, world, ("kinetic",))[0]
     clock = collective_call(world, lambda: (runtime.time(), runtime.macro_step()))
     boxes = collective_call(world, lambda: runtime.local_boxes("kinetic"))
@@ -77,7 +81,8 @@ def _snapshot(world, runtime, directory, phase, nx, nv, *, auxiliary=False):
         velocity = collective_call(world, lambda: _velocity_snapshot(runtime))
     checkpoint = collective_call(world, lambda: runtime.checkpoint(directory/(phase+"-checkpoint")))
     checkpoint_pin = collective_call(world, lambda: _pin(checkpoint))
-    authority = (collective_call(world, lambda: checkpoint_provenance(runtime, checkpoint))
+    authority = (collective_call(world, lambda: checkpoint_provenance(
+                     runtime, checkpoint, restart_authority=restart_authority))
                  if phase in ("accepted", "continuous", "replay") else None)
     if phase == "restored":
         collective_call(world, lambda: _authenticate_restored(runtime, checkpoint))
@@ -202,10 +207,13 @@ def test_native_m19_signed_freestreaming_exact_restart(nx, nv, tmp_path, record_
     rows["continuous"] = _snapshot(world, runtime, directory, "continuous", nx, nv, auxiliary=True)
     restored_context = collective_call(world, lambda: artifact_execution_context(artifact))
     restored = collective_call(world, lambda: pops.bind(artifact, resources={"execution_context": restored_context}))
+    restart_authority = collective_call(world, lambda: checkpoint_restart_authority(restored))
     collective_call(world, lambda: restored.restart(rows["accepted"][2]))
+    restart_authority["restored_source_run"] = collective_call(world, lambda: restored.last_run_identity.token)
     rows["restored"] = _snapshot(world, restored, directory, "restored", nx, nv, auxiliary=True)
     replay = collective_call(world, lambda: pops.run(restored, t_end=float(2*FINAL_TIME), max_steps=nx//2))
-    rows["replay"] = _snapshot(world, restored, directory, "replay", nx, nv, auxiliary=True)
+    rows["replay"] = _snapshot(world, restored, directory, "replay", nx, nv, auxiliary=True,
+                               restart_authority=restart_authority)
     with collective_check(world):
         assert second.accepted_steps == replay.accepted_steps == nx//2
         assert second.rejected_steps == replay.rejected_steps == 0
@@ -219,7 +227,7 @@ def test_native_m19_signed_freestreaming_exact_restart(nx, nv, tmp_path, record_
         assert len({Path(row[2]).resolve() for row in rows.values()}) == len(PHASES)
         for row in rows.values():
             assert _pin(row[2]) == row[3], "native checkpoint changed after capture"
-        checkpoint_equivalence = collective_call(world, lambda: compare_checkpoint_replay(
+        checkpoint_equivalence = collective_call(world, lambda: compare_checkpoint_replay_v2(
             {phase: rows[phase][2] for phase in ("accepted", "continuous", "replay")},
             {phase: rows[phase][4] for phase in ("accepted", "continuous", "replay")}))
         restored_equivalence = collective_call(world, lambda: _compare_restored_payload(
