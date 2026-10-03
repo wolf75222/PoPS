@@ -39,6 +39,7 @@ def build(directory,*,nx=8,nv=4,charge=1,provider_factory=native_physical_mappin
     va,xa=phase_frame.axes
     coordinate_f=phase.state_symbols(f)[0]
     flux=phase.operator(name='phase_transport',signature=(f,incoming)>>Rate(f),kind='grid_operator',
+        requirements={'aux':('velocity_coordinate',)},
         expr={'x':(charge*electric*coordinate_f,), 'y':(velocity*coordinate_f,)},
         lowering={'flux_wave_law':FluxWaveLaw(f,{'x':(charge*electric,), 'y':(velocity,)})})
     rate=phase.rate_operator('collisionless_vlasov',state_space=phase.state_handle(f),flux=True,fluxes=(flux,),default_flux=flux,sources=[])

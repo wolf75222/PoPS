@@ -38,12 +38,30 @@ comparison discriminates the consumed force; the oracle's Poisson residual does
 not certify a saved Native Field residual.
 
 The separately owned Module.frame and source-only compiler admission changes are
-now consumed coherently. The earlier frozen 6a77 failure is retained. The new
-Source cohort reaches the mapped-publication authority check and refuses two
-evaluations of the same physical producer at distinct SSPRK2 stages (1 failure,
-20 passes). This is reported to the primitive author; no guard is relaxed.
+consumed coherently. Earlier frozen-API, competing-publication and frozen-claim
+REDs remain retained separately. Publisher commits 582a4285 and 851a4b90 preserve
+one physical producer while authenticating each stage occurrence. The unchanged
+VP resolve→slice→detach→Program emission now passes. Seven additional independent
+checks derive claims from this actual resolved VP, refuse foreign producer,
+unknown and ports or competing same-point invocation, and emit all three Model
+bricks. The final affected cohort passed 37 tests in 13.07 seconds; the emitted
+C++ is Source evidence, not a successful C++ compiler or Native run.
+
 Flux() selects the uniquely authored default physical flux for the configured
 HLL finite-volume realization. Flux(handle) is a distinct named centered-divergence
-route and correctly refuses that FV realization; the prior refusal is preserved. The separate
-SSA fix a8d478f1 preserves captured equations when a mapped RHS is later named at
-another point, with 45 affected Source tests passing and genuine drift rejected.
+route and correctly refuses that FV realization; the prior refusal is preserved.
+The velocity-coordinate auxiliary is explicitly listed in the grid operator's
+public requirements, in addition to the FieldSpace signature. This uses the
+existing exact provider-pack contract, without changing the physical formula.
+
+The SSA fix a8d478f1 separately preserves captured equations when a mapped RHS is
+later named at another point, with 45 affected Source tests passing and genuine
+drift rejected. Its original equation-identity guard remains unchanged.
+
+Source command (env -u PYTHONPATH, ir17 Python, --noconftest -p no:cacheprovider,
+absolute own-checkout pythonpaths): test_sol61_m19_vlasov_poisson_preparation.py,
+test_sol61_m19_vlasov_poisson_oracle.py,
+test_sol61_value_materialization_immutable.py,
+test_sol61_module_physical_frame.py, test_sol61_source_only_module_frame.py,
+test_sol61_mapped_publication_occurrences.py and
+test_sol61_vp_publication_nonauthor.py, all under tests/review.
