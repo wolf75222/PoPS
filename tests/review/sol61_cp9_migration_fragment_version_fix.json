@@ -1,0 +1,12 @@
+{
+  "base": "412a7c9110e0fdb946604f47fd471326c74ad4a7",
+  "change": "Source fragment explicitly declares UNIFORM_V2_TARGET_VERSION as int64; no carriers fabricated or production guard relaxed",
+  "green": "24PASS17NativeLoader-deselected2.02s three affected files",
+  "native_qualified": false,
+  "proof_pins": {
+    "/Users/romaindespoulain/dev/tmp/sol61-cp9-migration-fragment-green.xml": "4ac829707d6e5cd303586ca70b97d679accca1549ca78d0d676cfc0ae43b4b51",
+    "/Users/romaindespoulain/dev/tmp/sol61-cp9-migration-fragment-red.xml": "111193477f27924efab137d39fbdab70cc2160ddd2ba14b9d06de3fcbc4257ad"
+  },
+  "red": "1FAIL14PASS17NativeLoader-deselected2.21s missing pops_checkpoint_version",
+  "schema": "sol61.cp9-migration-fragment-version-fix@1"
+}

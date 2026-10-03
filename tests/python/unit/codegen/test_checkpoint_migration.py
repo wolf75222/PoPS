@@ -140,7 +140,9 @@ def _migration_provenance(mapping=None):
 
 
 def _strict_uniform_preflight_payload():
+    # Offline v2 migration targets explicit valid-only8, never full-State9.
     payload = {
+        "pops_checkpoint_version": np.asarray(UNIFORM_V2_TARGET_VERSION, dtype=np.int64),
         "t": np.asarray(0.0, dtype=np.float64),
         "macro_step": np.asarray(0, dtype=np.int64),
         "pops_spatial_contract": np.asarray("{}"),
