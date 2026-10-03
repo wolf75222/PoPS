@@ -79,7 +79,7 @@ def receive(directory,pins):
             local=decode(np.frombuffer((root/localname).read_bytes(),dtype=np.uint8).copy())
             require(tuple(local[k] for k in ('dim','real','ranks','levels','blocks'))==tuple(image[k] for k in ('dim','real','ranks','levels','blocks')) and local['shard']==rank,'local authority differs')
             require(local['patches']==[p for p in image['patches'] if p['owner'] in (-1,rank)],'local grown bits differ')
-            require(meta['blocks']==image['blocks'],'valid block authority differs')
+            require(meta['blocks']==image['blocks'] and meta['expected_blocks']==image['blocks'],'valid block authority differs')
             for index,name in enumerate(image['blocks']):
                 filename=phase+'.rank%d.block%d.npy'%(rank,index);require(filename in pins,'valid not pinned')
                 values=np.load(root/filename,allow_pickle=False)

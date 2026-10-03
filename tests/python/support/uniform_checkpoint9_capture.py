@@ -32,8 +32,10 @@ def retain_provenance(artifact,directory):
                    'sidecar':pin(sidecar),'cpp':pin(folder/'program.cpp'),'ir':pin(folder/'program.ir.json'),'companions':companions},'root_approval':False})
 
 
-def persist_phase(directory,label,rank,ranks,observation,clock,values):
+def persist_phase(directory,label,rank,ranks,observation,clock,values,*,expected_blocks):
     """Persist raw typed data before validation; no synthetic carrier/value image."""
+    if type(expected_blocks) is not tuple or not expected_blocks or any(type(name) is not str or not name for name in expected_blocks) or len(set(expected_blocks))!=len(expected_blocks):raise ValueError('expected block authority differs')
+    if tuple(values)!=expected_blocks[:len(values)]:raise ValueError('partial block coverage differs')
     root=Path(directory);files={}
     def blob(name,value):
         path=root/name;path.write_bytes(value);files[name]=pin(path)
@@ -41,7 +43,7 @@ def persist_phase(directory,label,rank,ranks,observation,clock,values):
     # Each participant retains its actual complete image for all-rank equality audit.
     blob(label+'.rank%d.complete.carriers'%rank,observation.complete)
     metadata={'schema':'pops.uniform-state-checkpoint-phase@2','phase':label,'rank':rank,'ranks':ranks,
-              'contract':observation.contract,'capture_complete':bool(values),'dimension':observation.dimension,'time':observation.time,'macro_step':observation.macro_step,'runtime_clock':list(clock),
+              'contract':observation.contract,'capture_complete':tuple(values)==expected_blocks,'expected_blocks':list(expected_blocks),'dimension':observation.dimension,'time':observation.time,'macro_step':observation.macro_step,'runtime_clock':list(clock),
               'blocks':list(values),'files':files}
     for index,(name,value) in enumerate(values.items()):
         filename=label+'.rank%d.block%d.npy'%(rank,index);np.save(root/filename,value,allow_pickle=False)
@@ -52,11 +54,13 @@ def persist_phase(directory,label,rank,ranks,observation,clock,values):
     return save_json(root/(label+'.rank%d.phase.json'%rank),metadata)
 
 
-def validate_phase(observation,clock,values):
+def validate_phase(observation,clock,values,*,rank,ranks):
     from tests.review.sol61_amr_full_carrier_offline import decode
+    if type(rank) is not int or type(ranks) is not int or ranks<1 or not 0<=rank<ranks:raise ValueError('external world authority differs')
     image=decode(np.frombuffer(observation.complete,dtype=np.uint8).copy())
     if image['shard']!=-1 or image['levels']!=1 or image['real']!=64 or image['dim']!=observation.dimension or image['blocks']!=list(values):raise ValueError('complete phase authority differs')
     local=decode(np.frombuffer(observation.rank_local,dtype=np.uint8).copy())
+    if image['ranks']!=ranks or local['ranks']!=ranks or local['shard']!=rank:raise ValueError('external world/shard authority differs')
     if tuple(local[k] for k in ('dim','real','ranks','levels','blocks'))!=tuple(image[k] for k in ('dim','real','ranks','levels','blocks')) or local['patches']!=[p for p in image['patches'] if p['owner'] in (-1,local['shard'])]:raise ValueError('local/complete grown bits differ')
     if (observation.time,observation.macro_step)!=tuple(clock):raise ValueError('observation/runtime clock differs')
     for index,(name,value) in enumerate(values.items()):
@@ -71,3 +75,13 @@ def validate_phase(observation,clock,values):
             if not np.array_equal(grown[source],value.view(np.uint64)[target]):raise ValueError('complete/valid bits differ')
             covered[target[1:]]+=1
         if not np.all(covered==1):raise ValueError('valid coverage differs')
+
+
+def capture_valid_incrementally(world,runtime,directory,label,rank,ranks,observation,clock,expected_blocks):
+    from tests.python.support.collective_checks import collective_call
+    values={}
+    collective_call(world,lambda:persist_phase(directory,label,rank,ranks,observation,clock,values,expected_blocks=expected_blocks))
+    for name in expected_blocks:
+        values[name]=collective_call(world,lambda name=name:runtime.state_global(name))
+        collective_call(world,lambda:persist_phase(directory,label,rank,ranks,observation,clock,values,expected_blocks=expected_blocks))
+    return values

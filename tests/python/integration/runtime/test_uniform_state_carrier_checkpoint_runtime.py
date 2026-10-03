@@ -52,7 +52,7 @@ def test_installed_uniform_full_state_checkpoint_restart(profile,tmp_path,record
     resolved=collective_call(world,lambda:pops.resolve(validated,layout=layout,compile_options={'model_source_policy':'require'}))
     artifact=(collective_call(world,lambda:pops.compile(resolved)) if world is None else compile_resolved_plan_once(world,resolved,route='uniform-state-cp9-'+profile,compile_artifact=pops.compile))
     directory=collective_directory(world,tmp_path/('uniform-state-cp9-'+profile))
-    from tests.python.support.uniform_checkpoint9_capture import retain_provenance,persist_phase,validate_phase
+    from tests.python.support.uniform_checkpoint9_capture import retain_provenance,capture_valid_incrementally,validate_phase
     def provenance():
         if root():
             retain_provenance(artifact,directory)
@@ -68,11 +68,9 @@ def test_installed_uniform_full_state_checkpoint_restart(profile,tmp_path,record
         clock=(runtime.time,runtime.macro_step)
         rank=0 if world is None else world.rank
         ranks=1 if world is None else world.size
-        collective_call(world,lambda:persist_phase(directory,label,rank,ranks,observation,clock,{}))
-        valid={name:collective_call(world,lambda name=name:runtime.state_global(name)) for name in initial}
-        collective_call(world,lambda:persist_phase(directory,label,rank,ranks,observation,clock,valid))
+        valid=capture_valid_incrementally(world,runtime,directory,label,rank,ranks,observation,clock,tuple(initial))
         # Every raw shard/complete/valid/envelope is durable before a rejecting guard.
-        collective_call(world,lambda:validate_phase(observation,clock,valid))
+        collective_call(world,lambda:validate_phase(observation,clock,valid,rank=rank,ranks=ranks))
         phases[label]=(observation.complete,clock)
         return phases[label]
     def run_to(label,end):

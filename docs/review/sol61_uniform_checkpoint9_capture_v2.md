@@ -13,3 +13,9 @@ Source preparation: 13 PASS 64.22s across new capture controls, existing CP9 pre
 Commands: env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/python -m pytest --noconftest -p no:cacheprovider -o 'pythonpath=python .' tests/review/test_sol61_checkpoint9_capture_independent.py tests/review/test_sol61_uniform_checkpoint9_preparation.py tests/review/test_sol61_uniform_checkpoint9_independent.py -q --tb=short --junitxml=/tmp/sol61-cp9-capture-source.xml
 
 Future installed nodes: tests/python/integration/runtime/test_uniform_state_carrier_checkpoint_runtime.py::test_installed_uniform_full_state_checkpoint_restart[fanli15] and [two-transports]. ROOT owns Serial/MPI2 execution after independent review and rebuilt SDK receipt.
+
+## Follow-up after independent review of 5e419
+
+5e419 is preserved under sol61-cp9-capture-5e419. Two Source REDs (false self-declared world and partial values incorrectly marked complete) were recorded in /tmp/sol61-cp9-world-partial-red.xml. Validation now requires exact external rank/ranks and bounds, and compares complete world plus local world/shard before admission. Capture uses the true collective getter helper incrementally: raw observation is retained first, then every completed valid getter immediately, before invoking the next. expected_blocks is explicit declaration authority; only exact full ordered coverage sets capture_complete=true. The offline reader also requires expected_blocks to match the complete registry.
+
+Actual helper route adversary: the second getter raises through collective_call, while first valid NPY/raw blobs/partial metadata remain durable; no future getter or step is executed. Final controls 16 PASS .66s; both installed nodes collect .56s, no Native execution. XML /tmp/sol61-cp9-world-partial-green.xml. No change to equations, initial values, method or runtime production.
