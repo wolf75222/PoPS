@@ -1,0 +1,158 @@
+{
+  "audit_sha256": "56d62eca7baf6f7adbc7eb0c3026d89f607d767df0e13696aeeaf1d615a57866",
+  "github_ci_qualified": false,
+  "independent_receipt_sha256": "6481c3efcbcfea080b69fb5bb7c217b7c52258bc426eb2e212afe0cd6c56db07",
+  "independent_report": {
+    "CXX_objects_observed": 24,
+    "abi": {
+      "compiler": "15.3.0",
+      "dim": "2",
+      "headers": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+      "kokkos": "1",
+      "mpi": "1",
+      "mpi_abi": "a90648d3cbfdff72a77dc6db7ca9acfd1eb1076672051ef654f48e3676dcf6bc",
+      "std": "202002L",
+      "stdlib": "libstdc++_20260612"
+    },
+    "dimension": 2,
+    "doctor_green": true,
+    "header_count": 377,
+    "header_signature": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+    "installed_after": 1158,
+    "installed_before": 1157,
+    "job": "732416",
+    "merged_variants_json_joined_exact": true,
+    "native_members": [
+      "pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so"
+    ],
+    "native_scientific_qualification": false,
+    "native_sha256": "6a30996f85c8aef24ef9233fdcbd0850c7b20ed44a70b85511dd20ffc00030ed",
+    "preservation_exact": true,
+    "production_blobs": 1193,
+    "record_verified": 1154,
+    "root_approval": false,
+    "schema": "sol61.sdk26-m18-dim2-build-independent@1",
+    "scope": "build/install only; no Native tests or science qualification",
+    "shipped": 1149,
+    "source": "51b0eec9dcfd660098cc5531eed6c400185c8dad",
+    "versions_from_actual_headers": {
+      "amr": 12,
+      "native_abi": 8,
+      "uniform": 9
+    }
+  },
+  "job": "732416",
+  "native_scientific_qualification": false,
+  "replayed_pins": [
+    {
+      "bytes": 111320,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/build.log",
+      "sha256": "21ea484d7ecd17751917af1f2bb34bdebb340e3f1f300d92d6f972dcc91a7331"
+    },
+    {
+      "bytes": 40716,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/build/cp312-cp312-linux_x86_64-dim2/CMakeCache.txt",
+      "sha256": "1f82385d3d9d1a809ac8011993c69f5a46d57ece55fbb4f7d4a65639e0c653f5"
+    },
+    {
+      "bytes": 134777,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/clone-after.json",
+      "sha256": "230be132addec1de27eac260f0d5762b174fe828b803747166d03a7940130248"
+    },
+    {
+      "bytes": 134662,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/clone-before.json",
+      "sha256": "8d63494726adc3f11b83b56bead38ae3c7513b8b85e46b3f847b320d45849333"
+    },
+    {
+      "bytes": 7028,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/environment-explicit.txt",
+      "sha256": "8f404991fd96e33442d23b923d0cc5ca7f3050ce228cd5a47d7ca7e04614d3a0"
+    },
+    {
+      "bytes": 3801,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/identity/identity.json",
+      "sha256": "62a57232722602b2fb2e12f0ae7315430cd34415a3dcb35793258bf5c33d6b67"
+    },
+    {
+      "bytes": 134465,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/identity/source-files.json",
+      "sha256": "3c4e6e7d51de7ca842e40f7c93999e27be394ea0bb7f883b87e55c410c389239"
+    },
+    {
+      "bytes": 893,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/pip-list.json",
+      "sha256": "ad6d335dc37485cc72d57edd9763b3d17f7daeb2f18796519652c36a746eac34"
+    },
+    {
+      "bytes": 341600,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/preserved-after.json",
+      "sha256": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262"
+    },
+    {
+      "bytes": 341600,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/preserved-before.json",
+      "sha256": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262"
+    },
+    {
+      "bytes": 68,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/result.json",
+      "sha256": "ed27548e65d765715fab8781a5545e8ad91e533e8d066f2f0d7e6d0198cf2bca"
+    },
+    {
+      "bytes": 39,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/scope.txt",
+      "sha256": "d7d3a970854e4af1197cbfb2818f5c522c9a51cdf598d3ffe7f80b6c004e06c1"
+    },
+    {
+      "bytes": 134575,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/sdk25-original-after.json",
+      "sha256": "d1a8ba67113001e6b90a02513a0139927fea79b6f2d508156d5eb07260570c2b"
+    },
+    {
+      "bytes": 134575,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/sdk25-original-before.json",
+      "sha256": "d1a8ba67113001e6b90a02513a0139927fea79b6f2d508156d5eb07260570c2b"
+    },
+    {
+      "bytes": 141895,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/source-after.json",
+      "sha256": "7a5061203bb90b93dcf25770ea746ddcf69608d50d644abee7d06f88f858493c"
+    },
+    {
+      "bytes": 141895,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/source-before.json",
+      "sha256": "7a5061203bb90b93dcf25770ea746ddcf69608d50d644abee7d06f88f858493c"
+    },
+    {
+      "bytes": 225,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/wheel-sha256.txt",
+      "sha256": "52643fb79d88a68c0c0c06ef886cb9761d1838de05d59aa1853eee9ba99ad680"
+    },
+    {
+      "bytes": 9808135,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2-received-732416/wheels/pops-1.1.0-cp312-cp312-linux_x86_64.whl",
+      "sha256": "471e32e42cee512c5e4a9746ef86e21fdf7f4a7c4c5bc9afe632cd0687e017cd"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/dim2-merged-variants-readonly-20261003.json",
+      "sha256": "e527b5ca90d501729ac30e1de54f789b5580b4ee88c1e0ec8877034f671b5a0d"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/root-sdk26-m18-variants-export-20261003.json",
+      "sha256": "27d482436e1a0eaf6c4e73534a6ec6dfb7816f6c11bbd6e97e79385a0b2e00bf"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2.sbatch",
+      "sha256": "c4ba74465934aafc9dd85146bfaff766d0ba0304db7f84d96686ee51a9712945"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/root-sdk26-m18-dim2-build-transfer-reception-732416.json",
+      "sha256": "c7c330f3c892cd924534c835365f7da82308416033448dd15637b51f549874cb"
+    }
+  ],
+  "schema": "root.sdk26-m18-dim2-build-reception@1",
+  "scope": "Build/install reception only. No Native scientific acceptance inferred.",
+  "source_freeze": "51b0eec9dcfd660098cc5531eed6c400185c8dad",
+  "whole_mission_complete": false
+}

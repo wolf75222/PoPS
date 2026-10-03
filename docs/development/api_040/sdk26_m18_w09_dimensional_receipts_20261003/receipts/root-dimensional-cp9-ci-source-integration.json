@@ -1,0 +1,40 @@
+{
+  "actual_GitHub_CI_executed": false,
+  "actual_new_fixture_Native_executed": false,
+  "files": {
+    ".github/workflows/ci.yml": "23a2943123530bf7a9db4d34ccf05f99d61a788afd00cde0c5377f945e75c719",
+    "docs/review/sol61_dimensional_uniform_cp9_catalog.md": "b9dc4e5c1713eddbd1ca80ad75307767945a334aea221a04b21fee7f7b15701c",
+    "scripts/ci_plan.py": "5ea9f0b38ec2b62f2d869054c1cb386e0ba2278e2032299f0957b38d361b2ee6",
+    "scripts/ci_python_dimensions.py": "df3acbfd967fc5d3c34e46bbd183fe647a3b2511b25a18603f38091dd2ed04b1",
+    "tests/python/architecture/test_ci_plan.py": "c6e345a4f5efd828f659bfa7d715ea129e65714707978e7ef36f1dff462327e5",
+    "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py": "506de19a273d61c820e122841504b06228ef95d4764e624bb884a0a82b750093",
+    "tests/python/integration/runtime/test_uniform_cp9_dim2_runtime.py": "196656ddb5cec4ea54785227edabf3b5081419ca34b2a7d8b29d29cd3c722c3b",
+    "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py": "febd7e353148f0fbca3c6816de351b4b849b1747e2d0b48128556b8e9eff46f2",
+    "tests/python/native_dimensions.json": "ae8de3f8307de515acf498cbf7766ad87715588db39ed0dfd9041f3d5f121b1b",
+    "tests/python/support/dimensional_uniform_cp9_runtime.py": "06be4a66c7dd2b590b633221145da8f4d99278980095eaeeec24d4f8f9b01c22",
+    "tests/python/support/native_package_test_authority.py": "905ff1ae35349da1b76cd8839eb47d198d6d357b55af2913d8b8e4499159bab9",
+    "tests/review/test_sol61_dimensional_cp9_catalog.py": "6ba8b42085ba8f4d02353b46997c25120d6a32feac709b1ad43c0a1cf6fbad05"
+  },
+  "historical_Native_receipts_inherited": false,
+  "production_Source_reception_unchanged_at": "51b0eec9dcfd660098cc5531eed6c400185c8dad",
+  "roots": [
+    {
+      "cached": "",
+      "head": "4778814b58a578f10357951b3b995f190af15fed",
+      "root": "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002"
+    },
+    {
+      "cached": "",
+      "head": "d2129eb897b548b1a31974b45c7f2a86733f70bf",
+      "root": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS"
+    },
+    {
+      "cached": "",
+      "head": "cb974003947c61d181e848d6530222c09a07364f",
+      "root": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog"
+    }
+  ],
+  "schema": "root.dimensional-cp9-ci-source-integration@1",
+  "source_reception_sha256": "3899e73f67d373250e8a240cf7da80b669ad53b43390f78a37e00f327cdce2bd",
+  "whole_mission_complete": false
+}

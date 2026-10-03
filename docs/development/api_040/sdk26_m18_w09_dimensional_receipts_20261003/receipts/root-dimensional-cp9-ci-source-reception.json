@@ -1,0 +1,134 @@
+{
+  "actual_gitHub_CI_executed": false,
+  "actual_new_fixture_Native_executed": false,
+  "author_receipt_sha256": "a94b088ceafd139ff168aad5cc926e1a2c88cf4db5d1f545d2df8808d1f90c38",
+  "independent_audit_replayed": {
+    "GitHub_CI_executed": false,
+    "commit": "cb974003947c61d181e848d6530222c09a07364f",
+    "exact_Git_FS_changed_paths": 8,
+    "historical_Native_receipts_inherited": false,
+    "limits": "Prospective catalogue only; actual CI downloads/Native new wrappers unexecuted. Original installed-prefix route unchanged; new CI route requires exact source Python, package/native manifest/backend/header authority.",
+    "native_executed": false,
+    "partition": {
+      "1": [
+        "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py"
+      ],
+      "2": [
+        "tests/python/integration/runtime/test_uniform_cp9_dim2_runtime.py"
+      ],
+      "3": [
+        "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py"
+      ]
+    },
+    "root_seal": false,
+    "schema": "sol61.dimensional-cp9-ci-delta-independent@1",
+    "scientific_AST_unchanged_except_origin_admission": true,
+    "verdict": "Source delta favorable; prior two routing blockers closed"
+  },
+  "independent_pins_verified": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/.github/workflows/ci.yml",
+      "sha256": "23a2943123530bf7a9db4d34ccf05f99d61a788afd00cde0c5377f945e75c719"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/docs/review/sol61_dimensional_uniform_cp9_catalog.md",
+      "sha256": "b9dc4e5c1713eddbd1ca80ad75307767945a334aea221a04b21fee7f7b15701c"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/scripts/ci_plan.py",
+      "sha256": "5ea9f0b38ec2b62f2d869054c1cb386e0ba2278e2032299f0957b38d361b2ee6"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/scripts/ci_python_dimensions.py",
+      "sha256": "df3acbfd967fc5d3c34e46bbd183fe647a3b2511b25a18603f38091dd2ed04b1"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/scripts/verify_installed_native.py",
+      "sha256": "a8026696beb13a56e449088250098fa0bccba5369d82fe8cf743aa1b0f8f351a"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/scripts/write_native_variant_manifest.py",
+      "sha256": "1a7294fb90c274a003d0701746eeb9586dd3f1e9e5fb615eeb232502aa4932b6"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/tests/python/architecture/test_ci_plan.py",
+      "sha256": "c6e345a4f5efd828f659bfa7d715ea129e65714707978e7ef36f1dff462327e5"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/tests/python/conftest.py",
+      "sha256": "94c3d5214a8cfb94f78f5a64da2d03756f0bfbf816506a0d9402c2d31605be0d"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/tests/python/native_dimensions.json",
+      "sha256": "ae8de3f8307de515acf498cbf7766ad87715588db39ed0dfd9041f3d5f121b1b"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/tests/python/support/dimensional_uniform_cp9_runtime.py",
+      "sha256": "06be4a66c7dd2b590b633221145da8f4d99278980095eaeeec24d4f8f9b01c22"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/tests/python/support/native_package_test_authority.py",
+      "sha256": "905ff1ae35349da1b76cd8839eb47d198d6d357b55af2913d8b8e4499159bab9"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/tests/review/test_sol61_dimensional_cp9_catalog.py",
+      "sha256": "6ba8b42085ba8f4d02353b46997c25120d6a32feac709b1ad43c0a1cf6fbad05"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-dimensional-cp9-catalog/tests/test_manifest.toml",
+      "sha256": "ee745db93dc131fb2480b5d23528a23fc1a4cdd407d05f241cd8d7f40b36778e"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-dimensional-cp9-catalog-independent-20261003/pins.json",
+      "sha256": "7e8f1936f5682c7e24432032d75d597697fc76ca69ed69789544615d48c89776"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-dimensional-cp9-catalog-preparation-20261003/ci-correction-receipt.json",
+      "sha256": "a94b088ceafd139ff168aad5cc926e1a2c88cf4db5d1f545d2df8808d1f90c38"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-dimensional-cp9-ci-delta-independent-20261003/audit.py",
+      "sha256": "296c40dfa1d1f7d40e1674cf381f910de45b84723bc40b12202abad771cec6ba"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-dimensional-cp9-ci-delta-independent-20261003/report.json",
+      "sha256": "15206be4a7c2ebf187816f70ed5c71fad4753f842a2685fc60f4c9c166dd67cd"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-dimensional-cp9-ci-delta-independent-20261003/source.xml",
+      "sha256": "3370d15dd6a2873923346b3d5b2fef143bcca50a02373d7338fc033282f63882"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-dimensional-cp9-ci-delta-independent-20261003/test_substitution.py",
+      "sha256": "324aa32bc029071713a92df3fb60619006d0adcb882ba337caf3fec1f58b75c7"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-dimensional-cp9-ci-delta-independent-20261003/validation.json",
+      "sha256": "445a88f62d8a242e072f0133d8c3f84fc6744616ae292cd7a95bd064cc5d175f"
+    }
+  ],
+  "integrated_paths": [
+    ".github/workflows/ci.yml",
+    "docs/review/sol61_dimensional_uniform_cp9_catalog.md",
+    "scripts/ci_plan.py",
+    "scripts/ci_python_dimensions.py",
+    "tests/python/architecture/test_ci_plan.py",
+    "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py",
+    "tests/python/integration/runtime/test_uniform_cp9_dim2_runtime.py",
+    "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py",
+    "tests/python/native_dimensions.json",
+    "tests/python/support/dimensional_uniform_cp9_runtime.py",
+    "tests/python/support/native_package_test_authority.py",
+    "tests/review/test_sol61_dimensional_cp9_catalog.py"
+  ],
+  "schema": "root.dimensional-cp9-ci-source-reception@1",
+  "source_commits": [
+    "478bbd78984f8397529c2b84138023de51592677",
+    "cb974003947c61d181e848d6530222c09a07364f"
+  ],
+  "target_baselines_verified": [
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS",
+    "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002"
+  ],
+  "whole_mission_complete": false
+}
