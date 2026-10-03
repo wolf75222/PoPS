@@ -48,7 +48,8 @@ def run_groups(groups: dict[int, list[str]], packages: Path, timings: Path) -> i
         environment.update(POPS_NATIVE_DIM=str(dimension), PYTHONNOUSERSITE="1",
                            POPS_INCLUDE=str(ROOT / "include"),
                            PYTHONPATH=os.pathsep.join((str(ROOT / "scripts"), str(package))),
-                           POPS_CI_PYTEST_TIMINGS_DIR=str(receipts))
+                           POPS_CI_PYTEST_TIMINGS_DIR=str(receipts),
+                           POPS_CI_NATIVE_PACKAGE=str(package))
         environment.pop("POPS_NATIVE_VARIANTS_ROOT", None)
         verified = subprocess.run(
             [sys.executable, str(ROOT / "scripts/verify_installed_native.py"),

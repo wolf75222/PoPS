@@ -38,3 +38,44 @@ def test_real_public_two_block_case_resolves_in_each_declared_dimension(dimensio
     assert initial['wide'].shape==(3,)+(4,)*dimension
     assert resolved.initial_condition_plan.bindings
     assert dt==1/64
+
+def test_ci_build_downloads_dim3_from_the_same_build_matrix():
+    source=(ROOT/'.github/workflows/ci.yml').read_text()
+    assert 'dimension: ${{ fromJSON(needs.set-mode.outputs.python_dimensions) }}' in source
+    assert "if: steps.test-plan.outputs.dim3_count != '0'" in source
+    assert 'name: gate-python-build-kokkos-py-dim3' in source
+    assert 'path: .pops-ci/python-packages/dim3' in source
+
+@pytest.mark.parametrize('mutation',('foreign-path','changed-source','extra-source'))
+def test_ci_origin_source_authority_refuses_foreign_or_poisoned_artifacts(tmp_path,mutation):
+    from tests.python.support.native_package_test_authority import authenticate_ci_source_files
+    source=tmp_path/'python/pops';source.mkdir(parents=True);(source/'__init__.py').write_text('# genuine test source\n')
+    package=tmp_path/'.pops-ci/python-packages/dim3';(package/'pops').mkdir(parents=True)
+    (package/'pops/__init__.py').write_bytes((source/'__init__.py').read_bytes())
+    assert authenticate_ci_source_files(package,3,tmp_path)
+    if mutation=='foreign-path':package=tmp_path/'python'
+    elif mutation=='changed-source':(package/'pops/__init__.py').write_text('# poisoned\n')
+    else:(package/'pops/foreign.py').write_text('# extra\n')
+    with pytest.raises(RuntimeError):authenticate_ci_source_files(package,3,tmp_path)
+
+@pytest.mark.parametrize('header', (None,'foreign-signature'))
+def test_ci_origin_refuses_missing_or_foreign_baked_header_authority(tmp_path,monkeypatch,header):
+    # Source-only authority seam: no extension is loaded or Native fact claimed.
+    import types
+    from tests.python.support import native_package_test_authority as authority
+    import scripts.verify_installed_native as verifier
+    import pops.codegen.abi as abi
+    import pops.codegen.toolchain as toolchain
+    source=tmp_path/'python/pops';source.mkdir(parents=True);(source/'__init__.py').write_text('# source\n')
+    package=tmp_path/'.pops-ci/python-packages/dim3';(package/'pops/_native/dim3').mkdir(parents=True)
+    (package/'pops/__init__.py').write_bytes((source/'__init__.py').read_bytes())
+    extension=package/'pops/_native/dim3/SourceOnly.bin';extension.write_bytes(b'not a native extension')
+    calls=[]
+    monkeypatch.setattr(authority,'ROOT',tmp_path)
+    monkeypatch.setenv('POPS_CI_NATIVE_PACKAGE',str(package))
+    monkeypatch.setattr(verifier,'verify_installed_native',lambda **kwargs:(calls.append(kwargs) or extension))
+    monkeypatch.setattr(abi,'module_header_signature',lambda:header)
+    monkeypatch.setattr(toolchain,'pops_header_signature',lambda path:'authentic-signature')
+    with pytest.raises(RuntimeError,match='header signature'):
+        authority.authenticate_native_test_package(types.SimpleNamespace(__file__=str(package/'pops/__init__.py')),object(),3)
+    assert calls[0]['expect_dimension']==3 and calls[0]['expect_mpi'] is False

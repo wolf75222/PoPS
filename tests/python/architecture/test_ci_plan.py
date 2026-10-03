@@ -154,7 +154,7 @@ def test_unknown_change_in_a_mixed_pr_keeps_full_required_coverage(plans):
         "cpp_required", "python_required", "architecture_required", "mpi_required", "openmp_required"))
     assert plan["outputs"]["cpp_matrix"] == list(range(planner.CPP_SHARDS))
     assert plan["outputs"]["python_matrix"] == list(range(planner.PYTHON_SHARDS))
-    assert plan["outputs"]["python_dimensions"] == [1, 2]
+    assert plan["outputs"]["python_dimensions"] == [1, 2, 3]
     assert any("unmapped-path" in reason for reason in plan["full_reasons"])
 
 

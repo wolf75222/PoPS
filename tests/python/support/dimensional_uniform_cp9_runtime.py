@@ -72,7 +72,8 @@ def run_installed_dimensional_cp9_two_states(dimension,tmp_path,record_property,
     from pops.codegen._native_mpi import native_mpi_communicator
     native=select_native_dimension(dimension);world=native.mpi_world() if native_mpi_communicator(native)=='MPI_COMM_WORLD' else None
     root=lambda:world is None or world.rank==0
-    with collective_check(world):assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    from tests.python.support.native_package_test_authority import authenticate_native_test_package
+    collective_call(world,lambda:authenticate_native_test_package(pops,native,dimension))
     profile='dimension'+str(dimension)
     case,layout,initial,dt=collective_call(world,lambda:build(dimension))
     validated=collective_call(world,lambda:pops.validate(case))

@@ -1021,6 +1021,13 @@ jobs:
           name: gate-python-build-kokkos-py-dim2
           path: .pops-ci/python-packages/dim2
 
+      - name: Download Dim3 Python module artifact
+        if: steps.test-plan.outputs.dim3_count != '0'
+        uses: actions/download-artifact@v8
+        with:
+          name: gate-python-build-kokkos-py-dim3
+          path: .pops-ci/python-packages/dim3
+
       - name: Cache ccache (Python runtime loaders)
         if: steps.test-plan.outputs.python_shard_count != '0'
         uses: actions/cache@v6
