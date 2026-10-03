@@ -15,9 +15,8 @@ def _utf8_string_cpp(text):
     return "std::string{%s, %d}" % (literal, len(payload)) if 0 in payload else literal
 
 
-def optional_unit_cpp(unit):
-    if unit is None:
-        return "std::nullopt"
+def canonical_unit_text(unit):
+    """Existing canonical bytes shared by optional and length-unaware positions."""
     if isinstance(unit, Mapping):
         raw = dict(unit)
         unit = PhysicalDimension.from_data(raw)
@@ -29,4 +28,18 @@ def optional_unit_cpp(unit):
         text = unit
     else:
         raise TypeError("native unit requires a physical dimension, named unit, or None")
-    return "std::optional<std::string>{%s}" % _utf8_string_cpp(text)
+    return text
+
+
+def unit_c_string_cpp(unit):
+    """QualifiedProviderRequirement const-char position; reject unrepresentable NUL."""
+    text = "" if unit is None else canonical_unit_text(unit)
+    if "\0" in text:
+        raise ValueError("native const-char unit cannot preserve embedded NUL; a length-aware contract is required")
+    return _utf8_string_cpp(text)
+
+
+def optional_unit_cpp(unit):
+    if unit is None:
+        return "std::nullopt"
+    return "std::optional<std::string>{%s}" % _utf8_string_cpp(canonical_unit_text(unit))

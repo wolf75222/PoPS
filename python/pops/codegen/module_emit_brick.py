@@ -356,16 +356,20 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "  inline static constexpr std::array<pops::QualifiedProviderRequirement, %d> "
         "flux_provider_requirements{{" % len(provider_rows)
     )
+    from ._native_units import unit_c_string_cpp
+
     for row in provider_rows:
         key, contract, provider = row["key"], row["contract"], row["provider"]
         values = [
             key["owner_qid"], key["space_kind"], key["space_name"], key["component"],
-            contract["representation"], contract["centering"], contract["unit"] or "",
+            contract["representation"], contract["centering"],
             contract["layout"], contract["value_kind"] or "", provider["producer"] or "",
         ]
         availability = "true" if provider["availability"] else "false"
         S.append("    {%s, %s, %d}," %
-                 (", ".join(json.dumps(value) for value in values),
+                 (", ".join([*(json.dumps(value) for value in values[:6]),
+                              unit_c_string_cpp(contract["unit"]),
+                              *(json.dumps(value) for value in values[6:])]),
                   availability, (row["consumer_slot"] if native_slots is None
                                  else native_slots[row["consumer_slot"]])))
     S.append("  }};")
