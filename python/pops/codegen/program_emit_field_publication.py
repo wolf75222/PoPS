@@ -49,8 +49,12 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
                 canonical_bytes(_json_ready(observed.attrs["field_unknown"])):
             raise ValueError("field publication differs from its resolved output observation")
         key_cpp = "{%s}" % ", ".join(json.dumps(part) for part in key.to_data().values())
-        if source.attrs.get("contract") == "mapped-consumed-output@1" and canonical_bytes(_json_ready(claim.get("mapped_output"))) != canonical_bytes(_json_ready({name: source.attrs[name] for name in ("invocation", "physical_map", "source_port", "target_port", "source_point", "target_point")})):
-            raise ValueError("mapped Field publication differs from its resolved map authority")
+        if source.attrs.get("contract") == "mapped-consumed-output@1":
+            actual = canonical_bytes(_json_ready({name: source.attrs[name] for name in
+                ("invocation", "physical_map", "source_port", "target_port", "source_point", "target_point")}))
+            occurrences = claim.get("mapped_occurrences", (claim.get("mapped_output"),))
+            if sum(canonical_bytes(_json_ready(item)) == actual for item in occurrences) != 1:
+                raise ValueError("mapped Field publication differs from its resolved map authority")
         rows.append("{%s, %s, &%s, %d}" % (
             key_cpp, json.dumps(provider_identity(claim)), var[source.id], row["source_component"]))
     from .program_emit_ops import _required_block_index
