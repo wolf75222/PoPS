@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import numpy as np
 import pops
+from pops._generated_release_contract import NATIVE_ABI_VERSION
 import pytest
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
 from tests.python.support.integral_state_receipts import collective_directory
@@ -57,7 +58,7 @@ def test_rank_local_mapped_dto_refusals_preserve_accepted_storage(
         assert int(world.size) == 2
         assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
         caps = native.module_capabilities("production")
-        assert caps["abi_version"] == 9 and caps["mapped_consumed_field_output"] is True
+        assert caps["abi_version"] == NATIVE_ABI_VERSION and caps["mapped_consumed_field_output"] is True
     directory = collective_directory(world, tmp_path / "mapped-binding-refusal")
     collective_call(world, lambda: directory.mkdir(exist_ok=True))
     providers = directory / "providers"

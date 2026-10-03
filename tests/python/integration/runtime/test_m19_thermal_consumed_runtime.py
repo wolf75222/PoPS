@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import numpy as np
 import pops
+from pops._generated_release_contract import NATIVE_ABI_VERSION
 import pytest
 from tests.python.support.m19_thermal_consumed_case import build, reference, NAMES
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
@@ -35,7 +36,7 @@ def test_installed_thermal_consumed_field_two_destinations(tmp_path,record_prope
     with collective_check(world):
         assert Path(pops.__file__).resolve().is_relative_to(Path(__import__('sys').prefix).resolve())
         assert Path(native.__file__).resolve().is_file()
-        assert native.module_capabilities('production')['abi_version']==9
+        assert native.module_capabilities('production')['abi_version']==NATIVE_ABI_VERSION
         assert native.module_capabilities('production')['mapped_consumed_field_output'] is True
     provider_directory=directory/'providers'
     collective_call(world,lambda:provider_directory.mkdir(exist_ok=True))
