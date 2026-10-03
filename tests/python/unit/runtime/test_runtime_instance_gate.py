@@ -612,7 +612,7 @@ def test_checkpoint_budget_uses_authenticated_artifact_block_metadata():
     assert components == {"ions": 1, "electrons": 1}
 
 
-def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_authority():
+def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_authority(monkeypatch):
     from pops.runtime._checkpoint_resource_budget import _common_budget
     from pops.runtime._continuation_transitions import ContinuationTransitionPlan
     from pops._platform_contracts import ExecutionContext, ExecutionResource, proven_serial_manifest
@@ -672,13 +672,23 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
                 ]
             }
 
+    # Exact phase-record class with explicitly metadata-only compiled components.
+    from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
+    # Supply only the Source PlatformManifest boundary; never register a fake _pops.
+    platform = proven_serial_manifest(
+        backend="production", target="system", abi="test|c++|c++23", runtime=True)
+    monkeypatch.setattr("pops.codegen._compiled_artifact._common_platform_manifest",
+                        lambda **_kwargs: platform)
+    artifact = artifact_fixture(block_names=("fluid",))
+    artifact = CompiledSimulationArtifact(
+        replace(artifact.plan, continuation_transitions=continuation),
+        artifact.program, artifact.blocks, artifact.layout_programs,
+        artifact.component_artifacts,
+    )
+    artifact.verify()
     install_plan = SimpleNamespace(
-        artifact=SimpleNamespace(
-            artifact_identity=SimpleNamespace(token="artifact"),
-            plan=SimpleNamespace(consumer_graph=None, continuation_transitions=continuation,
-                                 field_plans={}, blocks=(), verify=lambda: None),
-        ),
-        bind_identity=SimpleNamespace(token="bind"),
+        artifact=artifact,
+        bind_identity=make_identity("bind", {"fixture": "cache-budget"}),
     )
 
     execution_context = ExecutionContext(
@@ -708,6 +718,8 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
             program=program,
             block_nvars_by_name={"fluid": 1},
             field_names=(),
+            # Metadata-only full-storage authority, independent of lazy cache inventory.
+            state_carriers_bytes=4096,
         )
 
     no_cache = budget(SimpleNamespace(_s=Native()), Program(cache_required=False))
@@ -2752,6 +2764,7 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         hierarchy_mode,
         hierarchy_identity,
         phase_prefix,
+        state_storage,
         prepare_outer_state,
         after_native_apply,
         rollback_after_native_apply,
@@ -2761,6 +2774,7 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         assert bit_identical is True
         assert hierarchy_mode == "restore_recorded_hierarchy"
         assert hierarchy_identity is None
+        assert state_storage == "full"
         assert phase_prefix == "native restart"
         assert callable(prepare_outer_state)
         assert callable(after_native_apply)
@@ -2774,13 +2788,18 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
     class _Native:
         def __init__(self):
             self._last_run_manifest = None
-            self._last_run_identity = None
-            self._restart_lineage_identity = None
+            self._last_run_identity = source_run_identity
+            self._restart_lineage_identity = source_run_identity
 
-        @staticmethod
-        def _restore_checkpoint_run_identity(identity):
+        def _restore_checkpoint_run_identity(self, identity):
+            self._last_run_manifest = None
+            self._last_run_identity = identity
+            self._restart_lineage_identity = identity
             assert identity == source_run_identity
             events.append("run")
+
+    # Metadata-only Native restore boundary; real cursor/owner protocol.
+    from pops.runtime._consumer_transaction import ConsumerCursorAuthority
 
     native = _Native()
     from pops.runtime._checkpoint_resource_budget import _producer_checkpoint_resource_budget
@@ -2809,9 +2828,11 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         _executor=native,
         _snapshot_builder=_SnapshotBuilder(),
         _publisher=_Publisher(),
-        _consumer_cursors=None,
+        _consumer_cursors=ConsumerCursorSet(),
         _checkpoint_resource_budget=resource_budget,
     )
+
+    owner._consumer_cursor_authority = ConsumerCursorAuthority(owner._consumer_cursors)
 
     assert (
         RuntimeInstance._restore_checkpoint(
@@ -2822,6 +2843,9 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         )
         == "restored"
     )
+    assert native._last_run_identity == source_run_identity
+    assert native._restart_lineage_identity.domain == "run"
+    assert native._restart_lineage_identity != source_run_identity
     assert owner._consumer_cursors is cursors
     assert events == ["native", "geometry", "diagnostics", "run"]
 
@@ -3126,15 +3150,17 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
     class _Native:
         def __init__(self):
             self._last_run_manifest = None
-            self._last_run_identity = None
-            self._restart_lineage_identity = None
+            self._last_run_identity = source_run_identity
+            self._restart_lineage_identity = source_run_identity
 
         @staticmethod
         def last_restart_regrid_receipt():
             return receipt
 
-        @staticmethod
-        def _restore_checkpoint_run_identity(identity):
+        def _restore_checkpoint_run_identity(self, identity):
+            self._last_run_manifest = None
+            self._last_run_identity = identity
+            self._restart_lineage_identity = identity
             published.append(identity)
             events.append("run")
 
@@ -3147,6 +3173,7 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         hierarchy_mode,
         hierarchy_identity,
         phase_prefix,
+        state_storage,
         prepare_outer_state,
         after_native_apply,
         rollback_after_native_apply,
@@ -3155,6 +3182,7 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         assert payload == b"checkpoint" and bit_identical is False
         assert hierarchy_mode == "regrid_on_restart"
         assert hierarchy_identity == hierarchy.identity.token
+        assert state_storage == "full"
         assert phase_prefix == "native restart"
         assert callable(prepare_outer_state)
         assert callable(after_native_apply)
@@ -3164,6 +3192,9 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         result = _AMRRegridRestartEvidence(restart_identity, receipt)
         after_native_apply(result)
         return result
+
+    # Metadata-only Native restore boundary; real cursor/owner protocol.
+    from pops.runtime._consumer_transaction import ConsumerCursorAuthority
 
     native = _Native()
     from pops.runtime._checkpoint_resource_budget import _producer_checkpoint_resource_budget
@@ -3177,7 +3208,7 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         _executor=native,
         _snapshot_builder=_SnapshotBuilder(),
         _publisher=_Publisher(),
-        _consumer_cursors=None,
+        _consumer_cursors=ConsumerCursorSet(),
         _checkpoint_resource_budget=resource_budget,
     )
     monkeypatch.setattr(
@@ -3196,6 +3227,8 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         "pops.runtime._checkpoint_manifest.checkpoint_run_identity",
         lambda _payload: source_run_identity,
     )
+
+    runtime._consumer_cursor_authority = ConsumerCursorAuthority(runtime._consumer_cursors)
 
     assert (
         RuntimeInstance._restore_checkpoint(
@@ -3233,6 +3266,9 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         },
     )
     assert published[0] == expected
+    assert native._last_run_identity == expected
+    assert native._restart_lineage_identity.domain == "run"
+    assert native._restart_lineage_identity != expected
 
 
 def test_checkpoint_restart_authenticates_and_restores_consumer_cursors(tmp_path):

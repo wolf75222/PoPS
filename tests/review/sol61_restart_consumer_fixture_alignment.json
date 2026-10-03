@@ -1,0 +1,17 @@
+{
+  "schema": "pops.restart-consumer-fixture-alignment-source@1",
+  "parent": "f977d0fb35967ef7babe09e9013c6f817b9d6d6b",
+  "scope": "SOURCE_ONLY",
+  "baseline_failed": 3,
+  "coherent_passed": 23,
+  "skipped": 0,
+  "excluded": 0,
+  "proofs": {
+    "/Users/romaindespoulain/dev/tmp/sol61-restart-consumers-baseline-red.xml": "269132a52722607392fbd54e9da9cdf58ceae2985e36f537927695e2cea7c112",
+    "/Users/romaindespoulain/dev/tmp/sol61-restart-consumers-baseline-red.log": "9f8b6518c5ad0810b2c766eea66fe6234ddcb463fc2407fdc113d06a0fb854af",
+    "/Users/romaindespoulain/dev/tmp/sol61-restart-consumers-coherent.xml": "fd1b7425e606df86f8514fa15d72537cfffb2b4218c68d3bb76e7d3dd08ea459"
+  },
+  "production_changes": false,
+  "native_qualification": false,
+  "root_approval": false
+}
