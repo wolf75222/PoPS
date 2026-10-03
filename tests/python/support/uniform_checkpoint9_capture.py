@@ -58,12 +58,13 @@ def validate_phase(observation,clock,values,*,rank,ranks):
     from tests.review.sol61_amr_full_carrier_offline import decode
     if type(rank) is not int or type(ranks) is not int or ranks<1 or not 0<=rank<ranks:raise ValueError('external world authority differs')
     image=decode(np.frombuffer(observation.complete,dtype=np.uint8).copy())
-    if image['shard']!=-1 or image['levels']!=1 or image['real']!=64 or image['dim']!=observation.dimension or image['blocks']!=list(values):raise ValueError('complete phase authority differs')
+    if image['shard']!=-1 or image['levels']!=1 or image['real']!=64 or image['dim']!=observation.dimension or len(set(image['blocks']))!=len(image['blocks']) or set(image['blocks'])!=set(values):raise ValueError('complete phase authority differs')
     local=decode(np.frombuffer(observation.rank_local,dtype=np.uint8).copy())
     if image['ranks']!=ranks or local['ranks']!=ranks or local['shard']!=rank:raise ValueError('external world/shard authority differs')
     if tuple(local[k] for k in ('dim','real','ranks','levels','blocks'))!=tuple(image[k] for k in ('dim','real','ranks','levels','blocks')) or local['patches']!=[p for p in image['patches'] if p['owner'] in (-1,local['shard'])]:raise ValueError('local/complete grown bits differ')
     if (observation.time,observation.macro_step)!=tuple(clock):raise ValueError('observation/runtime clock differs')
-    for index,(name,value) in enumerate(values.items()):
+    for name,value in values.items():
+        index=image['blocks'].index(name)
         if type(value) is not np.ndarray or value.dtype!=np.float64:raise ValueError('valid dtype differs')
         covered=np.zeros(value.shape[1:],dtype=np.uint8)
         for row in image['patches']:
