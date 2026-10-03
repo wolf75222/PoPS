@@ -142,7 +142,23 @@ def test_real_public_source_ir_and_narrow_countermodels_preserve_three_unknowns(
 
 
 def test_current_three_distinct_version_contracts_are_not_legacy_package_abi_six():
-    assert "inline constexpr int kAbiVersion = 5;" in (ROOT/"include/pops/runtime/module_capabilities.hpp").read_text()
+    from pops._generated_release_contract import (
+        NATIVE_ABI_VERSION, UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+        AMR_CHECKPOINT_PAYLOAD_VERSION,
+    )
+    assert (NATIVE_ABI_VERSION, UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+            AMR_CHECKPOINT_PAYLOAD_VERSION) == (8, 9, 12)
+    assert ("inline constexpr int kAbiVersion = %d;" % NATIVE_ABI_VERSION) in (
+        ROOT/"include/pops/runtime/module_capabilities.hpp").read_text()
+    release = (ROOT/"include/pops/runtime/config/generated_release_contract.hpp").read_text()
+    for symbol, version in (
+        ("kReleaseNativeAbiVersion", NATIVE_ABI_VERSION),
+        ("kUniformCheckpointPayloadVersion", UNIFORM_CHECKPOINT_PAYLOAD_VERSION),
+        ("kAmrCheckpointPayloadVersion", AMR_CHECKPOINT_PAYLOAD_VERSION),
+    ):
+        assert "inline constexpr int %s = %d;" % (symbol, version) in release
+    # The package callback ABI is a separate contract from module vocabulary
+    # and the two checkpoint payload versions. Historical readers remain frozen.
     assert "inline constexpr int kNativeSystemPackageAbiVersion = 7;" in (
         ROOT/"include/pops/runtime/system/native_package_capability.hpp").read_text()
     assert "NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 7" in (ROOT/"python/pops/codegen/_compile_emit.py").read_text()
