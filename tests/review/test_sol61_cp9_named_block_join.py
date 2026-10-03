@@ -44,3 +44,8 @@ def test_reader_joins_npy_capture_index_to_actual_native_index():
     for names in (['early_transport'],['early_transport','foreign'],['early_transport','early_transport']):
         with pytest.raises(ValueError):valid_block_join(meta,{'blocks':names},expected)
     with pytest.raises(ValueError):valid_block_join({'blocks':list(reversed(expected)),'expected_blocks':list(expected)},{'blocks':list(expected)},expected)
+
+@pytest.mark.parametrize('expected',[{}, {'':2}, {True:2}, {'q':True}, {'q':0}, {'q':2.0}])
+def test_reader_requires_exact_nonempty_named_component_authority(expected):
+    names=list(expected)
+    with pytest.raises(ValueError):valid_block_join({'blocks':names,'expected_blocks':names},{'blocks':names},expected)

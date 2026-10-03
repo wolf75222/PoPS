@@ -17,7 +17,9 @@ def strict_json(path):
 
 def valid_block_join(meta,image,expected):
     """NPY indices follow declared capture order; carrier indices follow native registry."""
+    require(type(expected) is dict and bool(expected) and all(type(name) is str and bool(name) and type(count) is int and count>0 for name,count in expected.items()),'expected block authority differs')
     names=image['blocks']
+    require(type(names) is list and bool(names) and all(type(name) is str and bool(name) for name in names),'native block authority differs')
     require(len(set(names))==len(names) and set(names)==set(expected),'authored partition differs')
     require(meta['blocks']==list(expected) and meta['expected_blocks']==list(expected),'valid block authority differs')
     return tuple((saved_index,names.index(name),name) for saved_index,name in enumerate(expected))
