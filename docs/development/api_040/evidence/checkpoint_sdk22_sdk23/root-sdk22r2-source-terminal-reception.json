@@ -1,0 +1,36 @@
+{
+  "ci_qualified": false,
+  "errors": 0,
+  "events": 1656,
+  "excluded_native_loader": 17,
+  "excluded_publication_mock": 1,
+  "failed": 0,
+  "independent_pins": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22r2-source-cohort-independent-received-20261003/pins.json",
+    "sha256": "4820b486af10d2e8324a8583d0b876cf4e3fb2aee124589fc2eb9215d592209d",
+    "verified": 20
+  },
+  "independent_reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22r2-source-cohort-independent-received-20261003/receive.py",
+    "sha256": "936f62b86b62b8471486557a5c9b3b07e11b7fb63d1c1bf5a2650f58baaca3fa"
+  },
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22r2-source-cohort-independent-received-20261003/report.json",
+    "sha256": "4a2a285e64735f53c6a74441964948caf9f1bd13f98bfb7d8ea014cdd2ed03a8"
+  },
+  "limits": [
+    "Source/host regression only; actual Native CP9 732229 remains FAILED before any physical step",
+    "Source before/after authority pinned to7bb; no new modified Source requalification implied"
+  ],
+  "native_qualified": false,
+  "passed": 552,
+  "production_git_blobs_verified": 1241,
+  "root_recomputed_report_equal": true,
+  "schema": "root.sdk22r2-source-terminal-reception@1",
+  "selected_unique": 552,
+  "skips": 0,
+  "source_files": 71,
+  "source_freeze": "7bbeb375df24d22d08f91e9f009ffe05812ec9ef",
+  "source_native_extensions": 0,
+  "whole_mission_complete": false
+}

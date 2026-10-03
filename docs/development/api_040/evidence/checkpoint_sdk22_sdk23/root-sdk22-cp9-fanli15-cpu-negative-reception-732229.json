@@ -1,0 +1,27 @@
+{
+  "actual_initial_carriers_only_partial": true,
+  "checkpoint_received_positive": false,
+  "ci_qualified": false,
+  "failure": "fixture serializes public time/macro_step methods instead of calling them",
+  "genuine_model_program_compile_before_bind": true,
+  "independent_reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-cp9-fanli-envelope-independent-20261003/audit.py",
+    "sha256": "c8b5e95fb964ab35e0825844e73ee356f8d05385f6396292f46888667bb84399"
+  },
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-cp9-fanli-envelope-independent-20261003/negative-report.json",
+    "sha256": "888fe319c6224ec930c1ca126c903ab1951dc3dba154a71653c209ebd1bb664b"
+  },
+  "job": 732229,
+  "native_scientific_acceptance": false,
+  "physical_steps_received": 0,
+  "regular_files_rehashed": 47,
+  "restart_received_positive": false,
+  "reviewer_attribution": "CP9 production author, nonauthor capture reviewer; pure actual envelope negative, no production requalification",
+  "root_recomputed_report_equal": true,
+  "schema": "root.sdk22-cp9-fanli15-cpu-negative-reception@1",
+  "source_freeze": "7bbeb375df24d22d08f91e9f009ffe05812ec9ef",
+  "symlink_entries_verified": 1,
+  "terminal": "FAILED1:0",
+  "whole_mission_complete": false
+}

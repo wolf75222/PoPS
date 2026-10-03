@@ -1,0 +1,77 @@
+{
+  "causal_failure": "first replay step cannot reopen previously closed semantic run identity",
+  "checkpoint_reloaded_full_state_and_clock_exact": true,
+  "ci_qualified": false,
+  "independent_artifacts_rewritten": false,
+  "independent_pins": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk23-cp9-negative-independent-732282/pins.json",
+    "sha256": "acda7a1da1c0e128e9046f2110432edda7491ae0285e8dfb8088cdee496fe4f2",
+    "verified": 5
+  },
+  "independent_reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk23-cp9-negative-independent-732282/receive.py",
+    "sha256": "25dcb2351ef26b221e944b7685581c989dd450fb4e0bd5a57e8069c3fe9a2a21"
+  },
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk23-cp9-negative-independent-732282/report.json",
+    "sha256": "232454ce50904520085f5225dde462bec6f1250fb98d162de8fb84de4508b666"
+  },
+  "job": 732282,
+  "limits": [
+    "eight pre-failure accepted steps have no new independent math reception",
+    "replay5 post-failure diagnostic capture is not an accepted replay step",
+    "no completed restart/replay case, MPI2, Field/history fullgrown, Ghost formula, AMR or GPU reception"
+  ],
+  "observed": {
+    "amr_qualified": false,
+    "ci_qualified": false,
+    "cp9_reload_full_storage_equal": true,
+    "gpu_qualified": false,
+    "job": 732282,
+    "math_qualified": false,
+    "native_positive": false,
+    "native_sha256": "504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd",
+    "observed_pre_failure_steps": 8,
+    "postfailure_labels": [
+      "replay5"
+    ],
+    "refusal_storage_equal": true,
+    "replay5_qualified": false,
+    "root_approval": false,
+    "saved_phases_verified": [
+      "accepted1",
+      "accepted2",
+      "accepted3",
+      "accepted4",
+      "after-legacy8",
+      "after-projection-contradiction",
+      "after-truncated-carrier",
+      "before-legacy8",
+      "before-projection-contradiction",
+      "before-truncated-carrier",
+      "continuous5",
+      "continuous6",
+      "continuous7",
+      "continuous8",
+      "full-restored-after-legacy",
+      "initial",
+      "legacy-valid-only-restored",
+      "reloaded",
+      "replay5"
+    ],
+    "schema": "sol61.sdk23-cp9-negative-reception@1",
+    "source": "12320d97c060246c35f4a9b2a36b6f53798795ab",
+    "transport_regular_rehashed": 174
+  },
+  "production_build_freeze": "12320d97c060246c35f4a9b2a36b6f53798795ab",
+  "root_build_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk23-build-reception-732279.json",
+    "sha256": "f29ffd69854f788257bd59004bdd74bea0170c5ac6fa1c58001bf4c52bed17f4"
+  },
+  "root_recomputed_report_equal": true,
+  "schema": "root.sdk23-cp9-fanli-cpu-negative-reception@1",
+  "scientific_acceptance": false,
+  "terminal": "FAILED 1:0",
+  "whole_cp9_restart_replay_received": false,
+  "whole_mission_complete": false
+}

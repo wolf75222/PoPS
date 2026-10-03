@@ -1,0 +1,59 @@
+{
+  "changed_test_and_cpp_files_main_native_bytes_verified": {
+    "src/runtime/system/system.cpp": "ef16aa212d5971b0bf82183f691017bf969d2ce2a0b6d9f8ce73774a05c74e35",
+    "tests/python/integration/runtime/test_public_evolved_stage_amr_v3.py": "8e0d66e7af45b68b6fe479d4309befaf015df85e95725f32c382e032e53ffe1c",
+    "tests/python/integration/runtime/test_uniform_state_carrier_checkpoint_runtime.py": "b2cd09a48906c95d8ee60bd8992a721b68b01cc751291ca7c8533b58114f8916",
+    "tests/python/support/evolved_stage_v_capture.py": "e5901fa4d60196babded6ba39074322ad88b54c56570c6584ed155e3f88e042d",
+    "tests/python/support/uniform_checkpoint9_capture.py": "fb3e1773bac5f2563d0f6e203ca00111b1aedf353e0979142f318339fc81ae56",
+    "tests/python/unit/codegen/test_checkpoint_migration.py": "27b59e80582448265f4b2ae63bcdccef531ef4ba72a5b64e084eeb3a02307c5d",
+    "tests/review/sol61_release_catalog_baseline3302_authority.json": "a07585484b119f80f19af1280431874d465533060449f3ab2d5a443e21683183",
+    "tests/review/sol61_uniform_checkpoint9_offline.py": "5755f3a6b4630f618b7b744f131f0bc3313d65102f9cce0e01ab5c21a00e98ee",
+    "tests/review/sol61_uniform_checkpoint9_release_authority.json": "affb18bbece3b8049cac3888acb292b5bf317dcab142689e5721b6b36e8b1d91",
+    "tests/review/sol61_uniform_checkpoint9_source_preparation.json": "ba47de041bd378ce5382e20ec59009618901af0432cb958649d69c60ffa8eee3",
+    "tests/review/sol61_v3_component_manifest_consumer_fix.md": "4f4304d60746ed8215e4adc96ff499ec117f41b019a323cdb5132a3f69b3968e",
+    "tests/review/test_sol61_checkpoint9_capture_independent.py": "175da017ecff726b4929baa1fe763f24704b99d1113cb02577547cc8e6377a01",
+    "tests/review/test_sol61_component_manifest_independent.py": "2ecc5d0c31cd5161eb1b817c486c4be8947f9636ea36bd8fa5e766b053c1dec0",
+    "tests/review/test_sol61_component_manifest_route.py": "648278a9081731b9cd912a2b1ba8901ecb98536fc3a7bb1ef9fa973e963469a4",
+    "tests/review/test_sol61_cp9_capacity_independent.py": "e8feba3aecfb451af00baadc7aa2acb486d567e4aeeeb2447befd7162f89a874",
+    "tests/review/test_sol61_cp9_capture_nonauthor.py": "0d98767b0c67148790e35da11f3b3ee84a66f76703ca2f38946919072af2ffee",
+    "tests/review/test_sol61_state_carriers_resource_capacity.py": "497007d54fa9d33bf6132b7156db9d831eb6649d49af68867c7eb59843af28ec",
+    "tests/review/test_sol61_uniform_capacity_actual_layout.py": "f61e7ba7844e7e4c967146b3e428a281dacfad081a145af79904ee7e4e3e0584",
+    "tests/review/test_sol61_uniform_carrier_restore_host.py": "3a5c640e2b2020a85287c372493d3ae1288187951d682bd540ca7b68f6f78d1f",
+    "tests/review/test_sol61_uniform_checkpoint9_independent.py": "54efd4abd7e59235b1f817492b790943e98462b6a009036668f95f0059204eaa",
+    "tests/review/test_sol61_uniform_checkpoint9_preparation.py": "e7bb96452e622a75a0b08c098d73bb54c70a18fb8291f10ab4e7afa1b229e9ee",
+    "tests/review/test_sol61_uniform_storage_observation_host.py": "62387cae9c9b008e08bb8f650107a4e93c1ca3cbbba95a766a55825ead82dc01",
+    "tests/review/test_sol61_v3_capture_preparation.py": "61ea87a86ec3610b708161b55d94d6a87291f232b50b1640836d97a3d5be1d9b",
+    "tests/review/test_sol61_v3_initial_authority_independent.py": "9288a6d470adb7c71cbc5000acb00ebf73876e626a79f0e1e4a21548aea1b85c"
+  },
+  "ci_qualified": false,
+  "consumer_review": {
+    "attribution": "Manifest production author independently reviewed Banach consumer assertions; earlier production nonauthor review remains separate",
+    "passed": 41,
+    "receipt": "/Users/romaindespoulain/dev/tmp/sol61-v3-manifest-consumer-independent-20261003/receipt.json",
+    "sha256": "4587d301f50c9c2d4035acc63c0e4bac0bc21d2bf96e18d1e31ecd1cd6e06c92"
+  },
+  "cpp_author_review": {
+    "passed": 12,
+    "receipt": "/Users/romaindespoulain/dev/tmp/sol61-cp9-layout-api-fix-20261003/receipt.json",
+    "sha256": "c27d6f7bca973bb3d47a5530a76786f8a63013442bf09a5e57a38dea21999082"
+  },
+  "cpp_nonauthor_review": {
+    "passed": 6,
+    "sha256": "ad9a7c7d5ee5df58301a18cfb57c6a5ff99cecff81f47f678231ef47d149b921",
+    "xml": "/tmp/sol61-cp9-layout-independent-green.xml"
+  },
+  "historical_pure_reader_helpers_unchanged": {
+    "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/review/sol61_amr_full_carrier_offline.py": "c5148a74fb067087f4c157c38d5a763e85169089c988b8a302c1d93720ad5e9d",
+    "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/review/sol61_evolved_stage_amr_saved_reception.py": "737c612cc3ba45f8490e22b40bcf2fedc7dd36fcda111e8929658b58c2ccfe6f",
+    "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/review/sol61_evolved_stage_amr_saved_reception_v2.py": "daca8f4d42d720040cd5363ac39e882e492129bccad44fbefb2ec72added6468",
+    "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/review/sol61_evolved_stage_amr_saved_reception_v3.py": "7c68df827727b4a53aad2934bde362505a8fb812a9fb7f64b795f699fb32ffea",
+    "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/review/sol61_integral_feedback_offline_oracle.py": "21041d64af5378a35b5a8717cc0300b6a399d95cc2c9209e66d66e5e2ed54f89"
+  },
+  "main_head": "7b6d73695e5589b54d01980f8ff99cf925f9af2f",
+  "main_production_and_changed_tests_git_equivalent": true,
+  "native_qualified": false,
+  "schema": "root.sdk22r2-corrected-source-integration@1",
+  "sole_production_change_since99c": "src/runtime/system/system.cpp BoxArray indexed capacity",
+  "source_freeze": "7bbeb375df24d22d08f91e9f009ffe05812ec9ef",
+  "whole_mission_complete": false
+}

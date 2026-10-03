@@ -1,0 +1,23 @@
+{
+  "actual_sdk21_native_sha256": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+  "historical_negative22pins_unchanged": true,
+  "independent_reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-postfailure-installed-supplement-independent-732222/receive.py",
+    "sha256": "b0a4aec95a512f95cc1a9f493645322abd9e28e76af006b71cdb6fd43bf34886"
+  },
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-postfailure-installed-supplement-independent-732222/report.json",
+    "sha256": "3556919647c3a033adc23ede64c609730e771f4b13f65afb37e49416a196ee27"
+  },
+  "installed_sdk21_files": 1156,
+  "limits": [
+    "Snapshot authenticates installed payload only; it does not itself encode a source Git epoch or a new Native SDK22 build.",
+    "ROOT supplied postfailure collection context; old negative archive remains unchanged."
+  ],
+  "native22_scientific_acceptance": false,
+  "new_sdk22_installed": false,
+  "pins_verified": 7,
+  "root_recomputed_report_equal": true,
+  "schema": "root.sdk22-postfailure-installed-supplement-reception@1",
+  "snapshot_byte_exact_to_before": true
+}

@@ -1,0 +1,65 @@
+{
+  "causal_failure": "strict Uniform archive member allowlist omits state_carriers_checkpoint9; JUnit later asserts the specific contradiction refusal",
+  "checkpoint_file_observed": true,
+  "checkpoint_restart_received_positive": false,
+  "ci_qualified": false,
+  "independent_reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-cp9-clockfix-negative-independent-732268/receive.py",
+    "sha256": "f5a5c7a4a11add7b20114a1949ca1ab6199c9a8ecf61340ea6b8c7c77dc2e227"
+  },
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-cp9-clockfix-negative-independent-732268/report.json",
+    "sha256": "1fa687257db262fc597e886a7df90cc4cd4031e7f9e8a85b6fa7622811f13bfa"
+  },
+  "job": 732268,
+  "limits": [
+    "Four observed physical accepted steps and durable CP9 file do not qualify restart or eight-step trajectory",
+    "No pure math oracle was run on this partial negative cohort",
+    "Symlink transport admission relies on authenticated ROOT secure transfer; this reader confirms existence, not independent link-target equality"
+  ],
+  "observed_phases": [
+    {
+      "clock": [
+        0.0,
+        0
+      ],
+      "phase": "initial"
+    },
+    {
+      "clock": [
+        0.0001,
+        1
+      ],
+      "phase": "accepted1"
+    },
+    {
+      "clock": [
+        0.0002,
+        2
+      ],
+      "phase": "accepted2"
+    },
+    {
+      "clock": [
+        0.00030000000000000003,
+        3
+      ],
+      "phase": "accepted3"
+    },
+    {
+      "clock": [
+        0.0004,
+        4
+      ],
+      "phase": "accepted4"
+    }
+  ],
+  "production_build_freeze": "7bbeb375df24d22d08f91e9f009ffe05812ec9ef",
+  "root_recomputed_report_equal": true,
+  "schema": "root.sdk22-cp9-clockfix-cpu-negative-reception@1",
+  "scientific_acceptance": false,
+  "terminal": "FAILED1:0",
+  "test_source_freeze": "78c75abb8b20318c9c0a8d5d93a85e4ac4bdb965",
+  "verified_pins": 111,
+  "whole_mission_complete": false
+}

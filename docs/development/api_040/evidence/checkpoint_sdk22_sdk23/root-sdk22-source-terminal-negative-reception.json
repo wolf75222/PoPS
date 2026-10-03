@@ -1,0 +1,31 @@
+{
+  "ci_qualified": false,
+  "classification": "obsolete expected TypeError after component manifest fix3871; cohort remains RED",
+  "errors": 0,
+  "events": 1638,
+  "failed": 1,
+  "historical_interruption_sha256": "4b43f5536dbe741e38123310f662eb3698af438723dbd8f33680f7b8c804f45b",
+  "independent_reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-final-source-negative-independent/audit.py",
+    "sha256": "9f91dc75ad0ff7828743fd843170c7bb3a1db47f28d68dabe5a62c6ca98a0c60"
+  },
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-final-source-negative-independent/report.json",
+    "sha256": "d7632cc954bd8c2e432e38453d8b8e36f4b4eefc936c4699533e1f31bfa54ca1"
+  },
+  "native_extensions": 0,
+  "native_loader_excluded": 17,
+  "native_qualified": false,
+  "passed": 545,
+  "production_git_blobs_verified": 1241,
+  "publication_mock_excluded": 1,
+  "raw_pins_verified": 14,
+  "root_negative_source_reception": true,
+  "root_recomputed_report_equal": true,
+  "schema": "root.sdk22-source-terminal-negative-reception@1",
+  "selected_unique": 546,
+  "skips": 0,
+  "source_files": 69,
+  "source_freeze": "99c805690cbca380abe5d08b157aafaa1959cb3e",
+  "whole_mission_complete": false
+}
