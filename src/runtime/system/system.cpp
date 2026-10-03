@@ -397,7 +397,9 @@ std::uint64_t System<Dim>::checkpoint_state_carriers_capacity() const {
       for (int axis = 0; axis < Dim; ++axis) block.ghosts[axis] = field.ghosts()[axis];
       blocks.push_back(std::move(block));
       std::uint64_t count = 0;
-      for (const auto& box : field.layout()) {
+      const auto& layout = field.layout();
+      for (std::size_t patch = 0; patch < layout.size(); ++patch) {
+        const auto& box = layout[patch];
         const auto n = static_cast<std::uint64_t>(box.numPts());
         if (n > std::numeric_limits<std::uint64_t>::max()-count)
           throw std::overflow_error("Uniform carrier cells overflow");
