@@ -218,6 +218,7 @@ def build_module_manifest(module: Any) -> ModuleManifest:
         "primitive_coordinates": {str(i): row.to_data() for i,row in enumerate(module.primitive_coordinates())},
     }
     return ModuleManifest(
+        physical_frame=None if getattr(module, "frame", None) is None else module.frame.to_dict(),
         name=module.name,
         owner_path=canonical_owner,
         state_spaces=state_spaces,

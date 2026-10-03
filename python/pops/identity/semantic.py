@@ -66,6 +66,10 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
     }
     if manifest["schema_version"] == 11:
         required.add("global_quantities")
+    if manifest["schema_version"] == 12:
+        required.add("physical_frame")
+        if "global_quantities" in manifest:
+            required.add("global_quantities")
     if set(manifest) != required:
         raise TypeError("ModuleManifest semantic projection received an unsupported schema")
 
@@ -93,7 +97,8 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
         operators.append(projected)
 
     return semantic_value({
-        **({"global_quantities_v1": manifest["global_quantities"]} if manifest["schema_version"] == 11 else {}),
+        **({"physical_frame_v1": manifest["physical_frame"]} if "physical_frame" in manifest else {}),
+        **({"global_quantities_v1": manifest["global_quantities"]} if "global_quantities" in manifest else {}),
         "owner": manifest["owner_path"],
         "spaces": {
             "state": _space_rows(manifest["state_spaces"], state=True),

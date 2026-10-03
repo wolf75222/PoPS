@@ -27,9 +27,15 @@ class Module(ModuleFreezable):
     The physics facade populates this registry; direct authoring through spaces,
     explicit parameter declarations, auxiliary fields, and operators is equivalent.
     """
-    def __init__(self, name: Any, *, owner: Any = None) -> None:
+    def __init__(self, name: Any, *, owner: Any = None, frame: Any = None) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("Module name must be a non-empty string")
+        if frame is not None:
+            from pops.domain.cartesian import CartesianDomainFrame
+            from pops.domain.rectangle import RectangleFrame
+            if type(frame) not in (CartesianDomainFrame, RectangleFrame):
+                raise TypeError("Module frame requires an exact CartesianDomainFrame")
+        self.frame = frame
         self.name = name
         candidate_owner = (OwnerPath.coerce(owner) if owner is not None
                            else OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name))
@@ -102,6 +108,11 @@ class Module(ModuleFreezable):
                     sampling: Any = "unspecified", value_shape: Any = None,
                     domain: Any = "real") -> Any:
         """Declare and return a :class:`StateSpace`."""
+        if self.frame is not None:
+            if frame == "model":
+                frame = self.frame.canonical_id
+            elif frame != self.frame.canonical_id:
+                raise ValueError("StateSpace frame differs from its declared Module frame")
         space = StateSpace(
             name, components, roles, layout, storage, representation=representation,
             centering=centering, units=units, frame=frame, clock=clock,
