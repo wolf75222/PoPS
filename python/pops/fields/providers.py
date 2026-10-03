@@ -18,11 +18,11 @@ from pops.descriptors_report import CapabilitySet, RequirementSet
 _EXTERNAL_PROVIDER_ID = "pops.fields.external-field-solver"
 _EXTERNAL_PROVIDER_VERSION = 2
 _EXTERNAL_PROVIDER_INTERFACE = "pops.prepared-field-solver-provider@1"
-_EXTERNAL_RESOLVER_ID = "pops.fields.external-field-solver.resolve@3"
-_EXTERNAL_INSTALLER_ID = "pops.fields.external-field-solver.install@3"
+_EXTERNAL_RESOLVER_ID = "pops.fields.external-field-solver.resolve@4"
+_EXTERNAL_INSTALLER_ID = "pops.fields.external-field-solver.install@4"
 _EXTERNAL_USE_POLICY_ID = "pops.fields.external-field-solver.use"
-_EXTERNAL_USE_POLICY_VERSION = 5
-_EXTERNAL_ADAPTER_ID = "pops.fields.external-field-solver.system-amr-host@3"
+_EXTERNAL_USE_POLICY_VERSION = 6
+_EXTERNAL_ADAPTER_ID = "pops.fields.external-field-solver.system-amr-native-memory@4"
 _EXTERNAL_LEVEL_LOCAL_POLICY = {
     "policy_id": "pops.field-hierarchy.level-local",
     "interface_version": 1,
@@ -38,7 +38,7 @@ _EXTERNAL_COMPOSITE_POLICY = {
 
 
 def _external_adapter_capabilities() -> dict[str, Any]:
-    """Return the exact proved adapter envelope, detached for public inspection."""
+    """Return the adapter contract; component declarations do not certify a GPU run."""
     return {
         "provider_id": _EXTERNAL_PROVIDER_ID,
         "provider_version": _EXTERNAL_PROVIDER_VERSION,
@@ -55,7 +55,10 @@ def _external_adapter_capabilities() -> dict[str, Any]:
         "hierarchy_materialization": True,
         "amr_provider_bridge": True,
         "binary_coarse_fine_coverage": True,
-        "execution": "host-serial-or-declared-mpi-hierarchy-batch",
+        "execution": "native-memory-serial-or-declared-mpi-hierarchy-batch",
+        "memory_spaces": ["host", "device", "managed"],
+        "device_precision": "float64",
+        "backend_admission": "exact-native-component-pair-target-and-runtime-context",
         "components": ["FieldTopology@2", "FieldSolver@2"],
     }
 
@@ -81,9 +84,27 @@ def _declared_execution(variants: tuple[dict[str, Any], ...]) -> dict[str, bool]
     host = [row for row in variants if row["device"] in ("cpu", "host")]
     return {
         "host": bool(host),
-        "mpi": any("mpi" in row["features"] for row in host),
+        "mpi": any("mpi" in row["features"] for row in variants),
         "gpu": any(row["device"] not in ("cpu", "host") for row in variants),
     }
+
+
+def _common_native_targets(bindings: tuple[Mapping[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+    """Intersect ranked device targets, retaining only features implemented by both roles."""
+    if len(bindings) != 2:
+        return ()
+    common = []
+    for topology in bindings[0].get("native_targets", ()):
+        for solver in bindings[1].get("native_targets", ()):
+            if (topology["dimension"], topology["device"]) == (
+                solver["dimension"], solver["device"]
+            ):
+                common.append({
+                    "dimension": topology["dimension"],
+                    "device": topology["device"],
+                    "features": sorted(set(topology["features"]) & set(solver["features"])),
+                })
+    return tuple(common)
 
 
 def _component_binding(component: Any, expected: Any, *, role: str) -> dict[str, Any]:
@@ -116,6 +137,7 @@ def _component_binding(component: Any, expected: Any, *, role: str) -> dict[str,
         "interface_version": interface.version,
         "parameters": parameters,
         "native_dimensions": sorted({row["dimension"] for row in variants}),
+        "native_targets": [dict(row) for row in variants],
         "declared_execution": _declared_execution(variants),
     }
 
@@ -155,6 +177,9 @@ class ExternalFieldSolver(Descriptor):
         if not common_dimensions:
             raise ValueError(
                 "ExternalFieldSolver components share no supported native dimension")
+        if not _common_native_targets((topology_binding, solver_binding)):
+            raise ValueError(
+                "ExternalFieldSolver components share no supported native execution target")
         if solver_binding["component_id"] == topology_binding["component_id"]:
             raise ValueError(
                 "ExternalFieldSolver requires distinct exact FieldSolver and FieldTopology "
@@ -214,17 +239,12 @@ class ExternalFieldSolver(Descriptor):
                 _EXTERNAL_LEVEL_LOCAL_POLICY["policy_id"],
                 _EXTERNAL_COMPOSITE_POLICY["policy_id"],
             ),
-            "host_execution": True,
+            "native_field_memory": True,
         })
 
     def capabilities(self) -> CapabilitySet:
         topology, solver = self.component_bindings()
-        declared = {
-            name: topology["declared_execution"][name]
-            and solver["declared_execution"][name]
-            for name in ("host", "mpi", "gpu")
-        }
-        adapter = {"host": True, "mpi": True, "gpu": False}
+        declared = _declared_execution(_common_native_targets((topology, solver)))
         provider = _external_provider_authority()
         return CapabilitySet({
             "provider": provider,
@@ -232,7 +252,7 @@ class ExternalFieldSolver(Descriptor):
             "external_field_solver_v2": True,
             "topology_provenance": True,
             "topology_contract": "cartesian_binary_coverage_hierarchy_v1",
-            "execution_adapter": "host_serial_or_declared_mpi_hierarchy_batch_v2",
+            "execution_adapter": "native_memory_serial_or_declared_mpi_hierarchy_batch_v4",
             "supports_amr": True,
             "max_levels": None,
             "refinement_ratio_policy": "hierarchy_exact_rank",
@@ -240,9 +260,9 @@ class ExternalFieldSolver(Descriptor):
                 _EXTERNAL_LEVEL_LOCAL_POLICY["policy_id"],
                 _EXTERNAL_COMPOSITE_POLICY["policy_id"],
             ),
-            "host": declared["host"] and adapter["host"],
-            "mpi": declared["mpi"] and adapter["mpi"],
-            "gpu": declared["gpu"] and adapter["gpu"],
+            "host": declared["host"],
+            "mpi": declared["mpi"],
+            "gpu": declared["gpu"],
             "component_pair_declares_mpi": declared["mpi"],
             "component_pair_declares_gpu": declared["gpu"],
         })
@@ -450,13 +470,9 @@ def _validate_external_use(use, where):
     dimension = len(cells)
     if dimension not in (1, 2, 3):
         raise ValueError("%s external field layout has no exact ranked domain" % where)
-    if len(bindings) != 2 or any(
-        not binding.get("declared_execution", {}).get("host")
-        or dimension not in tuple(binding.get("native_dimensions", ()))
-        for binding in bindings
-    ):
+    if not any(row["dimension"] == dimension for row in _common_native_targets(bindings)):
         raise ValueError(
-            "%s external field components require compatible Dim=%d float64 CPU targets"
+            "%s external field components require compatible Dim=%d float64 native targets"
             % (where, dimension)
         )
 

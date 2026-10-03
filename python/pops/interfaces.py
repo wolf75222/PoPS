@@ -23,7 +23,7 @@ _TABLE_ENTRY_POINT = "interface_table"
 _TABLE_SYMBOL = "pops_component_interface_v1"
 _NATIVE_DIMENSIONS = (1, 2, 3)
 _HOST_DEVICE = "cpu"
-_TAGGER_DEVICES = frozenset({_HOST_DEVICE, "cuda", "hip", "sycl", "openmptarget"})
+_MEMORY_CONTEXT_DEVICES = frozenset({_HOST_DEVICE, "cuda", "hip", "sycl", "openmptarget"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,8 +133,12 @@ class ComponentInterface:
         from pops.external._package_data import ComponentPackageError
 
         variants = tuple(component.component_manifest.target["variants"])
-        devices = _TAGGER_DEVICES if self.name == "tagger" and self.version >= 2 \
-            else frozenset({_HOST_DEVICE})
+        # These exact protocols carry both ExecutionContextV1 and residence-tagged field views.
+        # Other protocols retain their existing CPU envelope; build flags alone grant nothing.
+        memory_context = (self.name == "tagger" and self.version >= 2) or (
+            self.name in ("field_solver", "field_topology") and self.version == 2
+        )
+        devices = _MEMORY_CONTEXT_DEVICES if memory_context else frozenset({_HOST_DEVICE})
         supported = tuple(
             dict(row) for row in variants
             if row["dimension"] in _NATIVE_DIMENSIONS
