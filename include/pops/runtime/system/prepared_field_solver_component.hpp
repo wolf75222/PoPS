@@ -432,28 +432,39 @@ class PreparedFieldSolverComponent final {
   template <class FiniteCheck>
   SolveReport execute_bound_solve_(FiniteCheck&& active_solution_is_finite) {
     PopsSolveReportV2 native{};
+    std::optional<field_solver_component_detail::CallbackCompletion<>> completion;
+    const PopsFieldSolverApiV2* api = nullptr;
+    // Stream wrapping may allocate/throw. Every rank must admit its instance and table before
+    // any peer enters a provider callback that may itself perform MPI collectives.
+    collective_preflight_([&] {
+      completion.emplace(spec_.execution->view());
+      api = &solver_component_->table<PopsFieldSolverApiV2>(
+          POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, spec_.solver_interface_version);
+    }, "external FieldSolver callback preparation failed collectively");
     std::exception_ptr solve_error;
     try {
-      field_solver_component_detail::CallbackCompletion completion(spec_.execution->view());
       native.struct_size = sizeof(PopsSolveReportV2);
-      const auto& api = solver_component_->table<PopsFieldSolverApiV2>(
-          POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, spec_.solver_interface_version);
-      (void)component::solve_field(api, solver_state_, *solver_request_, native);
-      completion.wait();
+      (void)component::solve_field(*api, solver_state_, *solver_request_, native);
+      completion->wait();
     } catch (...) {
       solve_error = std::current_exception();
       // A callback may enqueue native work before reporting failure. Join that work before
       // the existing failure vote lets the outer transaction restore its candidate storage.
       try { Kokkos::fence(); } catch (...) {}
     }
+    // The optional lives outside the callback try. Destroy/join it before the failure vote;
+    // retaining it until function exit would permit peers to begin rollback too early.
+    completion.reset();
     if (all_reduce_max(solve_error ? 1L : 0L) != 0) {
       if (n_ranks() == 1 && solve_error)
         std::rethrow_exception(solve_error);
       throw std::runtime_error("external FieldSolver execution failed collectively");
     }
 
-    ExactContractBuilder report_contract;
-    report_contract.text("pops.runtime.external-field-solver-report")
+    std::string exact_report;
+    collective_preflight_([&] {
+      ExactContractBuilder report_contract;
+      report_contract.text("pops.runtime.external-field-solver-report")
         .scalar(std::uint32_t{1})
         .scalar(native.status)
         .scalar(native.action)
@@ -462,7 +473,8 @@ class PreparedFieldSolverComponent final {
         .scalar(native.reference_residual_norm)
         .scalar(native.residual_norm)
         .text(native.reason);
-    const std::string exact_report = std::move(report_contract).release();
+      exact_report = std::move(report_contract).release();
+    }, "external FieldSolver report preparation failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{"external-field-solver-report", std::string_view(exact_report)}}))
       throw std::runtime_error("external FieldSolver returned rank-divergent solve reports");
