@@ -146,6 +146,9 @@ struct SystemLayoutTransferSpec {
   std::array<std::int32_t, Dim> physical_source_active{};
   std::array<std::int32_t, Dim> physical_target_active{};
   std::string program_invocation;
+  // Zero preserves the State port contract. Positive width denotes an
+  // authenticated, private consumed-Field candidate, never accepted State.
+  std::int32_t mapped_field_components = 0;
 };
 
 /// Owned projection of PopsExecutionContextV1. Strings are values, never borrowed Python pointers.

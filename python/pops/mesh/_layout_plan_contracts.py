@@ -30,6 +30,7 @@ class LayoutRepresentation(Enum):
     """Versioned numerical meaning of a mapping port's stored values."""
 
     CELL_AVERAGE_V1 = "pops://representations/cell-average@1"
+    CELL_FIELD_V1 = "pops://representations/cell-field-observation@1"
 
     def to_data(self) -> dict[str, Any]:
         return {"uri": self.value}
@@ -737,21 +738,69 @@ class LayoutMappingPort:
 
     subject: Handle
     representation: LayoutRepresentation = LayoutRepresentation.CELL_AVERAGE_V1
+    observation: Any = None
+    component: str | None = None
+    declared_space: Any = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.subject, Handle) or self.subject.kind not in ("state", "field"):
             raise TypeError("LayoutMappingPort.subject must be a canonical state or field Handle")
+        if self.representation is LayoutRepresentation.CELL_FIELD_V1:
+            from pops.time.references import canonical_handle
+            if self.observation is None and self.declared_space is None:
+                from pops.fields._program_publication import _target_space
+                object.__setattr__(self, "declared_space", _target_space(self.subject))
+            object.__setattr__(self, "subject", canonical_handle(self.subject))
         handle_identity(
             self.subject, where="LayoutMappingPort.subject", kind=self.subject.kind)
         if type(self.representation) is not LayoutRepresentation:
             raise TypeError(
                 "LayoutMappingPort.representation must be an exact LayoutRepresentation")
 
+        from pops.fields.mapping import ConsumedFieldPort
+        if self.representation is LayoutRepresentation.CELL_FIELD_V1:
+            if self.subject.kind != "field":
+                raise ValueError("cell Field mapping port requires a Field authority")
+            if self.observation is not None:
+                if type(self.observation) is not ConsumedFieldPort or self.observation.to_data()["field"] != self.subject.canonical_identity() or self.component is not None:
+                    raise ValueError("cell Field source port changed its consumed observation")
+            elif type(self.component) is not str or not self.component:
+                raise ValueError("cell Field destination requires one exact declared component")
+            self.quantity_space()
+        elif self.observation is not None or self.component is not None or self.declared_space is not None:
+            raise ValueError("State mapping representation cannot carry a Field observation")
+
+    def layout_subject(self):
+        if self.representation is LayoutRepresentation.CELL_FIELD_V1 and self.observation is None:
+            if self.subject.block_ref is None:
+                raise ValueError("mapped Field input has no owning destination block")
+            return self.subject.block_ref
+        return self.subject
+
+    def quantity_space(self):
+        if self.observation is not None:
+            return self.observation.quantity_space()
+        if self.representation is LayoutRepresentation.CELL_FIELD_V1:
+            from pops.fields._program_publication import _target_space
+            from pops.model import FieldSpace
+            space = self.declared_space
+            if type(space) is not FieldSpace:
+                raise ValueError("cell Field target lost its declared physical space")
+            if self.component not in space.components:
+                raise ValueError("cell Field target component is not declared")
+            index = space.components.index(self.component)
+            return FieldSpace(space.name, components=(self.component,), units=(space.units[index],),
+                support=space.support, sampling=space.sampling, representation=space.representation,
+                centering=space.centering, frame=space.frame, clock=space.clock)
+        return getattr(self.subject, "space", None)
+
     def to_data(self) -> dict[str, Any]:
-        return {
-            "subject": self.subject.canonical_identity(),
-            "representation": self.representation.to_data(),
-        }
+        data = {"subject": self.subject.canonical_identity(), "representation": self.representation.to_data()}
+        if self.representation is LayoutRepresentation.CELL_FIELD_V1:
+            data["observation"] = None if self.observation is None else self.observation.to_data()
+            data["component"] = self.component
+            data["declared_space"] = None if self.declared_space is None else self.declared_space.to_data()
+        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -781,6 +830,8 @@ class LayoutMappingRequirement:
         if type(self.synchronization) is not LayoutSynchronization:
             raise TypeError(
                 "layout mapping synchronization must be an exact LayoutSynchronization")
+        if self.source_port.representation is LayoutRepresentation.CELL_FIELD_V1 and self.synchronization is not LayoutSynchronization.PROGRAM_POINT_V1:
+            raise ValueError("consumed Field mapping requires exact Program-point synchronization")
         from .physical_mapping import PhysicalSupportMap
         if self.operation in (LayoutMappingOperation.VELOCITY_MOMENT_V1,
                               LayoutMappingOperation.PHYSICAL_PULLBACK_V1):
@@ -946,8 +997,8 @@ class LayoutPlan:
         }
         for row in self.mappings:
             requirement = row.requirement
-            source = requirement.source_port.subject
-            target = requirement.target_port.subject
+            source = requirement.source_port.layout_subject()
+            target = requirement.target_port.layout_subject()
             if assignments.get((source.kind, source.qualified_id)) != requirement.source_layout:
                 raise ValueError("LayoutPlan mapping source port is not assigned to source_layout")
             if assignments.get((target.kind, target.qualified_id)) != requirement.target_layout:

@@ -11,6 +11,9 @@ from pops.fields._observation_contract import validate_field_gradient, validate_
 
 
 def _source(value: Any) -> tuple[int, Any]:
+    if getattr(value, "op", None) == "layout_map_import" and value.attrs.get("contract") == "mapped-consumed-output@1":
+        from ._mapped_publication import validate_candidate
+        return 1, validate_candidate(value)
     if getattr(value, "op", None) == "field_component":
         return 1, validate_field_observation(value)[2]
     if getattr(value, "op", None) == "field_gradient":
@@ -150,15 +153,23 @@ def validate_field_publication(value: Any, *, target_space: Any = None) -> tuple
         if not isinstance(target, Handle) or target.kind != "field" or target.block_ref is None:
             raise ValueError("field publication lost its qualified field destination")
         space = (_target_space if target_space is None else target_space)(target)
+        if source.attrs.get("contract") == "mapped-consumed-output@1":
+            from ._mapped_publication import _canonical
+            if _canonical(source.attrs["target_port"]["declared_space"]) != _canonical(space.to_data()):
+                raise ValueError("mapped Field publication changed its Module-owned destination declaration")
         component = row.get("component")
         key = (target.qualified_id, component)
         if component not in space.components or space != value.space or key in destinations:
             raise ValueError("field publication lost its exact destination component or field space")
         destinations.add(key)
-        observed = source if source.op == "field_component" else source.inputs[0]
+        observed = publication_observation(source)
         if observed.attrs.get("field_problem_identity") != value.attrs.get("field_problem_identity"):
             raise ValueError("field publication belongs to another physical field problem")
-    if len(solves) != 1:
+    if value.attrs.get("mapped_output_contract") == "mapped-consumed-output@1":
+        if any(source.op != "layout_map_import" or source.attrs.get("contract") != "mapped-consumed-output@1"
+               for source in value.inputs[:len(rows)]):
+            raise ValueError("mapped Field publication requires only private mapped candidates")
+    elif len(solves) != 1:
         raise ValueError("field publication must consume one exact joint solve")
     target_blocks = {row["target"].block_ref for row in rows}
     if any(getattr(key, "block_ref", None) not in target_blocks for key in supplemental):
@@ -204,3 +215,10 @@ def publication_states(value: Any, *, target_space: Any = None) -> dict[Any, Any
     rows = validate_field_publication(value, target_space=target_space)
     return _consumer_states(value.prog, value.point, _states(_source(value.inputs[0])[1], value.prog),
                             value.attrs.get("consumer_states", ()), value.inputs[len(rows):])
+
+
+def publication_observation(source):
+    if source.op == "layout_map_import" and source.attrs.get("contract") == "mapped-consumed-output@1":
+        from ._mapped_publication import validate_candidate
+        return validate_candidate(source)
+    return source if source.op == "field_component" else source.inputs[0]

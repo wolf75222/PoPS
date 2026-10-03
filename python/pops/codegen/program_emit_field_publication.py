@@ -42,12 +42,15 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
         if len(matching) != 1 or matching[0]["producer"] != value.attrs["field_problem_identity"]:
             raise ValueError("field publication has no exact resolved provider claim")
         claim = matching[0]
-        observed = source if source.op == "field_component" else source.inputs[0]
+        from pops.fields._program_publication import publication_observation
+        observed = publication_observation(source)
         if claim["observation"] != source.op or claim["source_component"] != row["source_component"] \
                 or canonical_bytes(_json_ready(claim["unknown"])) != \
                 canonical_bytes(_json_ready(observed.attrs["field_unknown"])):
             raise ValueError("field publication differs from its resolved output observation")
         key_cpp = "{%s}" % ", ".join(json.dumps(part) for part in key.to_data().values())
+        if source.attrs.get("contract") == "mapped-consumed-output@1" and canonical_bytes(_json_ready(claim.get("mapped_output"))) != canonical_bytes(_json_ready({name: source.attrs[name] for name in ("invocation", "physical_map", "source_port", "target_port", "source_point", "target_point")})):
+            raise ValueError("mapped Field publication differs from its resolved map authority")
         rows.append("{%s, %s, &%s, %d}" % (
             key_cpp, json.dumps(provider_identity(claim)), var[source.id], row["source_component"]))
     from .program_emit_ops import _required_block_index

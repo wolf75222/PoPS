@@ -172,15 +172,27 @@ class PhysicalSupportMap:
                                                 for axis in range(self.native_dimension))}
 
     def validate_ports(self, source: Any, target: Any) -> None:
-        source_space = getattr(source.subject, "space", None)
-        target_space = getattr(target.subject, "space", None)
+        source_space = source.quantity_space() if callable(getattr(source, "quantity_space", None)) else getattr(source.subject, "space", None)
+        target_space = target.quantity_space() if callable(getattr(target, "quantity_space", None)) else getattr(target.subject, "space", None)
         if source_space is None or target_space is None:
             raise ValueError("physical map ports require typed quantity declarations")
         spaces = source_space, target_space
         if tuple(space.support for space in spaces) != (self.source_support, self.target_support):
             raise ValueError("physical map source/target quantity support identities disagree")
-        if any(space.representation not in ("conservative", "cell_average") or space.sampling != "cell_average"
-               for space in spaces):
+        from ._layout_plan_contracts import LayoutRepresentation
+        observed = getattr(source, "representation", LayoutRepresentation.CELL_AVERAGE_V1) is LayoutRepresentation.CELL_FIELD_V1
+        if observed:
+            if target.representation is not LayoutRepresentation.CELL_FIELD_V1 or source.observation is None or target.observation is not None:
+                raise ValueError("consumed Field mapping requires an observation source and declared Field destination")
+            if any(space.representation != "field" or space.sampling != "cell" or space.centering != "cell" for space in spaces):
+                raise ValueError("consumed Field mapping requires explicit cell-sampled Field declarations")
+            if tuple(source.observation.to_data()["observation_axes"]) != self.source_axes:
+                raise ValueError("consumed Field support axes disagree with its resolved numerical observation binding")
+            axis = source.observation.derivative_axis
+            if axis is not None and axis not in self.source_axes:
+                raise ValueError("consumed Field gradient must select a declared active physical axis")
+        elif getattr(target, "representation", LayoutRepresentation.CELL_AVERAGE_V1) is not LayoutRepresentation.CELL_AVERAGE_V1 or any(
+                space.representation not in ("conservative", "cell_average") or space.sampling != "cell_average" for space in spaces):
             raise ValueError("physical maps require explicit cell_average representation/sampling")
         if len(spaces[0].units) != len(spaces[1].units):
             raise ValueError("physical map component counts differ")

@@ -37,11 +37,15 @@ def publication_claims(block: Any, program: Any) -> tuple[dict[str, Any], ...]:
             if str(target.owner_path.canonical()) != block.instance_owner_qid:
                 continue
             key = _key(module, target, row["component"])
-            observed = source if source.op == "field_component" else source.inputs[0]
+            from pops.fields._program_publication import publication_observation
+            observed = publication_observation(source)
             claim = {"key": key.to_data(), "target": target._resolved().canonical_identity(),
                      "producer": value.attrs["field_problem_identity"],
                      "unknown": _json_ready(observed.attrs["field_unknown"]),
                      "observation": source.op, "source_component": row["source_component"]}
+            if source.attrs.get("contract") == "mapped-consumed-output@1":
+                claim["mapped_output"] = _json_ready({name: source.attrs[name] for name in
+                    ("invocation", "physical_map", "source_port", "target_port", "source_point", "target_point")})
             prior = claims.get(key)
             if prior is not None and canonical_bytes(prior) != canonical_bytes(claim):
                 raise ValueError("Program field output has competing physical publication authorities")

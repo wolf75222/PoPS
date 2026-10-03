@@ -294,6 +294,8 @@ class _ProgramSerialization(_ProgramBase):
             if id(node) in seen:
                 continue
             seen.add(id(node))
+            if node.attrs.get("contract") == "mapped-consumed-output@1" or node.op == "field_map_pack":
+                result["version"] = max(result["version"], 24)
             if node.op == "affine_moment_update" and "basis" in node.attrs:
                 result["version"] = max(result["version"], 23)
             if node.op == "solve_spatial_field" and "convergence" in node.attrs:

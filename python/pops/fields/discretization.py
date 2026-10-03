@@ -71,13 +71,19 @@ def field_discretization_data(value: Any, *, where: str) -> dict[str, Any]:
     """Return exact versioned identity data for a protocol-conforming field plan."""
     plan = require_field_discretization(value, where=where)
     data = plan.to_data()
-    if not isinstance(data, dict) or set(data) != _FIELD_DISCRETIZATION_DATA_KEYS:
+    axes = data.get("observation_axes") if isinstance(data, dict) else None
+    keys = _FIELD_DISCRETIZATION_DATA_KEYS | ({"observation_axes"} if axes is not None else set())
+    if not isinstance(data, dict) or set(data) != keys:
         raise TypeError(
             "%s to_data() must return exactly the FieldDiscretization v%d keys"
             % (where, FIELD_DISCRETIZATION_SCHEMA_VERSION)
         )
-    if data["schema_version"] != FIELD_DISCRETIZATION_SCHEMA_VERSION:
+    expected_version = 3 if axes is not None else FIELD_DISCRETIZATION_SCHEMA_VERSION
+    if type(data["schema_version"]) is not int or data["schema_version"] != expected_version:
         raise ValueError("%s uses an unsupported field discretization schema" % where)
+    if axes is not None and (not isinstance(axes, (list, tuple)) or any(type(axis) is not int or axis < 0 for axis in axes)
+                             or len(set(axes)) != len(axes) or tuple(axes) != getattr(plan, "observation_axes", None)):
+        raise ValueError("%s has no exact observation support-axis binding" % where)
     if data["provider_id"] != plan.provider_id:
         raise ValueError("%s provider_id disagrees with its canonical data" % where)
     return data
@@ -189,7 +195,14 @@ class FieldDiscretization(Descriptor):
         nullspace: Any = None,
         gauge: Any = None,
         hierarchy_policy: Any = None,
+        observation_axes: tuple[int, ...] | None = None,
     ) -> None:
+        if observation_axes is not None and (type(observation_axes) is not tuple or
+                any(type(axis) is not int or axis < 0 for axis in observation_axes) or len(set(observation_axes)) != len(observation_axes)):
+            raise TypeError("Field observation_axes must be an exact tuple of distinct nonnegative integers")
+        self.observation_axes = observation_axes
+        if observation_axes is not None:
+            self.provider_id = "pops.fields.discretization.v3"
         self.method = _typed_descriptor(method, field="method")
         boundary_tuple = tuple(boundaries)
         if any(not isinstance(item, BoundaryCondition) for item in boundary_tuple):
@@ -220,7 +233,7 @@ class FieldDiscretization(Descriptor):
         return field_identity("field-discretization", self.to_data())
 
     def to_data(self) -> dict[str, Any]:
-        return {
+        data = {
             "schema_version": FIELD_DISCRETIZATION_SCHEMA_VERSION,
             "provider_id": self.provider_id,
             "method": strict_field_data(self.method),
@@ -232,6 +245,10 @@ class FieldDiscretization(Descriptor):
             "gauge": strict_field_data(self.gauge),
             "hierarchy_policy": strict_field_data(self.hierarchy_policy),
         }
+        if self.observation_axes is not None:
+            data["schema_version"] = 3
+            data["observation_axes"] = list(self.observation_axes)
+        return data
 
     def semantic_data(self) -> dict[str, Any]:
         """Exact numerical semantics, including nested descriptor configuration."""

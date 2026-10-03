@@ -46,7 +46,7 @@ def program_map_invocations(program: Any, *, allow_partition: bool = False) -> t
         if node.region != 0:
             raise ValueError("physical maps require top-level Program barriers")
         identity = node.attrs.get("invocation")
-        if not isinstance(identity, str) or not identity.startswith("pops.program-map.v1::"):
+        if not isinstance(identity, str) or not identity.startswith(("pops.program-map.v1::", "pops.program-field-map.v1::")):
             raise ValueError("Program map lacks an authenticated invocation identity")
         row = ports.setdefault(identity, {})
         if node.op in row:
@@ -62,10 +62,14 @@ def program_map_invocations(program: Any, *, allow_partition: bool = False) -> t
         # Compare canonical source metadata without relying on live object equality after detach.
         if canonical_bytes(_json_ready(source.attrs)) != canonical_bytes(_json_ready(target.attrs)):
             raise ValueError("Program map directional ports disagree on their exact contract")
-        if len(source.inputs) != 1 or source.inputs[0].state_ref != source.attrs["source_state"]:
-            raise ValueError("Program map source port does not read its declared qualified state")
-        if source.state_ref != source.attrs["source_state"] or target.state_ref != target.attrs["target_state"]:
-            raise ValueError("Program map port state provenance differs from its declaration")
+        if source.attrs.get("contract") == "mapped-consumed-output@1":
+            from pops.fields._mapped_publication import validate_mapped_pair
+            validate_mapped_pair(source, target)
+        else:
+            if len(source.inputs) != 1 or source.inputs[0].state_ref != source.attrs["source_state"]:
+                raise ValueError("Program map source port does not read its declared qualified state")
+            if source.state_ref != source.attrs["source_state"] or target.state_ref != target.attrs["target_state"]:
+                raise ValueError("Program map port state provenance differs from its declaration")
         result.append(ProgramMapInvocation(identity, source, target))
     return tuple(result)
 
@@ -76,11 +80,14 @@ def resolve_program_map_invocations(program: Any, plan: Any, *, resolve: Any) ->
     resolved = []
     for invocation in program_map_invocations(program):
         attrs = invocation.source.attrs
-        source, target = resolve(attrs["source_state"]), resolve(attrs["target_state"])
+        mapped = attrs.get("contract") == "mapped-consumed-output@1"
+        source, target = resolve(attrs["source_field"] if mapped else attrs["source_state"]), resolve(attrs["target_field"] if mapped else attrs["target_state"])
         candidates = [row.requirement for row in plan.mappings
             if row.requirement.source_port.subject == source
             and row.requirement.target_port.subject == target
             and row.requirement.synchronization is LayoutSynchronization.PROGRAM_POINT_V1
+            and (not mapped or (canonical_bytes(row.requirement.source_port.to_data()) == canonical_bytes(_json_ready(attrs["source_port"]))
+                                and canonical_bytes(row.requirement.target_port.to_data()) == canonical_bytes(_json_ready(attrs["target_port"]))))
             and row.requirement.physical_map is not None
             and canonical_bytes(row.requirement.physical_map.to_data()) == canonical_bytes(_json_ready(attrs["physical_map"]))]
         if len(candidates) != 1:

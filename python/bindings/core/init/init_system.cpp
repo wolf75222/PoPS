@@ -51,7 +51,18 @@ void require_exact_keys(const py::dict& value, std::initializer_list<const char*
       throw py::value_error(std::string(where) + " keys are not exact");
 }
 
-SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& row) {
+SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& input) {
+  py::dict row(input);
+  std::int32_t mapped_components = 0;
+  if (input.contains("mapped_field_components")) {
+    if (!PyLong_CheckExact(input["mapped_field_components"].ptr()))
+      throw py::type_error("mapped Field component width requires an exact integer");
+    mapped_components = py::cast<std::int32_t>(input["mapped_field_components"]);
+    if (mapped_components != 1)
+      throw py::value_error("mapped Field port requires one selected component");
+    row = input.attr("copy")().cast<py::dict>();
+    row.attr("pop")("mapped_field_components");
+  }
   require_exact_keys(
       row,
       {"mapping_identity", "provider_identity", "provider_component_identity",
@@ -79,7 +90,7 @@ SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& row) {
       py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_source_to_target"]),
       py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_source_active"]),
       py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_target_active"]),
-      py::cast<std::string>(row["program_invocation"])};
+      py::cast<std::string>(row["program_invocation"]), mapped_components};
 }
 
 SystemLayoutTransferExecution layout_transfer_execution_from_python(const py::dict& row) {

@@ -204,11 +204,17 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
         from ._joint_nullspace import constant_mode_nullspace
         nullspace, gauge = constant_mode_nullspace(problem.gauge), problem.gauge
     linear = LinearProblem(operator, rhs, nullspace=nullspace, gauge=gauge, properties=properties)
+    metadata = {"field_problem": problem.to_data(), "field_handle": field.canonical_identity(),
+                "unknown_components": tuple(row.canonical_identity() for row in problem.unknowns)}
+    if problem.unknown_spaces:
+        axes = getattr(registration.discretization, "observation_axes", None)
+        if axes is None or len(axes) != len(next(iter(problem.unknown_spaces.values())).support.coordinates):
+            raise FieldProblemError("field.observation.axes", "typed observation requires an exact physical-support to storage-axis realization")
+        metadata["observation_axes"] = axes
     return SolveRequest(problem=linear, unknowns=(SolveUnknown("field_tuple", template=rhs),),
         equation_inputs={"operator": operator, "rhs": rhs}, seeds={"field_tuple": None},
         outputs=("field_tuple",), derivative=DerivativeStrategy("exact"),
-        problem_metadata={"field_problem": problem.to_data(), "field_handle": field.canonical_identity(),
-                          "unknown_components": tuple(row.canonical_identity() for row in problem.unknowns)})
+        problem_metadata=metadata)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +224,24 @@ class FieldSolution:
     packed: ProgramValue
     unknowns: tuple[Any, ...]
     problem_identity: str
+    observation_spaces: tuple[Any, ...] = ()
+    coordinate_units: tuple[Any, ...] = ()
+    observation_axes: tuple[int, ...] | None = None
+
+    def mapping_port(self, unknown: Handle, *, derivative_axis: int | None = None, factor: Any = 1):
+        """Declare a scalar physical port of this consumed Field problem."""
+        from .mapping import ConsumedFieldPort
+        # Selection is checked against this exact consumed tuple, not merely a name.
+        if not isinstance(unknown, Handle):
+            raise TypeError("field mapping requires an exact field unknown Handle")
+        if sum(row == _identity(unknown) for row in self.unknowns) != 1:
+            raise FieldProblemError("field.observation.unknown", "mapping selects a foreign field unknown")
+        return ConsumedFieldPort(self.field, unknown, derivative_axis, factor)
+
+    def publish_mapped(self, physical_map: Any, bindings: Any, *, states: Any) -> ProgramValue:
+        """Map equation-owned observations to private destination-shaped Field candidates."""
+        from ._mapped_publication import publish_mapped
+        return publish_mapped(self, physical_map, bindings, states=states)
 
     def publish(self, bindings: Any, *, states: Any = None) -> ProgramValue:
         """Publish consumed scalar/gradient components to exact physics field inputs."""
@@ -234,7 +258,8 @@ class FieldSolution:
         return self.packed.prog._new("scalar_field", "field_component", (self.packed,),
             {"ncomp": 1, "component": matches[0], "field_problem_identity": self.problem_identity,
              "field_unknown": self.unknowns[matches[0]], "stencil_access": StencilAccess.pointwise()},
-            unknown.local_id + "_value", None, point=self.packed.point, inherit_state_ref=False)
+            unknown.local_id + "_value", None, point=self.packed.point, inherit_state_ref=False,
+            space=None if not self.observation_spaces else self.observation_spaces[matches[0]])
 
     def cell_mean_state(self, unknown: Handle, *, target: Any) -> ProgramValue:
         """Project one solved cell mean to an exact one-component State endpoint.
@@ -305,12 +330,31 @@ class FieldSolution:
         if type(dimension) is not int or dimension not in (1, 2, 3):
             raise TypeError("field gradient requires an explicit physical dimension")
         value = self[unknown]
+        space = None
+        if value.space is not None:
+            if self.observation_axes is None or len(self.coordinate_units) != len(self.observation_axes) \
+                    or any(axis >= dimension for axis in self.observation_axes):
+                raise FieldProblemError("field.observation.coordinates", "declared gradient requires exact active-axis physical coordinate units")
+            from pops.model import FieldSpace, PhysicalDimension
+            units = []
+            for axis in range(dimension):
+                if axis not in self.observation_axes:
+                    units.append(None)
+                    continue
+                coordinate = self.coordinate_units[self.observation_axes.index(axis)]
+                powers = dict(value.space.units[0].powers)
+                for base, exponent in coordinate.powers:
+                    powers[base] = powers.get(base, 0) - exponent
+                units.append(PhysicalDimension(tuple(powers.items())))
+            space = FieldSpace(value.space.name + ".gradient", components=tuple("axis%d" % axis for axis in range(dimension)),
+                representation="field", centering="cell", units=tuple(units),
+                support=value.space.support, sampling="cell", frame=value.space.frame, clock=value.space.clock)
         return value.prog._new("scalar_field", "field_gradient", (value,),
             {"ncomp": dimension, "spatial_dimension": dimension,
              "differentiation": "cell_centered_second_order",
              "sampling": "cell", "field_problem_identity": self.problem_identity,
              "stencil_access": StencilAccess.nearest_neighbour()},
-            unknown.local_id + "_gradient", None, point=value.point, inherit_state_ref=False)
+            unknown.local_id + "_gradient", None, point=value.point, inherit_state_ref=False, space=space)
 
 
 def observe_field_solution(field: Handle, solution: Any, *, unknown: Handle | None = None) -> Any:
@@ -336,7 +380,10 @@ def observe_field_solution(field: Handle, solution: Any, *, unknown: Handle | No
     if CanonicalData(registered.to_data(), where="field observation equations").to_data() != physical["field_problem"] \
             or CanonicalData(unknowns, where="field observation unknowns").to_data() != physical["unknown_components"]:
         raise FieldProblemError("field.observation.authority", "field observation physical tuple changed after solve")
-    result = FieldSolution(field, packed, unknowns, registered.identity.token)
+    result = FieldSolution(field, packed, unknowns, registered.identity.token,
+        tuple(registered.unknown_spaces[row] for row in registered.unknowns) if getattr(registered, "unknown_spaces", None) else (),
+        getattr(registered, "coordinate_units", ()),
+        getattr(registry.resolved_registration(field).discretization, "observation_axes", None))
     return result if unknown is None else result[unknown]
 
 

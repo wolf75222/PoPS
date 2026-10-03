@@ -88,6 +88,7 @@ _ALLOWED_OPS = frozenset(
         "field_state_cell_mean",
         "field_evolved_state",
         "field_gradient",
+        "field_map_pack",
         "field_publication",
         "vector_field",
         "laplacian",
@@ -255,7 +256,9 @@ class ProgramProviderPlans:
             for slot, (key, contract) in enumerate(rows):
                 optional_unit = (
                     "std::nullopt" if contract.unit is None
-                    else "std::optional<std::string>{%s}" % json.dumps(contract.unit)
+                    else "std::optional<std::string>{%s}" % json.dumps(
+                        json.dumps(contract.unit.to_data(), sort_keys=True, separators=(",", ":"))
+                        if hasattr(contract.unit, "to_data") else contract.unit)
                 )
                 optional_kind = (
                     "std::nullopt" if contract.value_kind is None

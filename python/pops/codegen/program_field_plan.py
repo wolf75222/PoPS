@@ -149,6 +149,8 @@ class ResolvedProgramFieldPlan:
             if self.target == "system" and solve.attrs.get("scope") == "hierarchy":
                 raise ValueError("a hierarchy field solver requires an AMR layout")
             metadata = _physical_metadata(solve)
+            if self.storage.observation_axes is not None and _canonical(metadata.get("observation_axes", ())) != _canonical(self.storage.observation_axes):
+                raise ValueError("typed Field solve changed its physical-support storage-axis binding")
             if _canonical(metadata.get("field_problem")) != expected_problem:
                 raise ValueError("Program field solve changed its registered physical equations")
             if solve.op == "solve_spatial_field":
@@ -229,7 +231,33 @@ def capture_program_field_plans(problem: Any, detach: Any, *, target: str,
         targets = tuple("program:%s:%d" % (node.op, node.id) for node in solves)
         if not targets:
             raise ValueError("generic field %r requires an explicit Program solve" % name)
-        storage = FieldStorageBinding(registration.operator.unknowns, layout_plan.layout_for(handle))
+        storage = FieldStorageBinding(registration.operator.unknowns, layout_plan.layout_for(handle),
+            getattr(registration.discretization, "observation_axes", None) if getattr(registration.operator, "unknown_spaces", None) else None)
+        # Typed observations retain their own physical declaration. Storage is
+        # reconciled with every equation input; no species supplies a default.
+        observation_spaces = getattr(registration.operator, "unknown_spaces", {})
+        if observation_spaces:
+            dependencies = registration.operator.dependencies()
+            if not dependencies:
+                raise ValueError("typed field observation has no equation input from which to infer storage")
+            layouts = {layout_plan.layout_for(item) for item in dependencies}
+            if layouts != {storage.layout}:
+                raise ValueError("typed field observation equation inputs do not share its exact storage layout")
+            support = next(iter(observation_spaces.values())).support
+            if any(getattr(item, "space", None) is None or item.space.support != support
+                   for item in dependencies):
+                raise ValueError("typed field observation support disagrees with an equation input")
+            coordinates = registration.operator.coordinate_units
+            axes = getattr(registration.discretization, "observation_axes", None)
+            resolved_layout = next(row for row in layout_plan.layouts if row.handle == storage.layout)
+            dimension = resolved_layout.geometry.dimension
+            if axes is None or len(axes) != len(support.coordinates) or any(axis >= dimension for axis in axes):
+                raise ValueError("typed field observation has no exact support-to-storage-axis binding")
+            if coordinates and len(coordinates) != len(axes):
+                raise ValueError("typed field observation coordinate units disagree with its support")
+            for axis, cells in enumerate(resolved_layout.geometry.cells):
+                if axis not in axes and cells != 1:
+                    raise ValueError("typed field observation hidden storage axes must be singleton")
         if target == "amr_system":
             resolved_layout = next(row for row in layout_plan.layouts if row.handle == storage.layout)
             if resolved_layout.capabilities.get("execution") != "synchronous":

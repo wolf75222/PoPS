@@ -37,6 +37,7 @@ from .nullspace import (
     PreparedNullspace,
     RHSCompatibilityEvidence,
 )
+from .mapping import ConsumedFieldPort
 from .problem import FieldBoundary, FieldProblem, FieldProblemError, FieldStorageBinding, SharedMeanGauge, ConstantModeGauge
 from .operator import (
     FieldOperator,

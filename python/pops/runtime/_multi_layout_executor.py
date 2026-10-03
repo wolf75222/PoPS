@@ -99,6 +99,10 @@ def _mapping_blocks(plan: Any, transfer: Any) -> tuple[str, str]:
             "runtime Transfer must resolve to exactly one authenticated layout mapping"
         )
     requirement = matches[0].requirement
+    from pops.mesh._layout_plan_contracts import LayoutRepresentation
+    if requirement.source_port.representation is LayoutRepresentation.CELL_FIELD_V1:
+        requirement.physical_map.validate_ports(requirement.source_port, requirement.target_port)
+        return (requirement.source_port.subject.qualified_id, requirement.target_port.subject.qualified_id)
     return (
         _mapping_block(requirement.source_port.subject),
         _mapping_block(requirement.target_port.subject),
@@ -340,6 +344,9 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
     if source_target != target_target or source_target not in ("system", "amr_system"):
         raise ValueError("layout Transfer requires matching resolved native execution targets")
     adaptive = source_target == "amr_system"
+    mapped_field = transfer.source_representation_uri == "pops://representations/cell-field-observation@1"
+    if mapped_field and (adaptive or not program_invocation):
+        raise NotImplementedError("mapped consumed Field output requires a Uniform program-point invocation")
     if transfer.operation_abi in (2, 3):
         requirement = next(row.requirement for row in plan.artifact.layout_plan.mappings
                            if row.requirement.qualified_id == transfer.mapping_id)
@@ -372,9 +379,9 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
     component = plan.components.get(transfer.component_id)
     if getattr(component, "native_handle", None) is None:
         raise TypeError("mapping Transfer component has no authenticated native handle")
-    source_components = int(source_engine.block_n_vars(source_block) if adaptive
+    source_components = 1 if mapped_field else int(source_engine.block_n_vars(source_block) if adaptive
                             else source_engine.n_vars(source_block))
-    target_components = int(target_engine.block_n_vars(target_block) if adaptive
+    target_components = 1 if mapped_field else int(target_engine.block_n_vars(target_block) if adaptive
                             else target_engine.n_vars(target_block))
     if source_components != target_components or source_components <= 0:
         raise ValueError("layout transfer source/target component counts differ")
@@ -408,6 +415,7 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
             "operation": transfer.operation_abi,
             "program_invocation": program_invocation,
             **contract,
+            **({"mapped_field_components": 1} if mapped_field else {}),
         },
         physical_spec=physical_spec,
         source_element_count=None if adaptive else source_components * source_cells,
