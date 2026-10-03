@@ -108,8 +108,23 @@ def test_genuine_compiled_model_source_retention(tmp_path):
                         {'cpu':True,'amr':True,'mpi':False,'gpu':False},'source-host-only','0'*64,
                         'clang++','c++20',2,target='amr_system',
                         module_manifest=Module('source-only-manifest').manifest())
-    # Current low-level manifest() is not the aggregate public artifact API.
-    with pytest.raises(TypeError,match='requires a CompiledSimulationArtifact'):model.manifest()
+    # Public component inspection is inert compiler metadata, not prepared storage.
+    from pops.external.artifact_manifest import CompiledArtifactManifest
+    retained_module = model.module_manifest.to_dict()
+    retained_source = model.source_provenance(require_complete=True)
+    manifest = model.manifest()
+    assert type(manifest) is CompiledArtifactManifest
+    payload = manifest.to_dict()
+    assert payload['schema_version'] == 2
+    assert CompiledArtifactManifest.from_dict(json.loads(json.dumps(payload))).to_dict() == payload
+    assert manifest.variables == ('u',) and manifest.roles == ('scalar',)
+    assert manifest.supports_uniform is True and manifest.supports_amr is True
+    assert manifest.supports_mpi is False and manifest.supports_gpu is False
+    assert manifest.ghost_depth is None and not manifest.ghost_depth_by_block
+    assert manifest.dimension is None and not manifest.field_outputs
+    assert not manifest.native_entrypoints
+    assert model.module_manifest.to_dict() == retained_module
+    assert model.source_provenance(require_complete=True) == retained_source
     root=tmp_path/'retained';root.mkdir()
     proof=retain_model_sources(model,root,0,'renamed-block')
     assert Path(proof['cpp']['path']).read_bytes()==cpp.read_bytes()
