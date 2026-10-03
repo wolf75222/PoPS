@@ -70,7 +70,9 @@ def test_actual_capture_persists_cursors_before_getter_failure(tmp_path):
     expected=ConsumerCursorSet((ScheduleCursor('second-public-cursor'),ScheduleCursor('first-public-cursor')))
     calls=[]
     class Runtime:
-        time=0.0;macro_step=0;consumer_cursors=expected
+        consumer_cursors=expected
+        def time(self):return 0.0
+        def macro_step(self):return 0
         def observe_accepted_state_storage(self):
             calls.append('observer');return SimpleNamespace(complete=b'explicit-source-image')
     def getter(*args):

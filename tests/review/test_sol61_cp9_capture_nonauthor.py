@@ -31,7 +31,7 @@ def test_actual_capture_saves_full_observation_before_real_getter_exception(tmp_
         assert (tmp_path/'initial.rank0.carriers').read_bytes()==image.rank_local
         assert (tmp_path/'initial.rank0.complete.carriers').read_bytes()==image.complete
         raise RuntimeError('Source getter failure')
-    runtime=SimpleNamespace(observe_accepted_state_storage=lambda:image,time=0.0,macro_step=0,state_global=bad)
+    runtime=SimpleNamespace(observe_accepted_state_storage=lambda:image,time=lambda:0.0,macro_step=lambda:0,state_global=bad)
     capture,phases=capture_body(tmp_path,runtime)
     with pytest.raises(Exception,match='Source getter failure'):capture('initial')
     assert calls==['q'] and not phases
@@ -42,7 +42,7 @@ def test_actual_capture_saves_corrupt_shard_before_guard_and_never_marks_phase(t
     from pops.runtime._state_storage_observation import AcceptedStateStorageObservation
     image,values=observation()
     bad=AcceptedStateStorageObservation(2,0.0,0,image.rank_local[:-8]+b'badbytes',image.complete)
-    runtime=SimpleNamespace(observe_accepted_state_storage=lambda:bad,time=0.0,macro_step=0,state_global=lambda name:values[name])
+    runtime=SimpleNamespace(observe_accepted_state_storage=lambda:bad,time=lambda:0.0,macro_step=lambda:0,state_global=lambda name:values[name])
     capture,phases=capture_body(tmp_path,runtime)
     with pytest.raises(ValueError,match='grown bits'):capture('corrupt')
     assert not phases

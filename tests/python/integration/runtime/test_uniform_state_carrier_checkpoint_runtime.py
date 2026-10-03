@@ -65,7 +65,7 @@ def test_installed_uniform_full_state_checkpoint_restart(profile,tmp_path,record
     phases={}
     def capture(label):
         observation=collective_call(world,runtime.observe_accepted_state_storage)
-        clock=(runtime.time,runtime.macro_step)
+        clock=collective_call(world,lambda:(runtime.time(),runtime.macro_step()))
         rank=0 if world is None else world.rank
         ranks=1 if world is None else world.size
         valid=capture_valid_incrementally(world,runtime,directory,label,rank,ranks,observation,clock,tuple(initial))
