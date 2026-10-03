@@ -13,3 +13,9 @@ Concrete evidence limitation: public consumer_cursors.to_data() values are compa
 Independent probes execute the fixture's exact nested injection body with explicit Source publisher/runtime stand-ins, not a Native simulation. They verify publish→observer refusal→retention→fault, foreign failure refusal, and preservation of an original publisher failure without invented targets/events. Combined with public validate/resolve Source authoring:4PASS4.18s; Native node only collected1/.62s. No C++ compile, Native import/build/run, ENV or remote mutation.
 
 Command: env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/python -m pytest --noconftest -p no:cacheprovider -o 'pythonpath=python .' tests/review/test_sol61_cp9_provisional_independent.py tests/review/test_sol61_cp9_provisional_effect_preparation.py -q --tb=short --junitxml=/tmp/sol61-cp9-provisional-independent.xml
+
+## Durable-cursor follow-up f373b01c
+
+Exact follow-up f373b01cc3a22dbdb2917a90bab8f6fcd6045ef7 closes the named gap without changing rollback assertions. Capture retains the public cursor DTO JSON on every rank before valid getters/guards and returns those same data. The post-publication injection also retains provisional cursors before the idle-observation guard/fault. Recursive closure includes all three cursor points. The earlier limitation above is historical to6b387.
+
+Independent actual-AST probes use genuine ConsumerCursorSet/ScheduleCursor DTO values, verify published provisional JSON, and require before cursor JSON to exist with exact values before a getter failure. Combined Source cohort5PASS2.89s; no Native run. No guards were relaxed and no private data extractor introduced. XML /tmp/sol61-cp9-provisional-cursors-independent.xml SHAdacfd8574ceda50ba739446de5370f3d4d49a446d0a15fbab00e5b89dc65fccd.
