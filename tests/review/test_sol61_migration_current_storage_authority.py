@@ -64,6 +64,7 @@ int main(int argc,char**argv) {try {
         if result.returncode:raise ValueError(result.stderr.decode())
         return result.stdout
     def carrier(image,shape,blocks,components):
+        assert type(image) is bytes, "Native binding requires exact bytes"
         raw=invoke('carrier',image,*shape,*[v for pair in zip(blocks,components) for v in pair])
         cells=int(np.prod(shape));rows=[];at=0
         for count in components:
