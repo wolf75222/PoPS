@@ -41,7 +41,7 @@ def test_installed_checkpoint_effect_failure_restores_full_uniform_state(tmp_pat
     collective_call(world,lambda:retain_provenance(artifact,directory) if rank==0 else None)
     runtime=collective_call(world,lambda:pops.bind(artifact,initial_values=initial_values_for_bindings(resolved.initial_condition_plan.bindings,initial),resources={'execution_context':artifact_execution_context(artifact)}))
     def capture(label):
-        image=collective_call(world,runtime.observe_accepted_state_storage);clock=(runtime.time,runtime.macro_step)
+        image=collective_call(world,runtime.observe_accepted_state_storage);clock=(runtime.time(),runtime.macro_step())
         cursors=runtime.consumer_cursors.to_data()
         collective_call(world,lambda:save_json(directory/(label+'.rank%d.cursors.json'%rank),cursors))
         values=capture_valid_incrementally(world,runtime,directory,label,rank,ranks,image,clock,tuple(initial))
