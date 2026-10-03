@@ -75,7 +75,7 @@ def test_explicit_provenance_join_synthetic_correspondence(tmp_path,mutation):
         source=name+'.model.cpp';(tmp_path/source).write_text('// synthetic '+name)
         sha=hashlib.sha256((tmp_path/source).read_bytes()).hexdigest();files[source]=sha
         rows.append({'block':name,'sha256':digest,'retained_source':{'file':source,'sha256':sha},'actual_source':{'contract':'pops.model.actual-compile@1','complete':True,'status':'available','source_sha256':sha,'binary_sha256':digest,'header_signature':'H'}})
-    proof={'schema':'pops.m16-explicit-retained-provenance@2','native':{'sha256':'N'},'root_scientific_approval':False,'layout_program':{'target':'amr_system','blocks':list(r.BLOCKS)},'model_binaries':rows,'files':files,'program':{'sha256':exports['program'][1],'abi_key':'headers=H;'}}
+    proof={'schema':'pops.m16-explicit-retained-provenance@2','native':{'sha256':'N'},'root_scientific_approval':False,'layout_program':{'target':'amr_system','blocks':list(r.BLOCKS)},'model_binaries':rows,'files':files,'program':{'sha256':exports['program'][1],'abi_key':'H|/synthetic/compiler|c++20|dim=2'}}
     if mutation=='contract':rows[0]['actual_source']['contract']='foreign@1'
     elif mutation=='header':rows[0]['actual_source']['header_signature']='foreign'
     elif mutation=='foreign-binary':exports['Q0']=(exports['Q1'][0],exports['Q1'][1])

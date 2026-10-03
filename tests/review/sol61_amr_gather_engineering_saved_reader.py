@@ -106,6 +106,7 @@ def join_provenance(directory,pins,binary_exports,*,native_sha256,header_signatu
         require(retained['file'] in proof['files'] and Path(retained['file']).name==retained['file'],'retained model TU reference differs')
         require(evidence['contract']=='pops.model.actual-compile@1' and evidence['complete'] is True and evidence['status']=='available' and evidence['source_sha256']==retained['sha256']==pins[retained['file']] and evidence['binary_sha256']==row['sha256'] and evidence['header_signature']==header_signature,'complete actual model TU evidence differs')
         binary(row['block'],row['sha256'])
-    require('headers='+header_signature+';' in proof['program']['abi_key'],'Program header signature differs')
+    abi=proof['program']['abi_key'].split('|')
+    require(len(abi)==4 and abi[0]==header_signature and bool(abi[1]) and abi[2]=='c++20' and abi[3]=='dim=2','Program header signature differs')
     binary('program',proof['program']['sha256'])
     return {'models':list(BLOCKS),'compiler_hash_recorded_not_live_rehashed':True,'compiler_to_dso_graph_proof':False,'native_authority':False}
