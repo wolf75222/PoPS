@@ -463,6 +463,9 @@ def install_runtime_executor(install_plan: Any, runtime_plan: Any = None) -> Any
     from pops.runtime._runtime_planning import require_runtime_plan_bundle
 
     runtime_plan = require_runtime_plan_bundle(plan, runtime_plan)
+    from pops.runtime._mapped_field_capability import require_mapped_consumed_field_output
+
+    require_mapped_consumed_field_output(plan.artifact)
     _require_supported_runtime_actions(plan, runtime_plan)
     native_facts = _native_runtime_facts()
     _require_runtime_determinism(plan, runtime_plan, native_facts)

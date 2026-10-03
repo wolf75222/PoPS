@@ -510,6 +510,11 @@ def _compile_problem_impl(
     from pops.time._program.detach import detach_compiled_program
 
     time = detach_compiled_program(time, physical_global_sources=physical_global_sources)
+    from pops.runtime._mapped_field_capability import (
+        requires_mapped_consumed_field_output, require_mapped_field_native_facts,
+    )
+    if requires_mapped_consumed_field_output(time._serialize()):
+        require_mapped_field_native_facts()
     program_graph = time.to_graph()
     from pops._balance_due_contract import BalanceDueContract
 

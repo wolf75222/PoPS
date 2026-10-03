@@ -37,7 +37,7 @@ namespace pops {
 /// older .so (pops_compiled_manifest) can be told apart from a newer module at load time. Distinct from
 /// the textual pops::abi_key() (compiler / std / header signature): that detects a toolchain ABI break,
 /// this versions the capability *vocabulary*.
-inline constexpr int kAbiVersion = 8;
+inline constexpr int kAbiVersion = 9;
 static_assert(kAbiVersion == release_contract::kReleaseNativeAbiVersion,
               "native ABI and generated release contract drifted");
 
@@ -62,6 +62,7 @@ struct ModuleCapabilities {
   bool supports_named_fields;  ///< named aux-field transport (named_aux, aux_field; always built).
   bool
       supports_partial_imex_mask;  ///< partial IMEX mask -- TRUE: Program implicit_source runs it.
+  bool mapped_consumed_field_output;  ///< Versioned consumed Field mapping and candidate transfer.
 };
 
 /// One native route/capability row in the structured report. ``status`` is one of
@@ -132,6 +133,7 @@ inline constexpr bool kHasMpi =
 inline ModuleCapabilities module_capabilities(CapabilityTarget target = CapabilityTarget::kModule) {
   ModuleCapabilities caps{};
   caps.abi_version = kAbiVersion;
+  caps.mapped_consumed_field_output = true;
   caps.supports_uniform = true;
   caps.supports_amr = true;
   caps.supports_mpi = detail::kHasMpi;
@@ -210,6 +212,9 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "production ABI stores stride; Explicit(stride=M) lowers to Program hold-then-catch-up",
                        kLayoutRouteTokensCsv, "production", "host", mpi, gpu, "strided cell access",
                        "backend='production'", "compile with backend='production'"),
+      capability_route("mapped_consumed_field_output", status_from_bool(caps.mapped_consumed_field_output),
+                       "mapped-consumed-output@1 scalar Field candidate transfer; Native ABI9",
+                       "uniform", "production", "host", mpi, gpu),
       capability_route("supports_named_fields", status_from_bool(caps.supports_named_fields),
                        "named aux-field transport", kLayoutRouteTokensCsv, "production", "host",
                        mpi, gpu, "named aux fields", "native named-field transport"),
