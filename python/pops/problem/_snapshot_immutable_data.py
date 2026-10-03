@@ -93,10 +93,17 @@ def record_code(cls, *, active):
     from ._snapshot_module_dependency import framework_dependency_projection
     from ._snapshot_module_fingerprint import module_implementation_fingerprint
     import sys
+    import dataclasses
 
     def canonical_dependency(value, *, path, **context):
         if type(value) is dict and ('.__annotations__' in path or '.__kwdefaults__' in path or '.__dict__' in path):
-            return {key:canonical_dependency(item,path=path+'.'+str(key)) for key,item in value.items()}
+            key = id(value)
+            if key in active: raise ValueError('immutable-data method metadata reference cycle')
+            active.add(key)
+            try:
+                return {key:canonical_dependency(item,path=path+'.'+str(key)) for key,item in value.items()}
+            finally:
+                active.remove(key)
         module = getattr(value, '__module__', None)
         if callable(value) and isinstance(module, str):
             if module == 'pops' or module.startswith('pops.'):
@@ -108,16 +115,27 @@ def record_code(cls, *, active):
     generated={'__init__','__repr__','__eq__','__hash__','__setattr__','__delattr__',
                '__lt__','__le__','__gt__','__ge__','__getstate__','__setstate__'}
     result={}
+    namespace={}
+    field_names={field.name for field in fields(cls)}
+    machinery={'__module__','__doc__','__annotations__','__dataclass_fields__','__dataclass_params__',
+               '__slots__','__dict__','__weakref__','__match_args__'}
     for base in reversed(cls.__mro__):
+        if base is object: continue
         for name, member in vars(base).items():
-            if name in generated: continue
+            if name in machinery: continue
+            if name in generated and isinstance(member,FunctionType) and (
+                    member.__code__.co_filename == '<string>' or
+                    member.__code__.co_filename == dataclasses.__file__):
+                continue
+            if name not in field_names and not isinstance(member,(FunctionType,staticmethod,classmethod,property)):
+                namespace[name]=immutable_data(member,active=active)
             if isinstance(member,(staticmethod,classmethod)): member=member.__func__
             if isinstance(member,property): member=member.fget
             if isinstance(member,FunctionType):
                 result[name]=callable_projection(member, path=cls.__module__+'.'+cls.__qualname__+'.'+name,
                     active=active, handle_resolver=None, artifact=False,
                     canonical=canonical_dependency, dependency_cache={})
-    return result
+    return {'methods':result,'namespace':namespace}
 
 
 def declared_data(value, active=None):

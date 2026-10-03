@@ -143,3 +143,19 @@ def test_nested_callable_factory_cannot_mutate_before_baseline():
             return {}
     with pytest.raises(ValueError, match='mutated stored authority'):
         AuthoringSnapshot({'record': Receipt(Factory())})
+
+
+def test_callable_factory_static_namespace_authority_is_retained():
+    @dataclass(frozen=True)
+    class Factory:
+        __pops_snapshot_immutable_data__ = 1
+        CLASS_PIN = b'original'
+        value: int = 1
+        def __call__(self): return self.CLASS_PIN
+        def snapshot_data(self): return {}
+    before = AuthoringSnapshot({'record': Receipt(Factory())})
+    try:
+        Factory.CLASS_PIN = b'foreign'
+        assert before.hash != AuthoringSnapshot({'record': Receipt(Factory())}).hash
+    finally:
+        Factory.CLASS_PIN = b'original'
