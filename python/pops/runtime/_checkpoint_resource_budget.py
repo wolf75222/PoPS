@@ -597,6 +597,7 @@ def _checkpoint_member_names(
             "program_hash",
             "phi",
             "auxiliary_checkpoint",
+            "state_carriers_checkpoint",
             "checkpoint_migration",
             *cache_names,
             *history_names,
@@ -680,9 +681,7 @@ def _common_budget(
         raise ValueError("checkpoint common budget requires Uniform or AMR")
     rank_capacity = _capacity(rank_capacity, where="checkpoint rank capacity", positive=True)
     state_carriers_bytes = _capacity(state_carriers_bytes,
-        where="checkpoint full-state carrier byte capacity", positive=runtime_kind == "amr")
-    if runtime_kind == "uniform" and state_carriers_bytes != 0:
-        raise ValueError("Uniform checkpoint cannot carry an AMR state carrier capacity")
+        where="checkpoint full-state carrier byte capacity", positive=True)
     block_names = tuple(block_nvars_by_name)
     block_nvars = tuple(block_nvars_by_name[name] for name in block_names)
     total_cells = _sum(cells, where="checkpoint configured cell capacity")
@@ -805,9 +804,8 @@ def _common_budget(
         "cells": list(cells),
         "rank_capacity": rank_capacity,
     }
-    if runtime_kind == "amr":
-        control_data["state_carriers_capacity_contract"] = "pops.amr.state-carriers-capacity@1"
-        control_data["state_carriers_bytes"] = state_carriers_bytes
+    control_data["state_carriers_capacity_contract"] = "pops.%s.state-carriers-capacity@1" % runtime_kind
+    control_data["state_carriers_bytes"] = state_carriers_bytes
     control_characters = len(
         json.dumps(control_data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     )
@@ -909,6 +907,7 @@ def install_uniform_checkpoint_resource_budget(owner: Any, install_plan: Any) ->
         cells=(spatial.cells_at_level(0),),
         shape=spatial.shape,
         rank_capacity=1,
+        state_carriers_bytes=_capacity(owner._s.checkpoint_state_carriers_capacity(), where="Uniform carrier capacity", positive=True),
         auxiliary_metadata_bytes=_capacity(capacity[0], where="auxiliary metadata capacity"),
         auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
         accepted_program_bytes=0,
@@ -1066,6 +1065,7 @@ def install_layout_checkpoint_resource_budget(
         cells=(spatial.cells_at_level(0),),
         shape=spatial.shape,
         rank_capacity=1,
+        state_carriers_bytes=_capacity(owner._s.checkpoint_state_carriers_capacity(), where="Uniform carrier capacity", positive=True),
         auxiliary_metadata_bytes=_capacity(capacity[0], where="auxiliary metadata capacity"),
         auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
         accepted_program_bytes=0,

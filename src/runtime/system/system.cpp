@@ -258,7 +258,7 @@ std::vector<runtime::program::ExchangeRecord> System<Dim>::program_exchange_reco
 
 
 template <int Dim>
-std::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_storage() const {
+std::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_storage(bool provisional_capture) const {
   const auto& lane = prepared_boundary_execution_lane();
   using namespace runtime::checkpoint;
   using Bits = std::conditional_t<sizeof(Real) == 8, std::uint64_t, std::uint32_t>;
@@ -268,7 +268,10 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_stora
   std::vector<ExactOrderedBytePair> authority;
   try {
     const auto phase = p_->lifecycle_.state(p_->macro_step_);
-    if (step_transaction_depth() != 0 || p_->external_restart_transaction_ ||
+    const auto depth=step_transaction_depth();
+    const bool provisional=provisional_capture && depth==1 &&
+        p_->external_step_transaction_ && !p_->external_step_transaction_committed_;
+    if ((depth != 0 && !provisional) || p_->external_restart_transaction_ ||
         (phase != "bound" && phase != "running" && phase != "checkpointed"))
       throw std::logic_error("accepted state storage observation requires bound accepted idle state");
     StateCarrierArchive<Dim> image;
@@ -365,6 +368,118 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_stora
   } catch (...) { error = std::current_exception(); }
   collectively_rethrow_exception(error, lane, "accepted state storage observation result allocation");
   return observation;
+}
+
+template <int Dim>
+std::uint64_t System<Dim>::checkpoint_state_carriers_capacity() const {
+  using namespace runtime::checkpoint;
+  const auto& lane = prepared_boundary_execution_lane();
+  std::uint64_t result = 0;
+  std::exception_ptr error;
+  try {
+    std::vector<StateCarrierStorageCapacity<Dim>> blocks;
+    std::uint64_t cells = 0;
+    for (const auto& name : p_->blocks_.names()) {
+      const auto& field = p_->find(name).U;
+      StateCarrierStorageCapacity<Dim> block;
+      block.name = name; block.components = field.ncomp();
+      for (int axis = 0; axis < Dim; ++axis) block.ghosts[axis] = field.ghosts()[axis];
+      blocks.push_back(std::move(block));
+      std::uint64_t count = 0;
+      for (const auto& box : field.layout()) {
+        const auto n = static_cast<std::uint64_t>(box.numPts());
+        if (n > std::numeric_limits<std::uint64_t>::max()-count)
+          throw std::overflow_error("Uniform carrier cells overflow");
+        count += n;
+      }
+      cells = std::max(cells, count);
+    }
+    const std::array<std::uint64_t,1> levels{cells};
+    result = state_carriers_byte_capacity<Dim>(levels, blocks);
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error,lane,"Uniform carrier configured capacity");
+  return result;
+}
+
+template <int Dim>
+void System<Dim>::validate_checkpoint_state_carriers(std::span<const std::uint8_t> bytes) const {
+    const auto image = runtime::checkpoint::decode_state_carriers<Dim>(bytes);
+    runtime::checkpoint::validate_complete_state_carriers(image);
+    if (image.real_bits != sizeof(Real)*8 || image.levels != 1 || image.blocks != p_->blocks_.names())
+      throw std::invalid_argument("Uniform carrier storage authority differs");
+    std::size_t at = 0;
+    for (std::size_t block=0;block<image.blocks.size();++block) {
+      const auto& field = p_->find(image.blocks[block]).U;
+      for (std::size_t patch=0;patch<field.layout().size();++patch) {
+        if (at==image.patches.size()) throw std::invalid_argument("Uniform carrier missing patch");
+        const auto& row=image.patches[at++];const auto& valid=field.layout()[patch];
+        if (row.block!=block || row.level!=0 || row.patch!=patch || row.components!=std::uint64_t(field.ncomp()))
+          throw std::invalid_argument("Uniform carrier patch/component authority differs");
+        for (int axis=0;axis<Dim;++axis)
+          if (row.lo[axis]!=valid.lo[axis] || row.hi[axis]!=valid.hi[axis] ||
+              row.grown_lo[axis]!=std::int64_t(valid.lo[axis])-field.ghosts()[axis] ||
+              row.grown_hi[axis]!=std::int64_t(valid.hi[axis])+field.ghosts()[axis])
+            throw std::invalid_argument("Uniform carrier valid/grown geometry differs");
+      }
+    }
+    if (at!=image.patches.size()) throw std::invalid_argument("Uniform carrier extra patch");
+}
+
+template <int Dim>
+void System<Dim>::restore_checkpoint_state_carriers(std::span<const std::uint8_t> bytes) {
+  using Bits=std::conditional_t<sizeof(Real)==8,std::uint64_t,std::uint32_t>;
+  const auto& lane=prepared_boundary_execution_lane();
+  std::vector<std::pair<MultiFab<Dim>*,std::unique_ptr<MultiFab<Dim>>>> candidates;
+  std::exception_ptr error;
+  try {
+    if (!p_->external_restart_transaction_ || p_->external_step_transaction_committed_)
+      throw std::logic_error("Uniform carrier restore requires uncommitted restart transaction");
+    validate_checkpoint_state_carriers(bytes);
+    const auto image=runtime::checkpoint::decode_state_carriers<Dim>(bytes);
+    std::size_t begin=0;
+    for (const auto& name:image.blocks) {
+      auto& target=p_->find(name).U;
+      auto candidate=std::make_unique<MultiFab<Dim>>(target.layout(),target.distribution(),target.local_rank(),target.ncomp(),target.ghosts());
+      for (std::size_t local=0;local<target.local_size();++local) {
+        const auto& row=image.patches[begin+target.global_index(local)];
+        const auto& live=target.fab(local);auto prior=live.create_host_mirror();live.copy_to_host(prior);
+        auto& fab=candidate->fab(local);auto host=fab.create_host_mirror();
+        if (row.bits.size()!=host.size()) throw std::invalid_argument("Uniform carrier storage size differs");
+        const auto stride=static_cast<std::size_t>(fab.grown_box().numPts());
+        for (int component=0;component<target.ncomp();++component)
+          for (std::size_t cell=0;cell<static_cast<std::size_t>(fab.box().numPts());++cell) {
+            auto remaining=cell;
+            std::size_t address=std::size_t(component)*stride,axis_stride=1;
+            for (int axis=0;axis<Dim;++axis) {
+              const auto length=static_cast<std::size_t>(fab.box().length(axis));
+              const auto coordinate=std::int64_t(fab.box().lo[axis])+remaining%length;
+              remaining/=length;
+              address+=static_cast<std::size_t>(coordinate-fab.grown_box().lo[axis])*axis_stride;
+              axis_stride*=static_cast<std::size_t>(fab.grown_box().length(axis));
+            }
+            if (row.bits[address]!=std::bit_cast<Bits>(prior(address)))
+              throw std::invalid_argument("Uniform carrier valid cells contradict scientific state projection");
+          }
+        for (std::size_t value=0;value<host.size();++value)
+          host(value)=std::bit_cast<Real>(static_cast<Bits>(row.bits[value]));
+        fab.copy_from_host(host);
+      }
+      begin+=target.layout().size();candidates.emplace_back(&target,std::move(candidate));
+    }
+    Kokkos::fence();
+  } catch (...) {error=std::current_exception();}
+  collectively_rethrow_exception(error,lane,"Uniform carrier restore preparation");
+  const std::string_view authority(reinterpret_cast<const char*>(bytes.data()),bytes.size());
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"Uniform-state-carriers",authority}},lane))
+    throw std::invalid_argument("Uniform carrier bytes differ across ranks");
+  error={};
+  try {
+    for (const auto& [target,candidate]:candidates)
+      for (std::size_t local=0;local<target->local_size();++local)
+        Kokkos::deep_copy(target->fab(local).storage(),candidate->fab(local).storage());
+    Kokkos::fence();
+  } catch (...) {error=std::current_exception();}
+  collectively_rethrow_exception(error,lane,"Uniform carrier restore publication");
 }
 
 template <int Dim>
@@ -1040,5 +1155,8 @@ template EffectiveOptionsReport System<kNativeDimension>::effective_options_repo
 }  // namespace pops
 
 namespace pops {
-template std::vector<std::vector<std::uint8_t>> System<kNativeDimension>::observe_accepted_state_storage() const;
+template std::vector<std::vector<std::uint8_t>> System<kNativeDimension>::observe_accepted_state_storage(bool) const;
+template std::uint64_t System<kNativeDimension>::checkpoint_state_carriers_capacity() const;
+template void System<kNativeDimension>::validate_checkpoint_state_carriers(std::span<const std::uint8_t>) const;
+template void System<kNativeDimension>::restore_checkpoint_state_carriers(std::span<const std::uint8_t>);
 }

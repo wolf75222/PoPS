@@ -1,0 +1,27 @@
+{
+  "additional_block_owner_test": {
+    "passed": 1,
+    "seconds": 0.59
+  },
+  "baseline": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+  "catalog_correction_commit": "83a8751c",
+  "checkpoint_payload": 9,
+  "coherent_source_host": {
+    "native_deselected": 17,
+    "passed": 27,
+    "seconds": 72.41
+  },
+  "command": "env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/python -m pytest --noconftest -p no:cacheprovider -o pythonpath=\"python .\" tests/review/test_sol61_uniform_checkpoint9_preparation.py tests/review/test_sol61_uniform_carrier_restore_host.py tests/review/test_sol61_uniform_storage_observation_host.py tests/review/test_sol61_state_carriers_resource_capacity.py tests/python/unit/codegen/test_checkpoint_migration.py -m \"not compiler and not native_loader\" -xq",
+  "diff_check": "PASS",
+  "full_native_tu_compilation": false,
+  "mpi_or_gpu_run": false,
+  "native_abi": 8,
+  "native_collection": {
+    "executed": false,
+    "nodes": 2
+  },
+  "native_or_scientific_qualification": false,
+  "release_generation_check": "PASS",
+  "root_approval": false,
+  "schema": "sol61.uniform-checkpoint9-source-preparation@1"
+}

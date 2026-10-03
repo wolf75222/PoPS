@@ -96,4 +96,4 @@ def test_common_budget_refuses_missing_or_foreign_carrier_capacity_before_owner_
         history_flux_snapshot_bytes=0,structural_bytes=0,field_provider_manifest_characters=0,
         program=None,block_nvars_by_name={},field_names=())
     with pytest.raises(ValueError):_common_budget(None,None,runtime_kind='amr',**kwargs)
-    with pytest.raises(ValueError):_common_budget(None,None,runtime_kind='uniform',state_carriers_bytes=8,**kwargs)
+    with pytest.raises(ValueError):_common_budget(None,None,runtime_kind='uniform',state_carriers_bytes=-1,**kwargs)

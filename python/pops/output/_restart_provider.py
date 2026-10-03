@@ -1045,7 +1045,10 @@ class _RestartSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class RestartV3:
-    """Compatibility-named adapter over strict Uniform v8 / AMR v11 accepted-state payloads."""
+    """Adapter over Uniform9 / AMR12; explicit legacy Uniform8 is valid-only.
+
+    The default identity guarantee applies to full current payloads. A per-call
+    state_storage="valid_only_legacy8" request never certifies grown State bits."""
 
     __pops_ir_immutable__ = True
     bit_identical: bool = False
@@ -1147,8 +1150,10 @@ class RestartV3:
             raise RuntimeError("restart cursor consensus returned no cursor set")
         return ReopenedRestart(Path(target), payload, cursors)
 
-    def restore(self, runtime: Any, reopened: Any) -> Any:
+    def restore(self, runtime: Any, reopened: Any, *, state_storage: str = "full") -> Any:
         self.validate_configuration()
+        if state_storage != "full" and self.hierarchy.mode == "regrid_on_restart":
+            raise ValueError("legacy Uniform8 state storage cannot regrid on restart")
         if type(reopened) is not ReopenedRestart:
             raise TypeError("RestartV3.restore requires an exact ReopenedRestart")
         if self.hierarchy.mode == "regrid_on_restart":
@@ -1159,10 +1164,12 @@ class RestartV3:
                 hierarchy_mode=self.hierarchy.mode,
                 hierarchy_identity=self.hierarchy.identity.token,
             )
+        options = {} if state_storage == "full" else {"state_storage": state_storage}
         return runtime._restore_checkpoint(
             reopened.payload,
             reopened.cursors,
             bit_identical=self.bit_identical,
+            **options,
         )
 
 

@@ -1417,6 +1417,35 @@ void bind_system_data(py::class_<System>& cls) {
             return to_ranked_field(s.density_global(name), s.spatial_shape());
           },
           py::arg("name"))
+      .def("checkpoint_state_carriers", [](const System& s) {
+        const auto images=s.observe_accepted_state_storage(true);
+        py::object result;std::exception_ptr error;
+        try {const auto& bytes=images.at(1);result=py::bytes(reinterpret_cast<const char*>(bytes.data()),bytes.size());}
+        catch (...) {error=std::current_exception();}
+        pops::collectively_rethrow_exception(error,s.prepared_boundary_execution_lane(),"Uniform checkpoint carrier Python staging");
+        return result;
+      })
+      .def("checkpoint_state_carriers_capacity", &System::checkpoint_state_carriers_capacity)
+      .def("validate_checkpoint_state_carriers", [](const System& s, py::object value) {
+        std::span<const std::uint8_t> bytes;
+        std::exception_ptr error;
+        try {
+          if (!PyBytes_CheckExact(value.ptr())) throw std::invalid_argument("Uniform carriers require immutable bytes");
+          bytes={reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(value.ptr())),static_cast<std::size_t>(PyBytes_GET_SIZE(value.ptr()))};
+        } catch (...) {error=std::current_exception();}
+        if (error) std::rethrow_exception(error);
+        s.validate_checkpoint_state_carriers(bytes);
+      })
+      .def("restore_checkpoint_state_carriers", [](System& s, py::object value) {
+        std::span<const std::uint8_t> bytes;
+        std::exception_ptr error;
+        try {
+          if (!PyBytes_CheckExact(value.ptr())) throw std::invalid_argument("Uniform carriers require immutable bytes");
+          bytes={reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(value.ptr())),static_cast<std::size_t>(PyBytes_GET_SIZE(value.ptr()))};
+        } catch (...) {error=std::current_exception();}
+        pops::collectively_rethrow_exception(error,s.prepared_boundary_execution_lane(),"Uniform carrier Python restore input");
+        s.restore_checkpoint_state_carriers(bytes);
+      })
       .def("observe_accepted_state_storage", [](const System& s) {
         const auto images = s.observe_accepted_state_storage();
         py::object result;

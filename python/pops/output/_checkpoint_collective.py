@@ -1181,6 +1181,7 @@ def restore_checkpoint_payload(
     payload: bytes,
     *,
     bit_identical: bool,
+    state_storage: str = "full",
     hierarchy_mode: str = "restore_recorded_hierarchy",
     hierarchy_identity: str | None = None,
     phase_prefix: str = "native restart",
@@ -1199,6 +1200,18 @@ def restore_checkpoint_payload(
     if not isinstance(phase_prefix, str) or not phase_prefix:
         raise TypeError("restart phase prefix must be non-empty text")
     topology = checkpoint_topology(owner)
+    storage_error = None
+    try:
+        from ._checkpoint_contract import require_checkpoint_resource_budget
+        if type(state_storage) is not str or state_storage not in ("full", "valid_only_legacy8"):
+            raise ValueError("restart state_storage must be full or valid_only_legacy8")
+        if state_storage != "full" and require_checkpoint_resource_budget(executor).runtime_kind != "uniform":
+            raise ValueError("valid_only_legacy8 is scoped to Uniform System")
+    except BaseException as error:
+        storage_error = error
+    rows = consensus(topology, "%s state-storage policy" % phase_prefix, error=storage_error, value=state_storage)
+    if any(row["value"] != state_storage for row in rows):
+        raise ValueError("restart state-storage policies differ across ranks")
     outer_active = False
     outer_protocol_error = None
     try:
@@ -1300,7 +1313,8 @@ def restore_checkpoint_payload(
                 hierarchy_identity=selected_hierarchy_identity,
             )
         else:
-            prepared = methods["_prepare_checkpoint_restart"](payload, bit_identical=policy)
+            options = {} if state_storage == "full" else {"state_storage": state_storage}
+            prepared = methods["_prepare_checkpoint_restart"](payload, bit_identical=policy, **options)
     except BaseException as error:
         prepare_error = error
     consensus(topology, "%s preflight" % phase_prefix, error=prepare_error)
@@ -1442,6 +1456,7 @@ def restore_checkpoint_path(
     path: Any,
     *,
     bit_identical: bool,
+    state_storage: str = "full",
     hierarchy_mode: str = "restore_recorded_hierarchy",
     hierarchy_identity: str | None = None,
     phase_prefix: str = "native restart",
@@ -1494,6 +1509,7 @@ def restore_checkpoint_path(
             executor,
             payload,
             bit_identical=policy,
+            state_storage=state_storage,
             hierarchy_mode=selected_hierarchy_mode,
             hierarchy_identity=hierarchy_identity,
             phase_prefix=phase_prefix,
@@ -1503,6 +1519,7 @@ def restore_checkpoint_path(
         executor,
         payload,
         bit_identical=policy,
+        state_storage=state_storage,
         phase_prefix=phase_prefix,
     )
 

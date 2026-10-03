@@ -1492,7 +1492,12 @@ class System {
   /// accepted-state-storage-observation@1: [rank-local, complete] POPSCAR1 bytes.
   /// Collective, accepted idle only; copies actual grown storage without refresh or fill.
   [[nodiscard]] POPS_EXPORT std::vector<std::vector<std::uint8_t>>
-  observe_accepted_state_storage() const;
+  observe_accepted_state_storage(bool provisional_capture = false) const;
+  /// uniform-state-carriers@1: complete actual storage, no ghost refresh.
+  [[nodiscard]] POPS_EXPORT std::uint64_t checkpoint_state_carriers_capacity() const;
+  POPS_EXPORT void validate_checkpoint_state_carriers(std::span<const std::uint8_t> bytes) const;
+  /// Requires active outer restart transaction; publication preserves storage allocations.
+  POPS_EXPORT void restore_checkpoint_state_carriers(std::span<const std::uint8_t> bytes);
   std::vector<double> state_global(
       const std::string& name) const;      ///< U, ncomp*global cell product
   std::vector<double> potential_global();  ///< phi, global cell product

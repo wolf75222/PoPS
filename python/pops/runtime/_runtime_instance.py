@@ -2373,6 +2373,7 @@ class RuntimeInstance:
         cursors: ConsumerCursorSet,
         *,
         bit_identical: bool,
+        state_storage: str = "full",
         hierarchy_mode: str = "restore_recorded_hierarchy",
         hierarchy_identity: str | None = None,
     ) -> Any:
@@ -2543,6 +2544,7 @@ class RuntimeInstance:
             self._executor,
             payload,
             bit_identical=policy,
+            state_storage=state_storage,
             hierarchy_mode=selected_hierarchy_mode,
             hierarchy_identity=hierarchy_identity,
             phase_prefix="native restart",
@@ -2552,10 +2554,17 @@ class RuntimeInstance:
         )
         return result.restart_identity if selected_hierarchy_mode == "regrid_on_restart" else result
 
-    def restart(self, path: Any) -> Any:
+    def restart(self, path: Any, *, state_storage: str = "full") -> Any:
+        if type(state_storage) is not str or state_storage not in ("full", "valid_only_legacy8"):
+            raise ValueError("restart state_storage must be full or valid_only_legacy8")
         operation = self._restart_operation()
         reopened = operation.reopen(self, path)
-        return operation.restore(self, reopened)
+        if state_storage == "full":
+            return operation.restore(self, reopened)
+        from pops.output._restart_provider import RestartV3
+        if type(operation) is not RestartV3:
+            raise TypeError("legacy Uniform state-storage restart requires RestartV3")
+        return operation.restore(self, reopened, state_storage=state_storage)
 
     def __str__(self) -> str:
         return "RuntimeInstance(layouts=%d, blocks=%d, consumers=%d)" % (

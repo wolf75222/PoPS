@@ -28,6 +28,7 @@ class _PreparedUniformRestart:
     auxiliary_checkpoint: bytes
     exchange_checkpoint: bytes
     program_diagnostic_checkpoint: bytes
+    state_carriers: bytes | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,7 +192,7 @@ class _SystemIO(_System):
         blocks = tuple(str(block) for block in self._s.block_names())
         if not blocks or len(blocks) != len(set(blocks)):
             raise ValueError("checkpoint requires a non-empty unique Uniform block order")
-        required_collectives = ["state_global"]
+        required_collectives = ["state_global", "checkpoint_state_carriers"]
         if not callable(getattr(self._s, "capture_auxiliary_checkpoint_accepted_state", None)):
             raise TypeError("checkpoint Uniform engine lacks exact auxiliary checkpoint capture")
         out = {
@@ -345,6 +346,10 @@ class _SystemIO(_System):
             out["field_potential_%d" % index] = np.asarray(
                 self._s.field_potential_global(slot), dtype=np.float64
             )
+        state_carriers = self._s.checkpoint_state_carriers()
+        if type(state_carriers) is not bytes or not state_carriers.startswith(b"POPSCAR1"):
+            raise ValueError("Uniform checkpoint requires complete POPSCAR1 immutable bytes")
+        out["state_carriers_checkpoint"] = np.frombuffer(state_carriers, dtype=np.uint8).copy()
         auxiliary_checkpoint = self._s.capture_auxiliary_checkpoint_accepted_state()
         if type(auxiliary_checkpoint) is not bytes or not auxiliary_checkpoint.startswith(
             b"POPSAUX2"
@@ -436,6 +441,7 @@ class _SystemIO(_System):
         payload: bytes,
         *,
         bit_identical: bool,
+        state_storage: str = "full",
         hierarchy_mode: str = "restore_recorded_hierarchy",
         hierarchy_identity: str | None = None,
     ) -> _PreparedUniformRestart:
@@ -475,12 +481,23 @@ class _SystemIO(_System):
         require_restart_bit_identical(bit_identical, where="Uniform restart")
         d = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         identity = authenticate_checkpoint_payload(self, d, runtime_kind="uniform")
+        if type(state_storage) is not str or state_storage not in ("full", "valid_only_legacy8"):
+            raise ValueError("Uniform state_storage must be full or valid_only_legacy8")
         require_exact_payload_version(
             d,
             key="pops_checkpoint_version",
-            expected=UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+            expected=UNIFORM_CHECKPOINT_PAYLOAD_VERSION if state_storage == "full" else 8,
             runtime_kind="Uniform",
         )
+        carrier_bytes = None
+        if state_storage == "full":
+            carriers = np.asarray(d["state_carriers_checkpoint"])
+            if carriers.dtype != np.dtype(np.uint8) or carriers.ndim != 1:
+                raise ValueError("Uniform checkpoint carriers require rank-one uint8")
+            carrier_bytes = carriers.tobytes()
+            self._s.validate_checkpoint_state_carriers(carrier_bytes)
+        elif "state_carriers_checkpoint" in d:
+            raise ValueError("legacy Uniform8 must not claim full-state carriers")
         spatial = authenticate_checkpoint_spatial_contract(self, d)
         authenticate_checkpoint_embedded_boundary_contract(self, d)
         preflight_uniform_restart(d)
@@ -677,7 +694,7 @@ class _SystemIO(_System):
         exchanges = prepare_checkpoint_continuation(self, d)
         from pops.runtime._checkpoint_program_diagnostics import prepare_checkpoint_program_diagnostics
         diagnostics = prepare_checkpoint_program_diagnostics(self, d)
-        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges, diagnostics)
+        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges, diagnostics, carrier_bytes)
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
@@ -745,6 +762,8 @@ class _SystemIO(_System):
         self._s._restore_checkpoint_program_exchanges(prepared.exchange_checkpoint)
         # Replay may itself record diagnostics. Restore the exact accepted table afterward.
         self._s._restore_checkpoint_program_diagnostics(prepared.program_diagnostic_checkpoint)
+        if prepared.state_carriers is not None:
+            self._s.restore_checkpoint_state_carriers(prepared.state_carriers)
         self._temporal_restart_state = prepared.temporal_state
         self._step_controller = None
         self._last_restart_identity = prepared.restart_identity
@@ -781,7 +800,7 @@ class _SystemIO(_System):
             del self._continuation_receipt_before_restart
             self.__dict__.pop("_prepared_continuation_restart_receipt", None)
 
-    def restart(self, path: Any, *, bit_identical: bool = False) -> Any:
+    def restart(self, path: Any, *, bit_identical: bool = False, state_storage: str = "full") -> Any:
         """Restore the direct engine through the native collective transaction protocol."""
         from pops.output._checkpoint_collective import restore_checkpoint_path
 
@@ -790,5 +809,6 @@ class _SystemIO(_System):
             self,
             path,
             bit_identical=bit_identical,
+            state_storage=state_storage,
             phase_prefix="Uniform direct-engine restart",
         )

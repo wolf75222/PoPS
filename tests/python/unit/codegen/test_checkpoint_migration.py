@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 import pops
-from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+from pops.codegen._checkpoint_migration_uniform_v2 import UNIFORM_V2_TARGET_VERSION
 from pops._checkpoint_migration_protocol import _CHECKPOINT_MIGRATION_PROVENANCE_MAX_CHARACTERS
 from pops.codegen.checkpoint_migration import (
     UNIFORM_V2_AUTHORITY_TRANSFERS,
@@ -453,7 +453,7 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, na
     migrated = _decode_reviewed(destination.read_bytes())
     _, restart = inspect_checkpoint_payload_integrity(migrated, runtime_kind="uniform")
     assert report.destination_restart_identity == restart.token
-    assert int(migrated["pops_checkpoint_version"]) == UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+    assert int(migrated["pops_checkpoint_version"]) == UNIFORM_V2_TARGET_VERSION
     authority_payload = decode_checkpoint_bytes(authority_bytes, owner._checkpoint_resource_budget)
     assert str(migrated["program_hash"]) == str(authority_payload["program_hash"])
     from pops.runtime._checkpoint_exchanges import CONTINUATION_CHECKPOINT_KEYS
@@ -482,7 +482,7 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, na
             source_payload["history_blk.R_%d" % slot],
         )
 
-    accepted = owner.restart(destination)
+    accepted = owner.restart(destination, state_storage="valid_only_legacy8")
     assert accepted.token == report.destination_restart_identity
 
 
