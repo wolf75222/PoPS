@@ -1,6 +1,7 @@
 # Declared quadrature domain M18 / W09
 
-Library contract `pops.discrete-entropy-certificate@1` is authoring algebra.
+Current library contract `pops.discrete-entropy-certificate@2` is authoring algebra;
+@1 remains historical and is not the current floating-point certificate contract.
 `DiscreteEntropyCertificate` accepts an exact declared quadrature and arbitrary
 basis-order covector, checks exact rational signs of its binary coefficients at
 **every** retained basis column, and requires a positive column margin. It makes
@@ -14,8 +15,11 @@ five-node/three-moment example is byte-preserved.
 
 For y=(.5,-1), the target (1,.9) has margin -.4 and is certified outside the
 cone. Target (1,.5) has zero margin: nonnegative endpoint populations can realize
-it, but positive finite exponential populations cannot. Separate native guards
-name these two refusals. Target (1,.49) is inside; the common Newton header
+it, but positive finite exponential populations cannot: this is a mathematical
+proof for the declared table. Runtime certifies the negative W09 margin as
+`target_infeasible`; its boundary/cancellation band is conservatively
+`finite_dual_not_certified`, not a floating-point proof of exact boundary.
+Target (1,.49) is inside; the common Newton header
 converges at residual 4.04e-14 without changing the prescribed target. Guards
 are authored by public `value/min/guard`, before `LocalResidual`, not new
 compiler/runtime opcodes. Numeric FP acceptance thresholds are unchanged.
@@ -60,3 +64,5 @@ MPI/GPU, performance, CI or complete mission qualification follows from Source.
 Certificate @2 normalizes by an exact power of two, checking every binary coefficient and every node again. Unrepresentable dynamic range is refused at authoring. Runtime products/sums carry a conservative binary64 forward-error envelope: values within it are `finite_dual_not_certified`, never a numerical proof of a boundary. Nonfinite arithmetic is explicitly indeterminate. The declared W09 boundary has a separate mathematical proof; no target is repaired.
 
 Spatial reductions use min(margin+error) and min(margin-error), never independently reduced errors. Finiteness of every target, product, margin and bound is converted to a 0/1 indicator with native Where before collective minimum; NaN/Inf on one cell therefore cannot hide behind another cell's finite minimum. The previous @2 implementation and independent spatial RED remain historical.
+
+Independent review preserved both REDs (subnormal direction and spatially mismatched error envelope). The corrected cohort passed 96 Source/host tests and 7 independent adversaries; no Native execution or qualification is inferred. Independent report SHA256: `2c4d81fc9fdf0475cfb4b63f92462e05c5f4c93c127db32773b66dc9e933f2de`.
