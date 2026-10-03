@@ -254,12 +254,8 @@ class ProgramProviderPlans:
         for qid, rows in self._plans.items():
             values = []
             for slot, (key, contract) in enumerate(rows):
-                optional_unit = (
-                    "std::nullopt" if contract.unit is None
-                    else "std::optional<std::string>{%s}" % json.dumps(
-                        json.dumps(contract.unit.to_data(), sort_keys=True, separators=(",", ":"))
-                        if hasattr(contract.unit, "to_data") else contract.unit)
-                )
+                from ._native_units import optional_unit_cpp
+                optional_unit = optional_unit_cpp(contract.unit)
                 optional_kind = (
                     "std::nullopt" if contract.value_kind is None
                     else "std::optional<std::string>{%s}" % json.dumps(contract.value_kind)

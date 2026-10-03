@@ -543,12 +543,14 @@ def _emit_auxiliary_route_registration(
             literal(value[name]) for name in ("owner_qid", "space_kind", "space_name", "component")
         )
 
+    from ._native_units import optional_unit_cpp
+
     def contract(row: Mapping[str, Any]) -> str:
         value = row["contract"]
         return "Contract{%s, %s, %s, %s, %s}" % (
             literal(value["representation"]),
             literal(value["centering"]),
-            optional(value["unit"]),
+            optional_unit_cpp(value["unit"]),
             literal(value["layout"]),
             optional(value["value_kind"]),
         )
@@ -667,7 +669,7 @@ def _emit_auxiliary_route_registration(
                     ),
                     literal(contract_value.representation),
                     literal(contract_value.centering),
-                    optional(contract_value.unit),
+                    optional_unit_cpp(contract_value.unit),
                     literal(contract_value.layout),
                     optional(contract_value.value_kind),
                     shape_for(
