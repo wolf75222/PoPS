@@ -93,7 +93,7 @@ def test_installed_amr_consumed_field_regrid_and_nonfinite_rollback(
         ),
     )
     runtime = collective_call(
-        world, lambda: pops.bind(artifact, execution_context=artifact_execution_context(artifact))
+        world, lambda: pops.bind(artifact, resources={"execution_context": artifact_execution_context(artifact)})
     )
 
     def capture(label):
