@@ -1418,9 +1418,9 @@ void bind_system_data(py::class_<System>& cls) {
           },
           py::arg("name"))
       .def("checkpoint_state_carriers", [](const System& s) {
-        const auto images=s.observe_accepted_state_storage(true);
+        const auto bytes=s.checkpoint_state_carriers();
         py::object result;std::exception_ptr error;
-        try {const auto& bytes=images.at(1);result=py::bytes(reinterpret_cast<const char*>(bytes.data()),bytes.size());}
+        try {result=py::bytes(reinterpret_cast<const char*>(bytes.data()),bytes.size());}
         catch (...) {error=std::current_exception();}
         pops::collectively_rethrow_exception(error,s.prepared_boundary_execution_lane(),"Uniform checkpoint carrier Python staging");
         return result;

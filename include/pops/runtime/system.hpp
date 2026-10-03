@@ -1492,7 +1492,10 @@ class System {
   /// accepted-state-storage-observation@1: [rank-local, complete] POPSCAR1 bytes.
   /// Collective, accepted idle only; copies actual grown storage without refresh or fill.
   [[nodiscard]] POPS_EXPORT std::vector<std::vector<std::uint8_t>>
-  observe_accepted_state_storage(bool provisional_capture = false) const;
+  observe_accepted_state_storage() const;
+  /// Checkpoint capture may serialize the current provisional effect under its active outer
+  /// transaction; this is distinct from accepted-idle observation and makes no publication.
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_state_carriers() const;
   /// uniform-state-carriers@1: complete actual storage, no ghost refresh.
   [[nodiscard]] POPS_EXPORT std::uint64_t checkpoint_state_carriers_capacity() const;
   POPS_EXPORT void validate_checkpoint_state_carriers(std::span<const std::uint8_t> bytes) const;
@@ -1547,6 +1550,7 @@ class System {
                                                   /// @}
 
  private:
+  std::vector<std::vector<std::uint8_t>> capture_state_storage_(bool provisional_capture) const;
   typename SystemInterfaceProvider<Dim>::CoreEvaluator prepare_interface_core_evaluator_(
       typename SystemInterfaceProvider<Dim>::CoreFaceEvaluator* retained_evaluator = nullptr);
   void prepare_bound_physical_group_();

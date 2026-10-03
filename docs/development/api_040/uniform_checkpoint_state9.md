@@ -72,3 +72,11 @@ The catalog correction is a distinct preceding commit at unchanged payload8:
 `sol61_release_catalog_baseline3302_authority.json` records historical digests,
 actual catalog digest and baseline guard failure. The CP9 authority file then
 records the separate payload9 change, still Native ABI8.
+
+Additive observer ABI correction: the historical C++
+`observe_accepted_state_storage() const` signature/export is preserved exactly.
+The boolean capture helper is private. A separate public checkpoint-carrier route
+permits the existing provisional checkpoint effect only under its uncommitted
+external step transaction; it does not publish or label that image accepted.
+The observer remains unconditionally accepted-idle. Old noarg method pointers
+remain source-compatible and the native explicit noarg symbol is retained.

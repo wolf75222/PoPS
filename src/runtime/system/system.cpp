@@ -258,7 +258,7 @@ std::vector<runtime::program::ExchangeRecord> System<Dim>::program_exchange_reco
 
 
 template <int Dim>
-std::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_storage(bool provisional_capture) const {
+std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool provisional_capture) const {
   const auto& lane = prepared_boundary_execution_lane();
   using namespace runtime::checkpoint;
   using Bits = std::conditional_t<sizeof(Real) == 8, std::uint64_t, std::uint32_t>;
@@ -368,6 +368,17 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_stora
   } catch (...) { error = std::current_exception(); }
   collectively_rethrow_exception(error, lane, "accepted state storage observation result allocation");
   return observation;
+}
+
+template <int Dim>
+std::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_storage() const {
+  return capture_state_storage_(false);
+}
+
+template <int Dim>
+std::vector<std::uint8_t> System<Dim>::checkpoint_state_carriers() const {
+  auto images=capture_state_storage_(true);
+  return std::move(images[1]);
 }
 
 template <int Dim>
@@ -1155,7 +1166,8 @@ template EffectiveOptionsReport System<kNativeDimension>::effective_options_repo
 }  // namespace pops
 
 namespace pops {
-template std::vector<std::vector<std::uint8_t>> System<kNativeDimension>::observe_accepted_state_storage(bool) const;
+template std::vector<std::vector<std::uint8_t>> System<kNativeDimension>::observe_accepted_state_storage() const;
+template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_state_carriers() const;
 template std::uint64_t System<kNativeDimension>::checkpoint_state_carriers_capacity() const;
 template void System<kNativeDimension>::validate_checkpoint_state_carriers(std::span<const std::uint8_t>) const;
 template void System<kNativeDimension>::restore_checkpoint_state_carriers(std::span<const std::uint8_t>);

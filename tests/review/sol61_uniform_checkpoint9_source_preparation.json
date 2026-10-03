@@ -3,6 +3,13 @@
     "passed": 1,
     "seconds": 0.59
   },
+  "additive_observer_delta": {
+    "actual_capture_and_restore_host_passed": 6,
+    "boolean_helper_private": true,
+    "full_native_symbol_table_not_rebuilt": true,
+    "historical_noarg_signature_preserved": true,
+    "seconds": 7.66
+  },
   "baseline": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
   "catalog_correction_commit": "83a8751c",
   "checkpoint_payload": 9,

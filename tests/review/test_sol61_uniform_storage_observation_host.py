@@ -8,7 +8,7 @@ ROOT=Path(__file__).resolve().parents[2]
 @pytest.mark.parametrize('dim',(1,2,3))
 def test_actual_adapter_preserves_grown_bits_and_refuses_nonaccepted(tmp_path,dim):
     text=(ROOT/'src/runtime/system/system.cpp').read_text()
-    start=text.index('template <int Dim>\nstd::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_storage(bool provisional_capture)')
+    start=text.index('template <int Dim>\nstd::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool provisional_capture)')
     end=text.index('\ntemplate <int Dim>\nstd::uint64_t System<Dim>::checkpoint_state_carriers_capacity',start)
     body=text[start:end]
     source=tmp_path/'adapter.cpp'
@@ -40,7 +40,9 @@ template<int D>class System{public:
 struct Block{Field<D>U;};struct Impl{Lifecycle lifecycle_;int macro_step_=0;double t=7.5;bool external_restart_transaction_=false;bool external_step_transaction_=false;bool external_step_transaction_committed_=false;Names blocks_;std::array<Block,2>blocks;const Block&find(const std::string&name)const{return blocks[name=="vector-first"?0:1];}};
 std::unique_ptr<Impl>p_=std::make_unique<Impl>();std::size_t depth=0;
 std::size_t step_transaction_depth()const{return depth;}const Lane&prepared_boundary_execution_lane()const{static Lane lane;return lane;}
-std::vector<std::vector<std::uint8_t>> observe_accepted_state_storage(bool provisional_capture=false)const;
+std::vector<std::vector<std::uint8_t>> observe_accepted_state_storage()const;
+std::vector<std::vector<std::uint8_t>> capture_state_storage_(bool provisional_capture)const;
+std::vector<std::uint8_t> checkpoint_state_carriers()const;
 };
 """+body+r"""
 }
@@ -49,8 +51,8 @@ for(int b=0;b<2;++b){auto&field=system.p_->blocks[b].U;field.components=b?1:3;st
 auto first=system.observe_accepted_state_storage();auto local=decode_state_carriers<D>(first[0]);auto complete=decode_state_carriers<D>(first[1]);assert(local.shard==0&&complete.shard==-1&&complete.blocks.size()==2);for(int b=0;b<2;++b){auto&patch=complete.patches[b];assert(patch.components==std::uint64_t(b?1:3));for(std::size_t i=0;i<patch.bits.size();++i)assert(patch.bits[i]==std::bit_cast<std::uint64_t>(system.p_->blocks[b].U.f.storage.data[i]));}
 system.p_->blocks[0].U.f.storage.data[0]=-1234.;assert(system.observe_accepted_state_storage()[1]!=first[1]);assert(decode_state_carriers<D>(first[1]).patches[0].bits[0]!=std::bit_cast<std::uint64_t>(-1234.));
 for(int mode=0;mode<3;++mode){system.depth=mode==0;system.p_->external_restart_transaction_=mode==1;system.p_->lifecycle_.phase=mode==2?"assembling":"bound";bool refused=false;try{(void)system.observe_accepted_state_storage();}catch(const std::logic_error&){refused=true;}assert(refused);}
-system.depth=1;system.p_->external_restart_transaction_=false;system.p_->lifecycle_.phase="running";system.p_->external_step_transaction_=true;system.p_->external_step_transaction_committed_=false;assert(!system.observe_accepted_state_storage(true)[1].empty());
-for(int mode=0;mode<3;++mode){system.depth=mode==0?2:1;system.p_->external_step_transaction_=mode!=1;system.p_->external_step_transaction_committed_=mode==2;bool refused=false;try{(void)system.observe_accepted_state_storage(true);}catch(const std::logic_error&){refused=true;}assert(refused);}
+system.depth=1;system.p_->external_restart_transaction_=false;system.p_->lifecycle_.phase="running";system.p_->external_step_transaction_=true;system.p_->external_step_transaction_committed_=false;assert(!system.checkpoint_state_carriers().empty());
+for(int mode=0;mode<3;++mode){system.depth=mode==0?2:1;system.p_->external_step_transaction_=mode!=1;system.p_->external_step_transaction_committed_=mode==2;bool refused=false;try{(void)system.checkpoint_state_carriers();}catch(const std::logic_error&){refused=true;}assert(refused);}
 
 }
 """)
