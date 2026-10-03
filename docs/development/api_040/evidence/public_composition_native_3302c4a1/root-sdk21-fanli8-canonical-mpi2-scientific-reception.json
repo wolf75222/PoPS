@@ -1,0 +1,186 @@
+{
+  "GPU_inter_node_Dim1_Dim3_qualified": false,
+  "actual_shard_patch_counts": {
+    "accepted1": [
+      1,
+      0
+    ],
+    "accepted2": [
+      1,
+      0
+    ],
+    "accepted3": [
+      1,
+      0
+    ],
+    "accepted4": [
+      1,
+      0
+    ],
+    "accepted5": [
+      1,
+      0
+    ],
+    "accepted6": [
+      1,
+      0
+    ],
+    "accepted7": [
+      1,
+      0
+    ],
+    "accepted8": [
+      1,
+      0
+    ],
+    "initial": [
+      1,
+      0
+    ]
+  },
+  "backend_scope": "Dim2 CPU OpenMP, MPI-enabled SDK, 2 actual rank(s)",
+  "checkpoint_restart_qualified": false,
+  "compiled_provenance": {
+    "compiler_to_binary_semantic_proof": false,
+    "model_DSO_sha256": "4c8e3d700e88e9caa63a613c576005b6f14cc455542b95d6b3c17173176d8791",
+    "model_TU_sha256": "58aad0302801794bb956b0f5557e5932adab73ca35ec649836ae8ece7260050f",
+    "models": 1,
+    "program_CPP_sha256": "971149f2ca740c2c49ee428e7f23db7b6fc10935844575bda1256d624c275a5d",
+    "program_DSO_sha256": "c2f081debcc71277b78cf6858e37bbb807290aefd699c54acc7d32b25f68c8be",
+    "program_IR_sha256": "496309a1367861b42e83fa421c21039ca7501989102109a92b48f9e42ea5286c"
+  },
+  "full_M17_qualified": false,
+  "ghost_formula_qualified": false,
+  "github_ci_qualified": false,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-fanli-canonical-mpi2-independent-732111/report.json",
+    "sha256": "885cff38228f1409c93ff6ead8b2f621c343ae6a43e94c832da4f63b3c048f05"
+  },
+  "math_and_storage": {
+    "native_authority": false,
+    "root_scientific_approval": false,
+    "science": {
+      "contract": "pops.fan-li15.uniform-eight-saved-math@1",
+      "dop853_final_error": 4.460334324107862e-10,
+      "h3_max": 0.017545356253353284,
+      "h4_max": 0.005277108301697017,
+      "metrics": [
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.00756390007852085,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 1
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007562055866979791,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 2
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007560198272613448,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 3
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.0075583273010747755,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 4
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007556442958074221,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 5
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007554545249378193,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 6
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.00755263418081085,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 7
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007550709758252182,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 8
+        }
+      ],
+      "native_authority": false,
+      "root_scientific_approval": false,
+      "whole_carrier_qualification": false
+    },
+    "storage": {
+      "checkpoint_restart_qualified": false,
+      "contract": "sol61.fan-li15-eight-uniform-storage-reception@1",
+      "ghost_formula_qualified": false,
+      "native_authority": false,
+      "patch_counts": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "phases": [
+        "initial",
+        "accepted1",
+        "accepted2",
+        "accepted3",
+        "accepted4",
+        "accepted5",
+        "accepted6",
+        "accepted7",
+        "accepted8"
+      ],
+      "ranks": 2,
+      "root_scientific_approval": false
+    }
+  },
+  "native_job": "732111",
+  "native_node_status": "PASSED",
+  "performance_qualified": false,
+  "pins_rehashed": 122,
+  "pins_sha256": "28fcc2aafd446ba7f2043da0a1ada52db483825be89932154a5b3d808c3d69c8",
+  "pure_reader_imported_pops": false,
+  "rank_authority": {
+    "JUnit_timing": {
+      "rank0.xml": {
+        "case_seconds": 474.569,
+        "suite_seconds": 474.888
+      },
+      "rank1.xml": {
+        "case_seconds": 474.561,
+        "suite_seconds": 474.874
+      }
+    },
+    "actual_native_ranks": [
+      0,
+      1
+    ],
+    "logical_scenarios": 1,
+    "world": 2
+  },
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-fanli-canonical-mpi2-independent-732111/run.py",
+    "sha256": "5ff0c8eefa7a1600ebd4a87d6acba7389784232d6ff786401e5dfbfd8e999eca"
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk21-fanli-eight-canonical-mpi2-scoped-scientific-reception@1",
+  "scope": "original smooth periodic Fan-Li15, normalized analytic path, canonical order, N16x16 extrusion, dt1e-4, eight SSPRK2 accepted steps and nine saved captures only",
+  "scoped_native_scientific_acceptance": true,
+  "source_freeze": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+  "whole_mission_complete": false
+}

@@ -1,0 +1,57 @@
+{
+  "changed_CXX_inputs": [],
+  "checks": {
+    "doctor_all_true": true,
+    "git_source_blobs_verified": 1191,
+    "installed_codegen_authority_matches_git": true,
+    "installed_files": 1156,
+    "observed_CXX_objects": 0,
+    "observed_snapshot_domain_count": 1191,
+    "old_environment_preserved": true,
+    "root_transfer_pins_rehashed": 23,
+    "sdk20_archive_verified_files": 1156,
+    "sdk20_matches_sdk20_prior_installation": true,
+    "shipped_source_verified_files": 1147,
+    "source_before_after_equal": true,
+    "wheel_nonRECORD_members_verified": 1152
+  },
+  "codegen_source_authority": {
+    "contract": "pops.codegen-source@1",
+    "sha256": "c90343018034d7259dacccfb6e37dc92f0e1c72735b8fa0f74c7a9ef31301d4b"
+  },
+  "compile_commands_available": false,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-build-independent-732100/report.json",
+    "sha256": "84c4951264be4404650da37c8d0fc56ca28128d862eb7abe42f1f47f9ad3a666"
+  },
+  "installed_header_signature": "2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d",
+  "job": "732100",
+  "native_extension_changed": false,
+  "native_scientific_acceptance": false,
+  "native_sha256": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-build-independent-732100/audit_build.py",
+    "sha256": "530766c368bd0ad153b9856061cffdfc56b6622bac68f2d419c18b0c339cbb64"
+  },
+  "root_recompute_exact_bytes": true,
+  "root_replay": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-build-root-replay-732100/report.json",
+  "schema": "root.sdk21.build-install-reception@1",
+  "scientific_reference_preflight": {
+    "finite": true,
+    "max_error": 2.0872192862952943e-14,
+    "method": "DOP853",
+    "numpy": "2.5.3",
+    "original_FanLi_case_qualified": false,
+    "schema": "root.scientific-reference-preflight@1",
+    "scipy": "1.18.1",
+    "success": true
+  },
+  "separate_supplement_pins_rehashed": 23,
+  "separate_supplement_pins_sha256": "72e68a6d8d6e32bd47926affb3fa2c955036a1efed98b3a4420859f6d01cd561",
+  "source_freeze": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+  "test_extra_package_versions": {
+    "numpy": "2.5.3",
+    "scipy": "1.18.1"
+  },
+  "whole_mission_complete": false
+}

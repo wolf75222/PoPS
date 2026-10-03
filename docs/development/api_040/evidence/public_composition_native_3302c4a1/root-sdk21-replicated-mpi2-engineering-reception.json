@@ -1,0 +1,239 @@
+{
+  "GPU_inter_node_Dim1_Dim3_qualified": false,
+  "backend_scope": "Dim2 CPU Kokkos OpenMP, MPICH MPI2 on one node",
+  "body": {
+    "Program_CPP": "456f98a1313b1178175c051f8640f64971438e0861d8110ba139c4fd8e1eaa16",
+    "Program_IR": "3b16c8bcec7cf14e5a563f1534320cde16e2fa02f7eaed941a87a16fdfc59d25",
+    "ghost_manifest": {
+      "compiled_required_depths": {
+        "Q0": 1,
+        "Q1": 1,
+        "forcing": 1
+      },
+      "scope": "compiled requirement, not an independently inferred configured AMR allocation"
+    },
+    "identity": {
+      "abi_key": "compiler=15.3.0;std=202002L;headers=2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+      "doctor": {
+        "compilateur": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/g++ [baked by the _pops build] ; -std=c++20 accepted"
+        ],
+        "headers_sync": [
+          true,
+          "headers == module build (sig 2d3aa1140e6b...)"
+        ],
+        "include": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/source/include"
+        ],
+        "interpreteur": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python (3.12) ; extension /gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "kokkos": [
+          true,
+          "Kokkos module (thread/device resources selected before initialization)"
+        ],
+        "kokkos_root": [
+          true,
+          "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15"
+        ],
+        "numpy": [
+          true,
+          "2.5.3"
+        ],
+        "threads": [
+          true,
+          "OMP_NUM_THREADS=1 ; first System created=False"
+        ]
+      },
+      "execution_environment": {
+        "FI_PROVIDER": null,
+        "FI_TCP_IFACE": null,
+        "OMP_NUM_THREADS": "1",
+        "OMP_PROC_BIND": "false",
+        "POPS_THREADS": "1"
+      },
+      "native_file": "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+      "native_sha256": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+      "package_file": "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/__init__.py",
+      "package_version": "1.1.0",
+      "python": "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python",
+      "schema_version": 2,
+      "scope": "installed production PoPS, local CPU Kokkos, MPI-enabled Dim=2",
+      "source_commit": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+      "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_files_sha256": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+      "sys_path": [
+        "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source/scripts",
+        "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source",
+        "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source/docs/development/api_040",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python312.zip",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/lib-dynload",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages"
+      ],
+      "verified_source_files": 1147
+    },
+    "job": 732138,
+    "model_provenance": [
+      {
+        "DSO": "2a193a4b51d3648cb5f20ff7999bd25efa9e12e804184ba879f50dc6111835d6",
+        "TU": "77d138f56ede1bf606dfff0ba9923b81167e09429193925e497729cf79d56009",
+        "block": "Q0"
+      },
+      {
+        "DSO": "f49fcb2e1f35fb790ec4d28bf70b461239e3d9986346c55e69ed8081c126aa61",
+        "TU": "9f54ffe105b7e0ec39061593535c91ba00251de6a7e962da3690e97d2873eb9b",
+        "block": "Q1"
+      },
+      {
+        "DSO": "d0257c212be1339b98e85babdaf34b66509418b0e869e4470ce36a3227e2a451",
+        "TU": "57ad88280356230b119e282e03b2ae7da99287819cca64892fa895a97e0393ef",
+        "block": "forcing"
+      }
+    ],
+    "payload": {
+      "logical_scenarios": 1,
+      "native_authority": false,
+      "payload_preparation_only": true,
+      "ranks": [
+        {
+          "coarse_owners": [
+            1,
+            1
+          ],
+          "rank": 0,
+          "topology": [
+            {
+              "block": "Q0",
+              "holes": 0,
+              "level": 0
+            },
+            {
+              "block": "Q0",
+              "holes": 192,
+              "level": 1
+            },
+            {
+              "block": "Q1",
+              "holes": 0,
+              "level": 0
+            },
+            {
+              "block": "Q1",
+              "holes": 192,
+              "level": 1
+            },
+            {
+              "block": "forcing",
+              "holes": 0,
+              "level": 0
+            },
+            {
+              "block": "forcing",
+              "holes": 192,
+              "level": 1
+            }
+          ]
+        },
+        {
+          "coarse_owners": [
+            1,
+            1
+          ],
+          "rank": 1,
+          "topology": [
+            {
+              "block": "Q0",
+              "holes": 0,
+              "level": 0
+            },
+            {
+              "block": "Q0",
+              "holes": 192,
+              "level": 1
+            },
+            {
+              "block": "Q1",
+              "holes": 0,
+              "level": 0
+            },
+            {
+              "block": "Q1",
+              "holes": 192,
+              "level": 1
+            },
+            {
+              "block": "forcing",
+              "holes": 0,
+              "level": 0
+            },
+            {
+              "block": "forcing",
+              "holes": 192,
+              "level": 1
+            }
+          ]
+        }
+      ],
+      "root_seal": false,
+      "scope": "private valid setter/getter bytes/clock; no entire-engine empty-rank claim, evolution, rollback, Ghost readiness or science",
+      "world": 2
+    },
+    "profile": "replicated",
+    "program_DSO": "ebc057d5d2ea1dbe34efba441dc1efd3bb96098beaf6cb463fd825822a494904",
+    "rank_authority": {
+      "JUnit_timing": {
+        "rank0.xml": {
+          "case_seconds": 243.154,
+          "suite_seconds": 244.522
+        },
+        "rank1.xml": {
+          "case_seconds": 243.155,
+          "suite_seconds": 244.522
+        }
+      },
+      "actual_native_ranks": [
+        0,
+        1
+      ],
+      "logical_scenarios": 1,
+      "world": 2
+    },
+    "raw_regular_count": 78,
+    "root_seal": false,
+    "schema": "sol61.sdk21.engineering-mpi-reception@1",
+    "scientific_acceptance": false,
+    "scope": "engineering storage getter/readonly only; no science/evolution/rollback/Ghost-readiness/CP qualification"
+  },
+  "empty_owner_scope": null,
+  "engineering_storage_scope_received": true,
+  "evolution_rollback_checkpoint_Ghost_readiness_qualified": false,
+  "github_ci_qualified": false,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-engineering-mpi-received-independent-20261003/replicated-report.json",
+    "sha256": "f4c32fe4dbb04bc3aaeb32fcc48a0fa219cd1738107483c69a219c095943b45e"
+  },
+  "job": 732138,
+  "pins": {
+    "external_authorities": 3,
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-engineering-mpi-received-independent-20261003/replicated-pins.json",
+    "profile_report": 1,
+    "raw_regular_files": 78,
+    "sha256": "224662bae7eba195e4b30f1425095bde71db1a03f2ab0f0b362d5f5d3cb9b5cc",
+    "shared_helpers": 5,
+    "total_rehashed": 87
+  },
+  "profile": "replicated",
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-engineering-mpi-received-independent-20261003/receive.py",
+    "sha256": "fc61dd2c94092b5cf369677f185699a6de4b603981b595f765ad820f5c955606"
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk21.engineering-mpi-profile-reception@1",
+  "scientific_acceptance": false,
+  "source_freeze": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+  "whole_mission_complete": false
+}
