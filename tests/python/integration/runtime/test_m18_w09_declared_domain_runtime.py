@@ -8,7 +8,7 @@ import pytest
 from examples.migration.scientific.api040_m18_w09 import make_case, NODES, WEIGHTS, CERTIFICATES
 from tests.python.integration.runtime.test_user_numerical_bodies_runtime import _world
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
-from tests.python.support.collective_checks import collective_call, collective_check, collective_attempt, state_snapshots
+from tests.python.support.collective_checks import collective_call, collective_check, collective_attempt
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.evolved_stage_v_capture import retain_v_provenance
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -27,10 +27,11 @@ def test_declared_quadrature_near_boundary_and_w09(isolated_native_cache,tmp_pat
     directory = collective_directory(world,tmp_path/'entropy-domain')
     collective_call(world,lambda:retain_v_provenance(artifact,native,directory,rank))
     prescribed = np.stack((np.ones((2,2)),np.full((2,2),moment)))
-    runtime = collective_call(world,lambda:pops.bind(artifact,initial_values={subjects[0]:np.zeros_like(prescribed),subjects[1]:prescribed.copy()},resources={'execution_context':artifact_execution_context(artifact)}))
     def json_file(path,value):
         path.write_text(json.dumps(value,sort_keys=True,allow_nan=False,indent=2)+'\n')
         return {'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+    collective_call(world,lambda:json_file(directory/f'preparation.rank{rank}.json',{'schema':'pops.entropy-declared-domain-fixture@2','before_bind':True,'rank':rank,'ranks':1 if world is None else world.size,'moment':moment,'target':[1.,moment],'nodes':list(NODES),'weights':list(WEIGHTS),'certificates':[c.to_data() for c in CERTIFICATES],'expected_diagnostic':diagnostic}))
+    runtime = collective_call(world,lambda:pops.bind(artifact,initial_values={subjects[0]:np.zeros_like(prescribed),subjects[1]:prescribed.copy()},resources={'execution_context':artifact_execution_context(artifact)}))
     def capture(label):
         observation = collective_call(world,runtime.observe_accepted_state_storage)
         def raw():
@@ -38,20 +39,25 @@ def test_declared_quadrature_near_boundary_and_w09(isolated_native_cache,tmp_pat
             for name,payload in [('rank-local',observation.rank_local),('complete',observation.complete)]:
                 path=directory/f'{label}.rank{rank}.{name}.bin';path.write_bytes(payload)
                 pins[name]={'path':str(path),'sha256':hashlib.sha256(payload).hexdigest()}
-            pins['metadata']=json_file(directory/f'{label}.rank{rank}.json',{'contract':observation.contract,'time':runtime.time(),'macro_step':runtime.macro_step(),'history':runtime.consumer_cursors.to_data(),'dimension':observation.dimension})
+            pins['metadata']=json_file(directory/f'{label}.rank{rank}.json',{'contract':observation.contract,'time':runtime.time(),'macro_step':runtime.macro_step(),'consumer_cursors':runtime.consumer_cursors.to_data(),'dimension':observation.dimension})
             return pins
         pins=collective_call(world,raw)
-        states=state_snapshots(runtime,world,('unknown','prescribed'))
-        def valid():
-            for name,array in zip(('dual','target'),states,strict=True):
+        states=[]
+        collective_call(world,lambda:json_file(directory/f'{label}.rank{rank}.pins.json',pins))
+        for block,name in (('unknown','dual'),('prescribed','target')):
+            value=collective_call(world,lambda block=block:runtime.state_global(block))
+            def persist_valid():
+                array=np.asarray(value).copy()
                 path=directory/f'{label}.rank{rank}.{name}.npy';np.save(path,array,allow_pickle=False)
                 pins[name]={'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
-            json_file(directory/f'{label}.rank{rank}.pins.json',pins)
-        collective_call(world,valid)
+                json_file(directory/f'{label}.rank{rank}.pins.json',pins)
+                return array
+            states.append(collective_call(world,persist_valid))
+        states=tuple(states)
         return observation.complete,states,(runtime.time(),runtime.macro_step()),runtime.consumer_cursors.to_data()
     before=capture('before')
     result,failures=collective_attempt(world,lambda:pops.run(runtime,t_end=.01,max_steps=1,console=False))
-    collective_call(world,lambda:json_file(directory/f'attempt.rank{rank}.json',{'schema':'pops.entropy-declared-domain-fixture@1','moment':moment,'failures':failures,'certificates':[c.to_data() for c in CERTIFICATES]}))
+    collective_call(world,lambda:json_file(directory/f'attempt.rank{rank}.json',{'schema':'pops.entropy-declared-domain-fixture@2','moment':moment,'failures':failures,'certificates':[c.to_data() for c in CERTIFICATES]}))
     after=capture('after')
     with collective_check(world):
         np.testing.assert_array_equal(after[1][1].reshape(2,2,2),prescribed)
