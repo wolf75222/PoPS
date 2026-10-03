@@ -52,20 +52,11 @@ def test_installed_uniform_full_state_checkpoint_restart(profile,tmp_path,record
     resolved=collective_call(world,lambda:pops.resolve(validated,layout=layout,compile_options={'model_source_policy':'require'}))
     artifact=(collective_call(world,lambda:pops.compile(resolved)) if world is None else compile_resolved_plan_once(world,resolved,route='uniform-state-cp9-'+profile,compile_artifact=pops.compile))
     directory=collective_directory(world,tmp_path/('uniform-state-cp9-'+profile))
+    from tests.python.support.uniform_checkpoint9_capture import retain_provenance,persist_phase,validate_phase
     def provenance():
-        if not root():return
-        rows=tuple(artifact.layout_programs)
-        if len(rows)!=1:raise ValueError('one exact Uniform layout required')
-        row,=rows;row.verify();artifact.verify()
-        if row.target!='system' or set(row.block_names)!=set(initial) or artifact.program is not row.program:raise ValueError('Uniform partition authority differs')
-        models=[]
-        for block in artifact.blocks:
-            evidence=block.model.source_provenance(require_complete=True)
-            filename=block.name+'.model.cpp';block.model.dump_cpp(directory/filename)
-            models.append({'block':block.name,'actual_source':evidence,'source_file':filename,'binary_sha256':hashlib.sha256(Path(block.model.so_path).read_bytes()).hexdigest()})
-        dump_retained_program(row.program,directory);row.program.dump_ir(directory/'program.ir.json')
-        (directory/'compiled-manifest.json').write_text(json.dumps(artifact.manifest().to_dict(),sort_keys=True,allow_nan=False))
-        (directory/'provenance.json').write_text(json.dumps({'schema':'pops.uniform-state-carrier-checkpoint-provenance@1','profile':profile,'models':models,'layout_identity':row.identity.token,'artifact_identity':artifact.artifact_identity.token,'root_approval':False},sort_keys=True,allow_nan=False))
+        if root():
+            retain_provenance(artifact,directory)
+            (directory/'preparation.json').write_text(json.dumps({'schema':'pops.uniform-state-carrier-checkpoint-preparation@2','profile':profile,'before_bind':True,'root_approval':False},allow_nan=False))
     collective_call(world,provenance)
     bindings=resolved.initial_condition_plan.bindings
     values=initial_values_for_bindings(bindings,initial)
@@ -75,11 +66,13 @@ def test_installed_uniform_full_state_checkpoint_restart(profile,tmp_path,record
     def capture(label):
         observation=collective_call(world,runtime.observe_accepted_state_storage)
         clock=(runtime.time,runtime.macro_step)
-        def persist():
-            if root():
-                (directory/(label+'.carriers')).write_bytes(observation.complete)
-                (directory/(label+'.clock.json')).write_text(json.dumps(clock,allow_nan=False))
-        collective_call(world,persist)
+        rank=0 if world is None else world.rank
+        ranks=1 if world is None else world.size
+        collective_call(world,lambda:persist_phase(directory,label,rank,ranks,observation,clock,{}))
+        valid={name:collective_call(world,lambda name=name:runtime.state_global(name)) for name in initial}
+        collective_call(world,lambda:persist_phase(directory,label,rank,ranks,observation,clock,valid))
+        # Every raw shard/complete/valid/envelope is durable before a rejecting guard.
+        collective_call(world,lambda:validate_phase(observation,clock,valid))
         phases[label]=(observation.complete,clock)
         return phases[label]
     def run_to(label,end):
@@ -143,6 +136,6 @@ def test_installed_uniform_full_state_checkpoint_restart(profile,tmp_path,record
         with collective_check(world):assert replay==continuous[step]
     def receipt():
         if root():
-            files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in directory.iterdir() if p.is_file()}
-            (directory/'receipt.json').write_text(json.dumps({'schema':'pops.uniform-state-carrier-checkpoint-native-fixture@1','profile':profile,'checkpoint_step':checkpoint_step,'final_step':final_step,'ranks':1 if world is None else world.size,'phases':list(phases),'refusals':refusals,'files':files,'state_valid_grown_and_clock_exact':True,'field_history_fullgrown_qualified':False,'ghost_formula_qualified':False,'root_approval':False},sort_keys=True,allow_nan=False))
+            files={str(p.relative_to(directory)):hashlib.sha256(p.read_bytes()).hexdigest() for p in directory.rglob('*') if p.is_file()}
+            (directory/'receipt.json').write_text(json.dumps({'schema':'pops.uniform-state-carrier-checkpoint-native-fixture@2','profile':profile,'checkpoint_step':checkpoint_step,'final_step':final_step,'ranks':1 if world is None else world.size,'phases':list(phases),'refusals':refusals,'files':files,'state_valid_grown_and_clock_exact':True,'field_history_fullgrown_qualified':False,'ghost_formula_qualified':False,'root_approval':False},sort_keys=True,allow_nan=False))
     collective_call(world,receipt);record_property('uniform_state_checkpoint_receipt',str(directory/'receipt.json'))
