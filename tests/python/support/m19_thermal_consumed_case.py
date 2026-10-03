@@ -26,12 +26,12 @@ def build(directory, *, reverse=False, gradient=False, provider_factory=native_p
     rod = PhysicalSupport((('x','periodic rod'),))
     frame = Rectangle('storage x then eta',(0,0),(1,1)).frame(Cartesian2D())
     case = pops.Case('screened thermal laminate and independent reservoirs')
-    source = Module('nonkinetic temperature load')
+    source = Module('nonkinetic temperature load', frame=frame)
     space = source.state_space('thermal coefficients',('unused','heat_load'),support=slab,
                               units=(unit,unit),sampling='cell_average')
     destinations=[]
     for i,name in enumerate((NAMES[0],NAMES[2])):
-        model=Module('thermal reservoir '+str(i))
+        model=Module('thermal reservoir '+str(i), frame=frame)
         evolved=model.state_space('accumulation',('spectator','enthalpy','marker'),support=rod,
                                   units=(unit,unit,unit),sampling='cell_average')
         incoming=model.field_space('applied temperature',('delivered',),support=rod,units=(unit,),sampling='cell')
