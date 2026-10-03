@@ -37,9 +37,13 @@ owner lookup or refresh the solver through another accessor. Its future state
 comparison discriminates the consumed force; the oracle's Poisson residual does
 not certify a saved Native Field residual.
 
-The full public Source preparation depends on the separately owned coherent
-Module.frame and source-only compiler admission changes. The frozen 6a77 API has
-no Module.frame and refuses the explicit transport-boundary frame. That failure
-is retained; no false positive Source/Native result is reported. The separate
+The separately owned Module.frame and source-only compiler admission changes are
+now consumed coherently. The earlier frozen 6a77 failure is retained. The new
+Source cohort reaches the mapped-publication authority check and refuses two
+evaluations of the same physical producer at distinct SSPRK2 stages (1 failure,
+20 passes). This is reported to the primitive author; no guard is relaxed.
+Flux() selects the uniquely authored default physical flux for the configured
+HLL finite-volume realization. Flux(handle) is a distinct named centered-divergence
+route and correctly refuses that FV realization; the prior refusal is preserved. The separate
 SSA fix a8d478f1 preserves captured equations when a mapped RHS is later named at
 another point, with 45 affected Source tests passing and genuine drift rejected.

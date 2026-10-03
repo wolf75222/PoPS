@@ -70,7 +70,7 @@ def build(directory,*,nx=8,nv=4,charge=1,provider_factory=native_physical_mappin
         port=solution.mapping_port(field[potential],derivative_axis=0,factor=-1)
         context=solution.publish_mapped(lift,{(target,'electric'):port},states={fs:value})
         mapped.append((port,solution))
-        return p.rhs(state=value,fields=context,terms=[Flux(flux)]),moment
+        return p.rhs(state=value,fields=context,terms=[Flux()]),moment
     initial_point=p.stage('initial accepted coordinate',c=0)
     initial=p.value('read accepted distribution',kinetic.n,at=initial_point)
     r0,n0=evaluate(initial,'initial')
