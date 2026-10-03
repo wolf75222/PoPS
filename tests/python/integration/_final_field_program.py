@@ -243,6 +243,7 @@ def resolve_periodic_field_program(
     components: tuple[Any, ...] = (),
     cxx: str | None = None,
     include: str | None = None,
+    compile_options: Any = None,
     strict_restart: bool = False,
     consumer_factory: ConsumerFactory | None = None,
     anchored_field: bool = False,
@@ -375,6 +376,10 @@ def resolve_periodic_field_program(
             "backend": Production(),
             "compile_options": {"cxx": cxx, "include": include},
         }
+    if compile_options is not None:
+        declared_options = dict(compile_options)
+        declared_options.update(native_options.get("compile_options", {}))
+        native_options["compile_options"] = declared_options
     return pops.resolve(
         pops.validate(case),
         layout=layout,
