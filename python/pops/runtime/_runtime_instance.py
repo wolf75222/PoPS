@@ -2434,7 +2434,7 @@ class RuntimeInstance:
 
         outer_snapshot: dict[str, Any] = {}
 
-        def prepare_outer_state() -> None:
+        def prepare_outer_state() -> Any:
             source_run_identity = checkpoint_run_identity(stored)
             restore_run_identity = getattr(self._executor, "_restore_checkpoint_run_identity", None)
             if not callable(restore_run_identity):
@@ -2461,8 +2461,19 @@ class RuntimeInstance:
                 "geometry_cache": dict(geometry_cache),
                 "run_authorities": snapshot_run_authorities(self._executor),
             }
+            from pops.identity import make_identity
+
+            prior = prepared_snapshot["run_authorities"][0][1]
+            epoch = make_identity("run", {
+                "continuation": "checkpoint_restart_epoch@1",
+                "source_run_identity": None if source_run_identity is None else source_run_identity.to_data(),
+                "previous_owner_run": None if prior[1] is None else prior[1].to_data(),
+                "previous_owner_lineage": None if prior[2] is None else prior[2].to_data(),
+            })
+            prepared_snapshot["continuation_epoch"] = epoch
             outer_snapshot.clear()
             outer_snapshot.update(prepared_snapshot)
+            return epoch.token
 
         def restore_outer_state(native_result: Any) -> None:
             selected_hierarchy_mode = outer_snapshot["hierarchy_mode"]
@@ -2508,6 +2519,24 @@ class RuntimeInstance:
                 outer_snapshot["canonical_diagnostics"]
             )
             restore_run_identity(restored_run_identity)
+            # A successful rewind is a new continuation, not permission to reopen a closed run.
+            # Keep the authenticated source run as last_run_identity; only future run requests
+            # receive this owner-history lineage. The outer snapshot restores it on failure.
+            from pops.identity import make_identity
+
+            epoch = outer_snapshot["continuation_epoch"]
+            if selected_hierarchy_mode == "regrid_on_restart":
+                epoch = make_identity(
+                    "run",
+                    {
+                        "continuation": "checkpoint_regrid_epoch@1",
+                        "owner_epoch": epoch.to_data(),
+                        "source_run_identity": (None if restored_run_identity is None
+                                                else restored_run_identity.to_data()),
+                    },
+                )
+            for current, _values in outer_snapshot["run_authorities"]:
+                current._restart_lineage_identity = epoch
 
         def rollback_outer_state() -> None:
             failures = []

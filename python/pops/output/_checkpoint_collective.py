@@ -1321,15 +1321,19 @@ def restore_checkpoint_payload(
 
     if outer_active:
         outer_prepare_error = None
+        outer_prepared_value = None
         try:
-            cast(Callable[[], Any], prepare_outer_state)()
+            outer_prepared_value = cast(Callable[[], Any], prepare_outer_state)()
         except BaseException as error:
             outer_prepare_error = error
-        consensus(
+        outer_rows = consensus(
             topology,
             "%s outer-state preparation" % phase_prefix,
             error=outer_prepare_error,
+            value=outer_prepared_value,
         )
+        if any(row["value"] != outer_rows[0]["value"] for row in outer_rows):
+            raise ValueError("restart outer-state continuation authority differs across ranks")
 
     active = False
     begin_error = None
