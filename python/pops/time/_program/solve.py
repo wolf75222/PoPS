@@ -508,6 +508,13 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if isinstance(value, _Affine):
             return self._linear_combine(name, value, at=at)
         if isinstance(value, ProgramValue):
+            if _is_field_value(value):
+                current = self._canonical_value(value)
+                if name == current.name and (at is None or at == current.point):
+                    return current
+                # A named materialization is a new SSA image. Retargeting the existing
+                # record would alter prior consumers, including sealed solve equations.
+                return self._linear_combine(name, value, at=value.point if at is None else at)
             return self._replace_value(value, name=name, point=value.point if at is None else at)
         raise TypeError(
             "value(%r): expected a ProgramValue, an affine combination, or a rate equation; got %r"
