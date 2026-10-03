@@ -258,6 +258,7 @@ sdk-support pops/runtime/builders/factory/model_factory.hpp
 sdk-support pops/runtime/builders/scheme_dispatch.hpp
 sdk-support pops/runtime/checkpoint/spatial_contract.hpp
 sdk-support pops/runtime/checkpoint/state_carriers.hpp
+sdk-support pops/runtime/checkpoint/uniform_migration_authority.hpp
 sdk-support pops/runtime/config/component_interfaces.hpp
 sdk-support pops/runtime/config/component_manifest.hpp
 sdk-support pops/runtime/config/dispatch_tags.hpp

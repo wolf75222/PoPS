@@ -473,6 +473,44 @@ def _attest_empty_accepted_exchange_authority(payload: Mapping[str, Any]) -> Non
         )
 
 
+def _attest_current_storage_authority(payload, spatial, blocks, components, version):
+    """Current storage is attested, not transferred into unknown legacy storage."""
+    from pops._native_selector import selected_native_module
+    from pops.runtime._checkpoint_program_diagnostics import (
+        PROGRAM_DIAGNOSTIC_CHECKPOINT_KEYS, validate_checkpoint_program_diagnostic_arrays)
+    present = validate_checkpoint_program_diagnostic_arrays(payload)
+    if version != 9 and not present:
+        return set()
+    native = selected_native_module(required=True)
+    if present:
+        attest = getattr(native, "_attest_uniform_migration_program_diagnostics", None)
+        if not callable(attest):
+            raise RuntimeError("native migration diagnostic attestation is unavailable")
+        raw, offsets = payload["program_diagnostics_state"], payload["program_diagnostics_offsets"]
+        ranks = len(offsets)-1
+        for rank, (lo, hi) in enumerate(zip(offsets[:-1], offsets[1:], strict=True)):
+            count = attest(raw[int(lo):int(hi)].tobytes(), rank, ranks)
+            if type(count) is not int or count < 0:
+                raise RuntimeError("native migration diagnostic attestation has invalid schema")
+    if version == 9:
+        attest = getattr(native, "_attest_uniform_migration_state_carriers", None)
+        if not callable(attest):
+            raise RuntimeError("native migration valid-projection attestation is unavailable")
+        image = _uint8_vector(payload, "state_carriers_checkpoint", minimum=8)
+        proof = attest(image, spatial.shape, blocks, tuple(len(components[b]) for b in blocks))
+        if (type(proof) is not dict or set(proof) != {
+            "contract", "dimension", "blocks", "valid_state_double_bytes"} or
+            proof["contract"] != "pops.uniform-migration-valid-projection@1" or
+            type(proof["dimension"]) is not int or proof["dimension"] != spatial.dimension or
+            tuple(proof["blocks"]) != blocks or type(proof["valid_state_double_bytes"]) is not tuple or
+            len(proof["valid_state_double_bytes"]) != len(blocks)):
+            raise RuntimeError("native Uniform migration projection attestation has invalid schema")
+        for block, bits in zip(blocks, proof["valid_state_double_bytes"], strict=True):
+            if type(bits) is not bytes or bits != payload["state_"+block].tobytes(order="C"):
+                raise ValueError("Uniform9 authority carrier valid projection contradicts scientific state")
+    return set(PROGRAM_DIAGNOSTIC_CHECKPOINT_KEYS) if present else set()
+
+
 def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     from pops.output._consumer_contracts import ConsumerGraph
     from pops.runtime._checkpoint_manifest import (
@@ -633,6 +671,8 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
             key = "history_%s_%d" % (name, slot)
             _float64_array(payload, key, (ncomp, *spatial.shape))
             expected.add(key)
+    expected |= _attest_current_storage_authority(
+        payload, spatial, blocks, block_components, authority_version)
     if _files(payload) != expected:
         raise ValueError("current Uniform migration authority has ambiguous or unknown keys")
 
@@ -936,7 +976,9 @@ def _migrate_payload(
     output = {
         name: np.array(value, copy=True)
         for name, value in authority.payload.items()
-        if name not in {MANIFEST_KEY, IDENTITY_KEY, "state_carriers_checkpoint"}
+        # Current diagnostics and grown data never describe the historical v2 state.
+        if name not in {MANIFEST_KEY, IDENTITY_KEY, "state_carriers_checkpoint",
+                        "program_diagnostics_state", "program_diagnostics_offsets"}
     }
     output["pops_checkpoint_version"] = np.asarray(UNIFORM_V2_TARGET_VERSION, dtype=np.int64)
     for row in mapping.blocks:
@@ -1158,7 +1200,7 @@ def migrate_uniform_v2_checkpoint(
     Current strict Uniform payload9 restart refuses this artifact: no source-grown
     authority exists in v2. Use the matching historical SDK8 contract explicitly.
 
-    ``current_authority`` is a complete, authenticated v8 checkpoint captured from the exact
+    ``current_authority`` is a complete, authenticated v8 or v9 checkpoint captured from the exact
     target runtime. The schema-6 mapping pins both artifact byte streams, their ABI/Program and
     lifecycle identities, the empty natively attested POPSAUX2 image and binary registry-contract
     SHA-256 values, and supplies every semantic correspondence absent from v2. The emitted
