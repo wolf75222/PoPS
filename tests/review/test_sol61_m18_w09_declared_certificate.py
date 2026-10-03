@@ -42,3 +42,35 @@ def test_lossy_dynamic_range_normalization_refused():
     q=DiscreteEntropyQuadrature((0.,1.),(1.,1.),((1.,1.),(0.,1.)))
     with pytest.raises(ValueError,match='exactly'):
         DiscreteEntropyCertificate(q,(float.fromhex('0x1.fffffffffffffp+1023'),5e-324),label='lossy')
+
+@pytest.mark.parametrize('bad',[float('inf'),float('-inf'),float('nan')])
+def test_one_nonfinite_cell_is_indeterminate_before_domain_decisions(bad):
+    import numpy as np
+    class Recorder:
+        def __init__(self): self.failed=[]; self.stopped=False
+        def value(self,label,values): return np.asarray(values)
+        def min(self,value): return float(np.fmin.reduce(value.ravel()))
+        def guard(self,label,seed,condition,*,action):
+            if not self.stopped and not condition:
+                self.failed.append(label);self.stopped=True
+            return seed
+    q=DiscreteEntropyQuadrature((-.5,0.,.5),(1.,1.,1.),((1.,1.,1.),(-.5,0.,.5)))
+    c=DiscreteEntropyCertificate(q,(.5,-1.),label='support')
+    p=Recorder()
+    with np.errstate(all='ignore'):
+        c.guard_finite_dual(p,object(),(np.array([1.,1.]),np.array([.49,bad])))
+    assert p.failed==['support_arithmetic_indeterminate']
+
+def test_error_envelopes_remain_paired_with_each_spatial_cell():
+    import numpy as np
+    class Recorder:
+        def __init__(self): self.failed=[]
+        def value(self,label,values): return np.asarray(values)
+        def min(self,value): return float(np.min(value))
+        def guard(self,label,seed,condition,*,action):
+            if not condition:self.failed.append(label)
+            return seed
+    q=DiscreteEntropyQuadrature((-.5,0.,.5),(1.,1.,1.),((1.,1.,1.),(-.5,0.,.5)))
+    p=Recorder(); DiscreteEntropyCertificate(q,(.5,-1.),label='support').guard_finite_dual(p,object(),(np.array([1.,1e16]),np.array([.49,5e15+1.])))
+    assert 'support_target_infeasible' not in p.failed
+    assert 'support_finite_dual_not_certified' in p.failed

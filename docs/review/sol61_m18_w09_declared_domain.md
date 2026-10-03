@@ -58,3 +58,5 @@ arbitrarily-near-boundary robustness, full M_N/article algorithm, transport,
 MPI/GPU, performance, CI or complete mission qualification follows from Source.
 
 Certificate @2 normalizes by an exact power of two, checking every binary coefficient and every node again. Unrepresentable dynamic range is refused at authoring. Runtime products/sums carry a conservative binary64 forward-error envelope: values within it are `finite_dual_not_certified`, never a numerical proof of a boundary. Nonfinite arithmetic is explicitly indeterminate. The declared W09 boundary has a separate mathematical proof; no target is repaired.
+
+Spatial reductions use min(margin+error) and min(margin-error), never independently reduced errors. Finiteness of every target, product, margin and bound is converted to a 0/1 indicator with native Where before collective minimum; NaN/Inf on one cell therefore cannot hide behind another cell's finite minimum. The previous @2 implementation and independent spatial RED remain historical.

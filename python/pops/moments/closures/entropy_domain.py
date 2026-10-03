@@ -63,16 +63,23 @@ class DiscreteEntropyCertificate:
             raise ValueError('certificate arithmetic error bound is not representable')
         gamma = k*u/(1-k*u)
         error = gamma*sum(abs(c*v) for c,v in zip(self.covector,values,strict=True)) + n*math.ulp(0.0)
-        field = program.value(self.label+'_margin',(margin,)*n)
-        bound = program.value(self.label+'_roundoff',(error,)*n)
-        minimum = program.min(field)
-        maximum_error = program.min(bound)
+        from pops._ir.expr import Expr
+        from pops._ir.control_expr import Where
         limit = float.fromhex('0x1.fffffffffffffp+1023')
-        checked = program.guard(self.label+'_arithmetic_indeterminate_lower',seed,minimum >= -limit,action=FailRun())
-        checked = program.guard(self.label+'_arithmetic_indeterminate_upper',checked,minimum <= limit,action=FailRun())
-        checked = program.guard(self.label+'_arithmetic_indeterminate_bound',checked,maximum_error <= limit,action=FailRun())
-        guarded = program.guard(self.label+'_target_infeasible',checked,minimum >= -maximum_error,action=FailRun())
-        return program.guard(self.label+'_finite_dual_not_certified',guarded,minimum > maximum_error,action=FailRun())
+        def indicator(value):
+            predicate = abs(value) <= limit
+            # Native Where converts NaN comparisons to zero before reduction.
+            return Where(predicate,1.,0.) if isinstance(predicate,Expr) else predicate*1.
+        finite = indicator(margin)*indicator(error)
+        for c,v in zip(self.covector,values,strict=True):
+            finite = finite*indicator(v)*indicator(c*v)
+        field = program.value(self.label+'_finite',(finite,)*n)
+        checked = program.guard(self.label+'_arithmetic_indeterminate',seed,program.min(field) >= 1.,action=FailRun())
+        # Keep each error paired with the margin that produced it.
+        lower = program.value(self.label+'_lower_margin',(margin+error,)*n)
+        upper = program.value(self.label+'_upper_margin',(margin-error,)*n)
+        guarded = program.guard(self.label+'_target_infeasible',checked,program.min(lower) >= 0.,action=FailRun())
+        return program.guard(self.label+'_finite_dual_not_certified',guarded,program.min(upper) > 0.,action=FailRun())
 
     def to_data(self):
         return {'contract':'pops.discrete-entropy-certificate@2','nodes':list(self.quadrature.nodes),
