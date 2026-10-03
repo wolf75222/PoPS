@@ -6,6 +6,7 @@
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include <pops/runtime/dynamic/physical_support_transfer.hpp>
 
 #include <array>
 #include <bit>
@@ -486,8 +487,13 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
   }
 
   void validate_physical_contract(bool moment) const {
-    if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1)
-      throw std::invalid_argument("physical maps require host memory");
+    if (execution.memory_space != component::physical_transfer_detail::memory_kind<
+                                      typename field_type::memory_space>())
+      throw std::invalid_argument("physical maps execution memory differs from native field storage");
+    if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 &&
+        !component::physical_transfer_detail::supports_device_context(
+            execution_abi, static_cast<PopsMemorySpaceV1>(execution.memory_space)))
+      throw std::invalid_argument("physical maps require a supported authenticated backend memory lane");
     if (source->dm.rank_space() != target->dm.rank_space() ||
         source->local_rank != target->local_rank ||
         source->dm.rank_space().size() != static_cast<std::size_t>(communicator.size()) ||

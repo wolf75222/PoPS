@@ -60,7 +60,7 @@ def _native_source(physical: Any, manifest: Any) -> bytes:
         '  operation.weights = request->axis_weights;',
         '  operation.weight_count = request->weight_count;',
         '  std::copy_n(request->weight_offsets, 3, operation.weight_offsets);',
-        '  return pops::component::apply_physical_support_integral(operation, request->source, request->destination, status);',
+        '  return pops::component::apply_physical_support_integral(operation, request->source, request->destination, status, &request->execution);',
         '}',
         'const PopsTransferApiV2 table = {',
         '  {sizeof(PopsTransferApiV2), POPS_COMPONENT_PROTOCOL_ABI_V1,',
@@ -94,14 +94,17 @@ def native_physical_mapping(requirement: Any, directory: Any) -> Any:
     interface = interfaces.Transfer
     manifest = ComponentManifest(
         uri="pops://physical-maps/" + requirement.qualified_id.rsplit("::", 1)[-1],
-        component_type="transfer", version="2.0.0", facets=interface.facets,
+        component_type="transfer", version="2.1.0", facets=interface.facets,
         signature={"generic": True, "native_interface": interface.signature_declaration(),
                    "physical_map": physical.to_data(),
+                   "physical_backend_dispatch": {"contract": "physical-support-backend-dispatch@1",
+                                                 "weights": "invocation-owned-backend-copy",
+                                                 "quadrature": "sequential-per-output-cell"},
                    "physical_integral": {"interface_version": 2,
                                          "physical_contract_identity": physical_map_identity(physical)}},
         interfaces=interface.manifest_declarations(),
-        target={"variants": [{"dimension": physical.native_dimension, "scalar": "float64", "device": "cpu",
-                              "features": []}]},
+        target={"variants": [{"dimension": physical.native_dimension, "scalar": "float64", "device": device,
+                              "features": []} for device in ("cpu", "cuda", "hip", "sycl", "openmptarget")]},
         entry_points={"interface_table": "pops_component_interface_v1"})
     source = _native_source(physical, manifest)
     root = Path(directory) / requirement.qualified_id.rsplit("::", 1)[-1]

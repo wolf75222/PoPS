@@ -380,3 +380,93 @@ TEST(PhysicalSupportTransfer, ActiveNonfiniteCellIsNotHiddenByZeroMomentWeight) 
 }
 
 }  // namespace
+
+TEST(PhysicalSupportTransfer, OwnedBackendWeightsDoNotAliasAuthoredStorage) {
+  ensure_kokkos();
+  using ExecutionSpace = Kokkos::DefaultHostExecutionSpace;
+  double authored[] = {1.0, -.5, .25};
+  const ExecutionSpace execution{};
+  pops::component::physical_transfer_detail::OwnedWeights<ExecutionSpace> owned(execution, authored, 3);
+  ASSERT_NE(owned.data(), authored);
+  authored[0] = 991.;
+  authored[1] = 992.;
+  EXPECT_DOUBLE_EQ(owned.data()[0], 1.);
+  EXPECT_DOUBLE_EQ(owned.data()[1], -.5);
+  EXPECT_DOUBLE_EQ(owned.data()[2], .25);
+}
+
+TEST(PhysicalSupportTransfer, DeviceAdmissionCannotRelabelHostMemoryOrUseMissingAuthority) {
+  ensure_kokkos();
+  double source[] = {1., 2., 3.}, destination[] = {kCanary};
+  const double weights[] = {1., 1., 1.};
+  PhysicalSupportTransfer map{};
+  map.dimension = 1; map.operation = 2; map.source_active[0] = 1;
+  map.reduction_cells[0] = 3; map.weights = weights; map.weight_count = 3;
+  auto s = field_view<PopsConstFieldViewV1>(source, 1, {3,1,1}, {1,1,1}, 1, 3);
+  auto d = field_view<PopsFieldViewV1>(destination, 1, {1,1,1}, {1,1,1}, 1, 1);
+  s.memory_space = POPS_MEMORY_SPACE_DEVICE_V1;
+  auto request = request_for(map, s, d);
+  PopsComponentStatusV1 status{};
+  EXPECT_EQ(apply_physical_support_transfer(map, &request, &status), 2);
+  EXPECT_DOUBLE_EQ(destination[0], kCanary);
+  d.memory_space = POPS_MEMORY_SPACE_DEVICE_V1;
+  request.destination = d;
+  // Both views labelled device is insufficient: the exact execution contract is absent.
+  EXPECT_EQ(apply_physical_support_transfer(map, &request, &status), 2);
+  EXPECT_DOUBLE_EQ(destination[0], kCanary);
+}
+
+TEST(PhysicalSupportTransfer, QuadratureRetainsSequentialAssociationForEveryComponent) {
+  ensure_kokkos();
+  const double weights[] = {1.e16, 1., -1.e16};
+  const double source[] = {1., 1., 1., 1., 2., 1., .5, .5, .5};
+  double destination[] = {kCanary, kCanary, kCanary};
+  PhysicalSupportTransfer map{};
+  map.dimension = 1; map.operation = 2; map.source_active[0] = 1;
+  map.reduction_cells[0] = 3; map.weights = weights; map.weight_count = 3;
+  const auto s = field_view<PopsConstFieldViewV1>(source, 1, {3,1,1}, {1,1,1}, 3, 3);
+  const auto d = field_view<PopsFieldViewV1>(destination, 1, {1,1,1}, {1,1,1}, 3, 1);
+  auto request = request_for(map, s, d); PopsComponentStatusV1 status{};
+  ASSERT_EQ(apply_physical_support_transfer(map, &request, &status), 0);
+  EXPECT_DOUBLE_EQ(destination[0], 0.);
+  EXPECT_DOUBLE_EQ(destination[1], 2.);
+  EXPECT_DOUBLE_EQ(destination[2], 0.);
+}
+
+#if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP) || defined(KOKKOS_ENABLE_SYCL) || defined(KOKKOS_ENABLE_OPENMPTARGET)
+TEST(PhysicalSupportTransfer, ActualDeviceReductionUsesOwnedWeightsAndAllComponentStrides) {
+  ensure_kokkos();
+  using ExecutionSpace = Kokkos::DefaultExecutionSpace;
+  using MemorySpace = typename ExecutionSpace::memory_space;
+  Kokkos::View<double*, MemorySpace> source("physical source", 18), destination("physical destination", 6);
+  auto host = Kokkos::create_mirror_view(source);
+  for (int c = 0; c < 3; ++c)
+    for (int x = 0; x < 2; ++x)
+      for (int eta = 0; eta < 3; ++eta)
+        host(c*6+x*3+eta) = (c+1)*.5 + x + eta*.25;
+  Kokkos::deep_copy(source, host);
+  const double weights[] = {.25, -.5, 1.};
+  PhysicalSupportTransfer map{};
+  map.dimension = 2; map.operation = 2; map.source_active[0] = map.source_active[1] = 1;
+  map.target_active[1] = 1; map.source_to_target[1] = 1;
+  map.reduction_cells[0] = 3; map.weights = weights; map.weight_count = 3;
+  auto s = field_view<PopsConstFieldViewV1>(source.data(), 2, {3,2,1}, {1,3,1}, 3, 6);
+  auto d = field_view<PopsFieldViewV1>(destination.data(), 2, {1,2,1}, {1,1,1}, 3, 2);
+  s.memory_space = d.memory_space = POPS_MEMORY_SPACE_DEVICE_V1;
+  auto request = request_for(map, s, d);
+  request.execution = {sizeof(PopsExecutionContextV1), 1, "actual-test-device-lane",
+      POPS_MEMORY_SPACE_DEVICE_V1, "actual-test-compiled-backend", "actual-test-device",
+      POPS_SCALAR_FLOAT64_V1, POPS_PRECISION_FLOAT64_V1, POPS_PRECISION_FLOAT64_V1,
+      POPS_PRECISION_FLOAT64_V1, POPS_PRECISION_FLOAT64_V1, 0, "actual-test-default-stream",
+      0, 0, "serial", "none"};
+  PopsComponentStatusV1 status{};
+  ASSERT_EQ(apply_physical_support_transfer(map, &request, &status), 0);
+  auto output = Kokkos::create_mirror_view(destination); Kokkos::deep_copy(output, destination);
+  for (int c = 0; c < 3; ++c)
+    for (int x = 0; x < 2; ++x) {
+      double expected = 0.;
+      for (int eta = 0; eta < 3; ++eta) expected += host(c*6+x*3+eta)*weights[eta];
+      EXPECT_DOUBLE_EQ(output(c*2+x), expected);
+    }
+}
+#endif
