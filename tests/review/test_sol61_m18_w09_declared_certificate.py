@@ -26,5 +26,19 @@ def test_true_public_graph_resolve_emit_has_two_distinct_diagnostics():
     case,layout,_=make_case()
     resolved=pops.resolve(pops.validate(case),layout=layout)
     source=emit_cpp_program(resolved.time,model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks),target='system')
-    assert source.index('upper_support_target_infeasible')<source.index('upper_support_no_finite_exponential_dual')<source.index('solve_prepared_local_nonlinear')
+    assert source.index('upper_support_target_infeasible')<source.index('upper_support_finite_dual_not_certified')<source.index('solve_prepared_local_nonlinear')
     assert 'AcceptAllLocalCandidates' in source  # declared guard, not a hidden solver recipe
+
+@pytest.mark.parametrize('scale',[2.0**-1073,2.0**-500,1.,2.0**500])
+def test_exact_binary_scaling_preserves_interior(scale):
+    q=DiscreteEntropyQuadrature((-.5,0.,.5),(1.,1.,1.),((1.,1.,1.),(-.5,0.,.5)))
+    c=DiscreteEntropyCertificate(q,(scale/2,-scale),label='scaled')
+    assert c.covector==(.5,-1.)
+    assert c.margin((1.,.49))>0
+    assert c.margin((1.,.5))==0
+    assert c.margin((1.,.9))<0
+
+def test_lossy_dynamic_range_normalization_refused():
+    q=DiscreteEntropyQuadrature((0.,1.),(1.,1.),((1.,1.),(0.,1.)))
+    with pytest.raises(ValueError,match='exactly'):
+        DiscreteEntropyCertificate(q,(float.fromhex('0x1.fffffffffffffp+1023'),5e-324),label='lossy')

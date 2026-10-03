@@ -56,3 +56,5 @@ Source receipts live externally under `sol61-m18-w09-original-preparation`.
 Root must integrate/build and receive actual scientific/refusal archives. No
 arbitrarily-near-boundary robustness, full M_N/article algorithm, transport,
 MPI/GPU, performance, CI or complete mission qualification follows from Source.
+
+Certificate @2 normalizes by an exact power of two, checking every binary coefficient and every node again. Unrepresentable dynamic range is refused at authoring. Runtime products/sums carry a conservative binary64 forward-error envelope: values within it are `finite_dual_not_certified`, never a numerical proof of a boundary. Nonfinite arithmetic is explicitly indeterminate. The declared W09 boundary has a separate mathematical proof; no target is repaired.

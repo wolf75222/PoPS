@@ -15,7 +15,7 @@ from tests.python.support.native_execution_context import artifact_execution_con
 
 pytestmark = [pytest.mark.compiler,pytest.mark.kokkos,pytest.mark.native_loader]
 
-@pytest.mark.parametrize('moment,diagnostic',[(.49,None),(.5,'upper_support_no_finite_exponential_dual'),(.9,'upper_support_target_infeasible')])
+@pytest.mark.parametrize('moment,diagnostic',[(.49,None),(.5,'upper_support_finite_dual_not_certified'),(.9,'upper_support_target_infeasible')])
 def test_declared_quadrature_near_boundary_and_w09(isolated_native_cache,tmp_path,record_property,moment,diagnostic):
     del isolated_native_cache
     from pops._native_selector import select_native_dimension
