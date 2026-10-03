@@ -1266,9 +1266,32 @@ void bind_system_stepping(py::class_<System>& cls) {
           [](System& source, System& target,
              std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& spec,
              const py::dict& execution) {
+            std::optional<SystemLayoutTransferSpec> prepared_spec;
+            std::optional<SystemLayoutTransferExecution> prepared_execution;
+            std::exception_ptr preparation_error;
+            try {
+              prepared_spec.emplace(layout_transfer_spec_from_python(spec));
+              prepared_execution.emplace(layout_transfer_execution_from_python(execution));
+            } catch (...) {
+              preparation_error = std::current_exception();
+            }
+            // DTO parsing may allocate or reject a rank-local Python value. Vote on the
+            // native process world before prepare enters its first collective; an outer
+            // Python collective cannot compensate for peers already inside that call.
+#ifdef POPS_HAS_MPI
+            const auto& world = pops::WorldCommunicator::world();
+            if (pops::all_reduce_max(preparation_error ? 1L : 0L, world.communicator()) != 0) {
+              if (world.size() == 1 && preparation_error)
+                std::rethrow_exception(preparation_error);
+              throw std::runtime_error("layout-transfer DTO preparation failed collectively");
+            }
+#else
+            if (preparation_error)
+              std::rethrow_exception(preparation_error);
+#endif
             return PreparedSystemLayoutTransfer::prepare(
-                source, target, std::move(component), layout_transfer_spec_from_python(spec),
-                layout_transfer_execution_from_python(execution));
+                source, target, std::move(component), std::move(*prepared_spec),
+                std::move(*prepared_execution));
           },
           py::arg("target"), py::arg("component"), py::arg("spec"), py::arg("execution_context"),
           py::keep_alive<0, 1>(), py::keep_alive<0, 2>(),

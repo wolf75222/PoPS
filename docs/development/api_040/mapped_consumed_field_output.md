@@ -33,3 +33,9 @@ cell work. Old accepted images are never substituted for consumed stage outputs.
 Freshness, owner layout/distribution, Program-point identity, collective failure
 and rollback remain mandatory authorities. A real SDK rebuild and independent
 Native witnesses are required after the Source freeze.
+
+The Python/native binding also prepares both transfer DTOs under a native-world
+error vote before entering the prepared transport. This covers malformed
+rank-local scalar widths, exact-key violations and allocation failures; an outer
+Python collective occurs too late to protect peers already in Native collectives.
+A genuine two-rank malformed-DTO test with timeout is required on the rebuilt SDK.
