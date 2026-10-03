@@ -23,7 +23,7 @@ from tests.python.support.native_execution_context import artifact_execution_con
 
 
 from tests.python.integration.runtime.test_public_evolved_stage_amr import capture, same_images
-from tests.python.support.evolved_stage_v_capture import retain_v_provenance, capture_initial_carriers
+from tests.python.support.evolved_stage_v_capture import retain_v_provenance, capture_initial_carriers, initial_carrier_authority
 
 @pytest.mark.compiler
 @pytest.mark.kokkos
@@ -46,7 +46,8 @@ def test_public_evolved_stage_amr_c25_and_initial_carrier(isolated_native_cache,
     directory = collective_directory(world, tmp_path/"evolved-stage-amr")
     compilation = collective_call(world, lambda: retain_v_provenance(artifact, native, directory, world.rank))
     runtime = collective_call(world, bind)
-    initial_carriers = capture_initial_carriers(world, runtime, directory)
+    initial_authority = initial_carrier_authority(world, runtime, artifact)
+    initial_carriers = capture_initial_carriers(world, runtime, directory, initial_authority)
     initial = capture(world, runtime, width, histories=False)
     # All ranks publish their actual rank-local manifests while each phase is live.
     # Preserve native row/list order; the independent reader binds rank0 to metadata.

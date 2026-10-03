@@ -63,14 +63,14 @@ def retain_v_provenance(artifact,native,directory,rank):
              'rank':rank,'native':pin(native.__file__),'compilation':entries,'before_bind':True})
     return entries
 
-def capture_initial_carriers(world,runtime,directory):
+def capture_initial_carriers(world,runtime,directory,authority):
     # Existing native codec used by CP12: no publication, solve or Field getter.
     method,failures=collective_attempt(world,lambda:required_initial_method(runtime))
     raw=None
     if not any(failures):raw,failures=collective_attempt(world,method)
     def save():
         evidence={'schema':'pops.evolved-stage-v-initial-carriers@1','rank':world.rank,
-                  'ranks':world.size,'failures':failures,'available':raw is not None}
+                  'ranks':world.size,'failures':failures,'available':raw is not None,'authority':authority}
         if raw is not None:
             if type(raw) is not bytes:raise TypeError('native CP12 codec must return exact bytes')
             path=directory/('initial-carriers-rank%d.bin'%world.rank);path.write_bytes(raw);evidence['file']=pin(path)
@@ -83,7 +83,7 @@ def capture_initial_carriers(world,runtime,directory):
     from tests.review.sol61_amr_full_carrier_offline import decode
     def validate():
         image=decode(np.frombuffer(raw,dtype=np.uint8))
-        validate_initial_envelope(image,world.size)
+        validate_initial_envelope(image,world.size,authority=authority)
     collective_call(world,validate)
     return evidence
 
@@ -92,7 +92,48 @@ def required_initial_method(runtime):
     if not callable(method):raise RuntimeError('existing native CP12 carrier capture unavailable')
     return method
 
-def validate_initial_envelope(image,ranks):
-    if image['dim']!=2 or image['real']!=64 or image['shard']!=-1 or image['ranks']!=ranks or image['levels']!=2:
+def initial_carrier_authority(world,runtime,artifact):
+    """Expected valid geometry comes from actual allocation, never from captured bytes."""
+    from pops._native_collectives import allgather_value
+    collective_call(world,artifact.verify)
+    blocks=tuple(block.name for block in artifact.blocks)
+    components={block.name:int(block.model.n_vars) for block in artifact.blocks}
+    levels=collective_call(world,runtime.n_levels)
+    shape=collective_call(world,runtime.spatial_shape)
+    fine=collective_call(world,runtime.patch_boxes)
+    local=collective_call(world,lambda:runtime.amr.coarse_local_box_bounds())
+    owned=collective_call(world,lambda:allgather_value(world,local))
+    def expected():
+        if len(shape)!=2 or len(owned)!=world.size or levels!=2:raise ValueError('actual V allocation authority differs')
+        coarse=sorted({tuple(tuple(int(v) for v in corner) for corner in box) for rank in owned for box in rank})
+        boxes={0:[tuple((lo[axis],hi[axis]-1) for axis in range(2)) for lo,hi in coarse]}
+        for level,lo,hi in fine:
+            boxes.setdefault(int(level),[]).append(tuple((int(lo[axis]),int(hi[axis])) for axis in range(2)))
+        if set(boxes)!=set(range(levels)) or any(not rows for rows in boxes.values()):raise ValueError('actual allocation lacks a V level')
+        cells=set()
+        for axes in boxes[0]:
+            for x in range(axes[0][0],axes[0][1]+1):
+                for y in range(axes[1][0],axes[1][1]+1):
+                    if (x,y) in cells:raise ValueError('coarse allocation overlap')
+                    cells.add((x,y))
+        if cells!={(x,y) for x in range(shape[0]) for y in range(shape[1])}:raise ValueError('coarse allocation does not cover actual base shape')
+        return {'blocks':list(blocks),'components':components,'levels':levels,
+                'boxes':{str(level):sorted(rows) for level,rows in boxes.items()},'shape':list(shape)}
+    return collective_call(world,expected)
+
+
+def validate_initial_envelope(image,ranks,*,authority=None):
+    if type(authority) is not dict:raise ValueError('exact artifact/allocation authority required')
+    blocks=authority['blocks'];levels=authority['levels'];boxes=authority['boxes']
+    if image['dim']!=2 or image['real']!=64 or image['shard']!=-1 or image['ranks']!=ranks or image['levels']!=levels:
         raise ValueError('initial full global CP12 carrier envelope differs')
-    if image['blocks'] not in (['Q0','forcing'],['Q0','Q1','forcing']):raise ValueError('initial artifact block registry differs')
+    if image['blocks']!=blocks:raise ValueError('initial artifact block registry differs')
+    if not image['patches']:raise ValueError('complete global initial carrier rows missing')
+    for block,name in enumerate(blocks):
+        for level in range(levels):
+            rows=[row for row in image['patches'] if row['key'][:2]==(block,level)]
+            actual=sorted(tuple((axis[0],axis[1]) for axis in row['axes']) for row in rows)
+            expected=[tuple(tuple(axis) for axis in box) for box in boxes[str(level)]]
+            if actual!=sorted(expected) or not rows:raise ValueError('complete block/level valid coverage differs')
+            if [row['key'][2] for row in rows]!=list(range(len(rows))):raise ValueError('complete patch indices differ')
+            if any(row['components']!=authority['components'][name] for row in rows):raise ValueError('complete state component count differs')
