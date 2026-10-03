@@ -1,0 +1,34 @@
+{
+  "checks": {
+    "before_after_exact": true,
+    "event_count": 1284,
+    "pins": 13,
+    "production_git_blobs_verified": 1241,
+    "test_files": 56,
+    "xml_jsonl_exact": true
+  },
+  "ci_qualified": false,
+  "counts": {
+    "deselected": 1,
+    "errors": 0,
+    "failed": 0,
+    "passed": 428,
+    "selected": 428,
+    "skips": 0
+  },
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-source-terminal-independent/report.json",
+    "sha256": "1dfa9e1229680381e1d24fc099ea2fff9a8a231263efa0a52d987a8b58b5536e"
+  },
+  "native_qualified": false,
+  "original_report_unchanged": true,
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-source-terminal-independent/audit.py",
+    "sha256": "d210737ca5bf9c29268f00dab0315bada0927b69bff16e3c8507243532a65b30"
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk20.source-terminal-reception@1",
+  "source_cohort_green": true,
+  "source_freeze": "bdfea618dd5479e30f451f16e0dea5b632b12ccf",
+  "whole_mission_complete": false
+}

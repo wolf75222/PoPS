@@ -1,0 +1,105 @@
+{
+  "build_receipt_sha256": "6aa1d496481ae12aa581448abf5c5cdb2f372da3bfb80abdc5cca8003f769c9a",
+  "engineering_or_negative_scope": {
+    "attempts": [
+      {
+        "failures": [
+          null
+        ],
+        "step": 1
+      },
+      {
+        "failures": [
+          null
+        ],
+        "step": 2
+      },
+      {
+        "failures": [
+          null
+        ],
+        "step": 3
+      },
+      {
+        "failures": [
+          null
+        ],
+        "step": 4
+      },
+      {
+        "failures": [
+          null
+        ],
+        "step": 5
+      },
+      {
+        "failures": [
+          null
+        ],
+        "step": 6
+      },
+      {
+        "failures": [
+          null
+        ],
+        "step": 7
+      },
+      {
+        "failures": [
+          null
+        ],
+        "step": 8
+      }
+    ],
+    "captured_phases": [
+      "initial",
+      "accepted1",
+      "accepted2",
+      "accepted3",
+      "accepted4",
+      "accepted5",
+      "accepted6",
+      "accepted7",
+      "accepted8"
+    ],
+    "case_files": 60,
+    "failure": "ModuleNotFoundError: scipy at DOP853 qualification",
+    "ghost_depth_authority": {
+      "gas": 1
+    },
+    "job": 732072,
+    "junit_case_seconds": "306.533",
+    "limits": [
+      "Nine persisted states and completed attempts do not qualify the failed DOP853 node.",
+      "No compiler-to-binary semantic cryptographic proof.",
+      "World1 CPU only; no MPI2/GPU reception."
+    ],
+    "native_node_status": "FAILED",
+    "prerequisite": "Declare/install SciPy as test extra in a fresh authenticated environment; preflight scipy.integrate.solve_ivp DOP853 before submitting the unchanged strict node.",
+    "root_seal": false,
+    "schema": "sol61.sdk20.negative-native-envelope@1",
+    "scientific_acceptance": false
+  },
+  "independent_domain_pins_rehashed": 2,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-negative-envelope-independent-20261003/report.json",
+    "sha256": "bfbb3232b1700ba69f24fc42d842a7840eecf6a921edbccb5304c2777c59ffc6"
+  },
+  "job": "732072",
+  "native_envelope_pins_rehashed": 92,
+  "native_regular_file_count": 90,
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-negative-envelope-independent-20261003/receive.py",
+    "sha256": "2a697c37fcb49bcb392c005480a36ab5df036ec2214a75f7dba338a5ee50bef5"
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk20-negative-envelope-reception@2",
+  "scientific_acceptance": false,
+  "source_freeze": "bdfea618dd5479e30f451f16e0dea5b632b12ccf",
+  "supersedes_domain_label": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-negative-envelope-reception.json",
+    "reason": "separate independent helper-domain pins from complete Native envelope pins; original checks remain preserved",
+    "sha256": "39481499a78ab99d11676d224883627435be5908a1f0108c85afae440e2dee92"
+  },
+  "whole_mission_complete": false
+}

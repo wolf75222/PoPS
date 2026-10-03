@@ -1,0 +1,44 @@
+{
+  "build_script_sha256": "bef7cf07efc24054c84f526c87573ce32e2df75b62af529cdd1874f66e9dd93a",
+  "receipts": [
+    {
+      "name": "root-sdk20-build-reception-732069.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-build-reception-732069.json",
+      "schema": "root.sdk20.build-install-reception@1",
+      "sha256": "6aa1d496481ae12aa581448abf5c5cdb2f372da3bfb80abdc5cca8003f769c9a"
+    },
+    {
+      "name": "root-sdk20-source-terminal-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-source-terminal-reception.json",
+      "schema": "root.sdk20.source-terminal-reception@1",
+      "sha256": "40fcb20e88216099fc6a379d95bfbcf33aed11f7ed443a63cc0ee2591495332a"
+    },
+    {
+      "name": "root-sdk20-negative-envelope-reception-v2.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-negative-envelope-reception-v2.json",
+      "schema": "root.sdk20-negative-envelope-reception@2",
+      "sha256": "64ca49d387cbd1de25bfa902eb48405f28223e53587e2560d499308fac09e758"
+    },
+    {
+      "name": "root-sdk20-pure-nine-state-math-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-pure-nine-state-math-reception.json",
+      "schema": "root.sdk20-pure-nine-state-math-reception@1",
+      "sha256": "b16353b375ac7aa03a5f40a4acb759459c4c5fd308f221b870773c5dcca03e7c"
+    },
+    {
+      "name": "root-sdk20-uniform-v2-engineering-reception-v2.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-uniform-v2-engineering-reception-v2.json",
+      "schema": "root.sdk20-uniform-v2-engineering-reception@2",
+      "sha256": "6c617cd9119d013b44eae5d9931ac3b430886617bb27ca94ed3426c060186867"
+    },
+    {
+      "name": "root-sdk20-amr-gather-replicated-engineering-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-amr-gather-replicated-engineering-reception.json",
+      "schema": "root.sdk20-amr-gather-replicated-engineering-reception@1",
+      "sha256": "d8204591539cf8688bc75ac904e86afa9557e68a885c2197567e82f85981a18b"
+    }
+  ],
+  "schema": "root.sdk20-compact-receipt-copies@1",
+  "scope": "exact compact copies; full archives, inventories, DSOs and independent readers retained at external immutable origins",
+  "source_freeze": "bdfea618dd5479e30f451f16e0dea5b632b12ccf"
+}

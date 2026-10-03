@@ -1,0 +1,90 @@
+{
+  "MPI2_qualified": false,
+  "backend_scope": "CPU OpenMP, MPI-enabled SDK, one actual rank",
+  "body": {
+    "contract": "sol61.sdk20-amr-gather-object-bytes-engineering-reception@1",
+    "metrics": [
+      {
+        "clock_unchanged": true,
+        "coarse_local_boxes": [
+          1
+        ],
+        "rank": 0,
+        "topology": [
+          {
+            "block": "Q0",
+            "holes": 0,
+            "level": 0
+          },
+          {
+            "block": "Q0",
+            "holes": 192,
+            "level": 1
+          },
+          {
+            "block": "Q1",
+            "holes": 0,
+            "level": 0
+          },
+          {
+            "block": "Q1",
+            "holes": 192,
+            "level": 1
+          },
+          {
+            "block": "forcing",
+            "holes": 0,
+            "level": 0
+          },
+          {
+            "block": "forcing",
+            "holes": 192,
+            "level": 1
+          }
+        ]
+      }
+    ],
+    "native_authority": false,
+    "policy": "replicated",
+    "provenance_join_required": true,
+    "ranks": 1,
+    "root_scientific_approval": false,
+    "scope": "engineering private valid setter/public getter only; no step/rollback/Ghost formula"
+  },
+  "ghost_formula_qualified": false,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-amr-gather-independent-732076/report-v2.json",
+    "sha256": "8a3744279a25737195fd043baff16bb840a8bff1a0774900d2ada0dfcad16592"
+  },
+  "job": "732076",
+  "non_author_review": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-amr-gather-reader-review-20261003/report-v2.json",
+    "sha256": "6a25700c9b6cc1c54338da380739e2c11e17b63ec42cd20b2061d612be7d4b9c"
+  },
+  "prior_reader_report_preserved": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-amr-gather-independent-732076/report.json",
+    "sha256": "37283e3717fcac43db19f1f6e1a294b280b57bd638a567e4ad2581576398f012"
+  },
+  "regular_native_pins": 57,
+  "replay": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-amr-gather-independent-732076/replay.py",
+    "sha256": "e69d7590d0737c1bef44470bb1d34476b5eda727a7b2b1bca890bb8ab0237945"
+  },
+  "retained_provenance": {
+    "compiler_hash_recorded_not_live_rehashed": true,
+    "compiler_to_dso_graph_proof": false,
+    "contract": "sol61.gather-retained-provenance-join@2",
+    "models": [
+      "Q0",
+      "Q1",
+      "forcing"
+    ],
+    "native_authority": false
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk20-amr-gather-replicated-engineering-reception@1",
+  "scientific_acceptance": false,
+  "source_freeze": "bdfea618dd5479e30f451f16e0dea5b632b12ccf",
+  "whole_mission_complete": false,
+  "world": 1
+}
