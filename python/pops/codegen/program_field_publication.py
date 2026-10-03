@@ -24,6 +24,9 @@ def _key(module: Any, target: Handle, component: str) -> ComponentKey:
 
 def _merge_publication_claim(prior: Any, claim: Any) -> dict[str, Any]:
     """One physical authority, with separately authenticated ordered occurrences."""
+    # ResolvedOperationPlan freezes nested mappings; canonicalize its public JSON projection.
+    prior = None if prior is None else _json_ready(prior)
+    claim = _json_ready(claim)
     if prior is None or canonical_bytes(prior) == canonical_bytes(claim):
         return claim if prior is None else prior
     left = {k: v for k, v in prior.items() if k not in ("mapped_output", "mapped_occurrences", "occurrence_contract")}
@@ -94,7 +97,7 @@ def reproject_publication_packs(module: Any, packs: Any, claims: Any) -> Any:
                 if not isinstance(occurrence, Mapping) or set(occurrence) != {"invocation", "physical_map", "source_port", "target_port", "source_point", "target_point"}:
                     raise ValueError("invalid mapped publication occurrence")
                 rebuilt = _merge_publication_claim(rebuilt, {**physical, "mapped_output": occurrence})
-            if canonical_bytes(rebuilt) != canonical_bytes(claim):
+            if canonical_bytes(rebuilt) != canonical_bytes(_json_ready(claim)):
                 raise ValueError("mapped publication occurrences are repeated or noncanonical")
         key = ComponentKey(**claim["key"])
         target = Handle.from_canonical_identity(_json_ready(claim["target"]))

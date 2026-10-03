@@ -24,3 +24,19 @@ def test_foreign_physical_authority_refused(change):
 def test_same_point_new_invocation_refused():
     a=claim("initial");b=deepcopy(a);b["mapped_output"]["invocation"]="other"
     with pytest.raises(ValueError,match="same point"):_merge_publication_claim(a,b)
+
+
+def test_frozen_resolved_claims_keep_nested_exact_authorities():
+    from types import MappingProxyType
+    def freeze(value):
+        if isinstance(value,dict): return MappingProxyType({k:freeze(v) for k,v in value.items()})
+        if isinstance(value,list): return tuple(freeze(v) for v in value)
+        return value
+    a,b=claim("initial"),claim("predictor")
+    a["key"]={"owner":"same", "component":"phi"}; b["key"]=dict(a["key"])
+    result=_merge_publication_claim(freeze(a),freeze(b))
+    assert result == _merge_publication_claim(a,b)
+    assert _merge_publication_claim(freeze(result),freeze(b)) == result
+    wrong=deepcopy(b);wrong["mapped_output"]["source_port"]="foreign"
+    with pytest.raises(ValueError,match="competing"):
+        _merge_publication_claim(freeze(result),freeze(wrong))
