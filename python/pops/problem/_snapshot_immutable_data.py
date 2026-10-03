@@ -43,7 +43,6 @@ def immutable_data(value, *, active=None):
                 marker=getattr(type(value),'__pops_snapshot_immutable_data__',None)
                 if type(marker) is not int or marker != 1 or not callable(getattr(value,'snapshot_data',None)):
                     raise TypeError('immutable-data rejects executable callable record without authenticated data-factory projection')
-                declared_data(value.snapshot_data())
             names={field.name for field in fields(value)}
             slots=set()
             for base in type(value).__mro__:
@@ -53,8 +52,16 @@ def immutable_data(value, *, active=None):
                 raise TypeError('immutable-data record has undeclared stored slots')
             if hasattr(value,'__dict__') and set(vars(value))-names:
                 raise TypeError('immutable-data record has undeclared stored fields')
-            return {'$record':{'type':type_name(value),'implementation':record_code(type(value), active=active), 'fields':{
-                name:immutable_data(getattr(value,name),active=active) for name in sorted(names)}}}
+            stored = {'type':type_name(value),'implementation':record_code(type(value), active=active), 'fields':{
+                name:immutable_data(getattr(value,name),active=active) for name in sorted(names)}}
+            if callable(value):
+                receipt = declared_data(value.snapshot_data())
+                after = {'type':type_name(value),'implementation':record_code(type(value), active=active), 'fields':{
+                    name:immutable_data(getattr(value,name),active=active) for name in sorted(names)}}
+                if stored != after:
+                    raise ValueError('immutable-data factory projection mutated stored authority')
+                stored['declared'] = receipt
+            return {'$record':stored}
         raise TypeError('immutable-data rejects mutable, opaque or callable leaf %s'%type_name(value))
     finally:
         active.remove(key)

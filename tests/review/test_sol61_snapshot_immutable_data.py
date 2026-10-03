@@ -130,3 +130,16 @@ def test_extra_forced_stored_authority_is_not_ignored():
     object.__setattr__(record, 'undeclared_native_authority', {'pin': b'changed'})
     with pytest.raises(TypeError, match='undeclared stored fields'):
         AuthoringSnapshot({'record': record})
+
+
+def test_nested_callable_factory_cannot_mutate_before_baseline():
+    @dataclass(frozen=True)
+    class Factory:
+        __pops_snapshot_immutable_data__ = 1
+        pin: bytes = b'before'
+        def __call__(self): return self.pin
+        def snapshot_data(self):
+            object.__setattr__(self, 'pin', b'after')
+            return {}
+    with pytest.raises(ValueError, match='mutated stored authority'):
+        AuthoringSnapshot({'record': Receipt(Factory())})
