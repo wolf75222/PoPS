@@ -64,7 +64,7 @@ def test_resealed_adversaries_refused(tmp_path,mutation):
     with pytest.raises(ValueError):r.receive(tmp_path,pins,'empty-owner',2)
 
 
-@pytest.mark.parametrize('mutation',(None,'contract','header','foreign-binary','missing-source'))
+@pytest.mark.parametrize('mutation',(None,'contract','header','foreign-binary','missing-source','missing-program','manifest-block','manifest-ghost'))
 def test_explicit_provenance_join_synthetic_correspondence(tmp_path,mutation):
     # Metadata and arbitrary bytes only: no compiler/Native authority claimed.
     files={};exports={};rows=[]
@@ -75,11 +75,17 @@ def test_explicit_provenance_join_synthetic_correspondence(tmp_path,mutation):
         source=name+'.model.cpp';(tmp_path/source).write_text('// synthetic '+name)
         sha=hashlib.sha256((tmp_path/source).read_bytes()).hexdigest();files[source]=sha
         rows.append({'block':name,'sha256':digest,'retained_source':{'file':source,'sha256':sha},'actual_source':{'contract':'pops.model.actual-compile@1','complete':True,'status':'available','source_sha256':sha,'binary_sha256':digest,'header_signature':'H'}})
+    manifest={'protocol':'pops.manifest','kind':'compiled-artifact','schema_version':2,'payload':{'blocks':list(r.BLOCKS),'abi_key':'H|/synthetic/compiler|c++20|dim=2','required_headers_sig':'H','ghost_depth':1,'ghost_depth_by_block':dict.fromkeys(r.BLOCKS,1),'supports_amr':True,'supports_mpi':True,'supports_gpu':False}}
+    if mutation=='manifest-block':manifest['payload']['blocks'].reverse()
+    if mutation=='manifest-ghost':manifest['payload']['ghost_depth_by_block']['Q1']=True
+    for name,content in {'program.cpp':'// synthetic program','program.ir.json':'{}','compiled-manifest.json':json.dumps(manifest)}.items():
+        (tmp_path/name).write_text(content);files[name]=hashlib.sha256((tmp_path/name).read_bytes()).hexdigest()
     proof={'schema':'pops.m16-explicit-retained-provenance@2','native':{'sha256':'N'},'root_scientific_approval':False,'layout_program':{'target':'amr_system','blocks':list(r.BLOCKS)},'model_binaries':rows,'files':files,'program':{'sha256':exports['program'][1],'abi_key':'H|/synthetic/compiler|c++20|dim=2'}}
     if mutation=='contract':rows[0]['actual_source']['contract']='foreign@1'
     elif mutation=='header':rows[0]['actual_source']['header_signature']='foreign'
     elif mutation=='foreign-binary':exports['Q0']=(exports['Q1'][0],exports['Q1'][1])
     elif mutation=='missing-source':files.pop(rows[0]['retained_source']['file'])
+    elif mutation=='missing-program':files.pop('program.cpp')
     (tmp_path/'provenance.json').write_text(json.dumps(proof))
     pins={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in tmp_path.iterdir()}
     if mutation is None:

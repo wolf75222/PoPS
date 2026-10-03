@@ -94,6 +94,14 @@ def join_provenance(directory,pins,binary_exports,*,native_sha256,header_signatu
     layout=proof['layout_program']
     require(layout['target']=='amr_system' and set(layout['blocks'])==set(BLOCKS) and len(layout['blocks'])==3,'full AMR partition differs')
     require(set(binary_exports)==set(BLOCKS)|{'program'},'explicit full binary correspondence required')
+    required_files={'program.cpp','program.ir.json','compiled-manifest.json'}|{name+'.model.cpp' for name in BLOCKS}
+    require(set(proof['files'])==required_files,'complete retained Program/model inventory differs')
+    manifest=json_load(directory/'compiled-manifest.json')
+    require(manifest.get('protocol')=='pops.manifest' and manifest.get('kind')=='compiled-artifact' and type(manifest.get('schema_version')) is int and manifest['schema_version']==2,'compiled manifest envelope differs')
+    payload=manifest['payload']
+    require(payload['blocks']==list(BLOCKS) and payload['abi_key']==proof['program']['abi_key'] and payload['required_headers_sig']==header_signature,'compiled manifest Program authority differs')
+    require(type(payload['ghost_depth']) is int and payload['ghost_depth']==1 and payload['ghost_depth_by_block']=={name:1 for name in BLOCKS} and all(type(v) is int for v in payload['ghost_depth_by_block'].values()),'compiled manifest ghost authority differs')
+    require(payload['supports_amr'] is True and payload['supports_mpi'] is True and payload['supports_gpu'] is False,'compiled manifest layout/backend differs')
     rows=proof['model_binaries'];require(len(rows)==3 and {row['block'] for row in rows}==set(BLOCKS),'model inventory differs')
     for name,pin in proof['files'].items():
         require(Path(name).name==name and name in pins and pins[name]==pin,'retained file reference differs')
@@ -109,4 +117,4 @@ def join_provenance(directory,pins,binary_exports,*,native_sha256,header_signatu
     abi=proof['program']['abi_key'].split('|')
     require(len(abi)==4 and abi[0]==header_signature and bool(abi[1]) and abi[2]=='c++20' and abi[3]=='dim=2','Program header signature differs')
     binary('program',proof['program']['sha256'])
-    return {'models':list(BLOCKS),'compiler_hash_recorded_not_live_rehashed':True,'compiler_to_dso_graph_proof':False,'native_authority':False}
+    return {'contract':'sol61.gather-retained-provenance-join@2','models':list(BLOCKS),'compiler_hash_recorded_not_live_rehashed':True,'compiler_to_dso_graph_proof':False,'native_authority':False}
