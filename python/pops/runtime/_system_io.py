@@ -377,7 +377,7 @@ class _SystemIO(_System):
         from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
         capture_checkpoint_continuation(self, out)
         from pops.runtime._checkpoint_program_diagnostics import capture_checkpoint_program_diagnostics
-        capture_checkpoint_program_diagnostics(self, out)
+        capture_checkpoint_program_diagnostics(self, out, provisional_capture=True)
         identity = seal_checkpoint_payload(self, out, runtime_kind="uniform")
         return out, identity.token
 

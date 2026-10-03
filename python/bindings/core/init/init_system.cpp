@@ -702,6 +702,11 @@ void bind_system_program(py::class_<System>& cls) {
              const auto bytes = s.checkpoint_program_diagnostics();
              return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
            })
+      .def("_checkpoint_capture_program_diagnostics",
+           [](const System& s) {
+             const auto bytes = s.checkpoint_capture_program_diagnostics();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
       .def(
           "_validate_checkpoint_program_diagnostics",
           [](const System& s, py::object payload) {

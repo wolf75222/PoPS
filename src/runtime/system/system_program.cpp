@@ -1440,6 +1440,22 @@ std::vector<std::uint8_t> System<Dim>::checkpoint_program_diagnostics() const {
 }
 
 template <int Dim>
+std::vector<std::uint8_t> System<Dim>::checkpoint_capture_program_diagnostics() const {
+  const auto depth = step_transaction_depth();
+  const bool candidate = depth == 1 && p_->external_step_transaction_ &&
+                         !p_->external_step_transaction_committed_;
+  const auto phase = p_->lifecycle_.state(p_->macro_step_);
+  if ((depth != 0 && !candidate) || p_->external_restart_transaction_ ||
+      solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0 ||
+      (phase != "bound" && phase != "running" && phase != "checkpointed"))
+    throw std::logic_error("Program diagnostic checkpoint capture requires idle or uncommitted external candidate state");
+  Kokkos::fence();
+  const auto& lane = prepared_boundary_execution_lane();
+  return runtime::program::checkpoint_program_diagnostics(p_->program_.diagnostics_, lane.rank(),
+                                                          lane.size());
+}
+
+template <int Dim>
 void System<Dim>::validate_checkpoint_program_diagnostics(
     std::span<const std::uint8_t> bytes) const {
   if (!bytes.empty()) {
@@ -1648,6 +1664,7 @@ template bool System<kNativeDimension>::program_balance_consumer_is_due(const st
 template Real System<kNativeDimension>::program_diagnostic(const std::string&) const;
 template std::map<std::string, Real> System<kNativeDimension>::program_diagnostics() const;
 template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_program_diagnostics() const;
+template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_capture_program_diagnostics() const;
 template void System<kNativeDimension>::validate_checkpoint_program_diagnostics(
     std::span<const std::uint8_t>) const;
 template void System<kNativeDimension>::restore_checkpoint_program_diagnostics(

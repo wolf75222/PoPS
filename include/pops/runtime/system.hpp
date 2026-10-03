@@ -1385,6 +1385,8 @@ class System {
   POPS_EXPORT std::map<std::string, Real> program_diagnostics() const;
   /// Accepted, rank-local diagnostic image. Refuses an active native attempt.
   POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_diagnostics() const;
+  /// Checkpoint capture@1: idle or one uncommitted external candidate, never an observer.
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_capture_program_diagnostics() const;
   /// Decode/allocate without changing the live table; all values retain exact bits.
   POPS_EXPORT void validate_checkpoint_program_diagnostics(std::span<const std::uint8_t>) const;
   /// Replace the entire table inside an authenticated external restart transaction.
