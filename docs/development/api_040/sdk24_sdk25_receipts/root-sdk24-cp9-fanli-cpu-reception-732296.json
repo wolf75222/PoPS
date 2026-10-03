@@ -1,0 +1,207 @@
+{
+  "actual_independent_readers_replayed": true,
+  "amr_qualified": false,
+  "ci_qualified": false,
+  "dimension": 2,
+  "field_history_qualified": false,
+  "ghost_formula_qualified": false,
+  "gpu_qualified": false,
+  "independent": {
+    "math": {
+      "directory": "/Users/romaindespoulain/dev/tmp/sol61-sdk24-cp9-fanli-math-independent-732296",
+      "pins_sha256": "0b529b006453880436fd4eb948a4492623a2337f77a113aa17f472ea45b77b99",
+      "verified": 211
+    },
+    "state": {
+      "directory": "/Users/romaindespoulain/dev/tmp/sol61-sdk24-cp9-independent-reception-732296",
+      "pins_sha256": "ee6f8066f3c64b16be97ee2c66a13f3c814a4d27e0bed31ef60d05f4bad67570",
+      "verified": 5
+    }
+  },
+  "independent_artifacts_rewritten": false,
+  "job": 732296,
+  "mpi_transport_qualified": false,
+  "original_fanli_math": {
+    "contract": "sol61.sdk24.cp9.fanli-pure-math@1",
+    "job": 732296,
+    "metrics": {
+      "math": {
+        "continuous": {
+          "contract": "pops.fan-li15.uniform-eight-saved-math@1",
+          "dop853_final_error": 4.460334324107862e-10,
+          "h3_max": 0.017545356253353284,
+          "h4_max": 0.005277108301697017,
+          "metrics": [
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.00756390007852085,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 1
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.007562055866979791,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 2
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.007560198272613448,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 3
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.0075583273010747755,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 4
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.007556442958074221,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 5
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.007554545249378193,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 6
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.00755263418081085,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 7
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.007550709758252182,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 8
+            }
+          ],
+          "native_authority": false,
+          "root_scientific_approval": false,
+          "whole_carrier_qualification": false
+        },
+        "replay": {
+          "contract": "pops.fan-li15.uniform-eight-saved-math@1",
+          "dop853_final_error": 4.460334324107862e-10,
+          "h3_max": 0.017545356253353284,
+          "h4_max": 0.005277108301697017,
+          "metrics": [
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.00756390007852085,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 1
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.007562055866979791,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 2
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.007560198272613448,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 3
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.0075583273010747755,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 4
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.007556442958074221,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 5
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.007554545249378193,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 6
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.00755263418081085,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 7
+            },
+            {
+              "quadrature24_48_gap": 0.0,
+              "regularized_face_max": 0.007550709758252182,
+              "ssprk2_error": 4.440892098500626e-16,
+              "step": 8
+            }
+          ],
+          "native_authority": false,
+          "root_scientific_approval": false,
+          "whole_carrier_qualification": false
+        }
+      },
+      "native_authority": false,
+      "root_seal": false,
+      "schema": "sol61.sdk22.cp9-fanli-pure-math-preparation@1",
+      "scope": "pure independent Original FanLi15 SPD/rho, GL24/48 SSPRK2+DOP853 on authentic valid images; CP9 State/refusal scope separate; no Field/cache/history/Ghost formula or Native envelope qualification",
+      "state_cp9": {
+        "field_history_cache_qualified": false,
+        "ghost_formula_qualified": false,
+        "global_state_storage_exact": true,
+        "phases": 22,
+        "profile": "fanli15",
+        "rank_local_join_qualified": true,
+        "root_approval": false,
+        "schema": "sol61.uniform-checkpoint9-offline@2",
+        "signed_zero_observed": false
+      }
+    },
+    "native_envelope_authority": false,
+    "root_seal": false,
+    "root_transfer_sha256": "9fb9c1c962ae9c3a28816c640e275fd67a66bdf98f984971211d43aa28c0a724",
+    "scope": "pure Original FanLi15 math and unchanged adapter State checks; native envelope/CP9 qualification belongs separate reviewer"
+  },
+  "reports_identical_on_replay": true,
+  "root_approval": true,
+  "runtime_backend": "CPU OpenMP, one thread",
+  "schema": "root.sdk24-cp9-fanli-cpu-reception@1",
+  "scope": "Real installed Native CP9 full-grown State capture, three refusals, restore and bit-identical continuation/replay 5-8; Original FanLi15 GL24/48 SSPRK2 and DOP853 on authentic 15x16x16 valid images in both branches",
+  "source_freeze": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+  "storage": {
+    "abi_key": "compiler=15.3.0;std=202002L;headers=bc8ceef2cd0ff42555308da2f685c5663996a189a5d8e6bb4129e57b17ccca3b;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+    "amr_qualified": false,
+    "ci_qualified": false,
+    "field_history_cache_qualified": false,
+    "field_history_qualified": false,
+    "ghost_formula_qualified": false,
+    "global_state_storage_exact": true,
+    "gpu_qualified": false,
+    "installed_identity_authenticated": true,
+    "job": 732296,
+    "math_qualified": false,
+    "native_CP9_storage_scope_received": true,
+    "native_sha256": "504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd",
+    "phases": 22,
+    "profile": "fanli15",
+    "rank_local_join_qualified": true,
+    "regular_rehashed": 196,
+    "root_approval": false,
+    "root_build_pin": "ad373f92f1fc574e40e3f321ffe35be79b4ab9bacf590b7572ccb0b7bbefb21d",
+    "root_build_wheel_authority_joined": true,
+    "root_transport_pin": "9fb9c1c962ae9c3a28816c640e275fd67a66bdf98f984971211d43aa28c0a724",
+    "run_identity_branch_equality_required": false,
+    "schema": "sol61.sdk24-cp9-independent-reception@1",
+    "signed_zero_observed": false,
+    "source": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+    "transport_authenticated": true,
+    "world": 1
+  },
+  "verdict": "SCOPED_CP9_STATE_AND_ORIGINAL_FANLI_VALID_MATH_APPROVED",
+  "whole_mission_complete": false,
+  "world": 1
+}

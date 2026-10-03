@@ -1,0 +1,904 @@
+{
+  "actual_reader_replayed": true,
+  "author_pins_sha256": "08e1dde346140951d8ba859f06990367f40feb69fb1407d85cc7eca1d42bd502",
+  "ci_qualified": false,
+  "counterreview": {
+    "author_pins_sha256": "08e1dde346140951d8ba859f06990367f40feb69fb1407d85cc7eca1d42bd502",
+    "checks": {
+      "CPU_logical_profiles": 4,
+      "MPI2_logical_profiles": 4,
+      "MPI_rank_case_reports": 8,
+      "independent_semantic_mutations": 15
+    },
+    "highest_original_norm_relative": 9.20720856194327e-11,
+    "limits": [
+      "No PoPS/Native import, rerun, ENV or remote action",
+      "Homogeneous OriginalQ does not qualify signed diffusion/coarsefine physicalflux",
+      "No Fieldcache/Ghostformula/GPU/inter-node/performance/CI/wholemission qualification",
+      "Semantic adversaries are not externally sealed Native executions"
+    ],
+    "mutation_categories": [
+      "profile exact domains",
+      "rank1 missingModel/Program",
+      "late/incomplete actualsource proof",
+      "foreign header/native",
+      "initial complete empty/geometry",
+      "grown bits",
+      "history initialize",
+      "macro_step",
+      "near-cutoff strict acceptance"
+    ],
+    "mutations_scope": "direct pure semantic inputs over authenticated actual bytes; no external transport seal reminting or raw modifications",
+    "pins": [
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-native-matrix-received-732335-732336/sol61_evolved_stage_amr_saved_reception.py",
+        "sha256": "737c612cc3ba45f8490e22b40bcf2fedc7dd36fcda111e8929658b58c2ccfe6f"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-native-matrix-received-732335-732336/sol61_evolved_stage_amr_saved_reception_v2.py",
+        "sha256": "daca8f4d42d720040cd5363ac39e882e492129bccad44fbefb2ec72added6468"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-native-matrix-received-732335-732336/sol61_evolved_stage_amr_saved_reception_v3.py",
+        "sha256": "7c68df827727b4a53aad2934bde362505a8fb812a9fb7f64b795f699fb32ffea"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-native-matrix-received-732335-732336/sol61_integral_feedback_offline_oracle.py",
+        "sha256": "21041d64af5378a35b5a8717cc0300b6a399d95cc2c9209e66d66e5e2ed54f89"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-native-matrix-received-732335-732336/sol61_amr_full_carrier_offline.py",
+        "sha256": "c5148a74fb067087f4c157c38d5a763e85169089c988b8a302c1d93720ad5e9d"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-native-matrix-received-732335-732336/epoch.py",
+        "sha256": "0aa1593ba4a754b79f5ec92ab899088209b2afcb375b5b7a2f2c27c902f9dac4"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-native-matrix-received-732335-732336/pins.json",
+        "sha256": "08e1dde346140951d8ba859f06990367f40feb69fb1407d85cc7eca1d42bd502"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-native-matrix-received-732335-732336/report-cpu.json",
+        "sha256": "bfbd819cfc6b9df53d55c82cd2d8691f631e069f4998af92ceea9ec19c1b383c"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-native-matrix-received-732335-732336/report-mpi2.json",
+        "sha256": "aced9c8e9e96e37e78ae80c29a85f28deae429391f603a543d77ee59ceab6e46"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-final-independent-20261003/replay.json",
+        "sha256": "f31797a3bfb1779a9705f068269610dc920c77b119e31ca1d5c4737bb0b21812"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-final-independent-20261003/test_independent.py",
+        "sha256": "86e05841be7b8c30ff26802208744585c8c08345aacc4cef399819edec4fd641"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-v5-final-independent-20261003/tests-final.xml",
+        "sha256": "740df226f919a1e9a4698ec686d16378b1ea953505d3edfbbca2459765bfe84d"
+      }
+    ],
+    "recomputed_reports_equal_retained": true,
+    "schema": "sol61.v5-final-independent-counterreview@1",
+    "source_review": [
+      "all ranks real identity joins to installed authority + observed consensus ledger; no global MPI output identity fabricated",
+      "perrank C25 models/program before bind, retained TU/sidecars/commands/partition",
+      "original Q homogeneous oracle, full storage/state bits/history/restart epochs through frozen historical helpers",
+      "initial geometry codec equal accepted actual and declared boxes; no standalone ghostformula admission"
+    ],
+    "threshold_unchanged": 1e-10,
+    "verdict": "favorable bounded offline reception"
+  },
+  "counterreview_receipt_sha256": "5b8d6177456311c68f8bbee84ab1e3459a5360e053dcdb1b551a75f90b9d0123",
+  "counterreview_tests": 15,
+  "field_cache_qualified": false,
+  "ghost_formula_qualified": false,
+  "gpu_qualified": false,
+  "highest_original_Q_linf": 3.306613316489404e-11,
+  "highest_original_norm_relative": 9.20720856194327e-11,
+  "independent_artifacts_rewritten": false,
+  "inter_node_mpi_qualified": false,
+  "jobs": [
+    732335,
+    732336
+  ],
+  "logical_profiles_per_backend": 4,
+  "native_child_owner_graph_qualified": false,
+  "performance_at_comparable_calculation_qualified": false,
+  "rank_junit_reports_total": 12,
+  "reader_reports": {
+    "cpu": {
+      "build_pin": "c0358e69f3491a8a9a4e9af4b4ab70d84ad4af5d8c014265149114dd2393a83a",
+      "envelope_admitted": true,
+      "ranks": 1,
+      "results": [
+        {
+          "clock": {
+            "accepted": [
+              0.01,
+              1
+            ],
+            "continuous": [
+              0.02,
+              2
+            ],
+            "replay": [
+              0.02,
+              2
+            ]
+          },
+          "envelope_admitted": false,
+          "ghost_formula_qualified": false,
+          "gpu_qualified": false,
+          "original_norms": {
+            "accepted": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 1.609737246655967e-13
+            },
+            "continuous": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 3.521327193788274e-13
+            },
+            "reloaded": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 1.609737246655967e-13
+            },
+            "replay": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 3.521327193788274e-13
+            }
+          },
+          "profile": {
+            "cells": 8,
+            "ranks": 1,
+            "width": 1
+          },
+          "root_approval": false,
+          "root_owner_scope": "single actual root only",
+          "schema": "sol61.evolved-case-body@5",
+          "science": {
+            "accepted": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.18560000000002988
+              ],
+              "balance": [
+                2.989275493803234e-14
+              ],
+              "original_Q_linf": 2.99482660892636e-14,
+              "z_constraint_linf": 0.0
+            },
+            "continuous": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.19870000000009988
+              ],
+              "balance": [
+                9.989231664064846e-14
+              ],
+              "original_Q_linf": 7.002731727823175e-14,
+              "z_constraint_linf": 0.0
+            },
+            "reloaded": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.18560000000002988
+              ],
+              "balance": [
+                2.989275493803234e-14
+              ],
+              "original_Q_linf": 2.99482660892636e-14,
+              "z_constraint_linf": 0.0
+            },
+            "replay": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.19870000000009988
+              ],
+              "balance": [
+                9.989231664064846e-14
+              ],
+              "original_Q_linf": 7.002731727823175e-14,
+              "z_constraint_linf": 0.0
+            }
+          }
+        },
+        {
+          "clock": {
+            "accepted": [
+              0.01,
+              1
+            ],
+            "continuous": [
+              0.02,
+              2
+            ],
+            "replay": [
+              0.02,
+              2
+            ]
+          },
+          "envelope_admitted": false,
+          "ghost_formula_qualified": false,
+          "gpu_qualified": false,
+          "original_norms": {
+            "accepted": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 1.6123753435845007e-13
+            },
+            "continuous": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 3.520705274785667e-13
+            },
+            "reloaded": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 1.6123753435845007e-13
+            },
+            "replay": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 3.520705274785667e-13
+            }
+          },
+          "profile": {
+            "cells": 16,
+            "ranks": 1,
+            "width": 1
+          },
+          "root_approval": false,
+          "root_owner_scope": "single actual root only",
+          "schema": "sol61.evolved-case-body@5",
+          "science": {
+            "accepted": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.18560000000002994
+              ],
+              "balance": [
+                2.99482660892636e-14
+              ],
+              "original_Q_linf": 2.99482660892636e-14,
+              "z_constraint_linf": 0.0
+            },
+            "continuous": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.19870000000009994
+              ],
+              "balance": [
+                9.994782779187972e-14
+              ],
+              "original_Q_linf": 7.002731727823175e-14,
+              "z_constraint_linf": 0.0
+            },
+            "reloaded": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.18560000000002994
+              ],
+              "balance": [
+                2.99482660892636e-14
+              ],
+              "original_Q_linf": 2.99482660892636e-14,
+              "z_constraint_linf": 0.0
+            },
+            "replay": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.19870000000009994
+              ],
+              "balance": [
+                9.994782779187972e-14
+              ],
+              "original_Q_linf": 7.002731727823175e-14,
+              "z_constraint_linf": 0.0
+            }
+          }
+        },
+        {
+          "clock": {
+            "accepted": [
+              0.01,
+              1
+            ],
+            "continuous": [
+              0.02,
+              2
+            ],
+            "replay": [
+              0.02,
+              2
+            ]
+          },
+          "envelope_admitted": false,
+          "ghost_formula_qualified": false,
+          "gpu_qualified": false,
+          "original_norms": {
+            "accepted": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 9.207206791889938e-11
+            },
+            "continuous": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 6.641425102235585e-11
+            },
+            "reloaded": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 9.207206791889938e-11
+            },
+            "replay": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 6.641425102235585e-11
+            }
+          },
+          "profile": {
+            "cells": 8,
+            "ranks": 1,
+            "width": 2
+          },
+          "root_approval": false,
+          "root_owner_scope": "single actual root only",
+          "schema": "sol61.evolved-case-body@5",
+          "science": {
+            "accepted": {
+              "Q_projection_linf": 2.7755575615628914e-17,
+              "amounts": [
+                0.19142504387466658,
+                0.30732495616263467
+              ],
+              "balance": [
+                4.235167772037585e-12,
+                3.306607765374281e-11
+              ],
+              "original_Q_linf": 3.306613316489404e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "continuous": {
+              "Q_projection_linf": 5.551115123125783e-17,
+              "amounts": [
+                0.20410008774850597,
+                0.2946499123157632
+              ],
+              "balance": [
+                7.64313612400258e-12,
+                5.662603719258641e-11
+              ],
+              "original_Q_linf": 2.3560070561146063e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "reloaded": {
+              "Q_projection_linf": 2.7755575615628914e-17,
+              "amounts": [
+                0.19142504387466658,
+                0.30732495616263467
+              ],
+              "balance": [
+                4.235167772037585e-12,
+                3.306607765374281e-11
+              ],
+              "original_Q_linf": 3.306613316489404e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "replay": {
+              "Q_projection_linf": 5.551115123125783e-17,
+              "amounts": [
+                0.20410008774850597,
+                0.2946499123157632
+              ],
+              "balance": [
+                7.64313612400258e-12,
+                5.662603719258641e-11
+              ],
+              "original_Q_linf": 2.3560070561146063e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            }
+          }
+        },
+        {
+          "clock": {
+            "accepted": [
+              0.01,
+              1
+            ],
+            "continuous": [
+              0.02,
+              2
+            ],
+            "replay": [
+              0.02,
+              2
+            ]
+          },
+          "envelope_admitted": false,
+          "ghost_formula_qualified": false,
+          "gpu_qualified": false,
+          "original_norms": {
+            "accepted": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 9.20720856194327e-11
+            },
+            "continuous": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 6.641436011205306e-11
+            },
+            "reloaded": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 9.20720856194327e-11
+            },
+            "replay": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 6.641436011205306e-11
+            }
+          },
+          "profile": {
+            "cells": 16,
+            "ranks": 1,
+            "width": 2
+          },
+          "root_approval": false,
+          "root_owner_scope": "single actual root only",
+          "schema": "sol61.evolved-case-body@5",
+          "science": {
+            "accepted": {
+              "Q_projection_linf": 2.7755575615628914e-17,
+              "amounts": [
+                0.19142504387466658,
+                0.30732495616263467
+              ],
+              "balance": [
+                4.235167772037585e-12,
+                3.306607765374281e-11
+              ],
+              "original_Q_linf": 3.306613316489404e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "continuous": {
+              "Q_projection_linf": 5.551115123125783e-17,
+              "amounts": [
+                0.20410008774850597,
+                0.29464991231576326
+              ],
+              "balance": [
+                7.64313612400258e-12,
+                5.662609270373764e-11
+              ],
+              "original_Q_linf": 2.3560070561146063e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "reloaded": {
+              "Q_projection_linf": 2.7755575615628914e-17,
+              "amounts": [
+                0.19142504387466658,
+                0.30732495616263467
+              ],
+              "balance": [
+                4.235167772037585e-12,
+                3.306607765374281e-11
+              ],
+              "original_Q_linf": 3.306613316489404e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "replay": {
+              "Q_projection_linf": 5.551115123125783e-17,
+              "amounts": [
+                0.20410008774850597,
+                0.29464991231576326
+              ],
+              "balance": [
+                7.64313612400258e-12,
+                5.662609270373764e-11
+              ],
+              "original_Q_linf": 2.3560070561146063e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            }
+          }
+        }
+      ],
+      "root_approval": false,
+      "schema": "sol61.evolved-matrix-reception@5",
+      "scope": "actual root owner; homogeneous OriginalQ/history/AMR12 only; no Uniform9, Ghost formula, GPU, inter-node or CI qualification",
+      "source": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+      "transport_rehashed": 255
+    },
+    "mpi2": {
+      "build_pin": "c0358e69f3491a8a9a4e9af4b4ab70d84ad4af5d8c014265149114dd2393a83a",
+      "envelope_admitted": true,
+      "ranks": 2,
+      "results": [
+        {
+          "clock": {
+            "accepted": [
+              0.01,
+              1
+            ],
+            "continuous": [
+              0.02,
+              2
+            ],
+            "replay": [
+              0.02,
+              2
+            ]
+          },
+          "envelope_admitted": false,
+          "ghost_formula_qualified": false,
+          "gpu_qualified": false,
+          "original_norms": {
+            "accepted": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 1.6115956861858127e-13
+            },
+            "continuous": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 3.521218301156558e-13
+            },
+            "reloaded": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 1.6115956861858127e-13
+            },
+            "replay": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 3.521218301156558e-13
+            }
+          },
+          "profile": {
+            "cells": 8,
+            "ranks": 2,
+            "width": 1
+          },
+          "root_approval": false,
+          "root_owner_scope": "single actual root only",
+          "schema": "sol61.evolved-case-body@5",
+          "science": {
+            "accepted": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.18560000000002994
+              ],
+              "balance": [
+                2.99482660892636e-14
+              ],
+              "original_Q_linf": 2.99482660892636e-14,
+              "z_constraint_linf": 0.0
+            },
+            "continuous": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.1987000000000999
+              ],
+              "balance": [
+                9.992007221626409e-14
+              ],
+              "original_Q_linf": 7.002731727823175e-14,
+              "z_constraint_linf": 0.0
+            },
+            "reloaded": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.18560000000002994
+              ],
+              "balance": [
+                2.99482660892636e-14
+              ],
+              "original_Q_linf": 2.99482660892636e-14,
+              "z_constraint_linf": 0.0
+            },
+            "replay": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.1987000000000999
+              ],
+              "balance": [
+                9.992007221626409e-14
+              ],
+              "original_Q_linf": 7.002731727823175e-14,
+              "z_constraint_linf": 0.0
+            }
+          }
+        },
+        {
+          "clock": {
+            "accepted": [
+              0.01,
+              1
+            ],
+            "continuous": [
+              0.02,
+              2
+            ],
+            "replay": [
+              0.02,
+              2
+            ]
+          },
+          "envelope_admitted": false,
+          "ghost_formula_qualified": false,
+          "gpu_qualified": false,
+          "original_norms": {
+            "accepted": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 1.6123753435845012e-13
+            },
+            "continuous": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 3.520705274785667e-13
+            },
+            "reloaded": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 1.6123753435845012e-13
+            },
+            "replay": {
+              "prefix": "amr_original_field_4.",
+              "relative_recomputed": 3.520705274785667e-13
+            }
+          },
+          "profile": {
+            "cells": 16,
+            "ranks": 2,
+            "width": 1
+          },
+          "root_approval": false,
+          "root_owner_scope": "single actual root only",
+          "schema": "sol61.evolved-case-body@5",
+          "science": {
+            "accepted": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.18560000000002994
+              ],
+              "balance": [
+                2.99482660892636e-14
+              ],
+              "original_Q_linf": 2.99482660892636e-14,
+              "z_constraint_linf": 0.0
+            },
+            "continuous": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.19870000000009994
+              ],
+              "balance": [
+                9.994782779187972e-14
+              ],
+              "original_Q_linf": 7.002731727823175e-14,
+              "z_constraint_linf": 0.0
+            },
+            "reloaded": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.18560000000002994
+              ],
+              "balance": [
+                2.99482660892636e-14
+              ],
+              "original_Q_linf": 2.99482660892636e-14,
+              "z_constraint_linf": 0.0
+            },
+            "replay": {
+              "Q_projection_linf": 0.0,
+              "amounts": [
+                0.19870000000009994
+              ],
+              "balance": [
+                9.994782779187972e-14
+              ],
+              "original_Q_linf": 7.002731727823175e-14,
+              "z_constraint_linf": 0.0
+            }
+          }
+        },
+        {
+          "clock": {
+            "accepted": [
+              0.01,
+              1
+            ],
+            "continuous": [
+              0.02,
+              2
+            ],
+            "replay": [
+              0.02,
+              2
+            ]
+          },
+          "envelope_admitted": false,
+          "ghost_formula_qualified": false,
+          "gpu_qualified": false,
+          "original_norms": {
+            "accepted": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 9.207206791889938e-11
+            },
+            "continuous": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 6.641424200909101e-11
+            },
+            "reloaded": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 9.207206791889938e-11
+            },
+            "replay": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 6.641424200909101e-11
+            }
+          },
+          "profile": {
+            "cells": 8,
+            "ranks": 2,
+            "width": 2
+          },
+          "root_approval": false,
+          "root_owner_scope": "single actual root only",
+          "schema": "sol61.evolved-case-body@5",
+          "science": {
+            "accepted": {
+              "Q_projection_linf": 2.7755575615628914e-17,
+              "amounts": [
+                0.19142504387466658,
+                0.30732495616263467
+              ],
+              "balance": [
+                4.235167772037585e-12,
+                3.306607765374281e-11
+              ],
+              "original_Q_linf": 3.306613316489404e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "continuous": {
+              "Q_projection_linf": 5.551115123125783e-17,
+              "amounts": [
+                0.20410008774850594,
+                0.2946499123157632
+              ],
+              "balance": [
+                7.643108368426965e-12,
+                5.662603719258641e-11
+              ],
+              "original_Q_linf": 2.3560070561146063e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "reloaded": {
+              "Q_projection_linf": 2.7755575615628914e-17,
+              "amounts": [
+                0.19142504387466658,
+                0.30732495616263467
+              ],
+              "balance": [
+                4.235167772037585e-12,
+                3.306607765374281e-11
+              ],
+              "original_Q_linf": 3.306613316489404e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "replay": {
+              "Q_projection_linf": 5.551115123125783e-17,
+              "amounts": [
+                0.20410008774850594,
+                0.2946499123157632
+              ],
+              "balance": [
+                7.643108368426965e-12,
+                5.662603719258641e-11
+              ],
+              "original_Q_linf": 2.3560070561146063e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            }
+          }
+        },
+        {
+          "clock": {
+            "accepted": [
+              0.01,
+              1
+            ],
+            "continuous": [
+              0.02,
+              2
+            ],
+            "replay": [
+              0.02,
+              2
+            ]
+          },
+          "envelope_admitted": false,
+          "ghost_formula_qualified": false,
+          "gpu_qualified": false,
+          "original_norms": {
+            "accepted": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 9.20720698071417e-11
+            },
+            "continuous": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 6.641427495488841e-11
+            },
+            "reloaded": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 9.20720698071417e-11
+            },
+            "replay": {
+              "prefix": "amr_original_field_5.",
+              "relative_recomputed": 6.641427495488841e-11
+            }
+          },
+          "profile": {
+            "cells": 16,
+            "ranks": 2,
+            "width": 2
+          },
+          "root_approval": false,
+          "root_owner_scope": "single actual root only",
+          "schema": "sol61.evolved-case-body@5",
+          "science": {
+            "accepted": {
+              "Q_projection_linf": 2.7755575615628914e-17,
+              "amounts": [
+                0.19142504387466658,
+                0.30732495616263467
+              ],
+              "balance": [
+                4.235167772037585e-12,
+                3.306607765374281e-11
+              ],
+              "original_Q_linf": 3.306607765374281e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "continuous": {
+              "Q_projection_linf": 5.551115123125783e-17,
+              "amounts": [
+                0.20410008774850597,
+                0.2946499123157632
+              ],
+              "balance": [
+                7.64313612400258e-12,
+                5.662603719258641e-11
+              ],
+              "original_Q_linf": 2.3560070561146063e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "reloaded": {
+              "Q_projection_linf": 2.7755575615628914e-17,
+              "amounts": [
+                0.19142504387466658,
+                0.30732495616263467
+              ],
+              "balance": [
+                4.235167772037585e-12,
+                3.306607765374281e-11
+              ],
+              "original_Q_linf": 3.306607765374281e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            },
+            "replay": {
+              "Q_projection_linf": 5.551115123125783e-17,
+              "amounts": [
+                0.20410008774850597,
+                0.2946499123157632
+              ],
+              "balance": [
+                7.64313612400258e-12,
+                5.662603719258641e-11
+              ],
+              "original_Q_linf": 2.3560070561146063e-11,
+              "z_constraint_linf": 2.7755575615628914e-17
+            }
+          }
+        }
+      ],
+      "root_approval": false,
+      "schema": "sol61.evolved-matrix-reception@5",
+      "scope": "actual root owner; homogeneous OriginalQ/history/AMR12 only; no Uniform9, Ghost formula, GPU, inter-node or CI qualification",
+      "source": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+      "transport_rehashed": 370
+    }
+  },
+  "reports_identical_on_replay": true,
+  "root_approval": true,
+  "schema": "root.sdk25-v5-matrix-native-reception@1",
+  "scope": "V@3 actual four width1/2 N8/16 profiles CPU1 and same-node MPI2, received by @5; all-rank C25 before bind, complete initial and CP12 State/history/restart/replay, root-owner homogeneous OriginalQ with actual original residual norms",
+  "signed_diffusion_and_coarse_fine_physical_flux_discriminated": false,
+  "source_freeze": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+  "verified_author_pins": 27,
+  "whole_mission_complete": false
+}

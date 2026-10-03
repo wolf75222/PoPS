@@ -1,0 +1,255 @@
+{
+  "ci_qualified": false,
+  "consumer_files": [
+    "tests/python/integration/runtime/test_public_evolved_original_stage.py",
+    "tests/python/integration/runtime/test_public_evolved_stage_amr_v3.py",
+    "tests/python/support/uniform_checkpoint9_capture.py",
+    "tests/review/sol61_cp9_named_block_join.md",
+    "tests/review/sol61_evolved_epoch_nonauthor.md",
+    "tests/review/sol61_evolved_replay_epoch_consumer.json",
+    "tests/review/sol61_evolved_replay_epoch_consumer.md",
+    "tests/review/sol61_uniform_checkpoint9_offline_v3.py",
+    "tests/review/test_sol61_cp9_named_block_join.py",
+    "tests/review/test_sol61_evolved_epoch_nonauthor.py",
+    "tests/review/test_sol61_evolved_replay_epoch_consumer.py"
+  ],
+  "consumer_source_at_execution": "65b1063bf3dcd0b749ccfd99d8c2f66f4f2dbdca",
+  "consumer_source_only_cohort": {
+    "cases_passed": 41,
+    "nodes": [
+      "tests.review.test_sol61_evolved_replay_epoch_consumer::test_real_epoch_positive_old_guard_is_discriminated",
+      "tests.review.test_sol61_evolved_replay_epoch_consumer::test_forged_source_or_continuation_is_refused[source]",
+      "tests.review.test_sol61_evolved_replay_epoch_consumer::test_forged_source_or_continuation_is_refused[epoch]",
+      "tests.review.test_sol61_evolved_replay_epoch_consumer::test_forged_source_or_continuation_is_refused[legacy]",
+      "tests.review.test_sol61_evolved_replay_epoch_consumer::test_forged_source_or_continuation_is_refused[owner]",
+      "tests.review.test_sol61_evolved_replay_epoch_consumer::test_forged_source_or_continuation_is_refused[foreign]",
+      "tests.review.test_sol61_evolved_replay_epoch_consumer::test_forged_source_or_continuation_is_refused[duplicate]",
+      "tests.review.test_sol61_evolved_replay_epoch_consumer::test_forged_source_or_continuation_is_refused[path]",
+      "tests.review.test_sol61_evolved_replay_epoch_consumer::test_capture_live_owners_does_not_guess_or_mutate",
+      "tests.review.test_sol61_evolved_epoch_nonauthor::test_complete_multilayout_epoch_with_prior_lineage",
+      "tests.review.test_sol61_evolved_epoch_nonauthor::test_live_multilayout_authorities_cannot_be_replaced[dropped]",
+      "tests.review.test_sol61_evolved_epoch_nonauthor::test_live_multilayout_authorities_cannot_be_replaced[ordering]",
+      "tests.review.test_sol61_evolved_epoch_nonauthor::test_live_multilayout_authorities_cannot_be_replaced[lineage]",
+      "tests.review.test_sol61_evolved_epoch_nonauthor::test_live_multilayout_authorities_cannot_be_replaced[impostor]",
+      "tests.review.test_sol61_cp9_named_block_join::test_exact_named_join_preserves_both_orders_and_raw_bytes[False]",
+      "tests.review.test_sol61_cp9_named_block_join::test_exact_named_join_preserves_both_orders_and_raw_bytes[True]",
+      "tests.review.test_sol61_cp9_named_block_join::test_wrong_named_projection_refuses[foreign]",
+      "tests.review.test_sol61_cp9_named_block_join::test_wrong_named_projection_refuses[missing]",
+      "tests.review.test_sol61_cp9_named_block_join::test_wrong_named_projection_refuses[swapped-values]",
+      "tests.review.test_sol61_cp9_named_block_join::test_wrong_named_projection_refuses[signedzero]",
+      "tests.review.test_sol61_cp9_named_block_join::test_reader_joins_npy_capture_index_to_actual_native_index",
+      "tests.review.test_sol61_cp9_named_block_join::test_reader_requires_exact_nonempty_named_component_authority[expected0]",
+      "tests.review.test_sol61_cp9_named_block_join::test_reader_requires_exact_nonempty_named_component_authority[expected1]",
+      "tests.review.test_sol61_cp9_named_block_join::test_reader_requires_exact_nonempty_named_component_authority[expected2]",
+      "tests.review.test_sol61_cp9_named_block_join::test_reader_requires_exact_nonempty_named_component_authority[expected3]",
+      "tests.review.test_sol61_cp9_named_block_join::test_reader_requires_exact_nonempty_named_component_authority[expected4]",
+      "tests.review.test_sol61_cp9_named_block_join::test_reader_requires_exact_nonempty_named_component_authority[expected5]",
+      "tests.review.test_sol61_cp9_capture_nonauthor::test_actual_capture_saves_full_observation_before_real_getter_exception",
+      "tests.review.test_sol61_cp9_capture_nonauthor::test_actual_capture_saves_corrupt_shard_before_guard_and_never_marks_phase",
+      "tests.review.test_sol61_cp9_capture_nonauthor::test_detached_runtime_guard_rejects_foreign_world_authority",
+      "tests.review.test_sol61_cp9_capture_nonauthor::test_second_getter_failure_retains_first_actual_array_and_partial_envelope",
+      "tests.review.test_sol61_cp9_public_clock_protocol::test_historical_capture_refuses_method_objects_on_genuine_public_class",
+      "tests.review.test_sol61_cp9_public_clock_protocol::test_public_methods_produce_exact_durable_clock",
+      "tests.review.test_sol61_cp9_public_clock_protocol::test_both_actual_capture_bodies_use_genuine_public_method_protocol[test_uniform_state_carrier_checkpoint_runtime.py]",
+      "tests.review.test_sol61_cp9_public_clock_protocol::test_both_actual_capture_bodies_use_genuine_public_method_protocol[test_uniform_checkpoint_provisional_effect.py]",
+      "tests.review.test_sol61_cp9_provisional_effect_preparation::test_public_checkpoint_effect_resolves_on_same_authored_clock",
+      "tests.review.test_sol61_cp9_provisional_effect_preparation::test_actual_runtime_clock_methods_used_by_capture_expression",
+      "tests.review.test_sol61_cp9_provisional_independent::test_injection_after_publication_retains_proof_before_fault",
+      "tests.review.test_sol61_cp9_provisional_independent::test_foreign_observer_failure_does_not_mint_intended_fault",
+      "tests.review.test_sol61_cp9_provisional_independent::test_failed_real_publication_is_not_claimed_injected",
+      "tests.review.test_sol61_cp9_provisional_independent::test_actual_capture_persists_cursors_before_getter_failure"
+    ],
+    "sha256": "c27a96c35ba378f1be3bf32a03b407fd52707495b3719d7053b52f6af6e08fca"
+  },
+  "current_grown_and_diagnostics_not_copied_into_historical_output": true,
+  "current_main_commit": "3144ed3c75263a281f78a94916db8a3c27942599",
+  "current_native_source": "2d70c79f3763d730e8d1bdd2d70667caae0018d8",
+  "exact_bytes_receipt_sha256": "c80b40b8af1dfa888c595cbd8af381f2e7289344f35d4be5e2dcf6448fe67e08",
+  "exact_bytes_subset_not_additional_unique_cases": true,
+  "historical_pure_helpers_unchanged": {
+    "tests/review/sol61_amr_full_carrier_offline.py": "c5148a74fb067087f4c157c38d5a763e85169089c988b8a302c1d93720ad5e9d",
+    "tests/review/sol61_evolved_stage_amr_saved_reception.py": "737c612cc3ba45f8490e22b40bcf2fedc7dd36fcda111e8929658b58c2ccfe6f",
+    "tests/review/sol61_evolved_stage_amr_saved_reception_v2.py": "daca8f4d42d720040cd5363ac39e882e492129bccad44fbefb2ec72added6468",
+    "tests/review/sol61_evolved_stage_amr_saved_reception_v3.py": "7c68df827727b4a53aad2934bde362505a8fb812a9fb7f64b795f699fb32ffea",
+    "tests/review/sol61_integral_feedback_offline_oracle.py": "21041d64af5378a35b5a8717cc0300b6a399d95cc2c9209e66d66e5e2ed54f89"
+  },
+  "independent_migration_source_host_cases": 33,
+  "independent_receipt_sha256": "acd3d6f08e00c7159fee7763115ef83d91709cc78711073134b384c9ce90153d",
+  "integrated_actual_files": {
+    "include/pops/runtime/checkpoint/uniform_migration_authority.hpp": {
+      "bytes": 4016,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "ca06319f081a568f5514e4578d24950b54467cd83e77a075ae2d3d0415787b60"
+    },
+    "include/pops_headers.manifest": {
+      "bytes": 21850,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "3fd21570aefd22546b331478963c544692dd86d0e89560919225483da4624b36"
+    },
+    "python/bindings/core/init/init_system.cpp": {
+      "bytes": 102369,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "48fd227eda73739d1a6ef8a3de396630d480d59dda1281bd772804909eb7a18a"
+    },
+    "python/pops/codegen/_checkpoint_migration_uniform_v2.py": {
+      "bytes": 54029,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "217479655296702b8020865a66c046d56dc5b008bddc9e92de1b532ab78493c9"
+    },
+    "tests/python/integration/runtime/test_public_evolved_original_stage.py": {
+      "bytes": 23733,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "c61b56d50a462b9ffdb1349377a6642fb788eb199758d713c1e0aab453afefb4"
+    },
+    "tests/python/integration/runtime/test_public_evolved_stage_amr_v3.py": {
+      "bytes": 9207,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "585bc759151306703fb0b481af54b8ae0b94e368bc2c336fef91e8ef53f65df0"
+    },
+    "tests/python/support/uniform_checkpoint9_capture.py": {
+      "bytes": 6840,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "1969806772ffa4df6431b88f9c3de41360896f1619a75ebb6d81dc01dd1ef676"
+    },
+    "tests/review/fixtures/sdk24-migration732309-authority9.npz": {
+      "bytes": 18864,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f"
+    },
+    "tests/review/sol61_cp9_named_block_join.md": {
+      "bytes": 3315,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "7a42c18ed30153bd65965c0ae2414b0d30af52120e0ca630edacae8f3d1d4fa9"
+    },
+    "tests/review/sol61_evolved_epoch_nonauthor.md": {
+      "bytes": 1496,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "487f3307f5f263fb950ce21f7cf4ef475f78607fc5fd5973dfb8a58a2ffb77e8"
+    },
+    "tests/review/sol61_evolved_replay_epoch_consumer.json": {
+      "bytes": 521,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "1bda0c4eed4945b4cef35ab13a03d1e4abbae66ec8af482f9778b98e2b4359fe"
+    },
+    "tests/review/sol61_evolved_replay_epoch_consumer.md": {
+      "bytes": 1896,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "e02503b9fe14dbaebe59fcf5cdf44f09fe724dd4ee21e7bd94ba7ef03859b682"
+    },
+    "tests/review/sol61_migration_current_storage_authority.md": {
+      "bytes": 2815,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "d083b000b2304a56898284094ddd4049702fd2b89f2cfa773ed3a23440e0873c"
+    },
+    "tests/review/sol61_uniform_checkpoint9_offline_v3.py": {
+      "bytes": 10988,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "38467a320844dd46d8ff440bc68eaf753798efbed8f33f3342f5bc2a7b0580d7"
+    },
+    "tests/review/test_sol61_cp9_named_block_join.py": {
+      "bytes": 3235,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "4802dcd5838940dda0c3641c081488f790079e5f4af06e12b11915379c0275c3"
+    },
+    "tests/review/test_sol61_evolved_epoch_nonauthor.py": {
+      "bytes": 2312,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "ce9e1a42356b3a19999538aa532e3e5acff6730c45d69d53cae502e5bf7e2876"
+    },
+    "tests/review/test_sol61_evolved_replay_epoch_consumer.py": {
+      "bytes": 3284,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "b646bb472d42a3363d95dbdba16df72d9191ed6387df2dfb4af12742ba6ad68f"
+    },
+    "tests/review/test_sol61_migration_current_storage_authority.py": {
+      "bytes": 11324,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "00912ed281e65f62207cccf908fb3295d8b305aa7fd16083f4da6c46ba3fa2a0"
+    }
+  },
+  "migration_author": "b7dc7ef0f07b2ad5ad73e04025a3d03191100213",
+  "migration_contract": "pops.uniform-migration-valid-projection@1; v2 -> historical8 valid_only_legacy8",
+  "migration_files": [
+    "include/pops/runtime/checkpoint/uniform_migration_authority.hpp",
+    "include/pops_headers.manifest",
+    "python/bindings/core/init/init_system.cpp",
+    "python/pops/codegen/_checkpoint_migration_uniform_v2.py",
+    "tests/review/fixtures/sdk24-migration732309-authority9.npz",
+    "tests/review/sol61_migration_current_storage_authority.md",
+    "tests/review/test_sol61_migration_current_storage_authority.py"
+  ],
+  "migration_source_host_xml": {
+    "exact_bytes_boundary_subset": {
+      "cases_passed": 2,
+      "nodes": [
+        "tests.review.test_sol61_migration_current_storage_authority::test_actual_current9_authority_passes_without_copying_storage",
+        "::test_signed_zero_projection_is_bit_exact_not_numerical"
+      ],
+      "sha256": "63597657f6e50d5bdead2777fc637349a812add2d053f19665c50a8b96fd8b51"
+    },
+    "existing_source": {
+      "cases_passed": 6,
+      "nodes": [
+        "tests.python.unit.codegen.test_checkpoint_migration::test_checkpoint_migration_provenance_has_a_fixed_budgeted_envelope",
+        "tests.python.unit.codegen.test_checkpoint_migration::test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart",
+        "tests.python.unit.codegen.test_checkpoint_migration::test_uniform_v2_authority_requires_an_empty_native_exchange_mailbox",
+        "tests.python.unit.codegen.test_checkpoint_migration::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[1.0]",
+        "tests.python.unit.codegen.test_checkpoint_migration::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[-0.0]",
+        "tests.python.unit.codegen.test_checkpoint_migration::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[nan]"
+      ],
+      "sha256": "989f814034d699541f5969735373f98928c43e49dde14020a0560d75e1f5ea73"
+    },
+    "new_author_and_independent": {
+      "cases_passed": 27,
+      "nodes": [
+        "tests.review.test_sol61_migration_current_storage_authority::test_actual_current9_authority_passes_without_copying_storage",
+        "tests.review.test_sol61_migration_current_storage_authority::test_resealed_invalid_current_authority_refused[pair]",
+        "tests.review.test_sol61_migration_current_storage_authority::test_resealed_invalid_current_authority_refused[offsets]",
+        "tests.review.test_sol61_migration_current_storage_authority::test_resealed_invalid_current_authority_refused[diagbody]",
+        "tests.review.test_sol61_migration_current_storage_authority::test_resealed_invalid_current_authority_refused[valid]",
+        "tests.review.test_sol61_migration_current_storage_authority::test_resealed_invalid_current_authority_refused[carriertrunc]",
+        "tests.review.test_sol61_migration_current_storage_authority::test_resealed_invalid_current_authority_refused[blocks]",
+        "tests.review.test_sol61_migration_current_storage_authority::test_resealed_invalid_current_authority_refused[extra]",
+        "tests.review.test_sol61_migration_current_storage_authority::test_resealed_invalid_current_authority_refused[v8carrier]",
+        "tests.review.test_sol61_migration_current_storage_authority::test_nonempty_current_diagnostics_are_validated_not_limited_to_demo",
+        "tests.review.test_sol61_migration_current_storage_authority::test_common_diagnostic_codec_rejects_duplicates_rank_and_tail",
+        "tests.review.test_sol61_migration_current_storage_authority::test_native_attestation_fault_remains_original_and_prepublication",
+        "tests.review.test_sol61_migration_current_storage_authority::test_public_migration_omits_current_diagnostics_and_grown[False]",
+        "tests.review.test_sol61_migration_current_storage_authority::test_public_migration_omits_current_diagnostics_and_grown[True]",
+        "tests.review.test_sol61_migration_current_storage_authority::test_common_carrier_projection_rectangular_partition_dimensions_1_2_3",
+        "::test_projection_input_rejects_exact_wrong_representation[dtype]",
+        "::test_projection_input_rejects_exact_wrong_representation[endian]",
+        "::test_projection_input_rejects_exact_wrong_representation[nan]",
+        "::test_projection_input_rejects_exact_wrong_representation[negative-zero]",
+        "::test_actual_header_geometry_refuses_holes_overlap_bounds[rows0]",
+        "::test_actual_header_geometry_refuses_holes_overlap_bounds[rows1]",
+        "::test_actual_header_geometry_refuses_holes_overlap_bounds[rows2]",
+        "::test_signed_zero_projection_is_bit_exact_not_numerical",
+        "::test_diagnostic_pair_strict_body_offsets_rank[truncate]",
+        "::test_diagnostic_pair_strict_body_offsets_rank[offsetdtype]",
+        "::test_diagnostic_pair_strict_body_offsets_rank[offsetendian]",
+        "::test_diagnostic_pair_strict_body_offsets_rank[rank]"
+      ],
+      "sha256": "be94447d922d3754d7d506348d7511c86be8e413aa057c3422bed23b3364a368"
+    }
+  },
+  "native_loader_migration_cases_not_executed": 17,
+  "native_migration_qualified": false,
+  "native_rebuild_required_for_current_source": true,
+  "remote_equivalence_sha256": "7d70cdd594cc8fd55a97f465a4925a86f683f2b1be479f8439ff22aad5dbaf97",
+  "remote_test_source_equivalence": {
+    "build_freeze": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+    "build_source_inventory_sha256": "47ad676b65d156906783e8902e20bc6e9eb2d1be85238ff1a3df913998baf392",
+    "bundle_sha256": "07c1e150e58acaab7c9fa1a2a783b6c76a8155304e9e45eb12b03ead7d4ac79c",
+    "installed_after_sha256": "faf26ff2f5a40fba3e16e21f2b9a57fa31a0f5e9fff8c92f5937032ea5fd7574",
+    "installed_before_sha256": "faf26ff2f5a40fba3e16e21f2b9a57fa31a0f5e9fff8c92f5937032ea5fd7574",
+    "installed_files_verified": 1156,
+    "installed_package_not_modified": true,
+    "production_files_equal": 1191,
+    "schema": "root.sdk24.test-source-equivalence@1",
+    "test_freeze": "65b1063bf3dcd0b749ccfd99d8c2f66f4f2dbdca"
+  },
+  "schema": "root.sdk24-consumers-and-migration-source-integration@1",
+  "sdk24_production_build": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+  "whole_mission_complete": false
+}

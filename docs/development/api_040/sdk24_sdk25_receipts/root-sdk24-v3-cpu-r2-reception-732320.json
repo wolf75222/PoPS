@@ -1,0 +1,159 @@
+{
+  "C25_all_models_and_program_checked": true,
+  "actual_reader_replayed": true,
+  "cells": 8,
+  "ci_qualified": false,
+  "comparable_performance_qualified": false,
+  "counterreview": {
+    "actual_replay_report_sha256": "5243b42f517aea8a613d9b039ffbbe64458670c651bdc15385f818780e6347be",
+    "additional_adversaries": [
+      "missing model row",
+      "foreign Program target",
+      "incomplete model actual-source proof"
+    ],
+    "authority": "actual single process / single composite root owner [] only",
+    "immutable_historical_v4": true,
+    "initial_coverage": "all six descriptors including owner, grown axes, components joined to independently validated accepted CP12 topology",
+    "original_red": "5 PASS 1 FAIL; model source omission admitted by original nested retained primitive",
+    "root_seal": false,
+    "schema": "sol61.v4-r2.nonauthor-review@1",
+    "scope": "homogeneous Original-Q residual/projection/lifting/history and CP12 full State replay; no multiowner Native, Uniform9, Ghost formula, Field cache, signed-D/CF discriminant, GPU, inter-node, CI or performance qualification",
+    "tests": "21 PASS, 0 fail/error/skip, 0.71s",
+    "unchanged_red_now_refused": true,
+    "verdict": "bounded independent green"
+  },
+  "dimension": 2,
+  "field_cache_qualified": false,
+  "ghost_formula_qualified": false,
+  "gpu_qualified": false,
+  "independent_artifacts_rewritten": false,
+  "independent_reports_identical_on_replay": true,
+  "initial_full_carrier_coverage_checked": true,
+  "installed_build_source": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+  "job": 732320,
+  "mpi_transport_qualified": false,
+  "original_residual_linf_max": 7.002731727823175e-14,
+  "owner_native_scope": "single composite root owner []; multi-child algebra remains Source only",
+  "pins": {
+    "counterreview": "f0eab21085cd25d6e62a813ca4a7752f5e7efc3f395d7b733e8c7ddf2e080f0e",
+    "reader": "57e80686cb3f13277ea2b24c711c9a4399c247a7e4d2fe7696484e03fcb6932e"
+  },
+  "projection_linf_max": 0.0,
+  "reader_report": {
+    "CP12_full_storage_history_replay_equal": true,
+    "JUnit": "1PASS0ERROR0SKIP",
+    "Uniform9_qualification": false,
+    "allowner_epoch_authenticated": true,
+    "build_source_equivalence_pending": false,
+    "ci_qualified": false,
+    "clock": {
+      "accepted": [
+        0.01,
+        1
+      ],
+      "continuous": [
+        0.02,
+        2
+      ],
+      "replay": [
+        0.02,
+        2
+      ]
+    },
+    "equivalence_contract": "pops.evolved-stage-checkpoint-equivalence@2",
+    "field_cache_qualified": false,
+    "ghost_formula_qualified": false,
+    "gpu_qualified": false,
+    "homogeneous_science": {
+      "accepted": {
+        "Q_projection_linf": 0.0,
+        "amounts": [
+          0.18560000000002988
+        ],
+        "balance": [
+          2.989275493803234e-14
+        ],
+        "original_Q_linf": 2.99482660892636e-14,
+        "z_constraint_linf": 0.0
+      },
+      "continuous": {
+        "Q_projection_linf": 0.0,
+        "amounts": [
+          0.19870000000009988
+        ],
+        "balance": [
+          9.989231664064846e-14
+        ],
+        "original_Q_linf": 7.002731727823175e-14,
+        "z_constraint_linf": 0.0
+      },
+      "reloaded": {
+        "Q_projection_linf": 0.0,
+        "amounts": [
+          0.18560000000002988
+        ],
+        "balance": [
+          2.989275493803234e-14
+        ],
+        "original_Q_linf": 2.99482660892636e-14,
+        "z_constraint_linf": 0.0
+      },
+      "replay": {
+        "Q_projection_linf": 0.0,
+        "amounts": [
+          0.19870000000009988
+        ],
+        "balance": [
+          9.989231664064846e-14
+        ],
+        "original_Q_linf": 7.002731727823175e-14,
+        "z_constraint_linf": 0.0
+      }
+    },
+    "initial_fullgrown_observed": true,
+    "inter_node_qualified": false,
+    "job": 732320,
+    "math_scope": "homogeneous Original-Q residual/projection/lifting/history only; signed D and CF flux not discriminated",
+    "native_sha256": "504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd",
+    "numeric_ABI_version": "8 via ROOT build/header authority; no opaque ABI6 admission",
+    "original_solver_norms": {
+      "accepted": {
+        "reference": 0.18559999999999996,
+        "relative_recomputed": 1.609737246655967e-13,
+        "residual": 2.9876723297934744e-14
+      },
+      "continuous": {
+        "reference": 0.19870000000002994,
+        "relative_recomputed": 3.521327193788274e-13,
+        "residual": 6.996877134058354e-14
+      },
+      "reloaded": {
+        "reference": 0.18559999999999996,
+        "relative_recomputed": 1.609737246655967e-13,
+        "residual": 2.9876723297934744e-14
+      },
+      "replay": {
+        "reference": 0.19870000000002994,
+        "relative_recomputed": 3.521327193788274e-13,
+        "residual": 6.996877134058354e-14
+      }
+    },
+    "owner_runtime_scope": "actual single root owner only; multichild Source algebra not Native qualification",
+    "regular_rehashed": 72,
+    "root_approval": false,
+    "schema": "sol61.evolved-native-reception@4-r2",
+    "source": "65b1063bf3dcd0b749ccfd99d8c2f66f4f2dbdca",
+    "test_source_equivalence_authenticated": true,
+    "world": 1
+  },
+  "root_approval": true,
+  "schema": "root.sdk24-v3-cpu-r2-reception@1",
+  "signed_D_CF_flux_discriminated": false,
+  "solver_norm_ratio_recomputed_max": 3.521327193788274e-13,
+  "source": "65b1063bf3dcd0b749ccfd99d8c2f66f4f2dbdca",
+  "uniform9_qualified": false,
+  "verdict": "SCOPED_V3_CP12_HISTORY_REPLAY_AND_HOMOGENEOUS_ORIGINAL_Q_APPROVED",
+  "whole_mission_complete": false,
+  "width": 1,
+  "world": 1
+}

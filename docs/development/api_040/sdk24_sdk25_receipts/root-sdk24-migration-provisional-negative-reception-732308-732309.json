@@ -1,0 +1,583 @@
+{
+  "actual_independent_reader_replayed": true,
+  "causal_correction_only": true,
+  "ci_qualified": false,
+  "corrected_report_sha256": "f75ab9845e812ff13240c38d9a88092a870a08815170323f6dfbf04aa0dcd15b",
+  "independent_artifacts_rewritten": false,
+  "jobs": [
+    732308,
+    732309
+  ],
+  "migration_native_success_qualified": false,
+  "provisional_injection_reached": false,
+  "provisional_publication_or_rollback_qualified": false,
+  "reader_sha256": "7bc77054e9a52dc9ab50dadf99be1a0da26d2248082523edf7f36f855f92917d",
+  "reception": {
+    "migration": {
+      "abi": "compiler=15.3.0;std=202002L;headers=bc8ceef2cd0ff42555308da2f685c5663996a189a5d8e6bb4129e57b17ccca3b;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+      "actual_member_evidence": {
+        "actual_version": 9,
+        "archive": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk24-migration-cpu-complete-received-732309/native-sdk24-migration-cpu-job-732309/output/pytest-tmp/test_true_frozen_v2_migrates_a0/authority-v8.npz",
+        "carriers_prefix": "POPSCAR1",
+        "member_names": [
+          "abi_key",
+          "auxiliary_checkpoint",
+          "blocks",
+          "cache_names",
+          "cache_nodes",
+          "continuation_transition_plan",
+          "field_provider_slots",
+          "history_blk.rate_0",
+          "history_blk.rate_1",
+          "history_depth_blk.rate",
+          "history_fill_count_blk.rate",
+          "history_init_blk.rate",
+          "history_names",
+          "history_ncomp_blk.rate",
+          "history_policy_blk.rate",
+          "history_requested_stored_slots_blk.rate",
+          "history_sample_identity_blk.rate",
+          "history_slot_dt_blk.rate",
+          "history_storage_mode_blk.rate",
+          "history_stored_slots_blk.rate",
+          "macro_step",
+          "names_blk",
+          "ncomp_blk",
+          "phi",
+          "pops_checkpoint_manifest",
+          "pops_checkpoint_version",
+          "pops_embedded_boundary_contract",
+          "pops_restart_identity",
+          "pops_spatial_contract",
+          "program_cadence_stride",
+          "program_cadence_substeps",
+          "program_cadence_window_dt",
+          "program_cadence_window_start_time",
+          "program_cadence_window_steps",
+          "program_diagnostics_offsets",
+          "program_diagnostics_state",
+          "program_exchange_offsets",
+          "program_exchange_state",
+          "program_hash",
+          "program_last_dt",
+          "runtime_consumer_cursors",
+          "runtime_consumer_diagnostics",
+          "runtime_consumer_graph",
+          "state_blk",
+          "state_carriers_checkpoint",
+          "t",
+          "temporal_restart_state"
+        ],
+        "sha256": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "unknown_diagnostic_pair": {
+          "program_diagnostics_offsets": {
+            "dtype": "int64",
+            "sha256": "8649ca6be427f9e99454a4e99f8adc84b45e7e0410dc44eefb22284e477476b2",
+            "shape": [
+              2
+            ]
+          },
+          "program_diagnostics_state": {
+            "dtype": "uint8",
+            "sha256": "e9955b382ea745643613b23d81e55cca447fbabb23df485cfc38635b9835de29",
+            "shape": [
+              40
+            ]
+          }
+        }
+      },
+      "before_after_exact": true,
+      "cases": [
+        {
+          "name": "test_checkpoint_migration_provenance_has_a_fixed_budgeted_envelope",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_checkpoint_migration_provenance_has_a_fixed_budgeted_envelope",
+          "passed": true
+        },
+        {
+          "name": "test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart",
+          "passed": true
+        },
+        {
+          "name": "test_uniform_v2_authority_requires_an_empty_native_exchange_mailbox",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_uniform_v2_authority_requires_an_empty_native_exchange_mailbox",
+          "passed": true
+        },
+        {
+          "name": "test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[1.0]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[1.0]",
+          "passed": true
+        },
+        {
+          "name": "test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[-0.0]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[-0.0]",
+          "passed": true
+        },
+        {
+          "name": "test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[nan]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[nan]",
+          "passed": true
+        },
+        {
+          "name": "test_dense_uniform_authority_refuses_spurious_regrid_replay_schedule",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_dense_uniform_authority_refuses_spurious_regrid_replay_schedule",
+          "passed": true
+        },
+        {
+          "name": "test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts",
+          "passed": false
+        },
+        {
+          "name": "test_refused_mapping_publishes_no_destination[<lambda>-content SHA-256]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-content SHA-256]",
+          "passed": true
+        },
+        {
+          "name": "test_refused_mapping_publishes_no_destination[<lambda>-Program hash]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-Program hash]",
+          "passed": false
+        },
+        {
+          "name": "test_refused_mapping_publishes_no_destination[<lambda>-live resource budget]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-live resource budget]",
+          "passed": true
+        },
+        {
+          "name": "test_refused_mapping_publishes_no_destination[<lambda>-authority or target lifecycle pins]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-authority or target lifecycle pins]",
+          "passed": false
+        },
+        {
+          "name": "test_refused_mapping_publishes_no_destination[<lambda>-auxiliary checkpoint SHA-256]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-auxiliary checkpoint SHA-256]",
+          "passed": false
+        },
+        {
+          "name": "test_refused_mapping_publishes_no_destination[<lambda>-auxiliary registry contract]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-auxiliary registry contract]",
+          "passed": false
+        },
+        {
+          "name": "test_refused_mapping_publishes_no_destination[<lambda>-block mapping]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-block mapping]",
+          "passed": false
+        },
+        {
+          "name": "test_refused_mapping_publishes_no_destination[<lambda>-complete authority transfer set]",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-complete authority transfer set]",
+          "passed": true
+        },
+        {
+          "name": "test_ambiguous_legacy_schema_is_refused_without_publication",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_ambiguous_legacy_schema_is_refused_without_publication",
+          "passed": true
+        },
+        {
+          "name": "test_tampered_current_authority_is_refused_without_publication",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_tampered_current_authority_is_refused_without_publication",
+          "passed": true
+        },
+        {
+          "name": "test_resealed_tampered_auxiliary_authority_is_refused_without_publication",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_resealed_tampered_auxiliary_authority_is_refused_without_publication",
+          "passed": true
+        },
+        {
+          "name": "test_resealed_nonempty_auxiliary_authority_is_refused_without_publication",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_resealed_nonempty_auxiliary_authority_is_refused_without_publication",
+          "passed": true
+        },
+        {
+          "name": "test_authority_history_ledger_must_match_the_legacy_trajectory",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_authority_history_ledger_must_match_the_legacy_trajectory",
+          "passed": false
+        },
+        {
+          "name": "test_existing_destination_is_never_replaced",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_existing_destination_is_never_replaced",
+          "passed": true
+        },
+        {
+          "name": "test_destination_race_at_atomic_link_is_no_clobber",
+          "node": "tests.python.unit.codegen.test_checkpoint_migration::test_destination_race_at_atomic_link_is_no_clobber",
+          "passed": false
+        }
+      ],
+      "cause": "Current authority already admits versions8/9 and POPSCAR1 prefix. Its strict expected key set omits the genuine paired program diagnostic arrays; this is the concrete cause of all eight observed failures.",
+      "doctor": {
+        "compilateur": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/g++ [baked by the _pops build] ; -std=c++20 accepted"
+        ],
+        "headers_sync": [
+          true,
+          "headers == module build (sig bc8ceef2cd0f...)"
+        ],
+        "include": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/source/include"
+        ],
+        "interpreteur": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python (3.12) ; extension /gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "kokkos": [
+          true,
+          "Kokkos module (thread/device resources selected before initialization)"
+        ],
+        "kokkos_root": [
+          true,
+          "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15"
+        ],
+        "numpy": [
+          true,
+          "2.5.3"
+        ],
+        "threads": [
+          true,
+          "OMP_NUM_THREADS=1 ; first System created=False"
+        ]
+      },
+      "groups": {
+        "AssertionError: Regex pattern did not match.\n  Expected regex: 'Program hash'\n  Actual message: 'current Uniform migration authority has ambiguous or unknown keys'": [
+          "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-Program hash]"
+        ],
+        "AssertionError: Regex pattern did not match.\n  Expected regex: 'authority or target lifecycle pins'\n  Actual message: 'current Uniform migration authority has ambiguous or unknown keys'": [
+          "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-authority or target lifecycle pins]"
+        ],
+        "AssertionError: Regex pattern did not match.\n  Expected regex: 'auxiliary checkpoint SHA-256'\n  Actual message: 'current Uniform migration authority has ambiguous or unknown keys'": [
+          "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-auxiliary checkpoint SHA-256]"
+        ],
+        "AssertionError: Regex pattern did not match.\n  Expected regex: 'auxiliary registry contract'\n  Actual message: 'current Uniform migration authority has ambiguous or unknown keys'": [
+          "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-auxiliary registry contract]"
+        ],
+        "AssertionError: Regex pattern did not match.\n  Expected regex: 'block mapping'\n  Actual message: 'current Uniform migration authority has ambiguous or unknown keys'": [
+          "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-block mapping]"
+        ],
+        "AssertionError: Regex pattern did not match.\n  Expected regex: 'outgoing-dt ledger differs'\n  Actual message: 'current Uniform migration authority has ambiguous or unknown keys'": [
+          "tests.python.unit.codegen.test_checkpoint_migration::test_authority_history_ledger_must_match_the_legacy_trajectory"
+        ],
+        "PASS": [
+          "tests.python.unit.codegen.test_checkpoint_migration::test_checkpoint_migration_provenance_has_a_fixed_budgeted_envelope",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_uniform_v2_authority_requires_an_empty_native_exchange_mailbox",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[1.0]",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[-0.0]",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[nan]",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_dense_uniform_authority_refuses_spurious_regrid_replay_schedule",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-content SHA-256]",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-live resource budget]",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_refused_mapping_publishes_no_destination[<lambda>-complete authority transfer set]",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_ambiguous_legacy_schema_is_refused_without_publication",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_tampered_current_authority_is_refused_without_publication",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_resealed_tampered_auxiliary_authority_is_refused_without_publication",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_resealed_nonempty_auxiliary_authority_is_refused_without_publication",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_existing_destination_is_never_replaced"
+        ],
+        "ValueError: current Uniform migration authority has ambiguous or unknown keys": [
+          "tests.python.unit.codegen.test_checkpoint_migration::test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts",
+          "tests.python.unit.codegen.test_checkpoint_migration::test_destination_race_at_atomic_link_is_no_clobber"
+        ]
+      },
+      "job": 732309,
+      "links": {
+        "output/pytest-tmp/test_ambiguous_legacy_schema_icurrent": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_ambiguous_legacy_schema_i0",
+        "output/pytest-tmp/test_authority_history_ledger_current": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_authority_history_ledger_0",
+        "output/pytest-tmp/test_dense_uniform_authority_rcurrent": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_dense_uniform_authority_r0",
+        "output/pytest-tmp/test_destination_race_at_atomicurrent": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_destination_race_at_atomi0",
+        "output/pytest-tmp/test_existing_destination_is_ncurrent": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_existing_destination_is_n0",
+        "output/pytest-tmp/test_frozen_v2_fixture_refusescurrent": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_frozen_v2_fixture_refuses2",
+        "output/pytest-tmp/test_refused_mapping_publishescurrent": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_refused_mapping_publishes7",
+        "output/pytest-tmp/test_resealed_nonempty_auxiliacurrent": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_resealed_nonempty_auxilia0",
+        "output/pytest-tmp/test_resealed_tampered_auxiliacurrent": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_resealed_tampered_auxilia0",
+        "output/pytest-tmp/test_tampered_current_authoritcurrent": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_tampered_current_authorit0",
+        "output/pytest-tmp/test_true_frozen_v2_migrates_acurrent": "/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp/test_true_frozen_v2_migrates_a0"
+      },
+      "native": "504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd",
+      "native_or_scientific_qualification": false,
+      "negative_received": true,
+      "pins": {
+        "after/identity.json": "23bf2abd0cb4d4e028be0b41ca0a035918ce70f1f509376c93c2cce3c2429496",
+        "after/source-files.json": "1e3c65c848619eb73cf58720cd5e7671d018f536d5898bb83bcc6c1656c6963a",
+        "before/identity.json": "23bf2abd0cb4d4e028be0b41ca0a035918ce70f1f509376c93c2cce3c2429496",
+        "before/source-files.json": "1e3c65c848619eb73cf58720cd5e7671d018f536d5898bb83bcc6c1656c6963a",
+        "cache/codegen/00f385c1bc1fce72d11de92542663920ac3804f55f7bfe496d972a7ddee44b8c.so": "98984d9c08a5b52e3200200498ad2948f6c633f04e84ab9d052f5988db790928",
+        "cache/codegen/00f385c1bc1fce72d11de92542663920ac3804f55f7bfe496d972a7ddee44b8c.so.pops-artifact.json": "bffec942c01511ebc36303ac17c508e2677d2913725446b1ce57199c6508c038",
+        "cache/codegen/00f385c1bc1fce72d11de92542663920ac3804f55f7bfe496d972a7ddee44b8c.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "cache/codegen/8c05a29aa4654e23afd732b0f4dc6f508b6d46a78ee7e749505c1882f181c637.so": "865cf8cfb98ed3926e8b47c3ada7f10e4b12c1bc5c6a172632779aefdd118cef",
+        "cache/codegen/8c05a29aa4654e23afd732b0f4dc6f508b6d46a78ee7e749505c1882f181c637.so.pops-artifact.json": "7b39da23483cf098d0ace85a05018064e3693df8fb7dd9ef8d8f65853b6bb05d",
+        "cache/codegen/8c05a29aa4654e23afd732b0f4dc6f508b6d46a78ee7e749505c1882f181c637.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "compute-output-path.txt": "5c2ae7bbdc6f9d6ed7d8ed422c740de082f40e69047242c0b68614988813095b",
+        "installed-after.json": "faf26ff2f5a40fba3e16e21f2b9a57fa31a0f5e9fff8c92f5937032ea5fd7574",
+        "installed-before.json": "faf26ff2f5a40fba3e16e21f2b9a57fa31a0f5e9fff8c92f5937032ea5fd7574",
+        "output/identity.json": "23bf2abd0cb4d4e028be0b41ca0a035918ce70f1f509376c93c2cce3c2429496",
+        "output/pytest-tmp/test_ambiguous_legacy_schema_i0/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_ambiguous_legacy_schema_i0/legacy-v2.npz": "ff46bc641eb0532e60c5ce3539d99e2ce2d3f407cd4cfaaa0e40021b7750379c",
+        "output/pytest-tmp/test_authority_history_ledger_0/authority-v8.npz": "544d41f87126e4f9e643553f28844b5e97f69f7a3faf95f2588c552431209006",
+        "output/pytest-tmp/test_authority_history_ledger_0/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_dense_uniform_authority_r0/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_destination_race_at_atomi0/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_destination_race_at_atomi0/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_existing_destination_is_n0/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_existing_destination_is_n0/existing.npz": "2b7847b7b705781d7cf21a05e9c1bb37cbf078aea103bc3edcc6aca52ab65453",
+        "output/pytest-tmp/test_existing_destination_is_n0/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_frozen_v2_fixture_refuses0/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_frozen_v2_fixture_refuses1/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_frozen_v2_fixture_refuses2/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_refused_mapping_publishes0/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_refused_mapping_publishes0/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_refused_mapping_publishes1/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_refused_mapping_publishes1/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_refused_mapping_publishes2/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_refused_mapping_publishes2/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_refused_mapping_publishes3/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_refused_mapping_publishes3/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_refused_mapping_publishes4/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_refused_mapping_publishes4/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_refused_mapping_publishes5/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_refused_mapping_publishes5/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_refused_mapping_publishes6/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_refused_mapping_publishes6/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_refused_mapping_publishes7/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_refused_mapping_publishes7/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_resealed_nonempty_auxilia0/authority-v8.npz": "f6ac6e1814a3a9e74e3c96c9bb2f42bdf90112ff8f777ec5dab6803ee5ce2513",
+        "output/pytest-tmp/test_resealed_nonempty_auxilia0/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_resealed_tampered_auxilia0/authority-v8.npz": "2cdc5c3eed44372939fb1c378ca3eaa6f5a24a66d96c798bcade9fec33b408f9",
+        "output/pytest-tmp/test_resealed_tampered_auxilia0/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_tampered_current_authorit0/authority-v8.npz": "22cbf4bb5071a5a99def7cb7a021aa342f68c6fe76958767db719c2424dbcdab",
+        "output/pytest-tmp/test_tampered_current_authorit0/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest-tmp/test_true_frozen_v2_migrates_a0/authority-v8.npz": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f",
+        "output/pytest-tmp/test_true_frozen_v2_migrates_a0/legacy-v2.npz": "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226",
+        "output/pytest.log": "931d7251913113c141d0110b17374d19cde2e7e7a659d16b90047ae31b587434",
+        "output/pytest.xml": "80939eecf0f591142f7287248d20481f149d1e8005946012f29c19c33cd48a6a",
+        "output/result.json": "f1a27bb08c52483505424c94b1f8b940863aba7f7898eca47861d0771994f6c2",
+        "output/source-files.json": "1e3c65c848619eb73cf58720cd5e7671d018f536d5898bb83bcc6c1656c6963a",
+        "preserved-after.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+        "preserved-before.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+        "result.json": "b095e2f800ee34a249c5e4c31e3fbad4e8764ff3e50a6dd29a5f93f95efb8538",
+        "run.log": "c394bd7f5b77ca1633d617382b8a331e2555d900dfbedacdc5470cee960df1d2",
+        "source-after.json": "47ad676b65d156906783e8902e20bc6e9eb2d1be85238ff1a3df913998baf392",
+        "source-before.json": "47ad676b65d156906783e8902e20bc6e9eb2d1be85238ff1a3df913998baf392",
+        "test-exit.json": "48ac24139fe3481743be1ea3a0a1c3fca746a1391a7844d5c65c2863f2517d2a",
+        "test-wrapper.log": "f1a27bb08c52483505424c94b1f8b940863aba7f7898eca47861d0771994f6c2"
+      },
+      "raw_result": {
+        "command": [
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python",
+          "-c",
+          "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+          "-v",
+          "--tb=short",
+          "-o",
+          "pythonpath=",
+          "--junitxml=/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest.xml",
+          "--basetemp=/tmp/pops-api040-composition15-sdk24-migration-cpu-732309/output/pytest-tmp",
+          "tests/python/unit/codegen/test_checkpoint_migration.py"
+        ],
+        "counts": {
+          "errors": 0,
+          "failures": 8,
+          "skipped": 0,
+          "tests": 23
+        },
+        "duration_seconds": 188.26986864907667,
+        "identity_sha256": "23bf2abd0cb4d4e028be0b41ca0a035918ce70f1f509376c93c2cce3c2429496",
+        "log_sha256": "931d7251913113c141d0110b17374d19cde2e7e7a659d16b90047ae31b587434",
+        "pytest_base_temp": "pytest-tmp",
+        "returncode": 1,
+        "schema_version": 1,
+        "status": "failed"
+      },
+      "selection": {
+        "additional_source_cases": 6,
+        "cases": 23,
+        "deselected": 0,
+        "errors": 0,
+        "failed": 8,
+        "native_loader_failed": 8,
+        "native_loader_marked": 17,
+        "native_loader_passed": 9,
+        "passed": 15,
+        "skipped": 0,
+        "whole_file_executed": true
+      },
+      "source_evidence": {
+        "carrier_prefix_admission": true,
+        "diagnostic_pair_absent_from_expected": true,
+        "file": "python/pops/codegen/_checkpoint_migration_uniform_v2.py",
+        "source_blob_sha256": "13b0020d1dd42794da1788312690bd130e197f4ddfc08e15bb3d428003026dcd",
+        "strict_key_guard": "_current_authority line637",
+        "version8_9_admission": true
+      }
+    },
+    "new_runtime_executed": false,
+    "provisional": {
+      "abi": "compiler=15.3.0;std=202002L;headers=bc8ceef2cd0ff42555308da2f685c5663996a189a5d8e6bb4129e57b17ccca3b;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+      "actual_publication_artifacts_present": false,
+      "before_after_exact": true,
+      "cases": [
+        {
+          "name": "test_installed_checkpoint_effect_failure_restores_full_uniform_state",
+          "node": "tests.python.integration.runtime.test_uniform_checkpoint_provisional_effect::test_installed_checkpoint_effect_failure_restores_full_uniform_state",
+          "passed": false
+        }
+      ],
+      "cause": "Before-image guard refuses native registry ordering versus declared NPY order. Failure occurs before monkeypatch injection/pops.run/publication; no provisional effect or rollback received.",
+      "doctor": {
+        "compilateur": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/g++ [baked by the _pops build] ; -std=c++20 accepted"
+        ],
+        "headers_sync": [
+          true,
+          "headers == module build (sig bc8ceef2cd0f...)"
+        ],
+        "include": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/source/include"
+        ],
+        "interpreteur": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python (3.12) ; extension /gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "kokkos": [
+          true,
+          "Kokkos module (thread/device resources selected before initialization)"
+        ],
+        "kokkos_root": [
+          true,
+          "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15"
+        ],
+        "numpy": [
+          true,
+          "2.5.3"
+        ],
+        "threads": [
+          true,
+          "OMP_NUM_THREADS=1 ; first System created=False"
+        ]
+      },
+      "groups": {
+        "AssertionError: (('ValueError', 'complete phase authority differs', False),)": [
+          "tests.python.integration.runtime.test_uniform_checkpoint_provisional_effect::test_installed_checkpoint_effect_failure_restores_full_uniform_state"
+        ]
+      },
+      "job": 732308,
+      "links": {
+        "output/pytest-tmp/test_installed_checkpoint_effecurrent": "/tmp/pops-api040-composition15-sdk24-provisional-effect-cpu-732308/output/pytest-tmp/test_installed_checkpoint_effe0"
+      },
+      "native": "504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd",
+      "native_or_scientific_qualification": false,
+      "negative_received": true,
+      "pins": {
+        "after/identity.json": "23bf2abd0cb4d4e028be0b41ca0a035918ce70f1f509376c93c2cce3c2429496",
+        "after/source-files.json": "1e3c65c848619eb73cf58720cd5e7671d018f536d5898bb83bcc6c1656c6963a",
+        "before/identity.json": "23bf2abd0cb4d4e028be0b41ca0a035918ce70f1f509376c93c2cce3c2429496",
+        "before/source-files.json": "1e3c65c848619eb73cf58720cd5e7671d018f536d5898bb83bcc6c1656c6963a",
+        "cache/codegen/e02465b5b7a1d534d20a87f56ffe1765c22bf12741d9a6cb0fb022d55cd2d1ab.so": "8caef4a3375eb1a519c8895d3d77dbc94d9c507d3c3d1ddb3383eb9d363c833c",
+        "cache/codegen/e02465b5b7a1d534d20a87f56ffe1765c22bf12741d9a6cb0fb022d55cd2d1ab.so.pops-artifact.json": "c78927981938828539e55309d47500fb7c0f979571a62272180d6f9fc3efbc3a",
+        "cache/codegen/e02465b5b7a1d534d20a87f56ffe1765c22bf12741d9a6cb0fb022d55cd2d1ab.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "compute-output-path.txt": "864312a4ca0d710ac5f7d12b896815999a575aa384b6c483bf178cd5c8925204",
+        "installed-after.json": "faf26ff2f5a40fba3e16e21f2b9a57fa31a0f5e9fff8c92f5937032ea5fd7574",
+        "installed-before.json": "faf26ff2f5a40fba3e16e21f2b9a57fa31a0f5e9fff8c92f5937032ea5fd7574",
+        "output/identity.json": "23bf2abd0cb4d4e028be0b41ca0a035918ce70f1f509376c93c2cce3c2429496",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/before.carriers": "9235f3c7b57dbfb4509c4d2a79c2bb38a78c889923238ddf183187750d3af8e0",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/before.clock.json": "eabc15db63910ce6bb46f7e8a7a6d9abf2da97f46384f4f23030804f69166624",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/before.rank0.block0.npy": "22e127da912d8c6b0eab3187d59e6f9e5f5d4c5bf773516d6050a3c0e6e8657e",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/before.rank0.block1.npy": "9328e81fb90207c3ebeb4f0806854de823042bd0f0df1fcbf15740fb0c370c1f",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/before.rank0.carriers": "3a86ad6e6824beb675a9319c2df2a717afd4067fc670bd29aef69dc305cae317",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/before.rank0.complete.carriers": "9235f3c7b57dbfb4509c4d2a79c2bb38a78c889923238ddf183187750d3af8e0",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/before.rank0.cursors.json": "ec25d796a0cc8c3b227f2293454da22273ea8d2051e9a6f6cd7e8667638ac02b",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/before.rank0.phase.json": "d7297d6c1c62745253c99766766285d1d0564b00575d4fd2728deb6e5ff5a3a8",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/compiled-manifest.json": "6055c94c61601f84fb2530d075e13223ee4388d76fd3d650859f61eaa3eb4c0d",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-0-companions/6defaf478f4423c5912d9814bd16d8413eefb3a3605b6be819b7ffe81ff4186a.so.pops-artifact.json": "9ba41f6cee5d3e80cc9e98f94fb2adbade8478acd888ddb2a8def18eb55fd12a",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-0-companions/6defaf478f4423c5912d9814bd16d8413eefb3a3605b6be819b7ffe81ff4186a.so.pops-model-compile.json": "dd1d6f7ceb3c44a4e728f9987f797154ba08130dae2862535309f22e39c119df",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-0-companions/6defaf478f4423c5912d9814bd16d8413eefb3a3605b6be819b7ffe81ff4186a.so.pops-model.cpp": "869815b1877e9f8c711a44adf6e27961be94581328cefe02ee7e3054fec83b4b",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-0.artifact.json": "9ba41f6cee5d3e80cc9e98f94fb2adbade8478acd888ddb2a8def18eb55fd12a",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-0.cpp": "869815b1877e9f8c711a44adf6e27961be94581328cefe02ee7e3054fec83b4b",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-0.module-ir.json": "20afd7a97965693085cea5976e37b159d92a70dc608b905c1e1072d208fa08b6",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-0.so": "2bef3187565ade8f9a0c1f33879af01266c071ef8a0a14b61c44a95be2d8cf63",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-1-companions/8ad9ee1d9b5fd934338b185837b8e1aa104e52f25b932037db708b82c1506003.so.pops-artifact.json": "0189319d8d9ee3cf7ca734f800399cd061e60249a35df9f44d9bdc0328a867c1",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-1-companions/8ad9ee1d9b5fd934338b185837b8e1aa104e52f25b932037db708b82c1506003.so.pops-model-compile.json": "d4106680323309adbe6a37a755bc04561a5a216fdd678210a7ac8dd8388ab131",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-1-companions/8ad9ee1d9b5fd934338b185837b8e1aa104e52f25b932037db708b82c1506003.so.pops-model.cpp": "df30269d54d8d68633167e4a7c382349d0650840a7335b154d2600e3b288efa7",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-1.artifact.json": "0189319d8d9ee3cf7ca734f800399cd061e60249a35df9f44d9bdc0328a867c1",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-1.cpp": "df30269d54d8d68633167e4a7c382349d0650840a7335b154d2600e3b288efa7",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-1.module-ir.json": "20afd7a97965693085cea5976e37b159d92a70dc608b905c1e1072d208fa08b6",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/model-1.so": "4c3d868facc8c0c388e245ff7aa57004370ec61f0ca1eefa8222e68105579e80",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/program/e02465b5b7a1d534d20a87f56ffe1765c22bf12741d9a6cb0fb022d55cd2d1ab.so.pops-artifact.json": "c78927981938828539e55309d47500fb7c0f979571a62272180d6f9fc3efbc3a",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/program/program.artifact.json": "c78927981938828539e55309d47500fb7c0f979571a62272180d6f9fc3efbc3a",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/program/program.cpp": "21a12ea9e334bb1ab70bdde3c7f3f27630168b6eb813834ca8e64471c0e7b11d",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/program/program.ir.json": "f883849e586c0d522123ae93907f6135a8173765ef088011cb5b75f66713dabb",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/program/program.so": "8caef4a3375eb1a519c8895d3d77dbc94d9c507d3c3d1ddb3383eb9d363c833c",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/cp9-provisional-effect/provenance/receipt.json": "830ebf3b4cfafd1d84686909e12036fbf6c73a6258e305e674729c496b0441fb",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/.6defaf478f4423c5912d9814bd16d8413eefb3a3605b6be819b7ffe81ff4186a.pops-stage-fpqxryh0.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/.8ad9ee1d9b5fd934338b185837b8e1aa104e52f25b932037db708b82c1506003.pops-stage-0ysbms9y.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/6defaf478f4423c5912d9814bd16d8413eefb3a3605b6be819b7ffe81ff4186a.so": "2bef3187565ade8f9a0c1f33879af01266c071ef8a0a14b61c44a95be2d8cf63",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/6defaf478f4423c5912d9814bd16d8413eefb3a3605b6be819b7ffe81ff4186a.so.pops-artifact.json": "9ba41f6cee5d3e80cc9e98f94fb2adbade8478acd888ddb2a8def18eb55fd12a",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/6defaf478f4423c5912d9814bd16d8413eefb3a3605b6be819b7ffe81ff4186a.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/6defaf478f4423c5912d9814bd16d8413eefb3a3605b6be819b7ffe81ff4186a.so.pops-model-compile.json": "dd1d6f7ceb3c44a4e728f9987f797154ba08130dae2862535309f22e39c119df",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/6defaf478f4423c5912d9814bd16d8413eefb3a3605b6be819b7ffe81ff4186a.so.pops-model.cpp": "869815b1877e9f8c711a44adf6e27961be94581328cefe02ee7e3054fec83b4b",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/8ad9ee1d9b5fd934338b185837b8e1aa104e52f25b932037db708b82c1506003.so": "4c3d868facc8c0c388e245ff7aa57004370ec61f0ca1eefa8222e68105579e80",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/8ad9ee1d9b5fd934338b185837b8e1aa104e52f25b932037db708b82c1506003.so.pops-artifact.json": "0189319d8d9ee3cf7ca734f800399cd061e60249a35df9f44d9bdc0328a867c1",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/8ad9ee1d9b5fd934338b185837b8e1aa104e52f25b932037db708b82c1506003.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/8ad9ee1d9b5fd934338b185837b8e1aa104e52f25b932037db708b82c1506003.so.pops-model-compile.json": "d4106680323309adbe6a37a755bc04561a5a216fdd678210a7ac8dd8388ab131",
+        "output/pytest-tmp/test_installed_checkpoint_effe0/pops-native-cache/8ad9ee1d9b5fd934338b185837b8e1aa104e52f25b932037db708b82c1506003.so.pops-model.cpp": "df30269d54d8d68633167e4a7c382349d0650840a7335b154d2600e3b288efa7",
+        "output/pytest.log": "fe995f5f6dfea81ac86e86e8522309a74228275ea69970328e4b13eca1dea56d",
+        "output/pytest.xml": "a7e20d2c011b472adcb7c28365b1a25dbad7189d69aa4e0922c8d2ad79a1707d",
+        "output/result.json": "a78b8234abb0e366714a01c5ba57ed7981ccbba9e9d4761de2182fefb1ba7814",
+        "output/source-files.json": "1e3c65c848619eb73cf58720cd5e7671d018f536d5898bb83bcc6c1656c6963a",
+        "preserved-after.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+        "preserved-before.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+        "result.json": "e7f078e77014ca51d425d728de0a0eaf1dc9a59927b2af6954f18b921dd973fe",
+        "run.log": "185e3dcd2f79ab3ee024ae991f985526add821168589d9a9b08d06a93d589f3e",
+        "source-after.json": "47ad676b65d156906783e8902e20bc6e9eb2d1be85238ff1a3df913998baf392",
+        "source-before.json": "47ad676b65d156906783e8902e20bc6e9eb2d1be85238ff1a3df913998baf392",
+        "test-exit.json": "48ac24139fe3481743be1ea3a0a1c3fca746a1391a7844d5c65c2863f2517d2a",
+        "test-wrapper.log": "a78b8234abb0e366714a01c5ba57ed7981ccbba9e9d4761de2182fefb1ba7814"
+      },
+      "raw_result": {
+        "command": [
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python",
+          "-c",
+          "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+          "-v",
+          "--tb=short",
+          "-o",
+          "pythonpath=",
+          "--junitxml=/tmp/pops-api040-composition15-sdk24-provisional-effect-cpu-732308/output/pytest.xml",
+          "--basetemp=/tmp/pops-api040-composition15-sdk24-provisional-effect-cpu-732308/output/pytest-tmp",
+          "tests/python/integration/runtime/test_uniform_checkpoint_provisional_effect.py::test_installed_checkpoint_effect_failure_restores_full_uniform_state"
+        ],
+        "counts": {
+          "errors": 0,
+          "failures": 1,
+          "skipped": 0,
+          "tests": 1
+        },
+        "duration_seconds": 127.23233093693852,
+        "identity_sha256": "23bf2abd0cb4d4e028be0b41ca0a035918ce70f1f509376c93c2cce3c2429496",
+        "log_sha256": "fe995f5f6dfea81ac86e86e8522309a74228275ea69970328e4b13eca1dea56d",
+        "pytest_base_temp": "pytest-tmp",
+        "returncode": 1,
+        "schema_version": 1,
+        "status": "failed"
+      }
+    },
+    "required_policy": "Authenticate current authority diagnostic pair fully, then OMIT it from migrated historical8/reset by absence; historical2 lacks grown State, so current9 grown storage must never be transferred. Prefix-only carrier admission sufficiency is a separate issue requiring author fix and review, not the cause established for these eight failures.",
+    "root_approval": false,
+    "schema": "sol61.sdk24-native-negative-counterreception@2",
+    "source": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+    "supersedes_causal_wording_only": {
+      "correction": "Current authority already admits versions8/9 and POPSCAR1 prefix. Its strict expected key set omits the genuine paired program diagnostic arrays; this is the concrete cause of all eight observed failures.",
+      "inaccurate_words": "legacy-only migrator",
+      "report_sha256": "26cfa3942583143c4579f9b922876f575bd4844440e5337bf1190f5cda887354"
+    }
+  },
+  "report_identical_on_replay": true,
+  "schema": "root.sdk24-migration-provisional-negative-reception@1",
+  "source": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+  "superseded_report_sha256": "26cfa3942583143c4579f9b922876f575bd4844440e5337bf1190f5cda887354",
+  "verdict": "AUTHENTIC_NEGATIVES_ONLY",
+  "whole_mission_complete": false
+}

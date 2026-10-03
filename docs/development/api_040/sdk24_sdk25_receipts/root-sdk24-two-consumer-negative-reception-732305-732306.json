@@ -1,0 +1,101 @@
+{
+  "actual_independent_readers_replayed": true,
+  "build_authority": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk24-build-reception-732293.json",
+    "sha256": "ad373f92f1fc574e40e3f321ffe35be79b4ab9bacf590b7572ccb0b7bbefb21d"
+  },
+  "ci_qualified": false,
+  "gpu_qualified": false,
+  "independent": {
+    "two_transports": {
+      "directory": "/Users/romaindespoulain/dev/tmp/sol61-sdk24-two-transports-negative-independent-732305",
+      "pins_sha256": "22c5997576e4dbab06dde65dbb409900dc5f53a9fe13ab531c6ba32a2973b1ed",
+      "verified": 69
+    },
+    "v3": {
+      "directory": "/Users/romaindespoulain/dev/tmp/sol61-sdk24-v3-negative-independent-732306",
+      "pins_sha256": "3d4a0fd56a0054a7489d7cc01d128e743085685cef339b5a317bd67f68e5561b",
+      "verified": 2
+    }
+  },
+  "independent_artifacts_rewritten": false,
+  "jobs": [
+    732305,
+    732306
+  ],
+  "mpi_transport_qualified": false,
+  "native_positive": false,
+  "negative_evidence_received": true,
+  "reports_identical_on_replay": true,
+  "schema": "root.sdk24-two-consumer-negative-reception@1",
+  "science_qualified": false,
+  "scope": "Two authentic failed consumer cases; initial block-name bit join and V3 retained checkpoint comparison do not replace final CP9 or V3 scientific reception",
+  "source_freeze": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+  "two_transports": {
+    "C25_before_bind": true,
+    "captured_artifact_block_order": [
+      "early_transport",
+      "late_transport"
+    ],
+    "checkpoint_restart_qualified": false,
+    "complete_local_grown_bits_equal": true,
+    "contract": "sol61.sdk24.two-transports-negative@1",
+    "failure": "complete phase authority differs",
+    "initial_clock": [
+      0.0,
+      0
+    ],
+    "initial_valid_bits_match_by_qualified_block_name": true,
+    "job": 732305,
+    "native_block_order": [
+      "late_transport",
+      "early_transport"
+    ],
+    "root_seal": false,
+    "science_qualified": false,
+    "scope": "actual initial engineering observations only; ordered consumer assumption differs, not storage corruption or positive CP9/replay/math",
+    "terminal": "FAILED"
+  },
+  "v3": {
+    "JUnit": "1FAIL0ERROR0SKIP",
+    "amr_qualified": false,
+    "ci_qualified": false,
+    "clocks": {
+      "accepted": [
+        0.01,
+        1
+      ],
+      "continuous": [
+        0.02,
+        2
+      ],
+      "replay": [
+        0.02,
+        2
+      ]
+    },
+    "continuous_replay_differing_members": [
+      "pops_checkpoint_manifest",
+      "pops_restart_identity"
+    ],
+    "failure": "obsolete continuation identity comparison",
+    "final_scientific_NPZ_received": false,
+    "gpu_qualified": false,
+    "job": 732306,
+    "math_qualified": false,
+    "native_positive": false,
+    "native_sha256": "504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd",
+    "regular_rehashed": 60,
+    "retained_C25_rehashed": true,
+    "retained_checkpoints": [
+      "accepted",
+      "continuous",
+      "replay"
+    ],
+    "root_approval": false,
+    "schema": "sol61.sdk24-v3-negative-independent@1",
+    "source": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+    "world": 1
+  },
+  "whole_mission_complete": false
+}

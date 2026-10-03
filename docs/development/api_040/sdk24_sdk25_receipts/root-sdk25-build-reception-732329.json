@@ -1,0 +1,59 @@
+{
+  "actual_CXX_objects_observed": 24,
+  "build_audit": {
+    "all_checks_passed": true,
+    "header_signature": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+    "headers": 377,
+    "identity_source_files": 1148,
+    "installed_files": 1157,
+    "limits": [
+      "Native doctor is authenticated saved output, no independent execution",
+      "No Native/MPI test or publication/rollback reception",
+      "Symbol presence plus actual compile log, no new native load",
+      "SDK24 preservation tar and old ENV/Home fingerprints verified; Python cache exclusions remain historical"
+    ],
+    "native_sha256": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+    "preserved_sdk24_files": 1156,
+    "raw_files": 23,
+    "root_transfer_sha256": "9ff5d0388ebbff90f9767f826ecc0441aebdaa0edb3ee03e97049a3faf4ff106",
+    "schema": "sol61.sdk25-build-offline-counterreview@1",
+    "scientific_qualification": false,
+    "source_files": 1192,
+    "source_freeze": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+    "terminal": "732329|COMPLETED|0:0",
+    "wheel_record_files": 1154,
+    "wheel_sha256": "bcf2672005fe998dd7abd54ec69f231d7a9e8b967bde9b1b92a739b1ed972c73"
+  },
+  "ci_qualified": false,
+  "codegen_recomputed_by_root": true,
+  "codegen_source_authority": {
+    "algorithm": "sorted relative .py paths; length-prefix uint64 big endian name+bytes; domain prefix NUL",
+    "contract": "pops.codegen-source@1",
+    "files": 148,
+    "sha256": "778b74730e4b09c0ff9d7c85cfbae5cc1ea242259fe0304929aff26a6f8db327",
+    "wheel_equals_frozen_git": true
+  },
+  "compiler_to_dso_graph_proof": false,
+  "header_signature": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+  "independent_artifacts_rewritten": false,
+  "independent_pins_sha256": "0e57b627c44d4f5d56e7110dfe994ffedb7d5be9286170d677cc8fd82a1ec25f",
+  "independent_receipt_sha256": "4abff482c1b37e1b7adea41769b1fa40db5797452fa3b5ab8eabd2860fa941fe",
+  "independent_report_identical_on_replay": true,
+  "job": 732329,
+  "native_scientific_acceptance": false,
+  "native_sha256": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+  "numeric_module_abi_runtime_call_separately_exported": false,
+  "old_environment_preserved_files": 2377,
+  "reader_actually_replayed": true,
+  "schema": "root.sdk25-build-install-reception@1",
+  "sdk24_preserved_files": 1156,
+  "source_freeze": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+  "verdict": "BUILD_INSTALL_IDENTITY_APPROVED_NOT_SCIENCE",
+  "verified_pins": 4,
+  "versions_from_authenticated_headers": {
+    "amr_checkpoint_payload": 12,
+    "native_abi": 8,
+    "uniform_checkpoint_payload": 9
+  },
+  "whole_mission_complete": false
+}

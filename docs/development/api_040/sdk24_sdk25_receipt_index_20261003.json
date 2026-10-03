@@ -1,0 +1,141 @@
+{
+  "schema": "sol61.sdk24-sdk25-transportable-receipt-index@4",
+  "receipts": [
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk24-build-reception-732293.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk24-build-reception-732293.json",
+      "sha256": "ad373f92f1fc574e40e3f321ffe35be79b4ab9bacf590b7572ccb0b7bbefb21d",
+      "schema": "root.sdk24-build-install-reception@1",
+      "scope": "BUILD_INSTALL_IDENTITY_APPROVED_NOT_SCIENCE"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk24-cp9-fanli-cpu-reception-732296.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk24-cp9-fanli-cpu-reception-732296.json",
+      "sha256": "4ac572645324f8e163f8cea03df8cd4978e29a963ecfe49c2e28a8d35535e39d",
+      "schema": "root.sdk24-cp9-fanli-cpu-reception@1",
+      "scope": "Real installed Native CP9 full-grown State capture, three refusals, restore and bit-identical continuation/replay 5-8; Original FanLi15 GL24/48 SSPRK2 and DOP853 on authentic 15x16x16 valid images in both branches"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk24-cp9-fanli-mpi2-reception-732307.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk24-cp9-fanli-mpi2-reception-732307.json",
+      "sha256": "4eee8310a454c4657da66fa65fe7f77d325c0b72809a7749db346233583000c8",
+      "schema": "root.sdk24-cp9-fanli-mpi2-reception@1",
+      "scope": "Real installed Native MPI2 CP9 full-grown State capture, authenticated rank0/1 partition and global valid parity, three refusals, restore and bit-identical continuation/replay 5-8; Original FanLi15 GL24/48 SSPRK2 and DOP853 on authentic 15x16x16 valid images in both branches"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk24-v3-cpu-r2-reception-732320.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk24-v3-cpu-r2-reception-732320.json",
+      "sha256": "080f382dec6bc956db76aaa440971519285d09d9968b994cfba0c3e9f62f0862",
+      "schema": "root.sdk24-v3-cpu-r2-reception@1",
+      "scope": "SCOPED_V3_CP12_HISTORY_REPLAY_AND_HOMOGENEOUS_ORIGINAL_Q_APPROVED"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk24-two-transports-cpu-r2-reception-732321.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk24-two-transports-cpu-r2-reception-732321.json",
+      "sha256": "0a50a4428d0c8ce2d2a84de9f47ecf89feefc9be8a6e1a0d4dcaa9b2fa3c7014",
+      "schema": "root.sdk24-two-transports-cpu-r2-reception@1",
+      "scope": "13 authentic local/complete/valid State phases; qualified block-name joins, complete CP9 grown storage, refusal/restoration and bit-identical replay"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk24-consumers-migration-source-integration.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk24-consumers-migration-source-integration.json",
+      "sha256": "40fb5913184f5c0f4b7ec545867121d58002926804c4db12e9b1d9ccdf5c4efe",
+      "schema": "root.sdk24-consumers-and-migration-source-integration@1",
+      "scope": null
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk24-two-consumer-negative-reception-732305-732306.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk24-two-consumer-negative-reception-732305-732306.json",
+      "sha256": "97ea5dcfb0f2733eb549db73a4cb9cb9ff0e1c9605bfd09b9f48fe83781e47db",
+      "schema": "root.sdk24-two-consumer-negative-reception@1",
+      "scope": "Two authentic failed consumer cases; initial block-name bit join and V3 retained checkpoint comparison do not replace final CP9 or V3 scientific reception"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk24-migration-provisional-negative-reception-732308-732309.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk24-migration-provisional-negative-reception-732308-732309.json",
+      "sha256": "c68f971755ce6882ace193c947b72b3776fa1264b8c93f4f56a7218d86d4aeaa",
+      "schema": "root.sdk24-migration-provisional-negative-reception@1",
+      "scope": "AUTHENTIC_NEGATIVES_ONLY"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk25-build-reception-732329.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk25-build-reception-732329.json",
+      "sha256": "c0358e69f3491a8a9a4e9af4b4ab70d84ad4af5d8c014265149114dd2393a83a",
+      "schema": "root.sdk25-build-install-reception@1",
+      "scope": "BUILD_INSTALL_IDENTITY_APPROVED_NOT_SCIENCE"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk25-migration-provisional-native-reception-732331-732332-732333.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk25-migration-provisional-native-reception-732331-732332-732333.json",
+      "sha256": "82efcc669fdecf4996b04be1bd4c3095412354cfe9dcb6d505f4e53274facca8",
+      "schema": "root.sdk25-migration-provisional-native-reception@1",
+      "scope": "23 cases = 17 NativeLoader + 6 Source; CPU1 historical2-to8 migration and explicit valid_only_legacy8 restart, intended refusals and no-clobber"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk25-main-source-build-integration.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk25-main-source-build-integration.json",
+      "sha256": "03b0ab56d8b0c497ae3a9e6b5928a06cf717b1f29faf0950d2078f5ecac04aff",
+      "schema": "root.sdk25-main-source-build-integration@1",
+      "scope": "Main production and changed test sources equal to ROMEO SDK25; Source79 retained; native receptions are separate receipts"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk25-cp9-profiles-reception-732338-732339.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk25-cp9-profiles-reception-732338-732339.json",
+      "sha256": "b92160afb2f6dd5a2148cf38abbf1b77f050dd396ed37616e0b3aadcfc6690d1",
+      "schema": "root.sdk25-cp9-profiles-native-reception@1",
+      "scope": "Two logical profiles each on CPU1 and same-node MPI2; full grown/local/global valid State and clock, checkpoint9 restore/refusals/replay, qualified-name native block join"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk25-v5-matrix-reception-732335-732336.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk25-v5-matrix-reception-732335-732336.json",
+      "sha256": "94de072015df585df933400be835292da03fd72331795ac14a5e3047e581b032",
+      "schema": "root.sdk25-v5-matrix-native-reception@1",
+      "scope": "V@3 actual four width1/2 N8/16 profiles CPU1 and same-node MPI2, received by @5; all-rank C25 before bind, complete initial and CP12 State/history/restart/replay, root-owner homogeneous OriginalQ with actual original residual norms"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk25-nonreg-reception-732340-732341-732343-732345.json",
+      "relative_path": "sdk24_sdk25_receipts/root-sdk25-nonreg-reception-732340-732341-732343-732345.json",
+      "sha256": "dbe26a0361874632701a936e915259cb73af701d96682574b099d7b4e3327345",
+      "schema": "root.sdk25-nonreg-native-reception@1",
+      "scope": null
+    }
+  ],
+  "supporting_proofs": [
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/sdk25-source-cohort-execution.json",
+      "relative_path": "sdk24_sdk25_receipts/sdk25-source-cohort-execution.json",
+      "sha256": "ed092562f5870195a13587f464967ee6080bb5ab47b6766c5571abf287bb40bf"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/sdk25-source-cohort.xml",
+      "relative_path": "sdk24_sdk25_receipts/sdk25-source-cohort.xml",
+      "sha256": "2941cc4348dca61fa9f63eb4c0644c44a4a3b6abe86ca66e7fe4262ee668dc11"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/build25.sbatch",
+      "relative_path": "sdk24_sdk25_receipts/build25.sbatch",
+      "sha256": "f9485836245599b29f06c13ecaa5a8a188e03fde6cfed1c4be535767f353b3a6"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/submit_native.py",
+      "relative_path": "sdk24_sdk25_receipts/submit_native.py",
+      "sha256": "aebbac69cf8494818b4047915bd5d3088ac67ad15cda48fc89d16a4c97cd7718"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-run.sbatch",
+      "relative_path": "sdk24_sdk25_receipts/native-run.sbatch",
+      "sha256": "ff2f056d2d50619a3c02d40d70b2a3e66cd8547e4fcacb122a42f73ca04977d6"
+    },
+    {
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk25-ab2-selector-correction-20261003/correction.json",
+      "relative_path": "sdk24_sdk25_receipts/correction.json",
+      "sha256": "cf39ac1f252d8fbf641e82d481efa82278888d940ab69721bf59244af2521fde"
+    }
+  ],
+  "draft_only": false,
+  "root_approval": true,
+  "whole_mission_complete": false,
+  "proposed_main_path": "docs/development/api_040/sdk24_sdk25_receipt_index_20261003.json",
+  "publication_policy": "Exact original receipt bodies copied and rehashed; origin paths remain provenance. Only the index and prose are updated by ROOT.",
+  "integrated_main_source_commit": "8be7294199266d81eeff9a9af05aa4582a0fcf55"
+}
