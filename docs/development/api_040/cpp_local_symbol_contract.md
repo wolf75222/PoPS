@@ -14,7 +14,7 @@ actual Program translation unit. A sanitizer alone is insufficient: `a b` and
 The additive `@2` revision also reserves the generated State/Prim/Schema types
 and Axis template parameter. A non-author full TU demonstrated that a valid
 public component named `State` otherwise hid the required type in conversion.
-`cpp-public-text@1` is the separate canonical C++ string boundary. Quotes,
+`cpp-public-text@2` is the separate canonical C++ string boundary. Quotes,
 backslashes and line breaks are escaped; invalid JSON-only low Unicode escapes
 and surrogate pairs are emitted as valid C++ UTF-8 encodings. Existing ordinary
 JSON/C++ spellings remain unchanged. Length-aware std::string positions preserve
@@ -76,3 +76,10 @@ deselected; they need ROOT's fresh build/install and C25 before bind. There is n
 Native, MPI, CUDA, HIP, AMR, restart or scientific qualification from this packet.
 The original non-author RED and all intermediate failed Source/Host receipts are
 preserved externally alongside the final evidence.
+
+The second text revision also protects analytic and derived launcher identities.
+PreparedProviderIdentity borrows a static literal with explicit UTF-8 length when
+NUL is present; trusted_extension receives an owned exact-parameter string.
+There is no borrowed view of a temporary std::string. Non-NUL legacy spellings
+remain unchanged. The non-author NUL launcher mismatch and the actual astral Aux
+Clang refusal remain preserved; these are text/identity controls, no Native run.

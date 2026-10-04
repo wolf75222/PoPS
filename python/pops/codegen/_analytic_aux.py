@@ -1,7 +1,8 @@
 """Native geometry-only auxiliary launchers, regenerated at every AMR publication."""
 from __future__ import annotations
 
-import json
+from .cpp_strings import cpp_string_expression, cpp_string_view_expression
+
 
 from ._analytic_expression_lowering import lower_analytic_components
 
@@ -67,7 +68,7 @@ def emit_analytic_aux_launcher(identity, producer):
         "      std::vector<Dependency>{},",
         "      Provider::launcher_type::trusted_extension(",
         "          pops::PreparedProviderIdentity{%s, 1}, %s," % (
-            json.dumps("pops.analytic-aux." + identity), json.dumps(identity)),
+            cpp_string_view_expression("pops.analytic-aux." + identity), cpp_string_expression(identity)),
         "          [](const pops::runtime::system::AuxiliaryKernelLaunchContext<pops::kNativeDimension>& context) {",
         '            static_assert(pops::kNativeDimension == %d, "analytic auxiliary dimension mismatch");' % dimension,
         '            if (context.outputs.size() != 1 || !context.dependencies.empty() || context.storage.geometry == nullptr) '

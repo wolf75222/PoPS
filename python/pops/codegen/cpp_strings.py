@@ -1,7 +1,7 @@
-"""Exact public UTF-8 text at C++ string boundaries (cpp-public-text@1)."""
+"""Exact public UTF-8 text at C++ string boundaries (cpp-public-text@2)."""
 import json
 
-CONTRACT = "cpp-public-text@1"
+CONTRACT = "cpp-public-text@2"
 
 
 def cpp_string_literal(text, *, ensure_ascii=True):
@@ -31,3 +31,9 @@ def cpp_string_literal(text, *, ensure_ascii=True):
 def cpp_string_expression(text, *, ensure_ascii=True):
     literal = cpp_string_literal(text, ensure_ascii=ensure_ascii)
     return "std::string{%s, %d}" % (literal, len(text.encode("utf8"))) if "\0" in text else literal
+
+
+def cpp_string_view_expression(text):
+    """A borrowed view of a static literal, never of a temporary owned string."""
+    literal = cpp_string_literal(text)
+    return "std::string_view{%s, %d}" % (literal, len(text.encode("utf8"))) if "\0" in text else literal

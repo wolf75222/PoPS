@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .cpp_strings import cpp_string_literal, cpp_string_expression
+from .cpp_strings import cpp_string_literal, cpp_string_expression, cpp_string_view_expression
 
 import json
 from collections.abc import Mapping
@@ -700,7 +700,7 @@ def _emit_auxiliary_route_registration(
             "      Provider::launcher_type::trusted_extension(",
             "          pops::PreparedProviderIdentity{%s, 1}, %s,"
             % (
-                literal("pops.derived-aux." + identity),
+                cpp_string_view_expression("pops.derived-aux." + identity),
                 literal(identity),
             ),
             "          [](const pops::runtime::system::AuxiliaryKernelLaunchContext<"

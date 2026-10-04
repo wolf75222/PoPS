@@ -101,9 +101,23 @@ def test_public_metadata_names_remain_exact_and_locals_compile_without_types_ali
 def test_canonical_cpp_literal_preserves_json_legacy_and_utf8_controls():
     import json
     from pops.codegen.cpp_strings import cpp_string_literal,cpp_string_expression,CONTRACT
-    assert CONTRACT=="cpp-public-text@1"
+    assert CONTRACT=="cpp-public-text@2"
     for name in ("plain","a\"b","a\\b","a\nb","κ",r"literal\u0001"):
         assert cpp_string_literal(name)==json.dumps(name)
     assert cpp_string_literal("🚀")==r'"\U0001f680"'
     assert cpp_string_literal("\x01")==r'"\001"'
     assert cpp_string_expression("a\0b")==r'std::string{"a\000b", 3}'
+
+
+def test_analytic_provider_identity_and_exact_parameters_keep_embedded_nul_and_astral():
+    from pops.codegen.cpp_strings import cpp_string_view_expression
+    assert cpp_string_view_expression("a\0b")==r'std::string_view{"a\000b", 3}'
+    for name in ("nul\0tail","🚀"):
+        resolved=build((name,));graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks);block=resolved.blocks[0]
+        source=require_compiler_lowering(graph.model_for_block(block.name)).native_loader_source(
+            name="LauncherText",consumer_owner_qid=block.instance_owner_qid,
+            declare_auxiliary_providers=block.declares_auxiliary_providers)
+        assert r"\ud83d" not in source.replace(r"\\ud83d","")
+        if "\0" in name:
+            assert "pops::PreparedProviderIdentity{std::string_view{" in source
+            assert "std::string{" in source
