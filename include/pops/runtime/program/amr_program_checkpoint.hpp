@@ -1294,12 +1294,14 @@ std::size_t serialized_amr_program_accepted_state_capacity(
   out.repeated_bytes(capacity.interface_fragment_count,
                      checkpoint_detail::kMinInterfaceFragmentBytes);
   std::size_t interface_characters = capacity.interface_identity_characters;
-  for (const std::size_t additional :
-       {capacity.interface_program_identity_characters, capacity.interface_stage_characters}) {
-    if (additional > std::numeric_limits<std::size_t>::max() - interface_characters)
-      throw std::length_error("AMR Program interface identity capacity exceeds size_t");
-    interface_characters += additional;
-  }
+  if (capacity.interface_program_identity_characters >
+      std::numeric_limits<std::size_t>::max() - interface_characters)
+    throw std::length_error("AMR Program interface identity capacity exceeds size_t");
+  interface_characters += capacity.interface_program_identity_characters;
+  if (capacity.interface_stage_characters >
+      std::numeric_limits<std::size_t>::max() - interface_characters)
+    throw std::length_error("AMR Program interface identity capacity exceeds size_t");
+  interface_characters += capacity.interface_stage_characters;
   out.repeated_bytes(capacity.interface_fragment_count, interface_characters);
   out.repeated_bytes(capacity.interface_payload_terms, sizeof(double));
 
