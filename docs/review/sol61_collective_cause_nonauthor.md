@@ -1,0 +1,5 @@
+# Independent collective cause review
+
+Reviewed 2b1e9339e8b10c9b7f2a0f1a0bbf75dcf61ca1a9. Sixteen Source/Host MPI tests pass (3.52 s): eight actual extracted production bodies and eight independent real-helper cases. A novel exception with Unicode/newline text, non-standard exception, singleton split communicator, duplicated communicator and reversed communicator exercise exact cause selection and successful retry. Serial preserves original exception type; distributed cause uses the lowest failing supplied communicator rank. Reversed communicator is a helper test, not a newly admitted Field execution lane.
+
+Existing callback fences and completion reset precede the vote; ExactNamed candidate cleanup and System publication rollback precede rethrow. Prepared solver retains its existing world communicator; named/System retain existing execution lanes. No Native provider, CUDA, physics or end-to-end acceptance is claimed. An initial harness run passed eight author tests and failed eight independent setups because MPICH selected an unavailable compiler; its XML is preserved. The corrected harness selects the genuine available C++ compiler through MPICH_CXX.
