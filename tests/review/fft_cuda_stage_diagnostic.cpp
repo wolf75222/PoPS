@@ -124,9 +124,16 @@ struct Diagnostic {
                                             typename Kokkos::DefaultExecutionSpace::memory_space>;
   static void snapshot_arrays(const std::array<int, Dim>& cells,
                               const std::array<double, Dim>& spacing, const View& actual) {
+    Kokkos::Array<int, Dim> device_cells{};
+    Kokkos::Array<double, Dim> device_spacing{};
+    for (int d = 0; d < Dim; ++d) {
+      device_cells[d] = cells[d];
+      device_spacing[d] = spacing[d];
+    }
     Kokkos::parallel_for(
-        "fft_diagnostic_array_snapshots", Kokkos::RangePolicy<>(0, Dim),
-        KOKKOS_LAMBDA(int d) { actual[d] = typename Engine::complex_type(cells[d], spacing[d]); });
+        "fft_diagnostic_array_snapshots", Kokkos::RangePolicy<>(0, Dim), KOKKOS_LAMBDA(int d) {
+          actual[d] = typename Engine::complex_type(device_cells[d], device_spacing[d]);
+        });
   }
   static void axis(View& values, View& scratch, const std::array<int, Dim>& cells, int d,
                    bool inverse) {

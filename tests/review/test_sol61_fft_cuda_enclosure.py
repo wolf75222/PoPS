@@ -47,7 +47,9 @@ def test_all_eleven_launch_expressions_and_non_kernel_plan_bytes_are_preserved()
     kernels = (DIRECTORY / "poisson_fft_device_kernels.hpp").read_text()
     old_launches = _calls(old, r"Kokkos::parallel_for\(")
     new_launches = _calls(kernels, r"Kokkos::parallel_for\(")
-    normalize = lambda text: re.sub(r"\s+", "", text.replace("local_count_", "local_count"))
+    # The separate symbol-copy tests prove the owning snapshot. Normalize its
+    # aliases here to continue checking all original kernel arithmetic tokens.
+    normalize = lambda text: re.sub(r"\s+", "", text.replace("local_count_", "local_count").replace("device_cells", "cells").replace("device_spacing", "spacing"))
     assert len(old_launches) == len(new_launches) == 11
     assert list(map(normalize, old_launches)) == list(map(normalize, new_launches))
     original_reverse = re.search(r"  static POPS_HD int reverse_bits_\(.*?\n  }\n", old, re.S).group()

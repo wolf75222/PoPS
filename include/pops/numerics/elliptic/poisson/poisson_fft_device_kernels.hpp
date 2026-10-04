@@ -4,6 +4,7 @@
 // form extended-lambda identities. Views/scalars are explicit snapshots of the
 // private FFT plan; orchestration, allocation, fencing and MPI stay in that plan.
 #include <pops/core/foundation/types.hpp>
+#include <Kokkos_Array.hpp>
 #include <Kokkos_Complex.hpp>
 #include <Kokkos_Core.hpp>
 #include <array>
@@ -200,23 +201,33 @@ struct PoissonFFTDeviceKernels {
   static void inverse_symbol(const device_view& values, const int_array& cells,
                              const real_array& spacing, std::size_t transverse, int local_last,
                              int rank, bool last_axis_bit_reversed, std::size_t local_count) {
+    // std::array accessors are host-only in the supported NVCC toolchain. Keep
+    // the host plan interface, and capture an owning device-callable snapshot.
+    Kokkos::Array<int, Dim> device_cells{};
+    Kokkos::Array<double, Dim> device_spacing{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      device_cells[axis] = cells[axis];
+      device_spacing[axis] = spacing[axis];
+    }
     Kokkos::parallel_for(
         "pops_poisson_fft_symbol", Kokkos::RangePolicy<>(0, local_count),
         KOKKOS_LAMBDA(std::size_t ordinal) {
           std::size_t cursor = ordinal % transverse;
           double lambda = 0.0;
           for (int axis = 0; axis < Dim - 1; ++axis) {
-            const int frequency = static_cast<int>(cursor % cells[axis]);
-            cursor /= static_cast<std::size_t>(cells[axis]);
-            lambda += (2.0 * Kokkos::cos(2.0 * std::numbers::pi * frequency / cells[axis]) - 2.0) /
-                      (spacing[axis] * spacing[axis]);
+            const int frequency = static_cast<int>(cursor % device_cells[axis]);
+            cursor /= static_cast<std::size_t>(device_cells[axis]);
+            lambda +=
+                (2.0 * Kokkos::cos(2.0 * std::numbers::pi * frequency / device_cells[axis]) - 2.0) /
+                (device_spacing[axis] * device_spacing[axis]);
           }
           const int stored_frequency = rank * local_last + static_cast<int>(ordinal / transverse);
           const int frequency = last_axis_bit_reversed
-                                    ? reverse_bits_(stored_frequency, cells[Dim - 1])
+                                    ? reverse_bits_(stored_frequency, device_cells[Dim - 1])
                                     : stored_frequency;
-          lambda += (2.0 * Kokkos::cos(2.0 * std::numbers::pi * frequency / cells[Dim - 1]) - 2.0) /
-                    (spacing[Dim - 1] * spacing[Dim - 1]);
+          lambda +=
+              (2.0 * Kokkos::cos(2.0 * std::numbers::pi * frequency / device_cells[Dim - 1]) - 2.0) /
+              (device_spacing[Dim - 1] * device_spacing[Dim - 1]);
           values[ordinal] =
               Kokkos::abs(lambda) < 1e-14 ? complex_type(0.0, 0.0) : values[ordinal] / lambda;
         });
