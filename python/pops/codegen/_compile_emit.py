@@ -511,6 +511,14 @@ def _emit_auxiliary_route_registration(
     routes = getattr(model, "_auxiliary_provider_routes", None)
     if routes is None:
         raise ValueError("native auxiliary route emission requires resolved typed producer routes")
+    from .provider_instances import emitter_contract, runtime_key
+    from pops.model.provider_pack import ComponentKey
+    instance = emitter_contract(model, owner_qid=consumer_owner_qid)
+    if instance is not None and consumer_owner_qid is None:
+        raise ValueError('instanced native providers require the exact consumer block owner')
+
+    def native_key(value: Mapping[str, Any]) -> dict[str, Any]:
+        return runtime_key(ComponentKey(**value), instance).to_data()
 
     def route_key(row: Mapping[str, Any]) -> tuple[str, str, str, str]:
         value = row["key"]
@@ -538,7 +546,7 @@ def _emit_auxiliary_route_registration(
         return "std::optional<std::string>{%s}" % literal(value)
 
     def key(row: Mapping[str, Any]) -> str:
-        value = row["key"]
+        value = native_key(row["key"])
         return "Key{%s, %s, %s, %s}" % tuple(
             literal(value[name]) for name in ("owner_qid", "space_kind", "space_name", "component")
         )
@@ -661,7 +669,7 @@ def _emit_auxiliary_route_registration(
                     % tuple(
                         literal(value)
                         for value in (
-                            key_value.owner_qid,
+                            runtime_key(key_value, instance).owner_qid,
                             key_value.space_kind,
                             key_value.space_name,
                             key_value.component,
@@ -816,7 +824,7 @@ def _emit_auxiliary_route_registration(
             )
         identity = "provider:%s:%s/%s/%s" % (
             value["producer"],
-            row["key"]["owner_qid"],
+            native_key(row["key"])["owner_qid"],
             row["key"]["space_name"],
             row["key"]["component"],
         )
@@ -906,6 +914,9 @@ def emit_cpp_native_loader(
     )
 
     m = model
+    from .provider_instances import emitter_contract, runtime_key
+    from pops.model.provider_pack import ComponentKey
+    instance = emitter_contract(m, owner_qid=consumer_owner_qid)
     from pops.codegen.component_provider_packs import (
         bind_emitter_provider_packs,
         require_emitter_provider_carrier,
@@ -1056,7 +1067,7 @@ def emit_cpp_native_loader(
             % tuple(
                 json.dumps(value)
                 for value in (
-                    key.owner_qid,
+                    runtime_key(key, instance).owner_qid,
                     key.space_kind,
                     key.space_name,
                     key.component,
@@ -1104,7 +1115,7 @@ def emit_cpp_native_loader(
             key_values = ", ".join(
                 "pops::runtime::system::AuxiliaryComponentKey{%s, %s, %s, %s}"
                 % tuple(
-                    json.dumps(key[name])
+                    json.dumps(runtime_key(ComponentKey(**key), instance).to_data()[name])
                     for name in ("owner_qid", "space_kind", "space_name", "component")
                 )
                 for key in role["output_keys"]

@@ -27,10 +27,7 @@ def _target_space(target: Handle) -> Any:
     block_owner = getattr(target.block_ref, "model_owner_path", None)
     if registry is None or block_owner is None:
         raise ValueError("field publication target requires its authoritative Case registry")
-    instances = tuple(block for block in registry.handles().values()
-                      if block.model_owner_path.canonical() == block_owner.canonical())
-    if len(instances) != 1:
-        raise ValueError("consumed field publication cannot share a model-definition provider key across block instances")
+    registry.canonical_block(target.block_ref)
     model = registry.spec(target.block_ref.local_id)["model"]
     module = model if isinstance(model, Module) else model.module
     module.declaration_index().authenticate(target.declaration_ref)

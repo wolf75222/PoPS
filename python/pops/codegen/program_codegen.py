@@ -290,7 +290,9 @@ def _emit_cpp_program_impl(
             if key in provider_halos and provider_halos[key] != width:
                 raise ValueError("Program provider has conflicting exact native halo shapes")
             provider_halos[key] = width
-    provider_plans = ProgramProviderPlans(target=target, provider_halos=provider_halos)
+    from .provider_instances import graph_instance_contracts
+    provider_plans = ProgramProviderPlans(target=target, provider_halos=provider_halos,
+                                         instance_contracts=graph_instance_contracts(authority))
     prelude, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,

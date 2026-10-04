@@ -135,11 +135,16 @@ class ProgramProviderPlans:
     storage address after all package providers have been registered.
     """
 
-    def __init__(self, *, target: str = "system", provider_halos: Any = None) -> None:
+    def __init__(self, *, target: str = "system", provider_halos: Any = None,
+                 instance_contracts: Any = ()) -> None:
         from pops.codegen._program_kernel_reuse import ProgramSourceKernelHelpers
 
         self._plans: dict[str, tuple[tuple[Any, Any], ...]] = {}
         self._provider_halos = dict(provider_halos or {})
+        self._instance_contracts = tuple(instance_contracts)
+        from .provider_instances import validate_instance_contract
+        for contract in self._instance_contracts:
+            validate_instance_contract(contract)
         if target not in {"system", "amr_system"}:
             raise ValueError("Program provider plan target must be system or amr_system")
         self.target = target
@@ -262,7 +267,7 @@ class ProgramProviderPlans:
                 )
                 rendered_key = "Key{%s, %s, %s, %s}" % tuple(
                     json.dumps(value) for value in (
-                        key.owner_qid, key.space_kind, key.space_name, key.component,
+                        self._runtime_key(qid, key).owner_qid, key.space_kind, key.space_name, key.component,
                     )
                 )
                 rendered_contract = "Contract{%s, %s, %s, %s, %s}" % (
@@ -282,6 +287,14 @@ class ProgramProviderPlans:
                 "      std::vector<ConsumerValue>{%s}});" % ", ".join(values),
             ))
         return "\n".join(lines)
+
+    def _runtime_key(self, qid: str, key: Any) -> Any:
+        from .provider_instances import runtime_key
+        matches = tuple(c for c in self._instance_contracts
+                        if qid.startswith(c['instance_owner_qid'] + '/program/'))
+        if len(matches) > 1:
+            raise ValueError('Program provider consumer has ambiguous runtime instance authority')
+        return runtime_key(key, None if not matches else matches[0])
 
     def preparation_binding(self, qid: str) -> dict[str, Any]:
         """Return a registered consumer's prerequisite identity, without rebinding its reads."""

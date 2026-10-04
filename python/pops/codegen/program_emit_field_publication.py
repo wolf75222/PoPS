@@ -18,9 +18,6 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
         raise ValueError("consumed field publication requires an exact native Program model graph")
     def target_space(destination: Any) -> Any:
         model.model_for_block(destination.block_ref)
-        owner = destination.block_ref.model_owner_path.canonical()
-        if sum(candidate == owner for candidate in model._owners_by_block.values()) != 1:
-            raise ValueError("consumed field publication cannot share a model-definition provider key across block instances")
         module = model.source_module_for_owner(destination.declaration_ref.owner_path)
         module.declaration_index().authenticate(destination.declaration_ref)
         return module.field_spaces()[destination.declaration_ref.local_id]
@@ -48,7 +45,9 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
                 or canonical_bytes(_json_ready(claim["unknown"])) != \
                 canonical_bytes(_json_ready(observed.attrs["field_unknown"])):
             raise ValueError("field publication differs from its resolved output observation")
-        key_cpp = "{%s}" % ", ".join(json.dumps(part) for part in key.to_data().values())
+        from .provider_instances import emitter_contract, runtime_key
+        native_key = runtime_key(key, emitter_contract(emitter))
+        key_cpp = "{%s}" % ", ".join(json.dumps(part) for part in native_key.to_data().values())
         if source.attrs.get("contract") == "mapped-consumed-output@1":
             actual = canonical_bytes(_json_ready({name: source.attrs[name] for name in
                 ("invocation", "physical_map", "source_port", "target_port", "source_point", "target_point")}))
@@ -56,7 +55,7 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
             if sum(canonical_bytes(_json_ready(item)) == actual for item in occurrences) != 1:
                 raise ValueError("mapped Field publication differs from its resolved map authority")
         rows.append("{%s, %s, &%s, %d}" % (
-            key_cpp, json.dumps(provider_identity(claim)), var[source.id], row["source_component"]))
+            key_cpp, json.dumps(provider_identity({**claim, 'key': native_key.to_data()})), var[source.id], row["source_component"]))
     from .program_emit_ops import _required_block_index
     from .program_emit_kernels import _prepare_provider_values, program_provider_consumer_qid
     from .program_field_publication import remaining_input_pack

@@ -98,8 +98,16 @@ def derive_continuation_transitions(plan: Any) -> ContinuationTransitionPlan:
                           "resolved.amr_transfer"), "accepted continuation until replacement")
         operations = block.resolved_operations
         evidence = {} if operations is None else operations.to_data().get("provider_evidence", {})
+        from pops.codegen.provider_instances import EVIDENCE, runtime_key, validate_instance_contract
+        from pops.model.provider_pack import ComponentKey
+        instance = evidence.get(EVIDENCE)
+        if instance is not None:
+            validate_instance_contract(instance, owner_qid=block.instance_owner_qid)
+        def storage_component(component):
+            return {**component, 'key': runtime_key(ComponentKey(**component['key']), instance).to_data()}
         publication_claims = {}
         for claim in evidence.get("program_field_publications", ()):
+            claim = storage_component(claim)
             key = canonical_bytes(claim["key"])
             producer = claim["producer"]
             if producer not in program_field_producers:
@@ -108,6 +116,7 @@ def derive_continuation_transitions(plan: Any) -> ContinuationTransitionPlan:
                 raise ValueError("retained field publication has conflicting resolved owners")
             publication_claims[key] = producer
         for component in evidence.get("auxiliary", {}).get("entries", ()):
+            component = storage_component(component)
             producer = component["provider"]["producer"]
             # Producer strings are opaque operator identities, including joint providers.
             # The typed FieldSpace and exact output route identify the retained storage.

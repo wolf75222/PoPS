@@ -358,6 +358,8 @@ def resolve(
 
     blocks = tuple(replace(block, resolved_operations=build_block_resolved_operations(
         block, resolved_time)) for block in blocks)
+    from .provider_instances import qualify_publication_instances
+    blocks = qualify_publication_instances(blocks)
     from pops.codegen._interface_validation import (
         validate_prepared_boundary_jacvec,
         validate_shared_interface_program,

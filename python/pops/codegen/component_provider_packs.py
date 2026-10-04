@@ -151,10 +151,13 @@ def canonical_emitter_carrier_value(value: Any) -> Any:
 
 def emitter_carrier_snapshot(target: Any) -> dict[str, Any]:
     """Return canonical values of every carrier member plus typed routes."""
-    return {
+    result = {
         name: canonical_emitter_carrier_value(getattr(target, name, None))
         for name in EMITTER_CARRIER_ATTRS
     }
+    if hasattr(target, '_native_provider_instance'):
+        result['_native_provider_instance'] = canonical_emitter_carrier_value(target._native_provider_instance)
+    return result
 
 
 def require_emitter_provider_carrier(target: Any, *, where: str = "emitter") -> None:
@@ -208,6 +211,7 @@ class ComponentProviderPacks:
     auxiliary_route_metadata: tuple[Mapping[str, Any], ...]
     consumer_plans: Mapping[str, tuple[Mapping[str, Any], ...]]
     physical_flux_plan: tuple[Mapping[str, Any], ...]
+    native_instance: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         if type(self.complete) is not ProviderPack:
@@ -257,6 +261,10 @@ class ComponentProviderPacks:
             tuple(MappingProxyType(dict(row)) for row in self.physical_flux_plan),
         )
         object.__setattr__(self, "consumer_plans", MappingProxyType(plans))
+        if self.native_instance is not None:
+            from .provider_instances import validate_instance_contract
+            validate_instance_contract(self.native_instance)
+            object.__setattr__(self, 'native_instance', MappingProxyType(dict(self.native_instance)))
 
     def attach(self, target: Any) -> None:
         """Attach compiler-owned immutable evidence to one emitter carrier.
@@ -281,6 +289,10 @@ class ComponentProviderPacks:
             "_component_flux_consumer_plan": self.physical_flux_plan,
             "_auxiliary_provider_routes": self.auxiliary_routes,
         }
+        if self.native_instance is not None:
+            values['_native_provider_instance'] = self.native_instance
+        elif hasattr(target, '_native_provider_instance'):
+            raise ValueError('compiler emitter cannot revoke its native provider instance contract')
 
         for name, value in values.items():
             previous = getattr(target, name, None)
@@ -317,7 +329,7 @@ def unbound_emitter_attributes(target: Any) -> dict[str, Any]:
     projection without overwriting the source's pack or copying its object witness.
     """
     attrs = vars(target)
-    binding_names = (*EMITTER_CARRIER_ATTRS, _WITNESS_ATTR)
+    binding_names = (*EMITTER_CARRIER_ATTRS, _WITNESS_ATTR, '_native_provider_instance')
     if any(name in attrs for name in binding_names):
         require_emitter_provider_carrier(target, where="source of private emitter")
     return {name: value for name, value in attrs.items()

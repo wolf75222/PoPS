@@ -32,6 +32,8 @@ def require_block_plan_owner(plan: Any, owner_qid: Any, *, where: str,
         return
     if type(plan) is not ResolvedOperationPlan:
         reject("requires its exact Case-block resolved operation plan")
+    from .provider_instances import require_instance_contract
+    require_instance_contract(plan, owner_qid=owner_qid)
     mismatches = tuple(operation.identity for operation in plan.operations
                        if operation.guarantees.get("block_instance") != owner_qid)
     if mismatches:

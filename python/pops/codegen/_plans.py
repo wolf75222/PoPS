@@ -405,6 +405,11 @@ def provider_declaration_contract(block: Any) -> bytes:
         "model": _evidence(block.model, where="declaration.model"),
         "providers": _provider_graph_evidence(block.model),
     }
+    from .provider_instances import require_instance_contract
+    instance = require_instance_contract(getattr(block, 'resolved_operations', None),
+                                         owner_qid=block.instance_owner_qid)
+    if instance is not None:
+        payload['native_provider_instance'] = dict(instance)
     return canonical_bytes(payload)
 
 
