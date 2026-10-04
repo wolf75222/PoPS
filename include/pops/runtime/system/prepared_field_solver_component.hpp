@@ -8,6 +8,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
@@ -455,11 +456,8 @@ class PreparedFieldSolverComponent final {
     // The optional lives outside the callback try. Destroy/join it before the failure vote;
     // retaining it until function exit would permit peers to begin rollback too early.
     completion.reset();
-    if (all_reduce_max(solve_error ? 1L : 0L) != 0) {
-      if (n_ranks() == 1 && solve_error)
-        std::rethrow_exception(solve_error);
-      throw std::runtime_error("external FieldSolver execution failed collectively");
-    }
+    collectively_rethrow_exception(solve_error, world_communicator_view(),
+                                   "external FieldSolver execution failed collectively");
 
     std::string exact_report;
     collective_preflight_([&] {
@@ -513,11 +511,7 @@ class PreparedFieldSolverComponent final {
     } catch (...) {
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_error ? 1L : 0L) == 0)
-      return;
-    if (n_ranks() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error(collective_message);
+    collectively_rethrow_exception(local_error, world_communicator_view(), collective_message);
   }
 
   void prepare_provider_contract_() {

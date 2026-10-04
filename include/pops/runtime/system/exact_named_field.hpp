@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/runtime/named_field_output.hpp>
 #include <pops/runtime/named_field_publication.hpp>
@@ -256,9 +257,8 @@ class ExactNamedField final {
     }
     if (all_reduce_max(rhs_error ? 1L : 0L, lane) != 0) {
       clear_candidate_();
-      if (lane.size() == 1 && rhs_error)
-        std::rethrow_exception(rhs_error);
-      throw std::runtime_error("named-field RHS assembly failed collectively");
+      collectively_rethrow_exception(rhs_error, lane,
+                                     "named-field RHS assembly failed collectively");
     }
 
     try {
@@ -315,11 +315,7 @@ class ExactNamedField final {
 
   static void collective_rethrow_(const std::exception_ptr& error, const char* message,
                                   const ExecutionLane& lane) {
-    if (all_reduce_max(error ? 1L : 0L, lane) == 0)
-      return;
-    if (lane.size() == 1 && error)
-      std::rethrow_exception(error);
-    throw std::runtime_error(message);
+    collectively_rethrow_exception(error, lane, message);
   }
 
   static Extent<Dim> unit_ghosts_() {

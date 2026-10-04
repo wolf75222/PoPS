@@ -7,6 +7,7 @@
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 #include <pops/runtime/system/auxiliary_ghost_fill.hpp>
@@ -691,9 +692,8 @@ SolveOutcome System<Dim>::run_field_publication_outcome_(
   }
   if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
     rollback_field_publication_transaction();
-    if (lane.size() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error("System exact field solver failed on at least one MPI rank");
+    collectively_rethrow_exception(local_error, lane,
+                                   "System exact field solver failed on at least one MPI rank");
   }
   return stage_field_publication_outcome_(std::move(report));
 }
