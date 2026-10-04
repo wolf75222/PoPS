@@ -80,6 +80,19 @@ enum class HierarchyTensorSolverExecutionPath : std::uint8_t {
 
 namespace hierarchy_tensor_detail {
 
+// Named device callable: CUDA extended lambdas cannot originate in a private member.
+template <int Dim, class View>
+struct OriginalCandidateFiniteKernel {
+  View values;
+  int width;
+  POPS_HD Real operator()(const Index<Dim>& cell) const {
+    for (int component = 0; component < width; ++component)
+      if (!std::isfinite(values(cell, component)))
+        return Real(1);
+    return Real(0);
+  }
+};
+
 template <int Dim>
 Extent<Dim> ratio_extent(const ::pops::amr::RefinementRatio<Dim>& ratio) {
   Extent<Dim> result{};
@@ -516,12 +529,9 @@ class PreparedHierarchyTensorSolver {
         const int width = field.ncomp();
         invalid = std::max(invalid,
                            for_each_cell_reduce_max(
-                               field.fab(patch).grown_box(), [=] POPS_HD(const Index<Dim>& cell) {
-                                 for (int component = 0; component < width; ++component)
-                                   if (!std::isfinite(values(cell, component)))
-                                     return Real(1);
-                                 return Real(0);
-                               }));
+                               field.fab(patch).grown_box(),
+                               hierarchy_tensor_detail::OriginalCandidateFiniteKernel<
+                                   Dim, decltype(values)>{values, width}));
       }
     Kokkos::fence();
     if (invalid != Real(0))

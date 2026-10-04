@@ -33,6 +33,17 @@
 namespace pops {
 namespace {
 
+// Preserve the reduction adapter without a CUDA extended lambda in a private member.
+template <int Dim>
+struct CoupledFrequencyMaximumKernel {
+  CoupledFreqKernel<Dim> kernel;
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    Real value = std::numeric_limits<Real>::lowest();
+    kernel(index, value);
+    return value;
+  }
+};
+
 template <class FieldPlans>
 auto select_field_rhs_binding(FieldPlans& plans, const std::string& block, const std::string& field,
                               const std::string& identity = {}) {
@@ -2722,11 +2733,7 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
           kernel.consts[constant] = constants[static_cast<std::size_t>(constant)];
         local_maximum = std::max(
             local_maximum,
-            for_each_cell_reduce_max(reference.box(local), [=] POPS_HD(const Index<Dim>& index) {
-              Real value = std::numeric_limits<Real>::lowest();
-              kernel(index, value);
-              return value;
-            }));
+            for_each_cell_reduce_max(reference.box(local), CoupledFrequencyMaximumKernel<Dim>{kernel}));
       }
       return all_reduce_max(local_maximum, *lane);
     };
