@@ -86,6 +86,7 @@ set(POPS_CPP_TEST_SOURCE_test_dispatch_tags "tests/cpp/unit/mesh/test_dispatch_t
 set(POPS_CPP_TEST_SOURCE_test_elliptic_composite_rhs "tests/cpp/unit/elliptic/test_elliptic_composite_rhs.cpp")
 set(POPS_CPP_TEST_SOURCE_test_elliptic_interface "tests/cpp/unit/elliptic/test_elliptic_interface.cpp")
 set(POPS_CPP_TEST_SOURCE_test_elliptic_operator "tests/cpp/unit/elliptic/test_elliptic_operator.cpp")
+set(POPS_CPP_TEST_SOURCE_test_elliptic_named_device_kernels "tests/cpp/unit/elliptic/test_elliptic_named_device_kernels.cpp")
 set(POPS_CPP_TEST_SOURCE_test_elliptic_problem "tests/cpp/unit/elliptic/test_elliptic_problem.cpp")
 set(POPS_CPP_TEST_SOURCE_test_embedded_boundary_generic "tests/cpp/unit/runtime/test_embedded_boundary_generic.cpp")
 set(POPS_CPP_TEST_SOURCE_test_exb_seam "tests/cpp/integration/runtime/test_exb_seam.cpp")
