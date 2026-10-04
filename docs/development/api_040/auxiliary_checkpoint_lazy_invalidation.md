@@ -17,7 +17,13 @@ restore publishes none of these candidates. Subsequent consumer refresh uses the
 as the existing forced-provider input; capture and restore do not launch providers.
 
 This is auxiliary wire version 3, independently of Uniform CP9 and AMR12. The C++ accepted-state
-DTO and headers change and require a rebuilt matching Native package. Provider-empty migration
+DTO and headers change and require a rebuilt matching Native package. The coherent release
+contract advances Native ABI10 to ABI11: the actual accepted-state DTO grows from 104 to 128
+bytes on the measured Host profile, and the physical-time evaluation extension also changes
+the point layout. Generated C++/Python release products and the complete header signature
+must match the rebuilt module and every generated loader. Existing ABI10 Native/loader
+receipts do not qualify ABI11. This ABI change is distinct from the retained CP9/AMR12
+envelopes and from the auxiliary decoder's POPSAUX2 compatibility. Provider-empty migration
 attestation remains POPSAUX2. Ghost values are restored by the existing declared ghost routes;
 this extension does not qualify a ghost formula, scientific execution, or GPU/MPI runtime.
 
