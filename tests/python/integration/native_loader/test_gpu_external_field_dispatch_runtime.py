@@ -1,5 +1,5 @@
 """Installed Native dispatch faults; CUDA/HIP actual storage only; never relabel a CPU run."""
-import ctypes
+import os
 import importlib.machinery
 import hashlib
 import json
@@ -11,7 +11,7 @@ import pytest
 from pops import interfaces
 from pops.fields import ExternalFieldSolver
 from tests.python.support.external_field_fault_component import json_evidence
-from tests.python.support.gpu_field_solver_test_component import fault_source, component
+from tests.python.support.gpu_field_solver_test_component import fault_source, component, GPUSharedTableControl
 from functools import partial
 from tests.python.integration.native_loader.test_external_field_solver_runtime import _component, _topology_source, _program
 from tests.python.integration._final_field_program import passive_field_model, resolve_periodic_field_program
@@ -26,7 +26,7 @@ from tests.python.integration.mpi._compile_once import compile_resolved_plan_onc
 @pytest.mark.native_loader
 @pytest.mark.parametrize('fault', ('positive', 'callback_throw', 'table_preparation', 'nonfinite'))
 def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
-        isolated_native_cache, native_cxx, kokkos_root):
+        isolated_native_cache, native_cxx, kokkos_root, monkeypatch):
     del isolated_native_cache, native_cxx, kokkos_root
     from pops._native_selector import select_native_dimension
     from pops.codegen._native_mpi import native_mpi_communicator
@@ -47,7 +47,6 @@ def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
         assert facts['has_kokkos'] is True and facts['kokkos_device'] in ('cuda','hip')
         assert facts['field_memory_space'] in ('device','managed')
         device=facts['kokkos_device']
-    target=ranks-1
     _gpu_component=partial(component,device=device)
     directory=collective_directory(world,tmp_path/('external-field-'+fault))
     # Publish one authentic source package path before rank-local resolution.
@@ -72,20 +71,17 @@ def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
     for index, component in enumerate(artifact.component_artifacts):
         collective_call(world,lambda index=index,component=component:(directory/('component-%d-rank%d.so'%(index,rank))).write_bytes(component.binary))
         collective_call(world,lambda index=index,component=component:(directory/('component-%d-rank%d.json'%(index,rank))).write_text(json.dumps(json_evidence(component.to_data()),allow_nan=False,sort_keys=True)))
+    control_path=directory/("control-rank%d-pid%d.bin"%(rank,os.getpid()))
+    monkeypatch.setenv("POPS_TEST_FIELD_CONTROL",str(control_path))
     runtime=collective_call(world,lambda:pops.bind(artifact,initial_state={'material':np.ones((1,8,8))},resources={'execution_context':artifact_execution_context(artifact)}))
     def open_control():
         installed=runtime.inspect().to_dict()['instance']['installed_components']
         row,=tuple(row for row in installed if row['component_id']==solver.component_manifest.component_id)
         matched,=tuple(component for component in artifact.component_artifacts if component.component_id==solver.component_manifest.component_id)
         assert Path(row['path']).read_bytes()==matched.binary
-        (directory/('installed-component-rank%d.json'%rank)).write_text(json.dumps({'installed':json_evidence(row),'sha256':hashlib.sha256(matched.binary).hexdigest(),'after_bind_before_arm':True},allow_nan=False,sort_keys=True))
-        library=ctypes.CDLL(row['path'])
-        library.pops_test_field_fault_arm.argtypes=[ctypes.c_int]
-        library.pops_test_field_fault_arm.restype=ctypes.c_int
-        library.pops_test_field_callback_count.restype=ctypes.c_int
-        library.pops_test_field_write_count.restype=ctypes.c_int
-        return library
-    library=collective_call(world,open_control)
+        (directory/('installed-component-rank%d.json'%rank)).write_text(json.dumps({'installed':json_evidence(row),'sha256':hashlib.sha256(matched.binary).hexdigest(),'after_bind_before_arm':True,'control_layout':GPUSharedTableControl(control_path).layout,'control_path':str(control_path)},allow_nan=False,sort_keys=True))
+        return GPUSharedTableControl(control_path)
+    control=collective_call(world,open_control)
     slot,=collective_call(world,runtime.field_provider_slots)
     def capture(label):
         storage=collective_call(world,runtime.observe_accepted_state_storage)
@@ -99,25 +95,33 @@ def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
         collective_call(world,lambda:(directory/(label+'-rank%d.json'%rank)).write_text(json.dumps(metadata,allow_nan=False,sort_keys=True)))
         return storage,state,potential,metadata
     collective_call(world,lambda:(directory/('native-memory-rank%d.json'%rank)).write_text(json.dumps({'facts':facts,'capabilities':caps,'device':device,'rank':rank,'ranks':ranks},allow_nan=False,sort_keys=True)))
+    from pops._native_collectives import allgather_value
+    local_active=bool(collective_call(world,lambda:runtime.local_boxes('material')))
+    owners=tuple(allgather_value(world,local_active)) if world is not None else (local_active,)
+    with collective_check(world):
+        assert len(owners)==ranks and all(type(value) is bool for value in owners)
+        assert any(owners), 'No active Field owner for fault injection'
+    target=max(index for index,value in enumerate(owners) if value)
+    collective_call(world,lambda:(directory/('fault-owner-rank%d.json'%rank)).write_text(json.dumps({'owners':owners,'target':target,'rank':rank},sort_keys=True)))
     before=capture('before')
     if fault=='positive':
         result=collective_call(world,lambda:pops.run(runtime,t_end=1e-4,max_steps=1,console=False))
         accepted=capture('accepted')
         with collective_check(world):
             assert result.accepted_steps==1 and runtime.macro_step()==1 and runtime.time()==1e-4
-            assert library.pops_test_field_callback_count()==1
-            if runtime.local_boxes('material'):assert library.pops_test_field_write_count()>0
+            assert control.counts()['callbacks']==1
+            if runtime.local_boxes('material'):assert control.counts()['writes']>0
             assert np.array_equal(accepted[1].view(np.uint64),before[1].view(np.uint64))
-            assert np.all(accepted[2]==7.)
+            assert np.all(accepted[2]==0.)
         return
     with collective_check(world):
-        assert library.pops_test_field_callback_count()==0
-        assert library.pops_test_field_fault_arm(({'callback_throw':1,'table_preparation':2,'nonfinite':3}[fault]) if rank==target else 0)==0
+        assert control.counts()['callbacks']==0
+        control.arm(({'callback_throw':1,'table_preparation':2,'nonfinite':3}[fault]) if rank==target else 0)
     _,failures=collective_attempt(world,lambda:pops.run(runtime,t_end=1e-4,max_steps=1,console=False))
-    counts={'callbacks':library.pops_test_field_callback_count(),'writes':library.pops_test_field_write_count(),'rank':rank,'target':target,'fault':fault,'failures':failures}
+    counts={'callbacks':control.counts()['callbacks'],'writes':control.counts()['writes'],'rank':rank,'target':target,'fault':fault,'failures':failures}
     collective_call(world,lambda:(directory/('failure-rank%d.json'%rank)).write_text(json.dumps(counts,allow_nan=False,sort_keys=True)))
     # Restore only test-provider table authority before readonly captures/retry, never numerical state.
-    collective_call(world,lambda:library.pops_test_field_fault_arm(0))
+    collective_call(world,lambda:control.arm(0))
     after=capture('after')
     with collective_check(world):
         assert all(error and error[2] for error in failures), failures
@@ -133,7 +137,7 @@ def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
     retry_image=capture('retry')
     with collective_check(world):
         assert result.accepted_steps==1 and runtime.macro_step()==1 and runtime.time()==1e-4
-        assert library.pops_test_field_callback_count()==counts['callbacks']+1
+        assert control.counts()['callbacks']==counts['callbacks']+1
         assert np.array_equal(retry_image[1],before[1])
-        assert np.all(retry_image[2]==7.)
+        assert np.all(retry_image[2]==0.)
 

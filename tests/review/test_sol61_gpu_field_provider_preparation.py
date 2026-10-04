@@ -36,7 +36,20 @@ def test_completed_kernel_faults_preserve_queue_and_owning_mask_order():
     from tests.python.support.gpu_field_solver_test_component import fault_source
     source = fault_source(_manifest("fault-order", interfaces.FieldSolver))
     assert source.index("Mask owned_mask;") < source.index("join{execution}") < source.index("owned_mask = Mask")
-    assert source.index("Kokkos::parallel_for") < source.index("    execution.fence();") < source.index("++observed_writes;")
-    assert source.index("++observed_writes;") < source.index("if (fault_mode == 1) throw")
+    assert source.index("Kokkos::parallel_for") < source.index("    execution.fence();") < source.index("++control->writes;")
+    assert source.index("++control->writes;") < source.index("if (control->mode == 1) throw")
     assert "Kokkos::create_mirror(Kokkos::HostSpace{}, owned_mask)" in source
-    assert "fault_mode == 3" in source and "if (mode < 0 || mode > 3)" in source
+    assert "control->mode == 3" in source and "MAP_SHARED" in source
+    kernel=source[source.index("KOKKOS_LAMBDA"):source.index("    execution.fence();")]
+    assert "control" not in kernel
+    assert "entry.table = &control->table" in source
+    assert "pops_test_field_fault_arm" not in source
+
+
+def test_fixture_control_is_actual_mapping_and_fault_targets_active_owner():
+    from pathlib import Path
+    source=Path('tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py').read_text()
+    assert 'ctypes' not in source and 'GPUSharedTableControl(control_path)' in source
+    assert source.index('monkeypatch.setenv("POPS_TEST_FIELD_CONTROL"') < source.index('pops.bind(')
+    assert 'target=max(index for index,value in enumerate(owners) if value)' in source
+    assert 'np.all(accepted[2]==0.)' in source and 'np.all(retry_image[2]==0.)' in source

@@ -48,28 +48,29 @@ def solver_source(manifest, *, solution_expression="7.0", extra_includes="", wri
 
 
 def fault_source(manifest):
-    """GPU test faults after actual queue writes; mode 2 remains pre-callback table refusal."""
-    source = solver_source(manifest,
-        solution_expression="fault_mode == 3 ? std::numeric_limits<double>::quiet_NaN() : 7.0",
-        extra_includes="#include <stdexcept>",
-        solve_observer_statement="++observed_callbacks;",
-        write_observer_statement="\n    for (std::size_t point = 0; point < patch.material_mask.size; ++point) if (mask[point] == 1) ++observed_writes;\n")
-    source = source.replace("struct State {", "int fault_mode = 0;\nint observed_callbacks = 0;\nint observed_writes = 0;\nstruct State {")
-    source = source.replace("  report->status = POPS_SOLVE_SOLVED_V2;",
-        '  if (fault_mode == 1) throw std::runtime_error("test FieldSolver throw after actual writes");\n  report->status = POPS_SOLVE_SOLVED_V2;')
-    source = source.replace("const PopsFieldSolverApiV2 table", "PopsFieldSolverApiV2 table")
-    source += r"""
-extern "C" int pops_test_field_fault_arm(int mode) {
-  if (mode < 0 || mode > 3) return 1;
-  fault_mode = mode;
-  table.header.struct_size = mode == 2 ? sizeof(PopsComponentTableHeaderV1) : sizeof(PopsFieldSolverApiV2);
-  return 0;
-}
-extern "C" std::size_t pops_test_field_table_size() { return table.header.struct_size; }
-extern "C" int pops_test_field_callback_count() { return observed_callbacks; }
-extern "C" int pops_test_field_write_count() { return observed_writes; }
-"""
-    return source
+    """Use the actual mapped table; only Host reads control before device launch."""
+    from tests.python.support.external_field_fault_component import fault_source as shared_source
+    source = shared_source(manifest)
+    source = '#include <Kokkos_Core.hpp>\n#include <pops/runtime/system/prepared_field_solver_component.hpp>\n' + source
+    start = source.index("    for (std::size_t j = 0; j < patch.solution.extents[1]; ++j)")
+    end = source.index("\n  }\n  if (control->mode", start)
+    kernel = _KERNEL.replace("TEST_SOLUTION_EXPRESSION", "control->mode == 3 ? std::numeric_limits<double>::quiet_NaN() : 7.0")
+    observer = "\n    for (std::size_t point = 0; point < patch.material_mask.size; ++point) if (mask[point] == 1) ++control->writes;\n"
+    return source[:start] + kernel + observer + source[end:]
+
+
+from tests.python.support.external_field_fault_component import SharedTableControl
+
+class GPUSharedTableControl(SharedTableControl):
+    """Same true shared table, plus test-only nonfinite mode; no callback-pointer edit."""
+    def arm(self, mode):
+        import struct
+        if type(mode) is not int or mode not in (0, 1, 2, 3):
+            raise ValueError("invalid GPU test fault mode")
+        super().arm(0 if mode == 3 else mode)
+        if mode == 3:
+            struct.pack_into("=i", self.memory, self.layout["mode"], mode)
+            self.memory.flush()
 
 
 def component_manifest(name, interface, *, device, parameters=()):
