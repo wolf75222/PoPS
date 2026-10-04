@@ -67,6 +67,8 @@ double check_shape(const std::array<int, Dim>& cells, std::ofstream& output) {
     auto host_phi = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, phi);
     std::vector<double> values;
     for (std::size_t ordinal = 0; ordinal < fft.local_cell_count(); ++ordinal) {
+      require(std::isfinite(host_phi[ordinal].real()) && std::isfinite(host_phi[ordinal].imag()),
+              "nonfinite FFT result cannot pass the independent oracle");
       maximum = std::max(
           maximum, std::abs(host_phi[ordinal].real() - host_rhs[ordinal].real() / eigenvalue));
       maximum = std::max(
