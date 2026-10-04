@@ -32,11 +32,11 @@
 
 namespace pops {
 
-/// Discrete, monotonic ABI revision of the module capability contract. Bump when the SHAPE of
-/// ModuleCapabilities (its fields / their meaning) changes, so a per-artifact manifest baked into an
-/// older .so (pops_compiled_manifest) can be told apart from a newer module at load time. Distinct from
-/// the textual pops::abi_key() (compiler / std / header signature): that detects a toolchain ABI break,
-/// this versions the capability *vocabulary*.
+/// Discrete, monotonic native ABI revision. Bump when a public native layout or capability meaning
+/// changes, so an older per-artifact manifest can be distinguished from the rebuilt module.
+/// ABI11 includes the auxiliary accepted-state DTO and physical evaluation point layout changes.
+/// The complete textual abi_key() also authenticates compiler, standard and header bytes; the
+/// release capability vocabulary has its own independent version.
 inline constexpr int kAbiVersion = 11;
 static_assert(kAbiVersion == release_contract::kReleaseNativeAbiVersion,
               "native ABI and generated release contract drifted");
