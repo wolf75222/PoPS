@@ -13,8 +13,9 @@ _codegen_exprs, _live_prims, _prim_block, _jac_entries
 """
 from __future__ import annotations
 
+from .cpp_strings import cpp_string_expression
+
 from collections.abc import Mapping
-import json
 from typing import Any
 
 from pops._cartesian_axes import canonical_axis_mapping
@@ -94,13 +95,13 @@ def _exact_brick_contract(
     lines = [
         "  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() "
         "noexcept {",
-        "    return {%s, 1};" % json.dumps("pops.codegen.%s-brick" % family),
+        "    return {%s, 1};" % cpp_string_expression("pops.codegen.%s-brick" % family),
         "  }",
         "  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {",
         "    contract.text(\"pops.codegen.exact-physics-brick\")",
         "        .scalar(std::uint32_t{1})",
-        "        .text(%s)" % json.dumps(model_hash),
-        "        .text(%s)" % json.dumps(slot),
+        "        .text(%s)" % cpp_string_expression(model_hash),
+        "        .text(%s)" % cpp_string_expression(slot),
         "        .scalar(std::int32_t{%d})" % dimension,
         "        .scalar(std::int32_t{%d});" % n_vars,
     ]
@@ -117,7 +118,7 @@ def _exact_brick_contract(
         lines.append("    contract.scalar(std::int32_t{0});")
     path = getattr(model, "_path_conservative", None)
     if family == "hyperbolic" and path is not None:
-        lines.append("    contract.text(%s);" % json.dumps(path["identity"]))
+        lines.append("    contract.text(%s);" % cpp_string_expression(path["identity"]))
     lines += ["  }", ""]
     return lines
 

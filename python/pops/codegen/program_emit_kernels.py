@@ -15,8 +15,9 @@ its public surface is unchanged.
 
 from __future__ import annotations
 
+from .cpp_strings import cpp_string_expression
+
 from fractions import Fraction
-import json
 from typing import Any
 
 from pops.identity.scalar import scalar_cpp
@@ -243,8 +244,7 @@ class ProgramProviderPlans:
         """Emit the registry calls before the Program execution context is installed."""
         if target not in {"system", "amr_system"}:
             raise ValueError("Program provider plan target must be system or amr_system")
-        import json
-
+        
         lines: list[str] = []
         if self._plans:
             lines.extend((
@@ -263,16 +263,16 @@ class ProgramProviderPlans:
                 optional_unit = optional_unit_cpp(contract.unit)
                 optional_kind = (
                     "std::nullopt" if contract.value_kind is None
-                    else "std::optional<std::string>{%s}" % json.dumps(contract.value_kind)
+                    else "std::optional<std::string>{%s}" % cpp_string_expression(contract.value_kind)
                 )
                 rendered_key = "Key{%s, %s, %s, %s}" % tuple(
-                    json.dumps(value) for value in (
+                    cpp_string_expression(value) for value in (
                         self._runtime_key(qid, key).owner_qid, key.space_kind, key.space_name, key.component,
                     )
                 )
                 rendered_contract = "Contract{%s, %s, %s, %s, %s}" % (
-                    json.dumps(contract.representation), json.dumps(contract.centering), optional_unit,
-                    json.dumps(contract.layout), optional_kind,
+                    cpp_string_expression(contract.representation), cpp_string_expression(contract.centering), optional_unit,
+                    cpp_string_expression(contract.layout), optional_kind,
                 )
                 from pops.codegen._native_auxiliary_shapes import auxiliary_shape_cpp
                 shape = auxiliary_shape_cpp(self._provider_halos.get(
@@ -283,7 +283,7 @@ class ProgramProviderPlans:
                     )
                 )
             lines.extend((
-                "  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, " % json.dumps(qid),
+                "  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, " % cpp_string_expression(qid),
                 "      std::vector<ConsumerValue>{%s}});" % ", ".join(values),
             ))
         return "\n".join(lines)
@@ -724,7 +724,7 @@ def _prepare_provider_values(binding: Any, program_block: Any, state_var: Any) -
     if binding is None or not binding["count"] or binding["target"] not in {"system", "amr_system"}:
         return []
     return ["ctx.prepare_provider_values(%s, %d, %s, %d);" % (
-        json.dumps(binding["qid"]), program_block, state_var, binding["evaluation_id"])]
+        cpp_string_expression(binding["qid"]), program_block, state_var, binding["evaluation_id"])]
 
 
 def prepare_default_rhs_providers(
@@ -801,7 +801,7 @@ def _kernel_open(
             raise ValueError("Program provider plan count must be a non-negative integer")
         lines.append(
             "  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
-            % (count, json.dumps(provider_binding["qid"]), program_block)
+            % (count, cpp_string_expression(provider_binding["qid"]), program_block)
         )
     if params_block is not None:
         # Read the per-block RuntimeParams ONCE per fab (host scope), captured by value into the device

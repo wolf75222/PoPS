@@ -161,6 +161,7 @@ def _emit_resolved_cpp_program(
 
 
 from .cpp_symbols import printer_scope
+from .cpp_strings import cpp_string_literal
 
 @printer_scope
 def _emit_cpp_program_impl(
@@ -322,7 +323,7 @@ def _emit_cpp_program_impl(
             provider_plans=provider_plans)
         if target == "amr_system" else None)
     return _PROGRAM_CPP_TEMPLATE.format(
-        name=json.dumps(program.name),
+        name=cpp_string_literal(program.name),
         hash=program._ir_hash(),
         prelude=prelude,
         body=body,
@@ -367,7 +368,7 @@ def _emit_history_replay_authorities(program: Any) -> str:
         if not policy.degenerate_to_dense(depth):
             authorities.append((str(name), int(depth)))
     name_cases = "".join(
-        "    case %d: return %s;\n" % (index, json.dumps(name))
+        "    case %d: return %s;\n" % (index, cpp_string_literal(name))
         for index, (name, _depth) in enumerate(authorities)
     )
     depth_cases = "".join(
@@ -509,7 +510,7 @@ def _emit_block_names(program: Any) -> str:
     order = program._block_indices()  # name -> index, declaration order
     names = sorted(order, key=order.get)
     cases = "".join(
-        "    case %d: return %s;\n" % (order[block], json.dumps(block_name(block)))
+        "    case %d: return %s;\n" % (order[block], cpp_string_literal(block_name(block)))
         for block in names
     )
     return (

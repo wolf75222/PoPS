@@ -1,6 +1,6 @@
 """Typed C++ locals, separate from exact public component identities.
 
-cpp-local-symbols@1 preserves noncolliding legacy spellings. ContextVar isolates
+cpp-local-symbols@2 preserves noncolliding legacy spellings. ContextVar isolates
 concurrent and reentrant emitters and restores the outer table on failure.
 """
 from contextlib import contextmanager
@@ -9,10 +9,13 @@ from functools import wraps
 import re
 from types import MappingProxyType
 
-CONTRACT = "cpp-local-symbols@1"
+CONTRACT = "cpp-local-symbols@2"
 _ACTIVE = ContextVar("pops_cpp_local_symbols", default={})
 _RESERVED = frozenset(("index", "providers", "params", "outA", "statusA",
-                       "U", "F", "dir", "dt", "th_dt_"))
+                       "U", "F", "dir", "dt", "th_dt_", "State", "Prim", "Primitive",
+                       "Schema", "Real", "Axis", "ProviderParameters", "state", "interior",
+                       "left", "right", "direction", "UL", "UR", "Up", "result",
+                       "bound", "component", "n_vars", "dimension"))
 
 
 def symbol_table(symbols):

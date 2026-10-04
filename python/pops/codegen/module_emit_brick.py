@@ -37,6 +37,7 @@ from pops.codegen.module_emit_riemann import (
 from pops._ir.expr import Const
 from pops.identity.scalar import scalar_cpp
 from .cpp_symbols import printer_scope,variable_identifier
+from .cpp_strings import cpp_string_literal, cpp_string_expression
 
 
 @printer_scope
@@ -251,8 +252,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             L.append("%s}" % ind)
         return L
 
-    cnames = ", ".join('"%s"' % c for c in model.cons_names)
-    pnames = ", ".join('"%s"' % p for p in model.prim_state)
+    cnames = ", ".join(cpp_string_expression(c, ensure_ascii=False) for c in model.cons_names)
+    pnames = ", ".join(cpp_string_expression(p, ensure_ascii=False) for p in model.prim_state)
     # Roles parallel to the names: the compiled-artifact ABI requires one explicit semantic per
     # component. Non-physical components additionally carry their exact label in VariableSet's
     # parallel user_roles vector; collapsing q1/q2 onto two anonymous Custom values would make any
@@ -290,7 +291,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
 
         user_roles = None
         if any_user_label:
-            user_roles = ", ".join(json.dumps(label) for label in labels)
+            user_roles = ", ".join(cpp_string_expression(label) for label in labels)
         return ", ".join(semantics), user_roles
 
     croles, cuser_roles = roles_init(_roles_for(model.cons_names, model.cons_roles))
@@ -306,7 +307,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "#include <pops/numerics/fv/flux_interfaces.hpp>",
         "#include <pops/numerics/spatial/nd/state_conversion.hpp>",
         "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_brick)."
-        % model.name,
+        % cpp_string_literal(model.name, ensure_ascii=False)[1:-1],
         "// Satisfait pops::HyperbolicModel : flux + max_wave_speed + conversions + descripteurs.",
     ]
     if rt_member:  # RuntimeParams header only if a formula reads a runtime param
@@ -370,9 +371,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         ]
         availability = "true" if provider["availability"] else "false"
         S.append("    {%s, %s, %d}," %
-                 (", ".join([*(json.dumps(value) for value in values[:6]),
+                 (", ".join([*(cpp_string_literal(value) for value in values[:6]),
                               unit_c_string_cpp(contract["unit"]),
-                              *(json.dumps(value) for value in values[6:])]),
+                              *(cpp_string_literal(value) for value in values[6:])]),
                   availability, (row["consumer_slot"] if native_slots is None
                                  else native_slots[row["consumer_slot"]])))
     S.append("  }};")

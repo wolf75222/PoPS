@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import re
 import subprocess
 import sys
 
@@ -35,8 +36,12 @@ def main():
     cases=(('actual-red',runpy.run_path(str(hooke))['build']()),
            ('collisions-unicode',build()),('permuted',build(tuple(reversed(NAMES)))),
            ('component-collisions-recovery',build(state_names=('a b','a_b'),recovery=True)),
-           ('derived-primitive',build(primitive=True)))
-    cpp=[]
+           ('derived-primitive',build(primitive=True)),
+           *((label,build(state_names=names,primitive=True)) for label,names in (
+               ('quoted-components',('a"b','a_b')),('backslash-components',(r'a\b','a_b')),
+               ('newline-components',('a\nb','a_b')),('reserved-type',('State','a_b')),
+               ('reserved-template',('Axis','Prim')),('astral-unicode',('κ','🚀')))))
+    cpp=[];metadata_bodies=[];metadata_expected=[]
     for label,resolved in cases:
         graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks);directory=out/label;directory.mkdir()
         path=directory/'program.cpp';path.write_text(emit_cpp_program(resolved.time,model_graph=graph));cpp.append(path)
@@ -45,7 +50,27 @@ def main():
             path.write_text(require_compiler_lowering(graph.model_for_block(block.name)).native_loader_source(
                 name='SymbolProbe%d'%i,consumer_owner_qid=block.instance_owner_qid,
                 declare_auxiliary_providers=block.declares_auxiliary_providers));cpp.append(path)
+            methods=re.findall(r'^  static pops::VariableSet (?:conservative|primitive)_vars[^\n]+',path.read_text(),re.M)
+            assert len(methods)==2
+            metadata_bodies.append('struct Metadata%d {\n%s\n};'%(len(metadata_bodies),'\n'.join(methods)))
+            impl=getattr(graph.model_for_block(block.name),'_m',graph.model_for_block(block.name))
+            metadata_expected.extend(tuple(name.encode('utf8').hex() for name in names)
+                                     for names in (impl.cons_names,impl.prim_state))
     run('actual-program-and-model-host-tu',common+['-fsyntax-only']+[str(p) for p in cpp])
+    metadata=out/'metadata-roundtrip.cpp'
+    rows=['#include <pops/core/state/variables.hpp>','#include <iostream>','#include <iomanip>',
+          *metadata_bodies,'int main(){']
+    for i in range(len(metadata_bodies)):
+        for method in ('conservative_vars','primitive_vars'):
+            rows.append('for(const auto& name: Metadata%d::%s().names){'% (i,method))
+            rows.extend(['for(unsigned char c:name) std::cout<<std::hex<<std::setw(2)<<std::setfill(\'0\')<<unsigned(c);',
+                         'std::cout<<" ";}std::cout<<"\\n";'])
+    rows.append('}');metadata.write_text('\n'.join(rows)+'\n')
+    metadata_binary=out/'metadata-roundtrip'
+    run('metadata-host-compile',['/usr/bin/clang++','-std=c++20','-I'+str(ROOT/'include'),str(metadata),'-o',str(metadata_binary)])
+    run('metadata-byte-roundtrip',[str(metadata_binary)])
+    actual=[tuple(line.split()) for line in (out/'metadata-byte-roundtrip.stdout').read_text().splitlines()]
+    assert actual==metadata_expected
     from pops.codegen.cpp_symbols import variable_scope,variable_identifier
     from pops.codegen.cpp_writer import _cpp_expand,_cse_emit
     from pops._ir.expr import Var,Minimum,Const
@@ -83,8 +108,8 @@ def main():
         equality.append({'original':pin(path),'candidate':pin(candidate)})
     assert not any(name.startswith('pops.') and Path(getattr(module,'__file__','') or '').suffix in ('.so','.dylib','.pyd')
                    for name,module in tuple(sys.modules.items()))
-    report={'schema':'sol61.cpp-local-symbol-source-host@1','contract':'cpp-local-symbols@1','scope':'Source/Host, no PoPS Native/MPI/GPU',
-            'original_case':pin(hooke),'actual_translation_units':len(cpp),'cpp':[pin(p) for p in cpp],
+    report={'schema':'sol61.cpp-local-symbol-source-host@1','contract':'cpp-local-symbols@2','scope':'Source/Host, no PoPS Native/MPI/GPU',
+            'metadata_byte_roundtrip':{'source':pin(metadata),'records':len(metadata_expected)},'original_case':pin(hooke),'actual_translation_units':len(cpp),'cpp':[pin(p) for p in cpp],
             'scalar_control':pin(scalar),'hidden_nonfinite_leaf_control':pin(finite),'legacy_full_cpp_equal':equality,'commands':commands}
     (out/'receipt.json').write_text(json.dumps(report,sort_keys=True,indent=2)+'\n')
     print(len(cpp),'actual TU, distinct symbols scalar91, 3legacyCPP equal PASS')

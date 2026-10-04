@@ -12,7 +12,7 @@ from tests.python.support.public_cpp_symbol_case import build,NAMES
 def test_table_preserves_valid_names_and_separates_collisions_kinds_and_internal_names():
     symbols={('aux',n) for n in NAMES}|{('cons','same'),('aux','same'),('prim','same')}
     table=symbol_table(symbols)
-    assert CONTRACT=='cpp-local-symbols@1'
+    assert CONTRACT=='cpp-local-symbols@2'
     assert len(set(table.values()))==len(table)
     assert table['aux','a_b']=='a_b'
     assert table['aux','a b']!=table['aux','a_b']
@@ -83,3 +83,27 @@ def test_public_component_collision_and_recovery_use_the_real_printer(primitive)
     assert "const pops::Real derived gain" not in source
     assert '"a b"' in source and '"a_b"' in source
     assert "recovery_admissible" in source
+
+
+@pytest.mark.parametrize("names", (("a\"b","a_b"),("a\\b","a_b"),("a\nb","a_b"),("State","a_b"),("Axis","Prim"),("κ","🚀")))
+def test_public_metadata_names_remain_exact_and_locals_compile_without_types_aliasing(names):
+    from pops.codegen.cpp_strings import cpp_string_expression
+    resolved=build(state_names=names,primitive=True)
+    graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks);block=resolved.blocks[0]
+    source=require_compiler_lowering(graph.model_for_block(block.name)).native_loader_source(
+        name="PublicText",consumer_owner_qid=block.instance_owner_qid,
+        declare_auxiliary_providers=block.declares_auxiliary_providers)
+    assert ', '.join(cpp_string_expression(n,ensure_ascii=False) for n in names) in source
+    assert "const pops::Real State =" not in source
+    assert "const pops::Real Axis =" not in source
+
+
+def test_canonical_cpp_literal_preserves_json_legacy_and_utf8_controls():
+    import json
+    from pops.codegen.cpp_strings import cpp_string_literal,cpp_string_expression,CONTRACT
+    assert CONTRACT=="cpp-public-text@1"
+    for name in ("plain","a\"b","a\\b","a\nb","κ",r"literal\u0001"):
+        assert cpp_string_literal(name)==json.dumps(name)
+    assert cpp_string_literal("🚀")==r'"\U0001f680"'
+    assert cpp_string_literal("\x01")==r'"\001"'
+    assert cpp_string_expression("a\0b")==r'std::string{"a\000b", 3}'

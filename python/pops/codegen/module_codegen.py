@@ -34,6 +34,7 @@ from typing import Any
 from pops.identity.scalar import scalar_cpp
 from pops.codegen.cpp_writer import _cpp_identifier
 from .cpp_symbols import printer_scope,variable_identifier
+from .cpp_strings import cpp_string_literal
 
 # Re-export the moved helpers + the brick emitter so the public surface of
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
@@ -97,7 +98,7 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
         )
     nc = model.n_vars
     out = [
-        "// genere depuis le modele symbolique '%s' (pops.dsl.emit_cpp)" % model.name,
+        "// genere depuis le modele symbolique '%s' (pops.dsl.emit_cpp)" % cpp_string_literal(model.name, ensure_ascii=False)[1:-1],
         "// flux physique F = flux<Axis>(U) sur %d axes ; U et F de taille %d."
         % (len(axes), nc),
         "#include <cmath>",
@@ -171,7 +172,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
         "#include <cmath>",  # self-sufficient for std::sqrt / std::pow
         "#include <pops/core/identity/prepared_provider.hpp>",
         "// brique de SOURCE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_source)."
-        % model.name,
+        % cpp_string_literal(model.name, ensure_ascii=False)[1:-1],
         "// apply(U, a) -> terme source S(U, aux) ; aux via le ProviderPack exact.",
     ]
     if rt_member:  # RuntimeParams header only if a formula reads a runtime param
@@ -379,7 +380,7 @@ def _emit_metadata(model: Any, model_alias: Any) -> str:
 
     out += (
         'extern "C" const char* pops_compiled_aux_provider_pack() { return %s; }\n'
-        % json.dumps(json.dumps(provider_metadata, sort_keys=True, separators=(",", ":")))
+        % cpp_string_literal(json.dumps(provider_metadata, sort_keys=True, separators=(",", ":")))
     )
     consumer_plans = getattr(model, "_component_operator_consumer_plans", None)
     flux_plan = getattr(model, "_component_flux_consumer_plan", None)
@@ -389,7 +390,7 @@ def _emit_metadata(model: Any, model_alias: Any) -> str:
         )
     out += (
         'extern "C" const char* pops_compiled_aux_consumer_plans() { return %s; }\n'
-        % json.dumps(json.dumps(
+        % cpp_string_literal(json.dumps(
             plain({"by_operator": consumer_plans, "physical_flux": flux_plan}),
             sort_keys=True, separators=(",", ":"),
         ))
@@ -418,7 +419,7 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
         "#include <cmath>",  # self-sufficient for std::sqrt / std::pow
         "#include <pops/core/identity/prepared_provider.hpp>",
         "// brique de SECOND MEMBRE elliptique generee depuis '%s' (pops.dsl.emit_cpp_elliptic)."
-        % model.name,
+        % cpp_string_literal(model.name, ensure_ascii=False)[1:-1],
         "// rhs(U) -> Real : second membre f(U) de l'operateur elliptique (p.ex. densite de charge).",
     ]
     if rt_member:  # RuntimeParams header only if a formula reads a runtime param

@@ -1,6 +1,6 @@
 # C++ local symbol contract
 
-`cpp-local-symbols@1` separates accepted public names from C++ local identifiers.
+`cpp-local-symbols@2` separates accepted public names from C++ local identifiers.
 The real common emitter is `pops.codegen.cpp_writer`; public Module names,
 component strings, ProviderPack keys, operator handles and Case/Model owners remain
 exact. No declaration or provider identity is renamed to make a formula compile.
@@ -10,6 +10,18 @@ The previous Program emitter declared `const pops::Real difference gain`, while
 its common expression writer referenced `difference_gain`. Clang rejected the
 actual Program translation unit. A sanitizer alone is insufficient: `a b` and
 `a_b`, or two different Greek names, can share the same sanitized identifier.
+
+The additive `@2` revision also reserves the generated State/Prim/Schema types
+and Axis template parameter. A non-author full TU demonstrated that a valid
+public component named `State` otherwise hid the required type in conversion.
+`cpp-public-text@1` is the separate canonical C++ string boundary. Quotes,
+backslashes and line breaks are escaped; invalid JSON-only low Unicode escapes
+and surrogate pairs are emitted as valid C++ UTF-8 encodings. Existing ordinary
+JSON/C++ spellings remain unchanged. Length-aware std::string positions preserve
+embedded NUL. Module comments escape line breaks too. Structured contract JSON
+continues to use the existing serialization; only the surrounding C++ literal
+changes. This covers component labels, provider keys/contracts/owners, publication
+keys, public metadata and names, and the JSON metadata exports.
 
 Each Model or whole-Program emission now installs a deterministic typed table
 `(Var.kind, Var.name) -> identifier`. Valid noncolliding spellings keep their
@@ -48,8 +60,10 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
 
 The script emits the original non-author public counterexample plus independent
 collision/Unicode, reversed-provider, component/recovery and derived-primitive
-profiles. It compiles thirteen complete actual Program/Model translation units
-against the real candidate headers. A compiled scalar control distinguishes six
+profiles. It compiles twenty-five complete actual Program/Model translation units
+against the real candidate headers. A compiled extraction of their actual variable
+metadata checks every declared UTF-8 byte, including quotes, backslashes, newline,
+BMP/astral Unicode and reserved type/template spellings. A compiled scalar control distinguishes six
 Aux values with the exact result 91. A second real common-emitter control rejects
 a nonfinite Aux leaf even when the final IEEE min result is finite. Three complete
 legacy Program/Model C++ files are compared byte for byte against actual base Git

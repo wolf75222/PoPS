@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .cpp_strings import cpp_string_literal, cpp_string_expression
+
 import json
 from collections.abc import Mapping
 import math
@@ -538,7 +540,7 @@ def _emit_auxiliary_route_registration(
     }
 
     def literal(value: Any) -> str:
-        return json.dumps(value)
+        return cpp_string_expression(value)
 
     def optional(value: Any) -> str:
         if value is None:
@@ -1003,8 +1005,8 @@ def emit_cpp_native_loader(
         "  return POPS_ABI_KEY_LITERAL;\n"
         "}\n"
         "POPS_LOADER_API const char* pops_compiled_model_identity() {\n"
-        '  return "%s";\n'
-        "}\n" % model_identity
+        '  return %s;\n'
+        "}\n" % cpp_string_literal(model_identity)
     )
     key += (
         "POPS_LOADER_API int %s() {\n"
@@ -1068,7 +1070,7 @@ def emit_cpp_native_loader(
         key_values = ", ".join(
             "pops::runtime::system::AuxiliaryComponentKey{%s, %s, %s, %s}"
             % tuple(
-                json.dumps(value)
+                cpp_string_expression(value)
                 for value in (
                     runtime_key(key, instance).owner_qid,
                     key.space_kind,
@@ -1080,10 +1082,10 @@ def emit_cpp_native_loader(
         )
         if rhs_role is None:
             system_elliptic_package_lines += (
-                '  package.elliptic_attachments.push_back({"%s", "%s/%s", '
+                '  package.elliptic_attachments.push_back({%s, %s, '
                 "std::vector<pops::runtime::system::AuxiliaryComponentKey>{%s}, %d, "
                 "std::move(named_elliptic_rhs_%d)});\n"
-                % (fld, model_identity, fld, key_values, gradient_sign, index)
+                % (cpp_string_expression(fld), cpp_string_expression("%s/%s" % (model_identity, fld)), key_values, gradient_sign, index)
             )
         else:
             system_elliptic_package_lines += (
@@ -1097,8 +1099,8 @@ def emit_cpp_native_loader(
                 "    attachment.rhs = std::move(named_elliptic_rhs_%d);\n"
                 "    package.elliptic_attachments.push_back(std::move(attachment));\n"
                 "  }\n"
-                % (json.dumps(fld), json.dumps("%s/%s" % (model_identity, fld)),
-                   json.dumps(rhs_role["field"]), json.dumps(rhs_role["binding_identity"]), index)
+                % (cpp_string_expression(fld), cpp_string_expression("%s/%s" % (model_identity, fld)),
+                   cpp_string_expression(rhs_role["field"]), cpp_string_expression(rhs_role["binding_identity"]), index)
             )
     if m._elliptic is not None and (target != "system" or native_field_roles is None):
         system_elliptic_prepare_lines += (
@@ -1118,7 +1120,7 @@ def emit_cpp_native_loader(
             key_values = ", ".join(
                 "pops::runtime::system::AuxiliaryComponentKey{%s, %s, %s, %s}"
                 % tuple(
-                    json.dumps(runtime_key(ComponentKey(**key), instance).to_data()[name])
+                    cpp_string_expression(runtime_key(ComponentKey(**key), instance).to_data()[name])
                     for name in ("owner_qid", "space_kind", "space_name", "component")
                 )
                 for key in role["output_keys"]
@@ -1133,8 +1135,8 @@ def emit_cpp_native_loader(
                 "    package.elliptic_attachments.push_back(std::move(attachment));\n"
                 "  }\n"
                 % (
-                    json.dumps(role["field"]),
-                    json.dumps(role["block"]),
+                    cpp_string_expression(role["field"]),
+                    cpp_string_expression(role["block"]),
                     key_values,
                     role["gradient_sign"],
                 )
@@ -1175,11 +1177,11 @@ def emit_cpp_native_loader(
             "    package.elliptic_attachments.push_back(std::move(attachment));\n"
             "  }\n"
             % (
-                json.dumps(role["field"]),
-                json.dumps(role["block"]),
-                json.dumps(role["binding_identity"]),
-                json.dumps("%s/%s" % (model_identity, provider_key)),
-                json.dumps(provider_key),
+                cpp_string_expression(role["field"]),
+                cpp_string_expression(role["block"]),
+                cpp_string_expression(role["binding_identity"]),
+                cpp_string_expression("%s/%s" % (model_identity, provider_key)),
+                cpp_string_expression(provider_key),
                 role["binding_ordinal"],
                 scalar_cpp(role["coefficient"]),
                 rhs_index, rhs_index, rhs_index, rhs_index,
@@ -1217,7 +1219,7 @@ def emit_cpp_native_loader(
             + system_elliptic_prepare_lines
             + "  pops::runtime::system::PreparedNativeSystemPackage<pops::kNativeDimension> package;\n"
             "  package.consumer_qid = "
-            + json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model")
+            + cpp_string_expression(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model")
             + ";\n"
             "  const pops::NewtonOptions newton = pops::newton_options_from_abi(\n"
             "      newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);\n"
@@ -1265,7 +1267,7 @@ def emit_cpp_native_loader(
             "      name, std::move(model), limiter, riemann, recon, time, gamma, substeps,\n"
             "      stride, pos_floor, weno_epsilon, wave_speed_cache, %s, newton,\n"
             "      newton_diagnostics != 0%s);\n"
-            % (json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model"),
+            % (cpp_string_expression(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model"),
                (", user_reconstruction" if user_reconstruction_identity is not None else "") +
                (", user_face" if user_face_identity is not None else ""))
             + amr_elliptic_package_lines

@@ -13,7 +13,8 @@ three agree byte-for-byte. The per-cell read of the parameter (``params.get(inde
 """
 from __future__ import annotations
 
-import json
+from .cpp_strings import cpp_string_literal
+
 from typing import Any
 
 from pops.codegen.program_emit_kernels import _has_runtime_param
@@ -330,7 +331,7 @@ def emit_program_params(program: Any, model: Any = None) -> str:
     # seeded neutrally and the immutable BindSchema installs either the supplied value or its explicit
     # declaration default before a kernel can run.
     defaults = ", ".join("0.0" for _ in entries)
-    name_cases = "".join('    case %d: return %s;\n' % (k, json.dumps(nm))
+    name_cases = "".join('    case %d: return %s;\n' % (k, cpp_string_literal(nm))
                          for k, (_, nm, _, _) in enumerate(entries))
 
     def ival(accessor: Any, csv: Any) -> str:

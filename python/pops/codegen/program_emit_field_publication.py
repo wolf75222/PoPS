@@ -1,7 +1,8 @@
 """Publish already-consumed field values through the exact native provider transaction."""
 from __future__ import annotations
 
-import json
+from .cpp_strings import cpp_string_expression
+
 from typing import Any
 
 from pops.fields._program_publication import validate_field_publication
@@ -47,7 +48,7 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
             raise ValueError("field publication differs from its resolved output observation")
         from .provider_instances import emitter_contract, runtime_key
         native_key = runtime_key(key, emitter_contract(emitter))
-        key_cpp = "{%s}" % ", ".join(json.dumps(part) for part in native_key.to_data().values())
+        key_cpp = "{%s}" % ", ".join(cpp_string_expression(part) for part in native_key.to_data().values())
         if source.attrs.get("contract") == "mapped-consumed-output@1":
             actual = canonical_bytes(_json_ready({name: source.attrs[name] for name in
                 ("invocation", "physical_map", "source_port", "target_port", "source_point", "target_point")}))
@@ -55,7 +56,7 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
             if sum(canonical_bytes(_json_ready(item)) == actual for item in occurrences) != 1:
                 raise ValueError("mapped Field publication differs from its resolved map authority")
         rows.append("{%s, %s, &%s, %d}" % (
-            key_cpp, json.dumps(provider_identity({**claim, 'key': native_key.to_data()})), var[source.id], row["source_component"]))
+            key_cpp, cpp_string_expression(provider_identity({**claim, 'key': native_key.to_data()})), var[source.id], row["source_component"]))
     from .program_emit_ops import _required_block_index
     from .program_emit_kernels import _prepare_provider_values, program_provider_consumer_qid
     from .program_field_publication import remaining_input_pack
@@ -87,5 +88,5 @@ def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *
     publication_identity = "%s/publication/%d" % (value.attrs["field_problem_identity"], value.id)
     method = "stage_field_components" if target == "amr_system" else "publish_field_components"
     lines.append("ctx.%s(%d, %s, {%s});" % (
-        method, value.id, json.dumps(publication_identity), ", ".join(rows)))
+        method, value.id, cpp_string_expression(publication_identity), ", ".join(rows)))
     var[value.id] = var[value.inputs[0].id]
