@@ -100,3 +100,30 @@ def printer_scope(function):
         with variable_scope(_model_symbols(authority)):
             return function(*args, **kwargs)
     return emit
+
+
+def block_scratch_identifiers(prefix, names):
+    """Collision-free internal token families (block-scratch-identifiers@1).
+
+    Public labels remain exact registry keys. Preserve legacy valid tokens; the
+    scratch and its appended FieldView `A` must both avoid other token families
+    and actual scalar locals in the common printer scope.
+    """
+    from .cpp_writer import _cpp_identifier
+
+    names = set(names)
+    bases = {name: _cpp_identifier(prefix + name) for name in names}
+    family = lambda token: {token, token + "A"}
+    occupied = set().union(*(family(base) for base in bases.values()))
+    used = set(_ACTIVE.get().values()) | set(_RESERVED)
+    result = {}
+    for name in sorted(names, key=lambda name: (
+            bases[name] != prefix + name, name.encode("utf8"))):
+        token = bases[name]
+        if family(token) & used:
+            token = prefix + "pops_block_" + name.encode("utf8").hex()
+            while family(token) & (occupied | used):
+                token += "_q"
+        result[name] = token
+        used.update(family(token))
+    return MappingProxyType(result)

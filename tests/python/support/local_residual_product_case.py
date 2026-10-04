@@ -11,7 +11,7 @@ from pops.solvers.nonlinear import LocalNewton
 from pops.time import LocalResidual, FixedDt, FailRun
 
 
-def make_case(*, reverse=False, invalid=False):
+def make_case(*, reverse=False, invalid=False, block_names=("left", "right")):
     frame = Rectangle("local_box", (0., 0.), (1., 1.)).frame(Cartesian2D())
     models, states = [], []
     for name, components in (("pair", ("x", "y")), ("triple", ("p", "q", "r"))):
@@ -20,7 +20,7 @@ def make_case(*, reverse=False, invalid=False):
         models.append(model)
     case = pops.Case("original_product")
     order = (1, 0) if reverse else (0, 1)
-    blocks = {i: case.block(("left", "right")[i], models[i]) for i in order}
+    blocks = {i: case.block(block_names[i], models[i]) for i in order}
     subjects = tuple(blocks[i][states[i]] for i in range(2))
     program = pops.Program("local_product_step")
     a, b = tuple(program.state(subject) for subject in subjects)

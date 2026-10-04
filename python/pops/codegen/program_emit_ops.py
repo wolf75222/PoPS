@@ -617,9 +617,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 lines.append(
                     "ctx.require_cartesian_generated_operator(%d, %s);"
                     % (index, json.dumps("coupled_rate")))
+        from .cpp_symbols import block_scratch_identifiers
+        tokens = block_scratch_identifiers("cr%d_" % v.id,
+                                           (block_name(block) for block in components))
         scratch = {}
         for subslot, blk in enumerate(components):   # bundle / expr block order
-            scratch[blk] = "cr%d_%s" % (v.id, block_name(blk))
+            scratch[blk] = tokens[block_name(blk)]
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, %d, %s);"
                          % (scratch[blk], int(v.id), subslot, var[by_block[blk].id]))
         from pops._ir.native_call import native_functions
@@ -678,9 +681,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 lines.append(
                     "ctx.require_cartesian_generated_operator(%d, %s);"
                     % (index, json.dumps("solve_coupled_implicit")))
+        from .cpp_symbols import block_scratch_identifiers
+        tokens = block_scratch_identifiers("ci%d_" % v.id,
+                                           (block_name(block) for block in components))
         scratch = {}
         for subslot, block in enumerate(components):
-            scratch[block] = "ci%d_%s" % (v.id, block_name(block))
+            scratch[block] = tokens[block_name(block)]
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, %d, %s);"
                          % (scratch[block], int(v.id), subslot, var[by_block[block].id]))
         status = "ci_status_%d" % v.id
