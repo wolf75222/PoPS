@@ -554,7 +554,10 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         post_sync_lines.extend(integral_transfers)
         post_sync_lines.append("}")
     prelude_src = "\n".join("  " + ln for ln in prelude)
-    body_src = "\n".join("    " + ln for ln in lines)
+    # Host diagnostic effects outlive the current frame when a map suspends it.
+    # Allocate their invocation-owned payloads collectively before any callbacks.
+    body_src = "\n".join("    " + ln for ln in
+                         (*var.get(("field_counter_preparation",), ()), *lines))
     post_sync_src = "\n".join("        " + ln for ln in post_sync_lines)
     authorities = tuple(dict.fromkeys(
         var.get(("compiled_program_operator_authorities",), ())))

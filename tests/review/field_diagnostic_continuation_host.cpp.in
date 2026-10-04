@@ -1,0 +1,136 @@
+// Source/Host probe of emitted effects against the actual cadence/restore headers.
+// Preparation and solve/reuse statements are extracted from a public composition.
+#include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/parallel/collective_exception.hpp>
+#include <Kokkos_Core.hpp>
+#include <array>
+#include <cassert>
+#include <cstdlib>
+#include <memory>
+#include <new>
+
+static bool fail_next_allocation = false;
+void* operator new(std::size_t n) {
+  if (std::exchange(fail_next_allocation, false)) throw std::bad_alloc();
+  if (void* p = std::malloc(n)) return p;
+  throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+
+using State = pops::runtime::program::ProgramRuntimeState<2>;
+using Payload = std::array<pops::Real, 2>;
+struct Context {
+  State* state;
+  const pops::ExecutionLane* lane;
+  const pops::ExecutionLane& prepared_execution_lane() const { return *lane; }
+  void record_scalar(const std::string& key, pops::Real value) const {
+    state->record_diagnostic(key, value);
+  }
+};
+struct Control {
+  bool reject = false, refuse_preparation = false;
+  int callbacks = 0;
+  std::weak_ptr<Payload> owner;
+};
+
+int main(int argc, char** argv) {
+  Kokkos::initialize(argc, argv);
+  {
+    State state;
+    pops::MultiFab<2> stage;
+    auto lane = pops::ExecutionLane::world();
+    Context ctx{&state, &lane};
+    Control control;
+    auto* authority = &control;
+    auto* scratch = &stage;
+    Kokkos::View<int*> completed("completed Host work", 1);
+    double time = 0;
+    int step = 0;
+    state.install_unverified_step([=](double) {
+      if (authority->refuse_preparation) fail_next_allocation = true;
+      @PREPARATION@
+      authority->owner = field_counters_0;
+      assert((*field_counters_0)[0] == 0 && (*field_counters_0)[1] == 0);
+      ++authority->callbacks;
+      @SOLVE@
+      ctx.state->suspend_program_map("first temporal port", false, {scratch}, [=] {
+        assert(!authority->owner.owner_before(field_counters_0) &&
+               !field_counters_0.owner_before(authority->owner));
+        @REUSE@
+        ctx.state->suspend_program_map("second temporal port", true, {scratch}, [=] {
+          Kokkos::parallel_for("Host completion before diagnostics", 1,
+                              KOKKOS_LAMBDA(int i) { completed(i) = 17; });
+          Kokkos::fence();
+          @SOLVE@
+          if (authority->reject) {
+            @REUSE@
+            ctx.record_scalar("rejected-attempt-only", 99);
+            throw std::runtime_error("injected continuation rejection");
+          }
+        });
+      });
+    });
+    auto counts = [&](double solves, double reuses) {
+      const auto diagnostic = state.diagnostics();
+      assert(diagnostic.at(@SOLVE_KEY@) == solves);
+      assert(diagnostic.at(@REUSE_KEY@) == reuses);
+    };
+    auto enter = [&] {
+      assert(state.advance_cadence_region(time, step, .125, "Host proof") ==
+             "first temporal port");
+      assert(!control.owner.expired());
+      counts(1, 0);
+    };
+    auto second = [&] {
+      state.release_program_map("first temporal port", false);
+      assert(state.advance_cadence_region(time, step, .125, "Host proof") ==
+             "second temporal port");
+      counts(1, 1);
+      assert(!control.owner.expired());
+      state.release_program_map("second temporal port", true);
+    };
+    enter(); second();
+    assert(state.advance_cadence_region(time, step, .125, "Host proof").empty());
+    counts(2, 1);
+    assert(completed(0) == 17 && time == .125 && step == 1);
+    assert(control.owner.expired());
+    const auto accepted = state;
+    const auto old_owner = control.owner;
+
+    control.reject = true;
+    enter();
+    assert(old_owner.owner_before(control.owner) || control.owner.owner_before(old_owner));
+    second();
+    bool rejected = false;
+    try { state.advance_cadence_region(time, step, .125, "Host proof"); }
+    catch (const std::runtime_error&) { rejected = true; }
+    assert(rejected && time == .125 && step == 1 && control.owner.expired());
+    counts(2, 2);
+    assert(state.diagnostics().at("rejected-attempt-only") == 99);
+    auto restore = state.prepare_accepted_restore(accepted);
+    state.publish_prepared_accepted_restore(std::move(restore));
+    counts(2, 1);
+    assert(!state.diagnostics().contains("rejected-attempt-only"));
+    assert(!state.cadence_continuation_);
+    const auto rejected_owner = control.owner;
+
+    control.reject = false;
+    control.refuse_preparation = true;
+    const int calls = control.callbacks;
+    bool allocation_refused = false;
+    try { state.advance_cadence_region(time, step, .125, "Host proof"); }
+    catch (const std::bad_alloc&) { allocation_refused = true; }
+    assert(allocation_refused && control.callbacks == calls && time == .125 && step == 1);
+    assert(control.owner.expired() && !state.cadence_continuation_);
+    counts(2, 1);
+
+    control.refuse_preparation = false;
+    enter();
+    assert(rejected_owner.owner_before(control.owner) || control.owner.owner_before(rejected_owner));
+    second();
+    assert(state.advance_cadence_region(time, step, .125, "Host proof").empty());
+    counts(2, 1);
+    assert(time == .25 && step == 2 && control.owner.expired());
+  }
+  Kokkos::finalize();
+}
