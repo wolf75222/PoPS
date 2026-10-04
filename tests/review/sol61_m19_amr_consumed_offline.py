@@ -13,6 +13,37 @@ from tests.review.sol61_amr_full_carrier_offline import decode
 DT = 1 / 64
 NAMES = ("reservoir_z", "zeta_laminated_material", "reservoir_a")
 WEIGHTS = ((1 / 8, 1 / 8, 1 / 4, 1 / 2), (-1 / 4, 0, 1 / 4, 0))
+READER_CONTRACT = "sol61.m19-amr-consumed-offline@2"
+
+
+def _carrier_owner_map(child, level, patch_count, rank_count):
+    """Read CP12 ownership without inventing owners for replicated levels."""
+    mode_value = np.asarray(child["distribution_mode_%d" % level])
+    owner_map = np.asarray(child["dmap_%d" % level])
+    if (
+        mode_value.ndim != 0
+        or mode_value.dtype.kind not in "US"
+        or owner_map.dtype != np.dtype("int64")
+        or owner_map.ndim != 1
+        or type(patch_count) is not int
+        or patch_count < 1
+        or type(rank_count) is not int
+        or rank_count < 1
+    ):
+        raise ValueError("carrier distribution authority")
+    mode = str(mode_value.item())
+    if mode == "replicated":
+        if owner_map.size:
+            raise ValueError("carrier distribution authority")
+        return (-1,) * patch_count
+    if (
+        mode != "partitioned"
+        or len(owner_map) != patch_count
+        or np.any(owner_map < 0)
+        or np.any(owner_map >= rank_count)
+    ):
+        raise ValueError("carrier distribution authority")
+    return tuple(int(owner) for owner in owner_map)
 
 
 def potential(load):
@@ -168,17 +199,12 @@ def checkpoint_states(path):
             bits = np.zeros((components, ny, nx), dtype=np.uint64)
             coverage = np.zeros((ny, nx), dtype=np.uint8)
             selected = [p for p in archive["patches"] if p["key"][:2] == (block, level)]
-            mode = str(child["distribution_mode_%d" % level].item())
-            dmap = child["dmap_%d" % level]
-            if mode not in ("replicated", "partitioned") or len(dmap) != len(selected):
-                raise ValueError("carrier distribution authority")
+            owners = _carrier_owner_map(child, level, len(selected), archive["ranks"])
             native_boxes = child["patch_boxes"][child["patch_boxes"][:, 0] == level]
             for patch in selected:
                 (xlo, xhi, gxlo, gxhi), (ylo, yhi, gylo, gyhi) = patch["axes"]
                 index = patch["key"][2]
-                if index >= len(selected) or patch["owner"] != (
-                    -1 if mode == "replicated" else int(dmap[index])
-                ):
+                if index >= len(selected) or patch["owner"] != owners[index]:
                     raise ValueError("carrier rank owner")
                 if level and (
                     len(native_boxes) != len(selected)
@@ -394,6 +420,7 @@ def audit(directory):
             raise ValueError("NaN injection target trace differs")
     proofs["failure"] = {"target": target, "collective_finite_guard": True}
     return {
+        "reader_contract": READER_CONTRACT,
         "scope": "offline saved-data numerical and rollback audit",
         "proofs": proofs,
         "Native_received": False,
