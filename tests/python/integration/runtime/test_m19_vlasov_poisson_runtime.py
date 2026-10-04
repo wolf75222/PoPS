@@ -56,16 +56,19 @@ def test_installed_two_stage_vlasov_poisson(tmp_path,record_property,
         world,resolved,route='finite velocity Vlasov Poisson',compile_artifact=pops.compile)
     collective_call(world,lambda:retain_v_provenance(artifact,native,directory,rank))
     collective_call(world,lambda:save(directory/('prepared-rank%d.json'%rank),dict(
-        schema='sol61.finite-velocity-vlasov-poisson@1',rank=rank,ranks=ranks,
+        schema='sol61.finite-velocity-vlasov-poisson@2',rank=rank,ranks=ranks,
         dt=[DT.numerator,DT.denominator],steps=2,cells=[4,8],axes=['velocity','position'],
+        array_axes={'a_spectator':['component','position','velocity'],
+                    'm_number':['component','inactive','position'],
+                    'z_phase':['component','position','velocity']},
         velocity_boundary='zero flux',position_boundary='periodic',epsilon=1,
         charge=1,background_charge=-1,gauge='mean zero',temporal_method='SSPRK2',
         field_at_each_stage=True,actual_model_sources_before_bind=True,
         artifact=artifact.artifact_identity.token,native=pin(Path(native.__file__).resolve()),
         full_field_image_received=False,ghost_formula_received=False,root_received=False)))
     f=initial()
-    initial_state={'z_phase':f[None,:,:], 'm_number':(.5*f.sum(axis=0))[None,:,None],
-        'a_spectator':np.stack((np.full((4,8),7.),np.full((4,8),-13.)))}
+    initial_state={'z_phase':f.T[None,:,:].copy(), 'm_number':(.5*f.sum(axis=0))[None,None,:].copy(),
+        'a_spectator':np.stack((np.full((8,4),7.),np.full((8,4),-13.)))}
     runtime=collective_call(world,lambda:pops.bind(artifact,initial_state=initial_state,
         resources={'execution_context':artifact_execution_context(artifact)}))
     def capture(label):
@@ -74,7 +77,7 @@ def test_installed_two_stage_vlasov_poisson(tmp_path,record_property,
         cursors=collective_call(world,lambda:runtime.consumer_cursors.to_data())
         owners={name:collective_call(world,lambda name=name:runtime.local_boxes(name)) for name in NAMES}
         def receipt(complete):
-            save(directory/('%s-rank%d.json'%(label,rank)),dict(schema='sol61.vp-state@1',
+            save(directory/('%s-rank%d.json'%(label,rank)),dict(schema='sol61.vp-state@2',
                 phase=label,rank=rank,ranks=ranks,clock=clock,consumer_cursors=cursors,
                 local_boxes=owners,files=files,capture_complete=complete,
                 storage_route='public composite checkpoint',ghost_formula_received=False))
@@ -112,10 +115,10 @@ def test_installed_two_stage_vlasov_poisson(tmp_path,record_property,
         with collective_check(world):
             result=np.load(actual['z_phase']['file'],allow_pickle=False)
             assert np.isfinite(result).all() and np.min(result)>0
-            np.testing.assert_allclose(result,expected[None,:,:],rtol=0,atol=2e-11)
+            np.testing.assert_allclose(result,expected.T[None,:,:],rtol=0,atol=2e-11)
             # This State stores the last predictor moment, not an endpoint Field cache.
             np.testing.assert_allclose(np.load(actual['m_number']['file'],allow_pickle=False),
-                stages['predictor_rho'][None,:,None],rtol=0,atol=2e-11)
+                stages['predictor_rho'][None,None,:],rtol=0,atol=2e-11)
             np.testing.assert_array_equal(np.load(actual['a_spectator']['file'],allow_pickle=False),initial_state['a_spectator'])
             assert runtime.time()==index*float(DT) and runtime.macro_step()==index
     record_property('vp_receipt',str(directory/('prepared-rank%d.json'%rank)))
