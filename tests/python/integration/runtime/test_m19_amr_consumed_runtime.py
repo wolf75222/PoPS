@@ -1,4 +1,4 @@
-"""Future installed SDK ABI10 witness; Source collection is not Native reception."""
+"""Installed SDK witness requiring the current published ABI; Source collection is not Native reception."""
 
 import hashlib
 import json
@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import numpy as np
 import pops
+from pops._generated_release_contract import NATIVE_ABI_VERSION
 import pytest
 from tests.python.support.m19_amr_consumed_case import build, NAMES, DT
 from tests.python.support.collective_checks import (
@@ -56,7 +57,9 @@ def test_installed_amr_consumed_field_regrid_and_nonfinite_rollback(
             Path(pops.__file__).resolve().is_relative_to(Path(__import__("sys").prefix).resolve())
         )
         caps = native.module_capabilities("production")
-        assert caps["abi_version"] == 10 and caps["mapped_consumed_field_output_amr"] is True
+        assert type(caps["abi_version"]) is int
+        assert caps["abi_version"] == NATIVE_ABI_VERSION
+        assert caps["mapped_consumed_field_output_amr"] is True
     # One elected writer publishes the authenticated test component package; peers only load it.
     resolved = collective_call(
         world, lambda: build(directory / "providers", reverse=reverse) if rank == 0 else None
