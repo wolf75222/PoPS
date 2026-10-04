@@ -645,7 +645,8 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
         # for_each_cell kernel (see _emit_coupled_rate_kernel). The lowering reaches the operator
         # body (its per-block component formulas) through the BOUND registry, and binds each input
         # state's cons names from that input's StateSpace -- so the operator must be bound and the
-        # formulas must be cons-only (the MVP). Validate both here so a non-lowerable coupled_rate
+        # explicit formulas may read declared pointwise providers from the exact operator owner.
+        # Implicit auxiliary and primitive recipes remain deferred. Validate here so a non-lowerable coupled_rate
         # fails loud naming ADC-457, never emits an undefined reference.
         _coupled_rate_components(program, v, model)
         return

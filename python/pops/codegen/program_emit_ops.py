@@ -599,6 +599,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # states are co-located (same ba/dm as the System aux), so a single shared loop is sound
         # (the same co-distribution every aux-reading kernel relies on; see _kernel_open).
         components = _coupled_rate_components(program, v, model)
+        from .program_emit_control import _coupled_rate_provider_binding
+        provider_impl, provider_binding = _coupled_rate_provider_binding(
+            components, model, v, provider_plans)
+        provider_kwargs = {}
+        if provider_binding is not None:
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            stage = evaluation_stage_fraction(v, ark_partition="explicit")
+            evaluation_prelude.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+            provider_kwargs = dict(provider_impl=provider_impl, provider_binding=provider_binding,
+                                   program_block=bidx)
         by_block = {s.block: s for s in v.inputs}
         if target == "system":
             for block in components:
@@ -629,7 +639,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 lines.append("auto& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
                              % (reason, v.id, scratch[driver]))
             lines += _emit_coupled_rate_kernel(components, by_block, var, scratch,
-                                               status=status, active_mask=active, reason=reason)
+                                               status=status, active_mask=active, reason=reason,
+                                               **provider_kwargs)
             from pops.time.references import canonical_handle
             identity = canonical_handle(v.attrs["operator_handle"]).qualified_id
             lines.append("const pops::Real joint_collective_status_%d = "
@@ -643,7 +654,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("ctx.consume_pointwise_evaluation_status(%d, %d, joint_collective_status_%d, %s, %s);"
                          % (index, v.id, v.id, json.dumps(identity), reason_cpp))
         else:
-            lines += _emit_coupled_rate_kernel(components, by_block, var, scratch)
+            lines += _emit_coupled_rate_kernel(components, by_block, var, scratch, **provider_kwargs)
         # Per-block names live in this emission's local token table. Codegen is a pure read of the
         # Program: repeated emission never writes scratch metadata back into frozen authoring state.
         var.update({("coupled_scratch", v.id, blk): scratch[blk] for blk in scratch})

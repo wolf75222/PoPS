@@ -206,11 +206,12 @@ def _component_sources(
 
 def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch: Any, *,
                               status: str | None = None, active_mask: str | None = None,
-                              reason: str | None = None) -> list:
+                              reason: str | None = None, provider_impl: Any = None,
+                              provider_binding: Any = None, program_block: Any = None) -> list:
     """Lower a ``coupled_rate`` (Spec 3 criterion 27, ADC-457) to ONE multi-state for_each_cell kernel
     filling every participating block's rate scratch at once.
 
-    @p components: ``{block: [Expr, ...]}`` -- the per-block component formulas (cons-only MVP).
+    @p components: ``{block: [Expr, ...]}`` -- exact state and declared provider formulas.
     @p by_block:   ``{block: state Value}`` -- each block's input state (its StateSpace gives the cons
                    names + their component indices; its C++ token gives the ranked read FieldView).
     @p var:        the id -> C++ token map (the input states are already bound to ``ctx.state(idx)``).
@@ -230,13 +231,23 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     for comps in components.values():
         for e in comps:
             referenced |= e.deps()
+    roots = [e for blk in blocks for e in components[blk]]
+    if provider_binding is not None:
+        referenced -= set(provider_binding["slots"])
     cons_source = _component_sources(
         referenced, by_block, lambda state, index: (var[state.id], index))
 
     def state_handle(token: Any) -> str:
         return "%sA" % token                     # read handle for an input state token (u0A / u1A)
 
-    lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
+    from .program_emit_kernels import _prepare_provider_values
+    provider_state = var[next(iter(by_block.values())).id]
+    lines = _prepare_provider_values(provider_binding, program_block, provider_state)
+    lines.append("for (int li = 0; li < %s.local_size(); ++li) {" % driver)
+    if provider_binding is not None:
+        import json
+        lines.append("  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
+                     % (provider_binding["count"], json.dumps(provider_binding["qid"]), program_block))
     # Bind a write handle per OUTPUT block scratch, then a read handle per DISTINCT input state that a
     # formula actually reads (incl. a read-only catalyst input that is not an output block), all inside
     # the per-fab loop and BEFORE for_each_cell so the device lambda captures them by value.
@@ -275,8 +286,11 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     for c in sorted(cons_source):                # bind only the referenced cons (no unused locals)
         tok, idx = cons_source[c]
         lines.append("    const pops::Real %s = %s(index, %d);" % (c, state_handle(tok), idx))
+    if provider_binding is not None:
+        lines += ["    " + line for line in _cell_locals(
+            provider_impl, roots, provider_state, with_cons=False, with_prim=False,
+            provider_binding=provider_binding)]
     from .cpp_writer import _cse_emit
-    roots = [e for blk in blocks for e in components[blk]]
     declarations, rendered, native_results = _cse_emit(
         roots, "pops::Real", "    ", return_native_statuses=True)
     if native_results and status is None:

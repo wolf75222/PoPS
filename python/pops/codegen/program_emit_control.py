@@ -44,7 +44,7 @@ def _detached_coupled_quantity_identity(quantity: Any, source: Any) -> Any:
 
 def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dict:
     """Resolve a ``coupled_rate`` node @p v to its per-block component formulas (Spec 3 criterion
-    27, ADC-457), validated for the cons-only MVP. Returns ``{block: [Expr, ...]}`` (one formula
+    27, ADC-457), with exact state and explicit provider bindings. Returns ``{block: [Expr, ...]}`` (one formula
     per component of that block's StateSpace).
 
     The component formulas live in the BOUND operator's body (``op.body`` = the ``expr=`` dict
@@ -52,7 +52,7 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     names; the input states' cons names come from each input value's StateSpace (set by
     ``T.state(block, U)``). Raises a clear NotImplementedError naming ADC-457 when a coupled_rate
     cannot lower in this MVP: no bound registry, no operator body, a block whose component count
-    does not match its StateSpace, or a formula referencing a non-cons (prim / aux) Var."""
+    does not match its StateSpace, or an unsupported primitive/implicit auxiliary read."""
     from pops._ir.expr import Var
     from pops._ir.quantity import QuantityRef
     from pops._ir.application import substitute_quantities
@@ -182,7 +182,8 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
                 "node %r)" % (op_name, blk, len(comps), ncons, v.name))
         for e in comps:
             for node in _walk_expr(e):
-                if isinstance(node, Var) and node.kind != "cons":
+                if isinstance(node, Var) and node.kind != "cons" and not (
+                        v.op == "coupled_rate" and node.kind == "aux"):
                     raise NotImplementedError(
                         "coupled_rate formulas referencing prim/aux vars are deferred (ADC-457): "
                         "operator %r block %r references %s var %r; the MVP per-cell binding is "
@@ -204,9 +205,22 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     all_cons.update(component for component, count in counts.items() if count == 1)
     all_cons.update(private_symbols)
     referenced = set()
+    auxiliary = set()
+    conservative = set()
     for comps in components.values():
         for e in comps:
             referenced |= e.deps()
+            for node in _walk_expr(e):
+                if isinstance(node, Var):
+                    (auxiliary if node.kind == "aux" else conservative).add(node.name)
+    if auxiliary & conservative:
+        raise ValueError("coupled_rate auxiliary and conservative variables share a local name")
+    referenced -= auxiliary
+    if auxiliary:
+        # Validate before emission against the exact operator owner, never the first
+        # input block's representative model. The existing ProviderPack owns the ABI.
+        from .program_emit_kernels import ProgramProviderPlans
+        _coupled_rate_provider_binding(components, authority, v, ProgramProviderPlans())
     ambiguous = sorted(
         component for component, count in counts.items()
         if count > 1 and component in referenced)
@@ -222,6 +236,25 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
             "state; declare them via T.state(block[U]) or fix the formula (ADC-457, node %r)"
             % (op_name, sorted(missing), v.name))
     return components
+
+
+def _coupled_rate_provider_binding(components: Any, authority: Any, value: Any,
+                                   plans: Any) -> tuple[Any, Any]:
+    """Bind declared pointwise providers for this exact explicit coupled operator."""
+    from .program_models import ProgramModelGraph
+    from .program_emit_kernels import _model_impl, program_provider_consumer_qid
+
+    roots = [expression for row in components.values() for expression in row]
+    if not any(getattr(node, "kind", None) == "aux"
+               for root in roots for node in _walk_expr(root)):
+        return None, None
+    if type(authority) is not ProgramModelGraph:
+        raise ValueError("coupled_rate providers require the exact ProgramModelGraph authority")
+    owner_model = authority.model_for_owner(value.attrs["operator_handle"].owner_path)
+    impl = _model_impl(owner_model)
+    binding = plans.bind(impl, roots, program_provider_consumer_qid(
+        authority, value.id, value.block))
+    return impl, binding
 
 def _walk_expr(e: Any) -> Any:
     """Yield every node of a dsl Expr tree (used to scan a coupled_rate formula for non-cons Vars)."""
