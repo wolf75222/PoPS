@@ -6,7 +6,7 @@ from tests.python.integration.native_loader.test_external_field_solver_runtime i
 def fault_source(manifest):
     source = _solver_source(
         manifest,
-        extra_includes="#include <stdexcept>\n#include <sys/mman.h>\n#include <fcntl.h>\n#include <unistd.h>\n#include <fstream>\n#include <cstdlib>\n#include <new>",
+        extra_includes="#include <cstdint>\n#include <stdexcept>\n#include <sys/mman.h>\n#include <fcntl.h>\n#include <unistd.h>\n#include <fstream>\n#include <cstdlib>\n#include <new>",
         solve_observer_statement="++control->callbacks;",
     )
     source = source.replace(
