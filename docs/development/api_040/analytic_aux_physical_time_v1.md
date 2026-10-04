@@ -24,6 +24,8 @@ existing rank agreement includes the full boundary before publication. A missing
 temporal payload or another Clock is refused before a temporal kernel. The existing
 stage-state layout validation and evaluation sequence bind the consumer invocation;
 analytic expressions do not read mutable state leaves.
+Because the C++ Rational fields are mutable, the boundary and lease validate a
+positive denominator, range and canonical form before invoking rational arithmetic.
 
 Point contract version 3 adds an optional physical lease. Cache equality includes
 its rational fraction and exact binary64 dt/time bytes, along with all former

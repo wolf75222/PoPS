@@ -329,8 +329,10 @@ AuxiliaryPublicationStatus System<Dim>::prepare_program_auxiliary_consumer_for_s
   std::exception_ptr preflight_error;
   try {
     if (point.clock.empty() || point.tick != p_->macro_step_ || point.level != 0 ||
-        point.substep < 0 || point.stage < 0 || point.stage_fraction < amr::Rational(0, 1) ||
-        amr::Rational(1, 1) < point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
+        point.substep < 0 || point.stage < 0 || point.stage_fraction.denominator <= 0 ||
+        point.stage_fraction.numerator < 0 ||
+        point.stage_fraction.numerator > point.stage_fraction.denominator ||
+        amr::Rational(point.stage_fraction.numerator, point.stage_fraction.denominator) != point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
         !std::isfinite(point.physical_time) || evaluation_sequence < 0)
       throw std::invalid_argument("Program auxiliary read requires its complete current point");
     const auto& accepted = block_state(block);

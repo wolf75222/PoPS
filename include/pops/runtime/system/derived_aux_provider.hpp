@@ -293,8 +293,11 @@ struct AuxiliaryPhysicalEvaluation {
   double physical_time = 0;
 
   void validate() const {
-    if (stage_fraction < ::pops::amr::Rational(0, 1) ||
-        ::pops::amr::Rational(1, 1) < stage_fraction || !std::isfinite(dt) || dt <= 0 ||
+    // Rational fields are public: authenticate canonical form before invoking arithmetic.
+    if (stage_fraction.denominator <= 0 || stage_fraction.numerator < 0 ||
+        stage_fraction.numerator > stage_fraction.denominator ||
+        ::pops::amr::Rational(stage_fraction.numerator, stage_fraction.denominator) != stage_fraction ||
+        !std::isfinite(dt) || dt <= 0 ||
         !std::isfinite(physical_time))
       throw std::invalid_argument("auxiliary physical evaluation requires an exact finite stage");
   }

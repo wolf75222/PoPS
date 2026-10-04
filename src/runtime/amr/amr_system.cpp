@@ -12179,8 +12179,10 @@ void AmrSystem<Dim>::prepare_single_level_program_auxiliary_consumer(
     if (p_->engine->hierarchy().num_levels() != 1 || point.level != 0)
       throw std::invalid_argument("AMR flat auxiliary read requires exactly one live level");
     if (point.clock.empty() || point.tick != p_->macro_step || point.substep < 0 ||
-        point.stage < 0 || point.stage_fraction < amr::Rational(0, 1) ||
-        amr::Rational(1, 1) < point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
+        point.stage < 0 || point.stage_fraction.denominator <= 0 ||
+        point.stage_fraction.numerator < 0 ||
+        point.stage_fraction.numerator > point.stage_fraction.denominator ||
+        amr::Rational(point.stage_fraction.numerator, point.stage_fraction.denominator) != point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
         !std::isfinite(point.physical_time) || evaluation_sequence < 0)
       throw std::invalid_argument("AMR Program auxiliary read requires its complete current point");
     if (block < 0 || static_cast<std::size_t>(block) >= p_->blocks.size())

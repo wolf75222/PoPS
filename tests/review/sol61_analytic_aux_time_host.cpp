@@ -89,10 +89,13 @@ void check(pops::Index<2> upper) {
   }
   {auto changed=retry;++changed.layout_generation;auto tx=registry.begin_publication(changed,{}, {"actual-read"});require(tx.requires_staging("actual-emitted-time"));tx.reject();}
   auto snapshot=values(accepted);const auto accepted_generation=registry.accepted_generation();
-  for(int mutation=0;mutation<3;++mutation){
+  for(int mutation=0;mutation<6;++mutation){
     auto wrong=retry;if(mutation==0)wrong.clock="foreign logical Clock";
     if(mutation==1)wrong.physical_evaluation.reset();
     if(mutation==2)wrong.physical_evaluation->physical_time=std::numeric_limits<double>::quiet_NaN();
+    if(mutation==3)wrong.physical_evaluation->stage_fraction.denominator=0;
+    if(mutation==4)wrong.physical_evaluation->stage_fraction.denominator=-1;
+    if(mutation==5){wrong.physical_evaluation->stage_fraction.numerator=2;wrong.physical_evaluation->stage_fraction.denominator=4;}
     bool refused=false;try{auto candidate=accepted;auto tx=registry.begin_publication(wrong,{}, {"actual-read"});
       require(tx.requires_staging("actual-emitted-time"));
       tx.launch_ready_native({&accepted,&candidate,&geometry});tx.accept();}
