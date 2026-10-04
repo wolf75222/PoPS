@@ -1,5 +1,6 @@
 {
   "_meta": {
+    "api040_named_device_kernel_estimate_source": "Unmeasured scheduling seed added 2026-10-04 for test_elliptic_named_device_kernels: catalog median 2.0 s, following estimate_policy. Replace from the next complete CI timing artifact. Host correctness runs are not cold-CI build or CTest timing measurements.",
     "captured_utc": "2026-07-26",
     "default_parallel_share_seconds": 2.0,
     "estimate_policy": "new unmeasured targets use a conservative analogous-target estimate, falling back to the catalog median until the next cold-CI timing refresh",
@@ -26,6 +27,7 @@
       "test_composite_fac_fft_coarse",
       "test_composite_fac_variable_k",
       "test_composite_general_field",
+      "test_elliptic_named_device_kernels",
       "test_float32_poisson_residual",
       "test_generated_amr_system_block",
       "test_generated_stability_speed",
@@ -74,7 +76,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 199,
+    "target_count": 200,
     "v12_estimate_source": "No per-target cold-build receipt exists. History snapshot and AMR transition use the 300 s heavy-template tier; collective rejection uses the 2 s parallel-share floor. Replace from the next complete cold-CI build timing artifact.",
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor",
     "v18_estimate_source": "Unmeasured scheduling estimates: AMR publication and general composite solver use the existing 300 s heavy-template tier; small runtime contracts use the 2 s parallel-share floor. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -172,6 +174,7 @@
   "test_dispatch_tags": 2.0,
   "test_elliptic_composite_rhs": 2.0,
   "test_elliptic_interface": 2.0,
+  "test_elliptic_named_device_kernels": 2.0,
   "test_elliptic_operator": 2.0,
   "test_elliptic_problem": 2.0,
   "test_embedded_boundary_generic": 2.0,

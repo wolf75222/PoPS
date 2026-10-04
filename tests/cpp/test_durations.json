@@ -1,5 +1,6 @@
 {
   "_meta": {
+    "api040_named_device_kernel_estimate_source": "Unmeasured scheduling seed added 2026-10-04 for test_elliptic_named_device_kernels: catalog median 0.05 s, following estimate_policy. Replace from the next complete CI timing artifact. Host correctness runs are not cold-CI build or CTest timing measurements.",
     "captured_utc": "2026-07-26",
     "ctest_parallel_jobs": 4,
     "estimate_policy": "new unmeasured targets use a conservative analogous-target estimate, falling back to the catalog median until the next CTest timing refresh",
@@ -25,6 +26,7 @@
       "test_composite_fac_fft_coarse",
       "test_composite_fac_variable_k",
       "test_composite_general_field",
+      "test_elliptic_named_device_kernels",
       "test_float32_poisson_residual",
       "test_generated_amr_system_block",
       "test_generated_stability_speed",
@@ -73,7 +75,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 199,
+    "target_count": 200,
     "unit_seconds": "aggregate CTest wall time per build target",
     "v12_estimate_source": "The edd85c10f6184e7b14b048ee16d5cc39bc606b62 full CTest diagnostic observed approximately 0.7 s history-snapshot, 0.52 s AMR-transition, and 0.5 s collective-rejection aggregate work. Each is conservatively scheduled at 1 s; these are scheduling estimates, not controlled performance measurements.",
     "v18_estimate_source": "Unmeasured analogous-target scheduling estimates: AMR publication uses test_amr_program_diffusion; general composite field uses test_composite_fac_variable_k; physical support transfer uses test_nd_transfer; prepared resource cache uses test_cache_manager. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -176,6 +178,7 @@
   "test_dispatch_tags": 0.01,
   "test_elliptic_composite_rhs": 0.02,
   "test_elliptic_interface": 0.02,
+  "test_elliptic_named_device_kernels": 0.05,
   "test_elliptic_operator": 0.03,
   "test_elliptic_problem": 0.06,
   "test_embedded_boundary_generic": 0.7,
