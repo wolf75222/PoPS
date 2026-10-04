@@ -11439,9 +11439,7 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
   try {
     if (p_->restart_auxiliary_replacement_pending)
       throw std::logic_error("AMR auxiliary checkpoint cannot capture provisional restart storage");
-    if (!p_->dirty_auxiliary_providers.empty())
-      throw std::logic_error(
-          "AMR auxiliary checkpoint refuses dirty provider state before accepted publication");
+
     const auto& groups = p_->prepared_hierarchy->provider_storage;
     const auto& registries = p_->prepared_hierarchy->auxiliary_registries;
     if (groups.size() != registries.size())
@@ -11457,7 +11455,10 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
     for (std::size_t level = 0; level < registries.size(); ++level) {
       if (!groups[level])
         throw std::logic_error("AMR auxiliary checkpoint has an empty level carrier");
-      auto accepted = runtime::system::capture_auxiliary_checkpoint_state(registries[level]);
+      if (registries[level].has_pending_publication())
+        throw std::logic_error("AMR auxiliary checkpoint refuses pending publication");
+      auto accepted = runtime::system::capture_auxiliary_checkpoint_state(
+          registries[level], p_->dirty_auxiliary_providers);
       runtime::system::require_auxiliary_checkpoint_storage(accepted, *groups[level]);
       const Box<Dim>& domain = p_->engine->hierarchy().layout(level).domain();
       payloads[level].reserve(accepted.groups.size());
@@ -11850,7 +11851,8 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_auxiliary_level_c
   std::size_t metadata_bytes = 0;
   std::size_t components = 0;
   for (const auto& registry : p_->prepared_hierarchy->auxiliary_registries) {
-    const auto state = runtime::system::capture_auxiliary_checkpoint_state(registry);
+    const auto state = runtime::system::capture_auxiliary_checkpoint_state(
+        registry, p_->dirty_auxiliary_providers);
     metadata_bytes = std::max(metadata_bytes,
                               runtime::system::serialize_auxiliary_checkpoint_state(state).size());
     std::size_t level_components = 0;
@@ -11884,8 +11886,12 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
   try {
     if (p_->restart_transaction_committed)
       throw std::logic_error("AMR auxiliary checkpoint cannot change a committed restart");
-    if (!p_->dirty_auxiliary_providers.empty())
-      throw std::logic_error("AMR auxiliary checkpoint restore refuses dirty live provider state");
+    for (const auto& registry : p_->prepared_hierarchy->auxiliary_registries) {
+      if (registry.has_pending_publication())
+        throw std::logic_error("AMR auxiliary checkpoint restore refuses pending publication");
+      (void)runtime::system::capture_auxiliary_checkpoint_state(
+          registry, p_->dirty_auxiliary_providers);
+    }
     const auto& groups = p_->prepared_hierarchy->provider_storage;
     const auto& registries = p_->prepared_hierarchy->auxiliary_registries;
     const auto& transaction_groups = p_->prepared_hierarchy->provider_candidate_storage;
@@ -11928,12 +11934,17 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
   std::vector<std::unique_ptr<storage_type>> accepted_candidates;
   std::vector<std::unique_ptr<storage_type>> transaction_candidates;
   std::vector<registry_type> candidate_registries;
+  decltype(p_->dirty_auxiliary_providers) candidate_dirty;
   std::exception_ptr preparation_error;
   try {
     accepted_candidates.reserve(state.size());
     transaction_candidates.reserve(state.size());
     candidate_registries = p_->prepared_hierarchy->auxiliary_registries;
+    // Invalidation is hierarchy-wide; every level must retain the same lazy authority.
+    if (!state.empty()) candidate_dirty = state.front().invalidated_providers;
     for (std::size_t level = 0; level < state.size(); ++level) {
+      if (state[level].invalidated_providers != candidate_dirty)
+        throw std::invalid_argument("AMR auxiliary checkpoint level invalidations differ");
       const auto& live = p_->prepared_hierarchy->provider_storage[level];
       if (!live)
         throw std::logic_error("AMR auxiliary checkpoint has an empty accepted carrier");
@@ -11965,7 +11976,7 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
     runtime::system::restore_auxiliary_checkpoint_state(state[level], candidate_registries[level],
                                                         lane);
 
-  // POPSAUX2 stores valid values and accepted provider freshness, not numerical halos. Restore
+  // POPSAUX2/3 stores valid values and accepted provider provenance, not numerical halos. Restore
   // the latter through the declared hierarchy/physical producers before publishing that freshness.
   // In particular, a fine route must read its restored private parent, never the live provisional
   // carrier. No provider is reevaluated and these ghost producers do not alter valid values.
@@ -12051,7 +12062,7 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
   static_assert(std::is_nothrow_swappable_v<
                 typename decltype(p_->prepared_hierarchy->provider_storage)::value_type>);
   static_assert(noexcept(p_->prepared_hierarchy->auxiliary_registries.swap(candidate_registries)));
-  static_assert(noexcept(p_->dirty_auxiliary_providers.clear()));
+  static_assert(noexcept(p_->dirty_auxiliary_providers.swap(candidate_dirty)));
   for (std::size_t level = 0; level < state.size(); ++level) {
     p_->prepared_hierarchy->provider_storage[level].swap(accepted_candidates[level]);
     p_->prepared_hierarchy->provider_candidate_storage[level].swap(transaction_candidates[level]);
@@ -12060,7 +12071,7 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
         next_candidate_identity[level]);
   }
   p_->prepared_hierarchy->auxiliary_registries.swap(candidate_registries);
-  p_->dirty_auxiliary_providers.clear();
+  p_->dirty_auxiliary_providers.swap(candidate_dirty);
   if (p_->restart_transaction && !p_->restart_transaction_committed)
     p_->restart_auxiliary_replacement_pending = false;
 }

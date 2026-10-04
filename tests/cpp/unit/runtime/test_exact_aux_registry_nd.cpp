@@ -853,3 +853,68 @@ TEST(ExactAuxiliaryRegistryNd, EmptyAuxiliaryCheckpointAttestationIsExactAndFail
 }
 
 }  // namespace
+
+namespace {
+template <int Dim>
+void verifies_lazy_checkpoint_invalidations() {
+  using namespace pops::runtime::system;
+  auto calls = std::make_shared<std::vector<std::string>>();
+  auto registry = accepted_registry_for_checkpoint<Dim>(calls);
+  const auto initial_launches = calls->size();
+  const auto clean = capture_auxiliary_checkpoint_state(registry);
+  const auto clean_bytes = serialize_auxiliary_checkpoint_state(clean);
+  EXPECT_EQ(clean_bytes[7], '2');
+  EXPECT_EQ(serialize_auxiliary_checkpoint_state(deserialize_auxiliary_checkpoint_state<Dim>(clean_bytes)), clean_bytes);
+  const auto stale = capture_auxiliary_checkpoint_state(registry, {"checkpoint/derived"});
+  const auto stale_bytes = serialize_auxiliary_checkpoint_state(stale);
+  EXPECT_EQ(stale_bytes[7], '3');
+  const auto decoded = deserialize_auxiliary_checkpoint_state<Dim>(stale_bytes);
+  EXPECT_EQ(decoded, stale);
+  EXPECT_EQ(decoded.providers, clean.providers);
+  EXPECT_EQ(calls->size(), initial_launches); // capture/codec never evaluates a lazy provider
+  auto restored = registry;
+  restore_auxiliary_checkpoint_state(decoded, restored);
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored, decoded.invalidated_providers), stale);
+  EXPECT_EQ(calls->size(), initial_launches);
+  {
+    auto rejected = restored.begin_publication(point("checkpoint-clock", 2, AuxiliaryEvaluationEvent::before_residual), decoded.invalidated_providers);
+    rejected.launch_ready_native();
+    rejected.reject();
+  }
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored, decoded.invalidated_providers), stale);
+  {
+    auto retry = restored.begin_publication(point("checkpoint-clock", 2, AuxiliaryEvaluationEvent::before_residual), decoded.invalidated_providers);
+    retry.launch_ready_native(); retry.accept();
+  }
+  EXPECT_EQ(calls->size(), initial_launches + 2);
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored).invalidated_providers.size(), 0U);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"checkpoint/input"}), std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"foreign"}), std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"checkpoint/derived", "checkpoint/derived"}), std::invalid_argument);
+  auto bad = stale;
+  for (auto& provider : bad.providers)
+    if (provider.identity == "checkpoint/derived") provider.accepted_point.reset();
+  EXPECT_THROW((void)serialize_auxiliary_checkpoint_state(bad), std::invalid_argument);
+  auto empty_extension = clean_bytes;
+  empty_extension[7] = '3'; empty_extension.insert(empty_extension.end(), 8, 0);
+  EXPECT_THROW((void)deserialize_auxiliary_checkpoint_state<Dim>(empty_extension), std::runtime_error);
+  auto unsupported = clean_bytes; unsupported[7] = '4';
+  EXPECT_THROW((void)deserialize_auxiliary_checkpoint_state<Dim>(unsupported), std::runtime_error);
+  ExactAuxiliaryRegistry<Dim> initial;
+  auto unaccepted_output = output<Dim>("initial/owner", "gain", "value", 0);
+  initial.add(derived<Dim>("initial/derived", unaccepted_output, {}, calls));
+  initial.seal();
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(initial, {"initial/derived"}), std::invalid_argument);
+  auto truncated = stale_bytes; truncated.pop_back();
+  EXPECT_THROW((void)deserialize_auxiliary_checkpoint_state<Dim>(truncated), std::runtime_error);
+  auto foreign = stale; foreign.registry_contract += "foreign";
+  const auto before = capture_auxiliary_checkpoint_state(restored);
+  EXPECT_THROW(restore_auxiliary_checkpoint_state(foreign, restored), std::invalid_argument);
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored), before);
+}
+TEST(ExactAuxiliaryRegistryNd, LazyInvalidationsRoundTripWithoutPublishingAndRefreshOnlyOnConsumer) {
+  verifies_lazy_checkpoint_invalidations<1>();
+  verifies_lazy_checkpoint_invalidations<2>();
+  verifies_lazy_checkpoint_invalidations<3>();
+}
+} // namespace

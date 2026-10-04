@@ -962,7 +962,7 @@ class AmrSystem {
   /// Exact pending provider identities retained by accepted rollback snapshots.
   [[nodiscard]] POPS_EXPORT std::vector<std::string> dirty_auxiliary_provider_identities() const;
   /// Rank-local capacity derived from the qualified provider registries. The pair is the largest
-  /// payload-free POPSAUX2 image and scalar width of one full-domain level.
+  /// payload-free POPSAUX2/3 image and scalar width of one full-domain level.
   [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t>
   checkpoint_auxiliary_level_capacity() const;
   /// Restore only after the caller has staged compatible rank-local group payloads privately.  A
@@ -970,7 +970,7 @@ class AmrSystem {
   /// exposing a partial accepted generation.
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state(
       const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state);
-  /// Decode every sealed level POPSAUX2 image inside the prepared hierarchy lane while one native
+  /// Decode every sealed level POPSAUX2/3 image inside the prepared hierarchy lane while one native
   /// restart transaction owns rollback authority. The complete decoded vector is consensus-closed
   /// before the typed restore enters finite/registry phases; this route never lazily builds an
   /// engine or selects a process-global communicator.

@@ -723,10 +723,10 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
   std::string layout_contract;
   std::exception_ptr preparation_error;
   try {
-    if (!p_->dirty_auxiliary_providers_.empty())
-      throw std::logic_error(
-          "System auxiliary checkpoint refuses dirty provider state before accepted publication");
-    result = runtime::system::capture_auxiliary_checkpoint_state(p_->auxiliary_registry_);
+    if (p_->auxiliary_registry_.has_pending_publication())
+      throw std::logic_error("System auxiliary checkpoint refuses pending publication");
+    result = runtime::system::capture_auxiliary_checkpoint_state(
+        p_->auxiliary_registry_, p_->dirty_auxiliary_providers_);
     if (result.groups.empty()) {
       if (p_->provider_carrier_)
         throw std::logic_error("System auxiliary checkpoint has storage without registry groups");
@@ -830,7 +830,8 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
 
 template <int Dim>
 std::pair<std::size_t, std::size_t> System<Dim>::checkpoint_auxiliary_capacity() const {
-  const auto state = runtime::system::capture_auxiliary_checkpoint_state(p_->auxiliary_registry_);
+  const auto state = runtime::system::capture_auxiliary_checkpoint_state(
+      p_->auxiliary_registry_, p_->dirty_auxiliary_providers_);
   std::size_t components = 0;
   for (const auto& group : state.groups) {
     if (group.component_count > std::numeric_limits<std::size_t>::max() - components)
@@ -847,8 +848,10 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
   std::string collective_contract;
   std::exception_ptr preflight_error;
   try {
-    if (!p_->dirty_auxiliary_providers_.empty())
-      throw std::logic_error("System auxiliary checkpoint restore refuses dirty live providers");
+    if (p_->auxiliary_registry_.has_pending_publication())
+      throw std::logic_error("System auxiliary checkpoint restore refuses pending publication");
+    (void)runtime::system::capture_auxiliary_checkpoint_state(
+        p_->auxiliary_registry_, p_->dirty_auxiliary_providers_);
     if (state.groups.empty()) {
       if (p_->provider_carrier_)
         throw std::invalid_argument(
@@ -910,6 +913,7 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
   decltype(p_->dirty_auxiliary_providers_) candidate_dirty;
   std::exception_ptr candidate_error;
   try {
+    candidate_dirty = state.invalidated_providers;
     candidate_registry.emplace(p_->auxiliary_registry_);
     if (p_->provider_carrier_) {
       candidate_carrier.emplace(*p_->provider_carrier_);

@@ -352,10 +352,10 @@ class _SystemIO(_System):
         out["state_carriers_checkpoint"] = np.frombuffer(state_carriers, dtype=np.uint8).copy()
         auxiliary_checkpoint = self._s.capture_auxiliary_checkpoint_accepted_state()
         if type(auxiliary_checkpoint) is not bytes or not auxiliary_checkpoint.startswith(
-            b"POPSAUX2"
+            (b"POPSAUX2", b"POPSAUX3")
         ):
             raise RuntimeError(
-                "native Uniform exact auxiliary checkpoint is not a POPSAUX2 bytes image"
+                "native Uniform exact auxiliary checkpoint is not a POPSAUX2/3 bytes image"
             )
         out["auxiliary_checkpoint"] = np.frombuffer(auxiliary_checkpoint, dtype=np.uint8).copy()
         capture_histories(self._s, prepared.history_plan, out)
@@ -510,8 +510,8 @@ class _SystemIO(_System):
             raise ValueError(
                 "restart: exact auxiliary checkpoint must be a one-dimensional uint8 array"
             )
-        if auxiliary_checkpoint.size < 8 or auxiliary_checkpoint[:8].tobytes() != b"POPSAUX2":
-            raise ValueError("restart: exact auxiliary checkpoint is not POPSAUX2")
+        if auxiliary_checkpoint.size < 8 or auxiliary_checkpoint[:8].tobytes() not in (b"POPSAUX2", b"POPSAUX3"):
+            raise ValueError("restart: exact auxiliary checkpoint is not POPSAUX2/3")
         auxiliary_checkpoint_bytes = auxiliary_checkpoint.tobytes()
         cadence = prepare_program_cadence(
             self._s,
