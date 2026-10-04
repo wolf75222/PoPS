@@ -498,6 +498,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_poisson_smoother_cache
   test_cartesian_poisson_nd
   test_geometric_mg_nd
+  test_elliptic_named_device_kernels
   test_geometric_mg
   test_poisson_convergence
   test_poisson_fft

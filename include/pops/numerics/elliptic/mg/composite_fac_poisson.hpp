@@ -655,8 +655,7 @@ class CompositeFacPoisson {
             continue;
           const auto input = source.fab(local).view();
           const auto output = patch.parent_staging.view();
-          for_each_cell(
-              region, [=] POPS_HD(const Index<Dim>& index) { output(index, 0) = input(index, 0); });
+          for_each_cell(region, detail::CopyScalarKernel<Dim>{output, input});
         }
       }
       Kokkos::fence();
@@ -1530,10 +1529,7 @@ class CompositeFacPoisson {
       const auto in = source.fab(local).view();
       const auto out = destination.fab(local).view();
       const int components = source.ncomp();
-      for_each_cell(source.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        for (int component = 0; component < components; ++component)
-          out(cell, component) = in(cell, component);
-      });
+      for_each_cell(source.box(local), detail::CopyVectorKernel<Dim>{out, in, components});
     }
     Kokkos::fence();
   }
@@ -1724,7 +1720,7 @@ class CompositeFacPoisson {
       const auto values = source.fab(local).view();
       const auto published = destination.fab(local).view();
       for_each_cell(source.fab(local).grown_box(),
-                    [=] POPS_HD(const Index<Dim>& cell) { published(cell, 0) = values(cell, 0); });
+                    detail::CopyScalarKernel<Dim>{published, values});
     }
     Kokkos::fence();
   }

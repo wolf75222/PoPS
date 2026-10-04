@@ -23,6 +23,25 @@
 
 namespace pops {
 
+namespace amr_newton_detail {
+
+// Named at namespace scope so strict NVCC does not enclose a device lambda in
+// the workspace's private projection method. Views remain non-owning captures.
+template <int Dim>
+struct ProjectUnknownsKernel {
+  FieldView<Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  int components = 0;
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    if (!(active(cell, 0) >= Real(0.5)))
+      for (int component = 0; component < components; ++component)
+        values(cell, component) = Real(0);
+  }
+};
+
+}  // namespace amr_newton_detail
+
 /// Persistent nonlinear/Krylov storage for one ordered field vector carried by an exact AMR hierarchy.
 ///
 /// Covered parent cells are excluded from every scalar product through immutable active-cell masks;
@@ -421,11 +440,8 @@ class AmrFieldNewtonKrylovWorkspace final {
           const auto values = fields[level].fab(local).view();
           const auto active = std::as_const(*active_cells_[level]).fab(local).view();
           const int components = fields[level].ncomp();
-          for_each_cell(fields[level].box(local), [=] POPS_HD(const Index<Dim>& cell) {
-            if (!(active(cell, 0) >= Real(0.5)))
-              for (int component = 0; component < components; ++component)
-                values(cell, component) = Real(0);
-          });
+          for_each_cell(fields[level].box(local),
+                        amr_newton_detail::ProjectUnknownsKernel<Dim>{values, active, components});
         }
     });
   }
