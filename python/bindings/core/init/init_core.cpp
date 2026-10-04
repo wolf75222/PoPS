@@ -704,8 +704,8 @@ void init_core(py::module_& m) {
   // pops::module_capabilities() -- the SAME compile-time tokens as the attrs above (POPS_HAS_KOKKOS /
   // POPS_HAS_MPI), never a Python computation. pops._capabilities.inspect_capabilities cross-checks its
   // descriptor walk against this so the two cannot SILENTLY disagree; problem.explain_routes sources the
-  // route matrix from it. We expose kAbiVersion separately (it versions the capability vocabulary, not
-  // the toolchain ABI key) and module_capabilities(target) returns a plain dict (route-dependent: the
+  // route matrix from it. We expose kAbiVersion separately (the native layout/capability revision,
+  // distinct from the full toolchain/header ABI key) and module_capabilities(target) returns a plain dict (route-dependent: the
   // production package carries a stride while the route-agnostic module report does not).
   m.attr("__abi_version__") = static_cast<int>(pops::kAbiVersion);
   m.def(

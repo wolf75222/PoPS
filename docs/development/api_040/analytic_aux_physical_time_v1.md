@@ -54,8 +54,10 @@ signatures. The C++ loader compares the complete TU-local `POPS_ABI_KEY_LITERAL`
 before the package protocol, manifest and registrar callbacks. Builds reporting an
 unknown header signature retain the existing degraded Python guard; use a real
 authenticated SDK and C25 inspection for qualification. This patch does not declare
-binary compatibility or independently change the shared published release ABI;
-ROOT owns that decision and official regeneration after the coherent integration.
+binary compatibility. ROOT's coherent integration advances the shared native ABI
+to11, aligns the module capability constant and officially regenerates the C++/Python
+release products. Header signatures and generated loaders must match the rebuilt
+ABI11 module; the Host proof and earlier ABI10 receipts do not receive that rebuild.
 
 Source proofs cover four complete public compositions, including SSPRK2 fractions
 0 and 1, quarter/three-quarter stages, read-only catalyst and permuted inputs. Real
