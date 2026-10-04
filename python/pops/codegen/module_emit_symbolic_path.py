@@ -1,7 +1,8 @@
 """Emit an authored path body into the existing finite-volume model brick."""
 from __future__ import annotations
 
-from .cpp_writer import _cpp_identifier, _cse_emit
+from .cpp_writer import _cse_emit
+from .cpp_symbols import variable_identifier
 
 
 def _checked_expressions(expressions, indent):
@@ -32,7 +33,7 @@ def emit_symbolic_path_members(model):
         "      result.status = pops::PathStatus::NonFiniteDirection; return result;", "    }",
     ]
     for side in ("left", "right"):
-        lines += ["    const pops::Real %s = %s[%d];" % (_cpp_identifier(symbol.name), side, k)
+        lines += ["    const pops::Real %s = %s[%d];" % (variable_identifier(symbol.name,symbol.kind), side, k)
                   for k, symbol in enumerate(kernel[side + "_symbols"])]
     for axis in range(dimension):
         lines.append("    if (direction[%d] != pops::Real(0)) {" % axis)
@@ -57,7 +58,7 @@ def emit_symbolic_path_members(model):
               "      result.status = pops::PathStatus::NonFiniteInput; return result;", "    }",
               "    for (auto g : direction) if (!std::isfinite(g)) {",
               "      result.status = pops::PathStatus::NonFiniteDirection; return result;", "    }"]
-    lines += ["    const pops::Real %s = state[%d];" % (_cpp_identifier(name), k)
+    lines += ["    const pops::Real %s = state[%d];" % (variable_identifier(name,"cons"), k)
               for k, name in enumerate(model.cons_names)]
     for axis, expressions in enumerate(model._flux.values()):
         lines.append("    if (direction[%d] != pops::Real(0)) {" % axis)

@@ -118,21 +118,23 @@ class _VariablesMixin(_HyperbolicModel):
 
     def _aux_locals_lines(self) -> Any:
         """C++ locals read through exact compact provider-pack slots."""
+        from pops.codegen.cpp_symbols import variable_identifier
         used = self._aux_requirements(self._source_callback_expressions()).get("aux", ())
         return [
             "    const pops::Real %s = pops::provider_value<%d>(a);"
-            % (name, self._consumer_provider_slot("source_default", name))
+            % (variable_identifier(name,'aux'), self._consumer_provider_slot("source_default", name))
             for name in self._provider_components if name in used
         ]
 
     def _projection_provider_locals_lines(self) -> Any:
         """C++ locals read by the pointwise projection from its operator consumer pack."""
         from pops._ir.visitors import _dependencies
+        from pops.codegen.cpp_symbols import variable_identifier
 
         used = _dependencies(self._proj or ())
         return [
             "    const pops::Real %s = pops::provider_value<%d>(a);"
-            % (name, self._consumer_provider_slot("projection", name))
+            % (variable_identifier(name,'aux'), self._consumer_provider_slot("projection", name))
             for name in self._provider_components if name in used
         ]
 
@@ -144,6 +146,7 @@ class _VariablesMixin(_HyperbolicModel):
         ``BoundFluxProviders<Model>`` used by the finite-volume route, while exposing only the
         consumer's resolved pack.
         """
+        from pops.codegen.cpp_symbols import variable_identifier
         expressions = [
             *[expr for values in self._flux.values() for expr in values],
             *self._stability_callback_expressions(),
@@ -151,7 +154,7 @@ class _VariablesMixin(_HyperbolicModel):
         used = self._aux_requirements(expressions).get("aux", ())
         return [
             "    const pops::Real %s = pops::provider_value<%d>(a);"
-            % (name, self._physical_flux_consumer_slot(name))
+            % (variable_identifier(name,'aux'), self._physical_flux_consumer_slot(name))
             for name in self._provider_components if name in used
         ]
 

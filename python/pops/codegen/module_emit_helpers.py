@@ -21,7 +21,6 @@ from pops._cartesian_axes import canonical_axis_mapping
 from pops.codegen.cpp_writer import (
     _cse_emit,
     _cpp_expand,
-    _cpp_identifier,
     _count_cons_denoms,
     _recip_rewrite,
 )
@@ -168,16 +167,17 @@ def _prim_block(model: Any, live: Any = None, hoist: bool = False) -> list:
     recurring conservative denominators (>= 2 uses) and replaces those divisions by
     products (OPT-IN, changes the rounding). Without @p hoist and with live=None, historical output."""
     from pops._ir.primitive_expansion import expand_evaluation_boundaries
+    from .cpp_symbols import variable_identifier
     from pops._ir.control_expr import has_evaluation_boundary
     items = [(p, expand_evaluation_boundaries(e, model.prim_defs))
              for p, e in model.prim_defs.items() if live is None or p in live]
     if any(has_evaluation_boundary(e) for _, e in items):
         if hoist:
             raise ValueError("reciprocal hoisting cannot cross a scientific evaluation boundary")
-        return ["    const pops::Real %s = %s;" % (_cpp_identifier(p), _checked_inline_expr(e))
+        return ["    const pops::Real %s = %s;" % (variable_identifier(p,'prim'), _checked_inline_expr(e))
                 for p, e in items]
     if not hoist:
-        return ["    const pops::Real %s = %s;" % (_cpp_identifier(p), _cpp_expand(e, {}, None))
+        return ["    const pops::Real %s = %s;" % (variable_identifier(p,'prim'), _cpp_expand(e, {}, None))
                 for p, e in items]
     cons_set = set(model.cons_names)
     counts = {}
@@ -185,10 +185,10 @@ def _prim_block(model: Any, live: Any = None, hoist: bool = False) -> list:
         _count_cons_denoms(e, cons_set, counts)
     inv = [n for n in model.cons_names if counts.get(n, 0) >= 2]  # stable cons order
     inv_set = set(inv)
-    lines = ["    const pops::Real inv_%s = pops::Real(1) / %s;" % (_cpp_identifier(n),
-                                                                   _cpp_identifier(n))
+    lines = ["    const pops::Real %s = pops::Real(1) / %s;" % (variable_identifier("inv_"+n,"hoist"),
+                                                                variable_identifier(n,"cons"))
              for n in inv]
-    lines += ["    const pops::Real %s = %s;" % (_cpp_identifier(p),
+    lines += ["    const pops::Real %s = %s;" % (variable_identifier(p,"prim"),
                                                 _cpp_expand(_recip_rewrite(e, inv_set), {}, None))
               for p, e in items]
     return lines

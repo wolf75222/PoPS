@@ -160,6 +160,9 @@ def _emit_resolved_cpp_program(
     )
 
 
+from .cpp_symbols import printer_scope
+
+@printer_scope
 def _emit_cpp_program_impl(
     program: Any,
     model: Any = None,

@@ -15,6 +15,7 @@ from typing import Any
 from pops.codegen.cpp_writer import (
     _collect_eig_witnesses,
     _cpp_identifier,
+    _cpp_expand,
     _eig_witness_helpers,
 )
 from pops.codegen.module_emit_helpers import (
@@ -35,8 +36,10 @@ from pops.codegen.module_emit_riemann import (
 )
 from pops._ir.expr import Const
 from pops.identity.scalar import scalar_cpp
+from .cpp_symbols import printer_scope,variable_identifier
 
 
+@printer_scope
 def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generated", cse: Any = True,
                    hoist_reciprocals: Any = False, *, native_input_plan: Any = None) -> str:
     """Generates a C++ BRICK satisfying the pops::HyperbolicModel concept (wrapping : step
@@ -100,7 +103,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         )
 
     def cons_locals() -> list:
-        return ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+        return ["    const pops::Real %s = U[%d];" % (variable_identifier(c,'cons'), i)
                 for i, c in enumerate(model.cons_names)]
 
     def named_real_locals(lines: list) -> list:
@@ -754,16 +757,19 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S += ["    Up[%d] = %s;" % (i, c) for i, c in enumerate(pcpps)]
         S += ["    return Up;", "  }", ""]
 
+    def primitive_identifier(name):
+        return variable_identifier(name, "prim" if name in model.prim_defs else "cons")
+
     recovery_constraints = getattr(model, "_recovery_admissibility", {})
     if recovery_constraints or path_conservative:
         S.append("  POPS_HD bool recovery_admissible(const Prim& P, int* failing_component_) const {")
-        S += ["    const pops::Real %s = P[%d];" % (name, index)
+        S += ["    const pops::Real %s = P[%d];" % (primitive_identifier(name), index)
               for index, name in enumerate(model.prim_state)]
         for component, name in enumerate(model.prim_state):
             predicate = recovery_constraints.get(name)
             if predicate is None:
                 continue
-            S.append("    if (!(%s)) {" % predicate.to_cpp())
+            S.append("    if (!(%s)) {" % _cpp_expand(predicate, {}, None))
             S.append("      if (failing_component_ != nullptr) *failing_component_ = %d;" % component)
             S.append("      return false;")
             S.append("    }")
@@ -784,11 +790,11 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     S.append("  POPS_HD Prim to_primitive(const State& U) const {")
     S += cons_locals() + prim_locals(_live_prims(model, [], seed=model.prim_state))
     S.append("    Prim P{};")
-    S += ["    P[%d] = %s;" % (i, p) for i, p in enumerate(model.prim_state)]
+    S += ["    P[%d] = %s;" % (i, primitive_identifier(p)) for i, p in enumerate(model.prim_state)]
     S += ["    return P;", "  }", ""]
 
     S.append("  POPS_HD State to_conservative(const Prim& P) const {")
-    S += ["    const pops::Real %s = P[%d];" % (p, i) for i, p in enumerate(model.prim_state)]
+    S += ["    const pops::Real %s = P[%d];" % (primitive_identifier(p), i) for i, p in enumerate(model.prim_state)]
     ctl, ccpps = _codegen_exprs(model, model.cons_from, cse)
     S += ctl
     S.append("    State U{};")

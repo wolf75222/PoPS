@@ -645,6 +645,7 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     from pops._ir.visitors import _children, _dependencies
     from pops._ir.primitive_expansion import expand_evaluation_boundaries
     from pops.codegen.module_emit_helpers import _checked_inline_expr
+    from pops.codegen.cpp_symbols import variable_identifier
 
     from pops._ir.control_expr import has_evaluation_boundary
     expanded = expand_evaluation_boundaries(exprs, impl.prim_defs)
@@ -674,12 +675,12 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     if with_cons:
         for idx, c in enumerate(impl.cons_names):
             if c in cons_needed:
-                lines.append("const pops::Real %s = %sA(index, %d);" % (c, state_var, idx))
+                lines.append("const pops::Real %s = %sA(index, %d);" % (variable_identifier(c,'cons'), state_var, idx))
     if with_prim:
         for p, expr in impl.prim_defs.items():  # declaration order (a prim may use an earlier prim)
             if p in live:
                 expression = expand_evaluation_boundaries(expr, impl.prim_defs)
-                lines.append("const pops::Real %s = %s;" % (p, _checked_inline_expr(expression)))
+                lines.append("const pops::Real %s = %s;" % (variable_identifier(p,'prim'), _checked_inline_expr(expression)))
     # The ProviderPack plan, not a model-side named component cache, is the sole
     # authority for auxiliary/field values.  Walk typed leaves to distinguish a
     # provider named ``rho`` from the conservative variable ``rho``.
@@ -710,7 +711,7 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
                 "Program provider plan does not cover its emitted expressions"
             )
         for name in sorted(used_provider_names, key=lambda item: slots[item]):
-            lines.append("const pops::Real %s = providers(index, %d);" % (name, slots[name]))
+            lines.append("const pops::Real %s = providers(index, %d);" % (variable_identifier(name,'aux'), slots[name]))
     return lines
 
 

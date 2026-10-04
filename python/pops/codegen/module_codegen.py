@@ -33,6 +33,7 @@ from typing import Any
 
 from pops.identity.scalar import scalar_cpp
 from pops.codegen.cpp_writer import _cpp_identifier
+from .cpp_symbols import printer_scope,variable_identifier
 
 # Re-export the moved helpers + the brick emitter so the public surface of
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
@@ -54,6 +55,7 @@ from pops.codegen.module_emit_brick import emit_cpp_brick  # noqa: F401
 # emit_cpp
 # ---------------------------------------------------------------------------
 
+@printer_scope
 def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
     """Generates a compilable C++ function computing the physical flux from the symbolic
     tree (each Expr node knows how to write itself in C++ via to_cpp).
@@ -104,8 +106,9 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
         "  static_assert(Axis >= 0 && Axis < %d, \"flux axis is outside the emitted rank\");"
         % len(axes),
     ]
-    out += ["  const Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
-    out += ["  const Real %s = %s;" % (p, e.to_cpp()) for p, e in model.prim_defs.items()]
+    out += ["  const Real %s = U[%d];" % (variable_identifier(c,'cons'), i) for i, c in enumerate(model.cons_names)]
+    from .cpp_writer import _cpp_expand
+    out += ["  const Real %s = %s;" % (variable_identifier(p,'prim'), _cpp_expand(e,{},None)) for p, e in model.prim_defs.items()]
     for ordinal, axis in enumerate(axes):
         out.append("  if constexpr (Axis == %d) {" % ordinal)
         tl, cpps = _codegen_exprs(
@@ -122,6 +125,7 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
 # emit_cpp_source
 # ---------------------------------------------------------------------------
 
+@printer_scope
 def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
                     hoist_reciprocals: bool = False, *, native_input_plan: Any = None) -> str:
     """Generate a composable C++ SOURCE BRICK (in the pops sense) from model._source.
@@ -149,7 +153,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     nc = model.n_vars
 
     def cons_locals() -> list:
-        return ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+        return ["    const pops::Real %s = U[%d];" % (variable_identifier(c,'cons'), i)
                 for i, c in enumerate(model.cons_names)]
 
     def prim_locals(live: Any = None) -> list:
@@ -397,6 +401,7 @@ def _emit_metadata(model: Any, model_alias: Any) -> str:
 # emit_cpp_elliptic
 # ---------------------------------------------------------------------------
 
+@printer_scope
 def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
                       hoist_reciprocals: bool = False) -> str:
     """Generates a composable elliptic RIGHT-HAND SIDE BRICK from model._elliptic.
@@ -435,7 +440,7 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
         "  template <class State>",
         "  POPS_HD pops::Real rhs(const State& U) const {",
     ]
-    out += ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+    out += ["    const pops::Real %s = U[%d];" % (variable_identifier(c,'cons'), i)
             for i, c in enumerate(model.cons_names)]
     out += _prim_block(model, _live_prims(model, [model._elliptic]), hoist_reciprocals)
     tl, cpps = _codegen_exprs(model, [model._elliptic], cse)
@@ -448,6 +453,7 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
 # emit_cpp_elliptic_field
 # ---------------------------------------------------------------------------
 
+@printer_scope
 def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace: str = "pops_generated",
                             hoist_reciprocals: bool = False, cse: bool = True) -> str:
     """Generates a SELF-CONTAINED elliptic RHS brick for the NAMED field @p field (ADC-428).
@@ -489,7 +495,7 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
         slot=field,
     )
     out += ["  POPS_HD pops::Real elliptic_rhs(const State& U) const {"]
-    out += ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+    out += ["    const pops::Real %s = U[%d];" % (variable_identifier(c,'cons'), i)
             for i, c in enumerate(model.cons_names)]
     out += _prim_block(model, _live_prims(model, [spec["rhs"]]), hoist_reciprocals)
     tl, cpps = _codegen_exprs(model, [spec["rhs"]], cse)

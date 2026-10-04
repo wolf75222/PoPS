@@ -887,6 +887,9 @@ def _emit_auxiliary_route_registration(
 # ---------------------------------------------------------------------------
 
 
+from .cpp_symbols import printer_scope
+
+@printer_scope
 def emit_cpp_native_loader(
     model: Any,
     name: Any = None,

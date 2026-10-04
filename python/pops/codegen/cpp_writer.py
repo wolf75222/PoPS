@@ -72,7 +72,8 @@ def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None, guarded: Any = None)
     if isinstance(e, RuntimeParamRef):
         return e.to_cpp()  # params.get(<index>): reads the brick's RuntimeParams member
     if isinstance(e, Var):
-        return _cpp_identifier(e.name)
+        from .cpp_symbols import variable_identifier
+        return variable_identifier(e.name,e.kind)
     if isinstance(e, Neg):
         return "(-%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
     if isinstance(e, Sqrt):
@@ -182,7 +183,8 @@ def _cse_emit(
         counts, rep, size, memo = {}, {}, {}, {}
 
         def visit(e):
-            if (isinstance(e, Const) or (isinstance(e, Var) and e.name not in bindings and not controlled)
+            if (isinstance(e, Const) or (isinstance(e, Var) and e.name not in bindings
+                    and (e.kind,e.name) not in bindings and not controlled)
                     or _key(e, key_memo) in inherited):
                 return 1, None
             sub = memo.get(id(e))
@@ -218,7 +220,7 @@ def _cse_emit(
         cand = sorted(
             (k for k, count in counts.items() if materialize_all or count >= 2 or joint_kind(rep[k])
              or isinstance(rep[k], (BooleanAnd, BooleanOr, Where))
-             or isinstance(rep[k], Var) and rep[k].name in bindings),
+             or isinstance(rep[k], Var) and (rep[k].name in bindings or (rep[k].kind,rep[k].name) in bindings)),
             key=lambda k: size[k],
         )
         cse_map, lines = dict(inherited), []
@@ -258,7 +260,9 @@ def _cse_emit(
                 lines += rendered
                 native_statuses.append(name)
             else:
-                value = (bindings[expression.name] if isinstance(expression, Var)
+                variable_key = ((expression.kind,expression.name) if isinstance(expression,Var) else None)
+                value = (bindings[variable_key] if variable_key in bindings else
+                         bindings[expression.name] if isinstance(expression, Var)
                          and expression.name in bindings else
                          _cpp_expand(expression, cse_map, key_memo, guarded))
                 if prerequisite is not None:
@@ -443,7 +447,8 @@ def _cpp_roe(e: Any, prefix: Any) -> str:
         if prefix is None:
             raise ValueError("m.roe_dissipation: variable '%s' outside left()/right() marker"
                              % e.name)
-        return prefix + _cpp_identifier(e.name)
+        from .cpp_symbols import variable_identifier
+        return prefix + variable_identifier(e.name,e.kind)
     if isinstance(e, Neg):
         return "(-%s)" % _cpp_roe(e.a, prefix)
     if isinstance(e, Sqrt):

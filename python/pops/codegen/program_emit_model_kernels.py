@@ -283,9 +283,10 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
         if reason is not None:
             lines.append("    native_reason_view(index, 0) = pops::Real(0);")
         lines.append("    if (native_has_active_mask && native_active_view(index, 0) == pops::Real(0)) return;")
+    from .cpp_symbols import variable_identifier
     for c in sorted(cons_source):                # bind only the referenced cons (no unused locals)
         tok, idx = cons_source[c]
-        lines.append("    const pops::Real %s = %s(index, %d);" % (c, state_handle(tok), idx))
+        lines.append("    const pops::Real %s = %s(index, %d);" % (variable_identifier(c,"cons"), state_handle(tok), idx))
     if provider_binding is not None:
         lines += ["    " + line for line in _cell_locals(
             provider_impl, roots, provider_state, with_cons=False, with_prim=False,
@@ -761,8 +762,9 @@ def _emit_local_residual_nodes(block, initial_components, residual_width, physic
             # Bind leaves, too: otherwise a non-finite captured argument could
             # disappear behind a finite min/max. The common emitter keeps where
             # branches lazy and rounded barriers intact.
-            bindings = {name: _cpp_identifier(name) for name in _dependencies(exprs)}
-            bindings.update(zip(impl.cons_names, source, strict=True))
+            from .cpp_symbols import variable_bindings
+            bindings = variable_bindings(exprs)
+            bindings.update({('cons',name):value for name,value in zip(impl.cons_names, source, strict=True)})
             temporaries, rendered, observed = _cse_emit(
                 exprs, "pops::Real", "  ", materialize_all=True, return_names=True,
                 scalar_bindings=bindings)
