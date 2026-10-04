@@ -4,6 +4,7 @@
 #include <pops/parallel/world_communicator.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 
+#include <array>
 #include <atomic>
 #include <stdexcept>
 #include <string>
@@ -263,4 +264,56 @@ TEST(WorldCommunicator, SelectsOneCanonicalReplicatedOutputContributor) {
                std::runtime_error);
 #endif
   lane.close_collectively();
+}
+
+// Explicit typed views avoid nested initializer-list expressions in templated preparation sites.
+// The span API remains the same exact count/length/byte consensus and owns no string storage.
+TEST(WorldCommunicator, NamedSingletonBytePairSpanPreservesFullKeysAndEmbeddedNulls) {
+  pops::WorldCommunicator& world = pops::WorldCommunicator::world();
+  const auto communicator = pops::world_communicator_view();
+  const std::string key("slot\0full-key", 13);
+  const char value_bytes[] = {'a', '\0', 'b', static_cast<char>(0xff), '\0', 'z'};
+  const std::string_view value(value_bytes, sizeof(value_bytes));
+  const pops::ExactOrderedBytePair pair(std::string_view(key), value);
+  const std::span<const pops::ExactOrderedBytePair> pairs(&pair, std::size_t{1});
+  ASSERT_EQ(pairs.size(), 1U);
+  EXPECT_EQ(pairs.front().first.data(), key.data());
+  EXPECT_EQ(pairs.front().first.size(), 13U);
+  EXPECT_EQ(pairs.front().second.data(), value_bytes);
+  EXPECT_EQ(pairs.front().second.size(), sizeof(value_bytes));
+  const auto before = pops::exact_consensus_dynamic_storage_calls();
+  EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs({{std::string_view(key), value}},
+                                                             communicator));
+  EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(pairs, communicator));
+  EXPECT_EQ(pops::exact_consensus_dynamic_storage_calls() - before, 2U);
+  EXPECT_GE(world.size(), 1);
+}
+
+TEST(WorldCommunicator, NamedBytePairSpanPreservesOrderedCardinalityAndEmptyParts) {
+  pops::WorldCommunicator& world = pops::WorldCommunicator::world();
+  const auto communicator = pops::world_communicator_view();
+  const std::string first_key("same\0first", 10);
+  const std::string second_key("same\0other", 10);
+  const std::array<pops::ExactOrderedBytePair, 2> pairs{
+      pops::ExactOrderedBytePair(std::string_view(first_key), std::string_view{}),
+      pops::ExactOrderedBytePair(std::string_view(second_key), std::string_view("value"))};
+  EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(
+      std::span<const pops::ExactOrderedBytePair>(pairs.data(), pairs.size()), communicator));
+  EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(
+      {{std::string_view(first_key), std::string_view{}},
+       {std::string_view(second_key), std::string_view("value")}},
+      communicator));
+  EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(
+      std::span<const pops::ExactOrderedBytePair>{}, communicator));
+  if (world.size() > 1) {
+    const std::array<pops::ExactOrderedBytePair, 2> same_lengths{
+        pops::ExactOrderedBytePair(std::string_view(first_key), std::string_view("value")),
+        pops::ExactOrderedBytePair(std::string_view(second_key), std::string_view("other"))};
+    const std::array<pops::ExactOrderedBytePair, 2> ordered =
+        world.rank() % 2 == 0
+            ? same_lengths
+            : std::array<pops::ExactOrderedBytePair, 2>{same_lengths[1], same_lengths[0]};
+    EXPECT_FALSE(pops::all_ranks_agree_exact_ordered_byte_pairs(
+        std::span<const pops::ExactOrderedBytePair>(ordered.data(), ordered.size()), communicator));
+  }
 }

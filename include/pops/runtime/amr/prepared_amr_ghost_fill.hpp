@@ -785,9 +785,11 @@ PreparedAmrGhostFill<Dim, MemorySpace> prepare_amr_ghost_fill(
     throw std::runtime_error(
         "prepared AMR ghost metadata or schedule construction failed collectively");
   }
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view("pops-prepared-amr-ghost-fill"),
-                                                  std::string_view(state->exact_contract)}},
-                                                lane.communicator()))
+  const ExactOrderedBytePair exact_contract_pair(std::string_view("pops-prepared-amr-ghost-fill"),
+                                                 std::string_view(state->exact_contract));
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          std::span<const ExactOrderedBytePair>(&exact_contract_pair, std::size_t{1}),
+          lane.communicator()))
     throw std::invalid_argument(
         "prepared AMR ghost exact topology/materialization contract differs across ranks");
   state->remote_parent_collective =

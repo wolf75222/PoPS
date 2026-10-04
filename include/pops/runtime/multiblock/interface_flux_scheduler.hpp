@@ -392,12 +392,15 @@ class InterfaceFluxScheduler {
     const std::string collective_identity = collective_plan_identity_(
         route, left_state, left_geometry, right_state, right_geometry, left_normal, right_normal,
         face_count, component_count, communicator_identity, communicator_size);
-    if (distributed &&
-        !all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view(route.identity), std::string_view(collective_identity)}},
-            execution_communicator))
-      throw std::runtime_error(
-          "multi-block interface prepared route/layout differs across MPI ranks");
+    if (distributed) {
+      const ExactOrderedBytePair exact_contract_pair(std::string_view(route.identity),
+                                                     std::string_view(collective_identity));
+      if (!all_ranks_agree_exact_ordered_byte_pairs(
+              std::span<const ExactOrderedBytePair>(&exact_contract_pair, std::size_t{1}),
+              execution_communicator))
+        throw std::runtime_error(
+            "multi-block interface prepared route/layout differs across MPI ranks");
+    }
 
     PreparedInterface prepared;
     std::exception_ptr materialization_failure;
