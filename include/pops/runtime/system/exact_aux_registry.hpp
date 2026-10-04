@@ -398,6 +398,17 @@ class ExactAuxiliaryRegistry final {
         result.push_back(providers_[provider].identity());
     return result;
   }
+  /// Publication invalidates only an existing accepted image. A never-published dependent is
+  /// already due on its first exact consumer read, and has no stale image to persist. Keep the
+  /// complete dependency query above separate: selection still traverses dormant providers.
+  [[nodiscard]] std::vector<std::string> accepted_dependent_provider_identities(
+      const std::vector<std::string>& provider_ids) const {
+    auto result = dependent_provider_identities(provider_ids);
+    std::erase_if(result, [&](const std::string& identity) {
+      return !last_accepted_point(identity).has_value();
+    });
+    return result;
+  }
   [[nodiscard]] AuxiliaryStorageAddress<Dim> address_of(const AuxiliaryComponentKey& key) const {
     require_sealed_();
     const std::string encoded = key.exact_key();

@@ -443,7 +443,8 @@ void System<Dim>::publish_program_field_components(
             exact_keys.end())
           throw std::invalid_argument("Program field publication omits a provider output");
     remaining_dirty = p_->dirty_auxiliary_providers_;
-    for (const auto& identity : p_->auxiliary_registry_.dependent_provider_identities(provider_ids))
+    for (const auto& identity :
+         p_->auxiliary_registry_.accepted_dependent_provider_identities(provider_ids))
       if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) ==
           remaining_dirty.end())
         remaining_dirty.push_back(identity);
@@ -583,7 +584,8 @@ AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
     }
     remaining_dirty = p_->dirty_auxiliary_providers_;
     if (!consumer_qids.empty())
-      for (const auto& identity : p_->auxiliary_registry_.dependent_provider_identities(published))
+      for (const auto& identity :
+           p_->auxiliary_registry_.accepted_dependent_provider_identities(published))
         if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) ==
             remaining_dirty.end())
           remaining_dirty.push_back(identity);

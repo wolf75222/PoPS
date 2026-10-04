@@ -917,4 +917,69 @@ TEST(ExactAuxiliaryRegistryNd, LazyInvalidationsRoundTripWithoutPublishingAndRef
   verifies_lazy_checkpoint_invalidations<2>();
   verifies_lazy_checkpoint_invalidations<3>();
 }
+
+template <int Dim>
+void verifies_unpublished_dependents_are_due_without_stale_publication() {
+  using namespace pops::runtime::system;
+  auto calls = std::make_shared<std::vector<std::string>>();
+  const auto source = output<Dim>("arbitrary/root-owner", "field", "load", 0);
+  const auto used = output<Dim>("arbitrary/used-owner", "derived", "used", 1);
+  const auto dormant = output<Dim>("arbitrary/dormant-owner", "derived", "dormant", 2);
+  ExactAuxiliaryRegistry<Dim> registry;
+  const AuxiliaryEvaluationPolicy once{AuxiliaryEvaluationEvent::before_residual,
+                                      AuxiliaryFreshness::once};
+  registry.add(PreparedAuxiliaryProvider<Dim>{"root", AuxiliaryProviderKind::field_output,
+                                            once, {source}, {}});
+  registry.add(derived<Dim>("used", used, {dependency(source)}, calls, once));
+  registry.add(derived<Dim>("dormant", dormant, {dependency(source)}, calls, once));
+  registry.add_consumer_plan({"read-used", {{dependency(used), 0}}});
+  registry.add_consumer_plan({"read-dormant", {{dependency(dormant), 0}}});
+  registry.seal();
+  const auto at = point("arbitrary-clock", 0, AuxiliaryEvaluationEvent::before_residual);
+  {
+    auto external = registry.begin_external_publication(at, {"root"});
+    external.stage_external("root");
+    external.accept();
+  }
+  EXPECT_EQ(registry.dependent_provider_identities({"root"}).size(), 2U);
+  EXPECT_TRUE(registry.accepted_dependent_provider_identities({"root"}).empty());
+  {
+    auto read = registry.begin_publication(at, {}, {"read-used"});
+    read.launch_ready_native();
+    read.accept();
+  }
+  EXPECT_EQ(calls->size(), 1U);
+  EXPECT_FALSE(registry.last_accepted_point("dormant"));
+  const auto invalidated = registry.accepted_dependent_provider_identities({"root"});
+  EXPECT_EQ(invalidated, (std::vector<std::string>{"used"}));
+  {
+    auto external = registry.begin_external_publication(at, {"root"});
+    external.stage_external("root");
+    external.accept();
+  }
+  const auto checkpoint = capture_auxiliary_checkpoint_state(registry, invalidated);
+  const auto bytes = serialize_auxiliary_checkpoint_state(checkpoint);
+  EXPECT_EQ(bytes[7], '3');
+  auto restored = registry;
+  restore_auxiliary_checkpoint_state(deserialize_auxiliary_checkpoint_state<Dim>(bytes), restored);
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored, invalidated), checkpoint);
+  EXPECT_EQ(calls->size(), 1U) << "checkpoint must not evaluate a dormant provider";
+  {
+    auto read = restored.begin_publication(at, invalidated, {"read-dormant"});
+    EXPECT_TRUE(read.requires_staging("used")) << "accepted stale image remains forced";
+    EXPECT_TRUE(read.requires_staging("dormant")) << "first read needs no dirty marker";
+    read.launch_ready_native();
+    read.reject();
+  }
+  EXPECT_FALSE(restored.last_accepted_point("dormant"));
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored, invalidated), checkpoint);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"dormant"}),
+               std::invalid_argument);
+}
+
+TEST(ExactAuxiliaryRegistryNd, UnpublishedDependentsRemainDueWithoutCheckpointInvalidations) {
+  verifies_unpublished_dependents_are_due_without_stale_publication<1>();
+  verifies_unpublished_dependents_are_due_without_stale_publication<2>();
+  verifies_unpublished_dependents_are_due_without_stale_publication<3>();
+}
 } // namespace
