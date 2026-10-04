@@ -140,6 +140,32 @@ POPS_HD std::size_t local_slab_ordinal(const Box<Dim>& valid, const CellIndex<Di
   return ordinal;
 }
 
+// Device-callable transfers are named outside solve's nested host stage callback.
+// Ordinary local lambdas cannot be captured by the strict NVCC index-space launcher.
+template <int Dim>
+struct PackRhsSlabKernel {
+  typename PoissonFFT<Dim>::device_view destination{};
+  FieldView<Real, Dim> source{};
+  Box<Dim> slab{};
+
+  POPS_HD void operator()(const CellIndex<Dim>& cell) const {
+    const std::size_t ordinal = local_slab_ordinal(slab, cell);
+    destination[ordinal] = typename PoissonFFT<Dim>::complex_type(-source(cell, 0), Real(0));
+  }
+};
+
+template <int Dim>
+struct UnpackSolutionSlabKernel {
+  typename PoissonFFT<Dim>::device_view source{};
+  FieldView<Real, Dim> destination{};
+  Box<Dim> slab{};
+
+  POPS_HD void operator()(const CellIndex<Dim>& cell) const {
+    const std::size_t ordinal = local_slab_ordinal(slab, cell);
+    destination(cell, 0) = source[ordinal].real();
+  }
+};
+
 template <int Dim>
 std::array<int, Dim> fft_cells(const Geometry<Dim>& geometry) {
   std::array<int, Dim> cells{};
@@ -293,11 +319,8 @@ class PoissonFFTSolver {
     const auto fft_phi = fft_phi_;
     if (!execute_solve_stage_collectively_(
             [&] {
-              for_each_cell(valid, [=](const CellIndex<Dim>& cell) {
-                const std::size_t ordinal = fft_solver_detail::local_slab_ordinal(valid, cell);
-                fft_rhs[ordinal] =
-                    typename PoissonFFT<Dim>::complex_type(-rhs_view(cell, 0), Real(0));
-              });
+              for_each_cell(valid,
+                            fft_solver_detail::PackRhsSlabKernel<Dim>{fft_rhs, rhs_view, valid});
             },
             report, "poisson_fft_rhs_pack_failed_collectively"))
       return last_report_;
@@ -306,10 +329,8 @@ class PoissonFFTSolver {
       return last_report_;
     if (!execute_solve_stage_collectively_(
             [&] {
-              for_each_cell(valid, [=](const CellIndex<Dim>& cell) {
-                const std::size_t ordinal = fft_solver_detail::local_slab_ordinal(valid, cell);
-                trial_view(cell, 0) = fft_phi[ordinal].real();
-              });
+              for_each_cell(valid, fft_solver_detail::UnpackSolutionSlabKernel<Dim>{
+                                       fft_phi, trial_view, valid});
             },
             report, "poisson_fft_solution_unpack_failed_collectively"))
       return last_report_;

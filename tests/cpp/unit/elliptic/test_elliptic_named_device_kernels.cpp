@@ -207,6 +207,79 @@ void slab_pack_unpack_keeps_slab_order_and_views() {
     ASSERT_EQ(output(index), expected[index]) << "unpack storage offset " << index;
 }
 
+// The public FFT solver's sign conversion differs from the configurable
+// MultiFab adapter: preserve unary negation (including IEEE signs) exactly.
+template <int Dim>
+void solver_slab_transfers_preserve_exact_bits_and_padding() {
+  PaddedField<Dim> source(false), destination(true);
+  auto input = Kokkos::create_mirror_view(source.storage);
+  auto output = Kokkos::create_mirror_view(destination.storage);
+  for (std::size_t offset = 0; offset < source.size; ++offset) {
+    input(offset) = Real(offset) / Real(16) - Real(9);
+    output(offset) = Real(-83);
+  }
+  const Real exceptional[]{Real(0), -Real(0), std::numeric_limits<Real>::infinity(),
+                           -std::numeric_limits<Real>::infinity(),
+                           std::bit_cast<Real>(std::uint64_t{0x7ff8000000000042})};
+  const auto region = interior(source.box);
+  host_cells(region, [&](const auto& cell, auto ordinal) {
+    if (ordinal < 5)
+      input(source.offset(cell)) = exceptional[ordinal];
+  });
+  const auto original = std::vector<Real>(input.data(), input.data() + source.size);
+  Kokkos::deep_copy(source.storage, input);
+  Kokkos::deep_copy(destination.storage, output);
+  using Complex = typename pops::PoissonFFT<Dim>::complex_type;
+  typename pops::PoissonFFT<Dim>::device_view slab("solver_slab", source.box.numPts());
+  auto packed = Kokkos::create_mirror_view(slab);
+  for (std::size_t ordinal = 0; ordinal < packed.extent(0); ++ordinal)
+    packed(ordinal) = Complex(23, -29);
+  Kokkos::deep_copy(slab, packed);
+  pops::for_each_cell(
+      region, pops::fft_solver_detail::PackRhsSlabKernel<Dim>{slab, source.view, source.box});
+  Kokkos::fence();
+  Kokkos::deep_copy(packed, slab);
+  host_cells(source.box, [&](const auto& cell, auto ordinal) {
+    const auto expected =
+        region.contains(cell) ? Complex(-original[source.offset(cell)], Real(0)) : Complex(23, -29);
+    ASSERT_EQ(std::bit_cast<std::uint64_t>(packed(ordinal).real()),
+              std::bit_cast<std::uint64_t>(expected.real()));
+    ASSERT_EQ(std::bit_cast<std::uint64_t>(packed(ordinal).imag()),
+              std::bit_cast<std::uint64_t>(expected.imag()));
+  });
+  auto expected = std::vector<Real>(destination.size, Real(-83));
+  host_cells(region, [&](const auto& cell, auto) {
+    std::size_t ordinal = 0, stride = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      ordinal += (cell[axis] - source.box.lo[axis]) * stride;
+      stride *= source.box.length(axis);
+    }
+    expected[destination.offset(cell)] = packed(ordinal).real();
+  });
+  pops::for_each_cell(region, pops::fft_solver_detail::UnpackSolutionSlabKernel<Dim>{
+                                  slab, destination.view, source.box});
+  Kokkos::fence();
+  Kokkos::deep_copy(output, destination.storage);
+  for (std::size_t offset = 0; offset < destination.size; ++offset)
+    ASSERT_EQ(std::bit_cast<std::uint64_t>(output(offset)),
+              std::bit_cast<std::uint64_t>(expected[offset]))
+        << "solver offset " << offset;
+  auto after = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, source.storage);
+  for (std::size_t offset = 0; offset < source.size; ++offset)
+    ASSERT_EQ(std::bit_cast<std::uint64_t>(after(offset)),
+              std::bit_cast<std::uint64_t>(original[offset]));
+}
+
+TEST(EllipticNamedDeviceKernels, SolverSlabDim1) {
+  solver_slab_transfers_preserve_exact_bits_and_padding<1>();
+}
+TEST(EllipticNamedDeviceKernels, SolverSlabDim2) {
+  solver_slab_transfers_preserve_exact_bits_and_padding<2>();
+}
+TEST(EllipticNamedDeviceKernels, SolverSlabDim3) {
+  solver_slab_transfers_preserve_exact_bits_and_padding<3>();
+}
+
 TEST(EllipticNamedDeviceKernels, CopiesDim1) { copies_preserve_outside_ranges_and_components<1>(); }
 TEST(EllipticNamedDeviceKernels, CopiesDim2) { copies_preserve_outside_ranges_and_components<2>(); }
 TEST(EllipticNamedDeviceKernels, CopiesDim3) { copies_preserve_outside_ranges_and_components<3>(); }
