@@ -291,6 +291,9 @@ AuxiliaryStorageShape<Dim> read_shape(Reader& in) {
 }
 
 inline void write_point(Writer& out, const AuxiliaryEvaluationPoint& point) {
+  // The physical payload is an issuing Program's transient stage authority. Keep
+  // the existing checkpoint wire shape; restored derived providers recompute on
+  // their next live physical point (which differs from this discrete-only stamp).
   point.validate();
   out.string(point.clock);
   out.u64(point.accepted_step);
@@ -479,7 +482,11 @@ template <int Dim>
   const auto& accepted_points = registry.accepted_points();
   for (std::size_t index = 0; index < registry.provider_count(); ++index) {
     const auto& provider = registry.provider(index);
-    state.providers.push_back({provider.identity(), provider.kind(), accepted_points[index]});
+    auto durable_point = accepted_points[index];
+    // Checkpoints carry discrete accepted provenance, not a live Program stage lease.
+    // Runtime rollback snapshots copy the complete registry instead.
+    if (durable_point) durable_point->physical_evaluation.reset();
+    state.providers.push_back({provider.identity(), provider.kind(), std::move(durable_point)});
     for (const auto& output : provider.outputs())
       state.components.push_back({provider.identity(), provider.kind(), output.key, output.contract,
                                   output.shape, registry.address_of(output.key)});

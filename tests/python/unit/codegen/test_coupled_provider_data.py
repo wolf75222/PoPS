@@ -37,8 +37,8 @@ def test_independent_reference_conserves_exchange_and_exact_catalyst(cells):
     assert np.max(abs(states[0]-before[0]))>1e-2
     np.testing.assert_allclose(states[0][1]-before[0][1],2*(1/64)*gain,rtol=0,atol=1e-14)
 
-def test_two_fractions_do_not_claim_time_dependent_analytic_aux():
-    # Real existing contract: this witness deliberately uses fixed provider data.
+def test_time_dependent_analytic_aux_keeps_one_exact_declared_clock():
+    # Dynamic providers retain the declared Clock; the original witness stays static.
     from pops.fields import AnalyticAux
     from pops.analytic import time
     from pops.time import Program
@@ -47,5 +47,7 @@ def test_two_fractions_do_not_claim_time_dependent_analytic_aux():
     from pops.model import Module
     frame=Rectangle('time-contract',(0,0),(1,1)).frame(Cartesian2D())
     module=Module('time-contract owner',frame=frame);aux=module.aux_field('time_data')
-    with pytest.raises(ValueError,match='static parameter-free'):
-        AnalyticAux(module.aux_handle(aux),time(Program('time-contract').clock),frame=frame)
+    clock=Program('time-contract').clock
+    producer=AnalyticAux(module.aux_handle(aux),time(clock),frame=frame)
+    assert producer.expression.time_clocks()==(clock,)
+    assert producer.options()['temporal_contract']=='analytic-aux-time@1'

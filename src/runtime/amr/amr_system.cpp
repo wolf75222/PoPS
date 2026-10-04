@@ -12173,6 +12173,7 @@ void AmrSystem<Dim>::prepare_single_level_program_auxiliary_consumer(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
     int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
   const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR Program auxiliary read");
+  runtime::system::AuxiliaryEvaluationPoint auxiliary_point;
   std::exception_ptr preflight_error;
   try {
     if (p_->engine->hierarchy().num_levels() != 1 || point.level != 0)
@@ -12191,6 +12192,15 @@ void AmrSystem<Dim>::prepare_single_level_program_auxiliary_consumer(
         stage_state.ncomp() != accepted.ncomp())
       throw std::invalid_argument("AMR Program auxiliary read SSA state differs from its block");
     (void)p_->prepared_hierarchy->auxiliary_registries.at(0).consumer_plan(consumer_qid);
+    auxiliary_point.clock = point.clock;
+    auxiliary_point.accepted_step = static_cast<std::uint64_t>(point.tick);
+    auxiliary_point.layout_generation = p_->engine->materialization_generation();
+    auxiliary_point.level = point.level;
+    auxiliary_point.substep = point.substep;
+    auxiliary_point.stage = point.stage;
+    auxiliary_point.nonlinear_iteration = evaluation_sequence;
+    auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+    auxiliary_point.qualify_physical_evaluation(point);
   } catch (...) {
     preflight_error = std::current_exception();
   }
@@ -12219,15 +12229,7 @@ void AmrSystem<Dim>::prepare_single_level_program_auxiliary_consumer(
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"amr-program-auxiliary-read", std::move(exact).release()}}, lane))
     throw std::invalid_argument("AMR Program auxiliary read identity differs across MPI ranks");
-  runtime::system::AuxiliaryEvaluationPoint auxiliary_point;
-  auxiliary_point.clock = point.clock;
-  auxiliary_point.accepted_step = static_cast<std::uint64_t>(point.tick);
-  auxiliary_point.layout_generation = p_->engine->materialization_generation();
-  auxiliary_point.level = point.level;
-  auxiliary_point.substep = point.substep;
-  auxiliary_point.stage = point.stage;
-  auxiliary_point.nonlinear_iteration = evaluation_sequence;
-  auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+
   refresh_auxiliary_on_prepared_lane(auxiliary_point, {consumer_qid});
 }
 

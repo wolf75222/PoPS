@@ -325,6 +325,7 @@ AuxiliaryPublicationStatus System<Dim>::prepare_program_auxiliary_consumer_for_s
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
     int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
+  AuxiliaryEvaluationPoint auxiliary_point;
   std::exception_ptr preflight_error;
   try {
     if (point.clock.empty() || point.tick != p_->macro_step_ || point.level != 0 ||
@@ -339,6 +340,14 @@ AuxiliaryPublicationStatus System<Dim>::prepare_program_auxiliary_consumer_for_s
         stage_state.ncomp() != accepted.ncomp())
       throw std::invalid_argument("Program auxiliary read SSA state differs from its block layout");
     (void)p_->auxiliary_registry_.consumer_plan(consumer_qid);
+    auxiliary_point.clock = point.clock;
+    auxiliary_point.accepted_step = static_cast<std::uint64_t>(point.tick);
+    auxiliary_point.layout_generation = p_->embedded_boundary_generation_;
+    auxiliary_point.substep = point.substep;
+    auxiliary_point.stage = point.stage;
+    auxiliary_point.nonlinear_iteration = evaluation_sequence;
+    auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+    auxiliary_point.qualify_physical_evaluation(point);
   } catch (...) {
     preflight_error = std::current_exception();
   }
@@ -362,14 +371,7 @@ AuxiliaryPublicationStatus System<Dim>::prepare_program_auxiliary_consumer_for_s
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"program-auxiliary-read", std::move(exact).release()}}, lane))
     throw std::invalid_argument("Program auxiliary read identity differs across MPI ranks");
-  AuxiliaryEvaluationPoint auxiliary_point;
-  auxiliary_point.clock = point.clock;
-  auxiliary_point.accepted_step = static_cast<std::uint64_t>(point.tick);
-  auxiliary_point.layout_generation = p_->embedded_boundary_generation_;
-  auxiliary_point.substep = point.substep;
-  auxiliary_point.stage = point.stage;
-  auxiliary_point.nonlinear_iteration = evaluation_sequence;
-  auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+
   return refresh_auxiliary_(auxiliary_point, {consumer_qid});
 }
 

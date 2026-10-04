@@ -9,8 +9,12 @@ from ._analytic_expression_lowering import lower_analytic_components
 
 def emit_analytic_aux_launcher(identity, producer):
     """Lower the authenticated analytic VM vocabulary to a straight-line device expression."""
+    clocks = producer.expression.time_clocks()
+    clock_id = clocks[0].qualified_id if clocks else None
+    time_slot = 2 * len(producer.frame.axes) + 1
     ((operations, literals),) = lower_analytic_components(
-        (producer.expression.to_data(),), frame_id=producer.frame.canonical_id)
+        (producer.expression.to_data(),), frame_id=producer.frame.canonical_id,
+        time_clock_id=clock_id, time_input_slot=time_slot)
     stack = []
     statements = []
     binary = {"add": "+", "sub": "-", "mul": "*", "div": "/",
@@ -28,7 +32,9 @@ def emit_analytic_aux_launcher(identity, producer):
             expression = "geometry.cell_coordinate(%d, index[%d])" % (axis, axis)
         elif operation == "input":
             slot = int(literal)
-            if slot == 2 * len(producer.frame.axes):
+            if slot == time_slot and clock_id is not None:
+                expression = "physical_stage_time"
+            elif slot == 2 * len(producer.frame.axes):
                 expression = " * ".join("geometry.spacing(%d)" % a
                                         for a in range(len(producer.frame.axes)))
             else:
@@ -64,16 +70,23 @@ def emit_analytic_aux_launcher(identity, producer):
             "            if (geometry.lower()[%d] != pops::Real(%s) || geometry.upper()[%d] != pops::Real(%s)) "
             'throw std::invalid_argument("analytic auxiliary frame differs from publication geometry");'
             % (axis, float(lower).hex(), axis, float(upper).hex()))
+    temporal_prelude = ([
+        "            const pops::Real physical_stage_time = static_cast<pops::Real>("
+        "context.point.require_physical_time(%s));" % cpp_string_view_expression(clock_id)
+    ] if clock_id is not None else [])
     return "\n".join([
         "      std::vector<Dependency>{},",
         "      Provider::launcher_type::trusted_extension(",
-        "          pops::PreparedProviderIdentity{%s, 1}, %s," % (
-            cpp_string_view_expression("pops.analytic-aux." + identity), cpp_string_expression(identity)),
+        "          pops::PreparedProviderIdentity{%s, %d}, %s," % (
+            cpp_string_view_expression(("pops.analytic-aux-time@1." if clock_id is not None
+                                        else "pops.analytic-aux.") + identity),
+            2 if clock_id is not None else 1, cpp_string_expression(identity)),
         "          [](const pops::runtime::system::AuxiliaryKernelLaunchContext<pops::kNativeDimension>& context) {",
         '            static_assert(pops::kNativeDimension == %d, "analytic auxiliary dimension mismatch");' % dimension,
         '            if (context.outputs.size() != 1 || !context.dependencies.empty() || context.storage.geometry == nullptr) '
         'throw std::logic_error("analytic auxiliary requires one output, no dependencies and exact level geometry");',
         "            const auto geometry = *context.storage.geometry;",
+        *temporal_prelude,
         *checks,
         "            auto* const candidate = context.storage.candidate;",
         '            if (candidate == nullptr) throw std::logic_error("analytic auxiliary has no candidate storage");',

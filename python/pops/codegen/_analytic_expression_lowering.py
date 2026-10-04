@@ -42,9 +42,12 @@ def lower_analytic_components(
     frame_id: str,
     bindings: Any = None,
     time_clock_id: str | None = None,
+    time_input_slot: int = 0,
 ) -> tuple[tuple[tuple[str, ...], tuple[float, ...]], ...]:
     """Return one validated postfix opcode/literal pair per scalar component."""
 
+    if type(time_input_slot) is not int or time_input_slot < 0:
+        raise TypeError("analytic lowering requires a non-negative exact time input slot")
     if not isinstance(frame_id, str) or not frame_id:
         raise TypeError("analytic lowering requires a non-empty frame_id")
     if isinstance(components, (str, bytes)) or not isinstance(components, Sequence) \
@@ -56,7 +59,7 @@ def lower_analytic_components(
             frame_id=frame_id,
             where="components[%d]" % index,
             bindings=bindings,
-            time_clock_id=time_clock_id,
+            time_clock_id=time_clock_id, time_input_slot=time_input_slot,
         )
         for index, expression in enumerate(components)
     )
@@ -69,6 +72,7 @@ def _lower_expression(
     where: str,
     bindings: Any,
     time_clock_id: str | None,
+    time_input_slot: int,
 ) -> tuple[tuple[str, ...], tuple[float, ...]]:
     from pops.analytic import ScalarExpr
 
@@ -82,7 +86,7 @@ def _lower_expression(
     _lower_node(
         data["root"], expected="scalar", frame_id=frame_id, where=where + ".root",
         depth=1, budget=budget, opcodes=opcodes, literals=literals, bindings=bindings,
-        time_clock_id=time_clock_id,
+        time_clock_id=time_clock_id, time_input_slot=time_input_slot,
     )
     if len(opcodes) != len(literals) or not opcodes:
         raise RuntimeError("analytic lowering produced an invalid postfix program")
@@ -101,6 +105,7 @@ def _lower_node(
     literals: list[float],
     bindings: Any,
     time_clock_id: str | None,
+    time_input_slot: int,
 ) -> None:
     if depth > _MAX_DEPTH:
         raise ValueError("%s exceeds analytic max_depth=%d" % (where, _MAX_DEPTH))
@@ -169,7 +174,7 @@ def _lower_node(
         if Clock.from_data(data["clock"]).qualified_id != time_clock_id:
             raise ValueError("%s time Clock data does not authenticate clock_id" % where)
         opcodes.append("input")
-        literals.append(0.0)
+        literals.append(float(time_input_slot))
         return
 
     if set(data) != {"kind", "op", "arguments"} \
@@ -205,7 +210,7 @@ def _lower_node(
             argument, expected=child_kind, frame_id=frame_id,
             where="%s.arguments[%d]" % (where, index), depth=depth + 1, budget=budget,
             opcodes=opcodes, literals=literals, bindings=bindings,
-            time_clock_id=time_clock_id,
+            time_clock_id=time_clock_id, time_input_slot=time_input_slot,
         )
     # The canonical schema vocabulary is also the native ABI vocabulary.  Keeping one spelling
     # prevents the Python and C++ validators from accepting disjoint instruction sets.

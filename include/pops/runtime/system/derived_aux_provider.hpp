@@ -12,8 +12,10 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/index/index.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/runtime/multiblock/evaluation_point.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -76,8 +78,8 @@ enum class AuxiliaryEvaluationEvent : std::uint8_t {
   output = 5,
 };
 
-/// Freshness rule for an auxiliary component.  The rule is structural: it compares exact integer
-/// identities only and never infers a stage from a rounded floating physical time.
+/// Freshness rule for an auxiliary component. The rule compares discrete identities and, when
+/// supplied, exact physical lease bytes; it never infers a stage from rounded physical time.
 enum class AuxiliaryFreshness : std::uint8_t {
   once = 0,
   accepted_step = 1,
@@ -283,9 +285,31 @@ struct AuxiliaryConsumerProviderPlan {
 /// non-finite candidate is represented as an unsuccessful numerical evaluation.
 enum class AuxiliaryPublicationStatus { ready, nonfinite_candidate };
 
-/// Integer-identical point supplied by Program/AMR.  Physical time is intentionally absent: the
-/// time authority owns it, while auxiliary freshness needs an unambiguous accepted-step/stage
-/// identity that survives checkpoint/restart and MPI rank ordering.
+/// Physical stage payload transported from the authoritative Program boundary point.
+/// analytic-aux-time@1 is transient runtime authority, not a reconstructed checkpoint clock.
+struct AuxiliaryPhysicalEvaluation {
+  ::pops::amr::Rational stage_fraction{0, 1};
+  double dt = 0;
+  double physical_time = 0;
+
+  void validate() const {
+    if (stage_fraction < ::pops::amr::Rational(0, 1) ||
+        ::pops::amr::Rational(1, 1) < stage_fraction || !std::isfinite(dt) || dt <= 0 ||
+        !std::isfinite(physical_time))
+      throw std::invalid_argument("auxiliary physical evaluation requires an exact finite stage");
+  }
+  friend bool operator==(const AuxiliaryPhysicalEvaluation& a,
+                         const AuxiliaryPhysicalEvaluation& b) noexcept {
+    return a.stage_fraction == b.stage_fraction &&
+        std::bit_cast<std::uint64_t>(a.dt) == std::bit_cast<std::uint64_t>(b.dt) &&
+        std::bit_cast<std::uint64_t>(a.physical_time) ==
+            std::bit_cast<std::uint64_t>(b.physical_time);
+  }
+};
+
+/// Integer-identical evaluation point supplied by Program/AMR. An optional exact physical
+/// payload belongs to its issuing Clock. Ordinary/static points retain the original v2 bytes.
+/// The in-memory point participates in cache identity and rollback snapshots.
 struct AuxiliaryEvaluationPoint {
   std::string clock;
   std::uint64_t accepted_step = 0;
@@ -295,6 +319,7 @@ struct AuxiliaryEvaluationPoint {
   int stage = 0;
   int nonlinear_iteration = 0;
   AuxiliaryEvaluationEvent event = AuxiliaryEvaluationEvent::initialization;
+  std::optional<AuxiliaryPhysicalEvaluation> physical_evaluation;
 
   friend bool operator==(const AuxiliaryEvaluationPoint&,
                          const AuxiliaryEvaluationPoint&) = default;
@@ -304,12 +329,30 @@ struct AuxiliaryEvaluationPoint {
       throw std::invalid_argument(
           "auxiliary evaluation point requires a clock and non-negative "
           "level/substep/stage/iteration");
+    if (physical_evaluation) physical_evaluation->validate();
+  }
+
+  void qualify_physical_evaluation(const runtime::multiblock::BoundaryEvaluationPoint& source) {
+    if (source.clock != clock || source.tick < 0 ||
+        static_cast<std::uint64_t>(source.tick) != accepted_step || source.level != level ||
+        source.substep != substep || source.stage != stage)
+      throw std::invalid_argument("auxiliary physical point differs from its exact logical authority");
+    const AuxiliaryPhysicalEvaluation physical{source.stage_fraction, source.dt, source.physical_time};
+    physical.validate();
+    physical_evaluation = physical;
+  }
+
+  [[nodiscard]] double require_physical_time(std::string_view expected_clock) const {
+    validate();
+    if (clock != expected_clock || !physical_evaluation)
+      throw std::invalid_argument("analytic auxiliary requires its exact consuming physical Clock");
+    return physical_evaluation->physical_time;
   }
 
   void serialize_exact(ExactContractBuilder& exact) const {
     validate();
     exact.text("pops.auxiliary-evaluation-point")
-        .scalar(std::uint32_t{2})
+        .scalar(std::uint32_t{physical_evaluation ? 3U : 2U})
         .text(clock)
         .scalar(accepted_step)
         .scalar(layout_generation)
@@ -318,6 +361,12 @@ struct AuxiliaryEvaluationPoint {
         .scalar(stage)
         .scalar(nonlinear_iteration)
         .scalar(event);
+    if (physical_evaluation) {
+      exact.scalar(physical_evaluation->stage_fraction.numerator)
+          .scalar(physical_evaluation->stage_fraction.denominator)
+          .scalar(physical_evaluation->dt)
+          .scalar(physical_evaluation->physical_time);
+    }
   }
 };
 

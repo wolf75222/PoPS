@@ -234,12 +234,13 @@ class DerivedAux(_AuxProducer):
 
 
 class AnalyticAux(_AuxProducer):
-    """A static scalar evaluated from the current level's exact Cartesian geometry.
+    """A scalar evaluated from exact level geometry and its consuming stage Clock.
 
     Unlike an input array, a geometric coefficient is evaluated again on a new AMR
     layout. Coordinates denote cell centers; authenticated ``CellBounds`` inputs
     allow cell-width-dependent, analytically integrated metric coefficients.
-    Runtime parameters and time-dependent expressions are deliberately excluded.
+    Parameter-free analytic time reads use the consuming native physical stage;
+    the runtime must authenticate the expression's exact logical Clock.
     """
 
     producer_kind = "derived"
@@ -261,8 +262,10 @@ class AnalyticAux(_AuxProducer):
         expression.validate()
         if expression.frame_id not in (None, frame.canonical_id):
             raise ValueError("AnalyticAux expression belongs to another frame")
-        if expression.has_parameters or expression.time_clocks():
-            raise ValueError("AnalyticAux currently requires a static parameter-free expression")
+        if expression.has_parameters:
+            raise ValueError("AnalyticAux requires a parameter-free expression")
+        if len(expression.time_clocks()) > 1:
+            raise ValueError("AnalyticAux requires one exact consuming logical Clock")
         bounds = CellBounds(frame)
         expected = dict(reference for axis in frame.axes
                         for leaf in (bounds.lower(axis), bounds.upper(axis))
@@ -276,8 +279,13 @@ class AnalyticAux(_AuxProducer):
         object.__setattr__(self, "frame", frame)
 
     def options(self) -> dict[str, Any]:
-        return {**self._base_options(), "expression": self.expression.to_data(),
-                "frame": self.frame.to_dict()}
+        options = {**self._base_options(), "expression": self.expression.to_data(),
+                   "frame": self.frame.to_dict()}
+        clocks = self.expression.time_clocks()
+        if clocks:
+            options.update(temporal_contract="analytic-aux-time@1",
+                           time_clock=clocks[0].qualified_id)
+        return options
 
     def requirements(self) -> RequirementSet:
         return RequirementSet({"geometry_frame": self.frame.canonical_id})
