@@ -503,7 +503,7 @@ def _module_to_model(module: Any, state_space: Any = None,
     # Select waves from the exact physical flux/output-State operators in this view.
     # A shared legacy Module law is a fallback, never a first-State selection.
     # The single-StateSpace no-flux validation remains fail-closed.
-    from pops.model.flux_waves import common_flux_waves
+    from pops.model.flux_waves import common_flux_waves, common_flux_signed_bounds
     selected_waves = None
     if applicable_grid_names:
         selected_waves = common_flux_waves(module, applicable_grid_names)
@@ -520,6 +520,15 @@ def _module_to_model(module: Any, state_space: Any = None,
     else:
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "documentary"))
+    selected_signed_bounds = common_flux_signed_bounds(module, applicable_grid_names)
+    if selected_signed_bounds is not None and not principal_rates:
+        m.wave_speeds(**{
+            axis: _body_for_state(pair)
+            for axis, pair in selected_signed_bounds.items()
+        })
+        coverage_rows.append(LoweringCoverageRow(
+            "module:%s:signed_bounds" % module.name, "lowered", ("dsl:wave_speeds",)))
+        retain_recipes(m._m._wave_speeds)
     retain_recipes(m._m._eig)
     from pops.codegen.state_storage_lowering import (
         prepare_named_flux_storage_carrier, prepare_state_storage_requirements,
