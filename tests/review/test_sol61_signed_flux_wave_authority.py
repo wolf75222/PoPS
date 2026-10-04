@@ -98,3 +98,30 @@ def test_same_output_group_does_not_borrow_missing_signed_pair():
         lowering={'flux_wave_law':FluxWaveLaw(state,{'x':(Const(-2),Const(0)),'y':(Const(0),Const(3))})})
     names={op.name for op in module.operator_registry() if op.kind=='grid_operator'}
     with pytest.raises(ValueError,match='ambiguous signed bounds'):common_flux_signed_bounds(module,names)
+
+
+@pytest.mark.parametrize('mutation', ('unknownnode', 'extraoperand', 'boolchild', 'forwardchild', 'orphan', 'literalfield'))
+def test_signed_codec_validates_all_structural_nodes(mutation):
+    module, _, _ = independent()
+    data = module.manifest().to_dict()
+    law = next(row for row in data['operators'] if row['kind']=='grid_operator')['lowering_route']['flux_wave_law']
+    graph = law['signed_bounds']['x']
+    if mutation == 'unknownnode': graph['nodes'][0] = {'op':'invented_opcode','args':[]}
+    elif mutation == 'extraoperand': graph['nodes'][-1].append(0)
+    elif mutation == 'boolchild': graph['nodes'][-1][1][0] = True
+    elif mutation == 'forwardchild': graph['nodes'][-1][1][0] = len(graph['nodes'])-1
+    elif mutation == 'orphan': graph['nodes'].append(['neg', 0])
+    else:
+        import json
+        literal = json.loads(graph['nodes'][0][1]); literal['foreign']=1
+        graph['nodes'][0][1]=json.dumps(literal)
+    with pytest.raises(ValueError): ModuleManifest.from_dict(data)
+
+
+def test_common_dag_validator_accepts_native_expr_control_and_finite_nodes():
+    from pops._ir.visitors import _dag_key_data, validate_dag_key_data
+    from pops._ir.control_expr import Where, Rounded
+    from pops._ir.finite_linear import FiniteApplication, FiniteProjection
+    value = Where(Const(2)>Const(1), Rounded(Const(3)), Const(-4))
+    application = FiniteApplication('apply', ('source', ('a','b')), ('target', ('c',)), ((2.,-3.),), (value, Const(5)))
+    validate_dag_key_data(_dag_key_data((FiniteProjection(application,0),)), root_count=1)

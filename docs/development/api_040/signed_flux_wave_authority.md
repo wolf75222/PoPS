@@ -9,3 +9,14 @@ The lowering passes these pairs to the existing native-emitter `Model.wave_speed
 The real VP job733028 compiled all components and then failed at the bind HLL guard, before any Native step: the active transport had eigenvalues but no emitted signed pair. Its spectator and reduced-density models were already authenticated StateStorage and were not the rejected flux. VP now explicitly declares the exact scalar pairs `(charge*electric, charge*electric)` and `(velocity, velocity)` from the same expressions as its original flux and spectrum. HLL, SSPRK2, force, meshes, quadrature, oracle and `2e-11` threshold remain unchanged. This fixes missing operator-first library/lowering expressivity; it does not weaken the runtime guard.
 
 Source/Host tests include a distinct nonkinetic two-component transport, reversed axis insertion, negative/positive/zero characteristic speeds, legacy refusal, codec/roundtrip negatives, all three actual VP resolved models and the genuine emitted C++ translation unit syntax against read-only public headers. A real CompiledModel object is used only as inert Source metadata for the actual wave-capability guard; no Native binary or engine is simulated or qualified. Native execution remains ROOT's next rebuilt-SDK reception.
+
+The initial detached @2 decoder checked only DAG envelopes and roots; the independent
+946 counterexample replaced a signed-bound node with an unknown opcode and was accepted.
+The follow-up uses the common structural Expr DAG validator, without reconstructing
+or evaluating expressions. It checks every descriptor, its arity, backward child IDs,
+exact integer indices, canonical scalar payloads and complete root reachability. Unknown
+structural extension descriptors require a corresponding common schema before detached
+admission. This validation does not certify symbolic bound inequalities or foreign
+owner authority by itself; existing declaration resolution remains responsible for owners.
+Legacy @1 wire output and its admission behavior are preserved. No Native bypass was
+observed in the detached-decoder counterexample.

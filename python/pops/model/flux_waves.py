@@ -132,6 +132,9 @@ def validate_flux_wave_data(value, signature):
             raise ValueError('flux wave codec root is invalid')
 
     if signed:
+        from pops._ir.visitors import validate_dag_key_data
+        for graph in axes.values():
+            validate_dag_key_data(graph, root_count=count)
         pairs = canonical_axis_mapping(value['signed_bounds'], where='signed flux codec')
         if tuple(pairs) != tuple(axes):
             raise ValueError('signed flux codec axes differ from the spectrum')
@@ -143,3 +146,4 @@ def validate_flux_wave_data(value, signature):
                 raise ValueError('signed flux codec requires exactly two roots per axis')
             if any(type(root) is not int or not 0 <= root < len(nodes) for root in roots):
                 raise ValueError('signed flux codec root is invalid')
+            validate_dag_key_data(graph, root_count=2)
