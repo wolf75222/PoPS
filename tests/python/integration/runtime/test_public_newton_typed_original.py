@@ -1,10 +1,11 @@
-"""Genuine installed Native Original Newton policies; ROOT runs Serial/MPI SDK8."""
+"""Genuine installed Native Original Newton policies; ROOT runs Serial/MPI against the current published ABI."""
 from pathlib import Path
 import hashlib
 import json
 import sys
 import numpy as np
 import pops
+from pops._generated_release_contract import NATIVE_ABI_VERSION
 import pytest
 from pops.solvers import Newton
 from pops.solvers.tolerances import Relative, AbsoluteFloor, Absolute
@@ -42,7 +43,8 @@ def test_public_typed_original_policy(isolated_native_cache, tmp_path, record_pr
     package = Path(pops.__file__).resolve()
     assert package.is_relative_to(Path(sys.prefix).resolve()), package
     native = select_native_dimension(2)
-    assert native.__abi_version__ == 8
+    assert type(native.__abi_version__) is int
+    assert native.__abi_version__ == NATIVE_ABI_VERSION
     world = native.mpi_world()
     selected = solver(backend, policy)
     if backend == "uniform":
