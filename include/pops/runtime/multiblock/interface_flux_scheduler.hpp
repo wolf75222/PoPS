@@ -283,7 +283,7 @@ class InterfaceFluxScheduler {
     CommunicatorView execution_communicator;
     int communicator_rank = 0;
     int communicator_size = 1;
-    std::string communicator_identity = "serial";
+    std::string communicator_identity;
     int component_count = 0;
     std::size_t face_count = 0;
     Real left_normal = Real(0);
@@ -389,9 +389,10 @@ class InterfaceFluxScheduler {
 
     if (distributed && !registry_agrees_across_ranks_(execution_communicator))
       throw std::runtime_error("multi-block interface prepared registry differs across MPI ranks");
-    const std::string collective_identity = collective_plan_identity_(
+    const std::string collective_identity = prepare_collective_plan_identity_(
         route, left_state, left_geometry, right_state, right_geometry, left_normal, right_normal,
-        face_count, component_count, communicator_identity, communicator_size);
+        face_count, component_count, communicator_identity, communicator_size,
+        execution_communicator);
     if (distributed) {
       const ExactOrderedBytePair exact_contract_pair(std::string_view(route.identity),
                                                      std::string_view(collective_identity));
@@ -1963,6 +1964,27 @@ class InterfaceFluxScheduler {
       append_scalar_(bytes, geometry.lower()[axis]);
       append_scalar_(bytes, geometry.upper()[axis]);
     }
+  }
+
+  // Serialization owns allocating string storage. Every execution rank must finish this
+  // preparation vote before any rank enters the ordered-byte consensus in install().
+  static std::string prepare_collective_plan_identity_(
+      const route_type& route, const field_type& left_state, const geometry_type& left_geometry,
+      const field_type& right_state, const geometry_type& right_geometry, Real left_normal,
+      Real right_normal, std::size_t face_count, int component_count,
+      std::string_view communicator_identity, int communicator_size,
+      const CommunicatorView& communicator) {
+    std::string identity;
+    std::exception_ptr preparation_failure;
+    try {
+      identity = collective_plan_identity_(
+          route, left_state, left_geometry, right_state, right_geometry, left_normal, right_normal,
+          face_count, component_count, communicator_identity, communicator_size);
+    } catch (...) {
+      preparation_failure = std::current_exception();
+    }
+    finish_collective_preflight_(communicator, preparation_failure, "route identity preparation");
+    return identity;
   }
 
   static std::string collective_plan_identity_(
