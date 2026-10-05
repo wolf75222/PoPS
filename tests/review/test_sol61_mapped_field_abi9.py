@@ -5,10 +5,13 @@ from types import SimpleNamespace
 import subprocess
 import pytest
 from pops.runtime._mapped_field_capability import (requires_mapped_consumed_field_output, require_mapped_consumed_field_output)
+from pops._generated_release_contract import (
+    NATIVE_ABI_VERSION, UNIFORM_CHECKPOINT_PAYLOAD_VERSION, AMR_CHECKPOINT_PAYLOAD_VERSION,
+)
 ROOT=Path(__file__).resolve().parents[2]
 def artifact(*irs):
-    return SimpleNamespace(layout_programs=tuple(SimpleNamespace(program=SimpleNamespace(program=SimpleNamespace(_serialize=lambda ir=ir:ir))) for ir in irs))
-@pytest.mark.parametrize("facts",[None,{}, {"abi_version":8,"mapped_consumed_field_output":True},{"abi_version":9},{"abi_version":9,"mapped_consumed_field_output":1},{"abi_version":True,"mapped_consumed_field_output":True},{"abi_version":10,"mapped_consumed_field_output":True}])
+    return SimpleNamespace(layout_programs=tuple(SimpleNamespace(target="system",program=SimpleNamespace(program=SimpleNamespace(_serialize=lambda ir=ir:ir))) for ir in irs))
+@pytest.mark.parametrize("facts",[None,{}, {"abi_version":8,"mapped_consumed_field_output":True},{"abi_version":9},{"abi_version":9,"mapped_consumed_field_output":1},{"abi_version":True,"mapped_consumed_field_output":True},{"abi_version":NATIVE_ABI_VERSION+1,"mapped_consumed_field_output":True}])
 def test_incompatible_native_facts_refused(facts):
     with pytest.raises(RuntimeError,match="ABI9"):
         require_mapped_consumed_field_output(artifact({"nodes":[{"op":"layout_map_export","attrs":{"contract":"mapped-consumed-output@1"}}]}), capability_reader=lambda target:facts)
@@ -25,10 +28,22 @@ def test_install_and_codegen_guards_precede_side_effects():
     text=ast.unparse(f)
     assert text.index('require_mapped_consumed_field_output(plan.artifact)')<text.index('matches =')<text.index('matches[0].install')
     text=(ROOT/'python/pops/codegen/_compile_drivers.py').read_text()
-    assert text.index('require_mapped_field_native_facts()',text.index('def _compile_problem_impl'))<text.index('src = emit_program_graph',text.index('def _compile_problem_impl'))
-def test_actual_capability_header_abi9(tmp_path):
-    source=tmp_path/'cap.cpp';binary=tmp_path/'cap'
-    source.write_text('#include <pops/runtime/module_capabilities.hpp>\n#include <cassert>\nint main(){static_assert(pops::kAbiVersion==9);auto c=pops::module_capabilities();assert(c.abi_version==9&&c.mapped_consumed_field_output);assert(pops::module_capabilities(pops::CapabilityTarget::kProduction).mapped_consumed_field_output);}')
+    assert text.index('require_mapped_field_native_facts(adaptive=target == "amr_system")',text.index('def _compile_problem_impl'))<text.index('src = emit_program_graph',text.index('def _compile_problem_impl'))
+def test_actual_capability_header_matches_release(tmp_path):
+    source=tmp_path/'cap.cpp'
+    binary=tmp_path/'cap'
+    source.write_text(f'''#include <pops/runtime/module_capabilities.hpp>
+#include <cassert>
+int main() {{
+  static_assert(pops::kAbiVersion == {NATIVE_ABI_VERSION});
+  static_assert(pops::release_contract::kReleaseNativeAbiVersion == {NATIVE_ABI_VERSION});
+  static_assert(pops::release_contract::kUniformCheckpointPayloadVersion == {UNIFORM_CHECKPOINT_PAYLOAD_VERSION});
+  static_assert(pops::release_contract::kAmrCheckpointPayloadVersion == {AMR_CHECKPOINT_PAYLOAD_VERSION});
+  auto c = pops::module_capabilities(pops::CapabilityTarget::kProduction);
+  assert(c.abi_version == {NATIVE_ABI_VERSION});
+  assert(c.mapped_consumed_field_output && c.mapped_consumed_field_output_amr);
+}}
+''')
     result=subprocess.run(['clang++','-std=c++20','-DPOPS_NATIVE_DIM=2','-I',str(ROOT/'include'),str(source),'-o',str(binary)],capture_output=True,text=True)
     assert result.returncode==0,result.stderr
     subprocess.run([str(binary)],check=True)

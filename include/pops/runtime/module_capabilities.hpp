@@ -217,7 +217,7 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("mapped_consumed_field_output_amr", status_from_bool(caps.mapped_consumed_field_output_amr),
                        "pops.amr.scalar-field-endpoint@1", "amr", "production", "host", mpi, false),
       capability_route("mapped_consumed_field_output", status_from_bool(caps.mapped_consumed_field_output),
-                       "mapped-consumed-output@1 scalar Field candidate transfer; Native ABI9/10",
+                       "mapped-consumed-output@1 scalar Field candidate transfer; released Native ABI since 9",
                        "uniform", "production", "host", mpi, gpu),
       capability_route("supports_named_fields", status_from_bool(caps.supports_named_fields),
                        "named aux-field transport", kLayoutRouteTokensCsv, "production", "host",

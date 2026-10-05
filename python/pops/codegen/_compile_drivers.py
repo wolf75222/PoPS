@@ -514,7 +514,7 @@ def _compile_problem_impl(
         requires_mapped_consumed_field_output, require_mapped_field_native_facts,
     )
     if requires_mapped_consumed_field_output(time._serialize()):
-        require_mapped_field_native_facts()
+        require_mapped_field_native_facts(adaptive=target == "amr_system")
     program_graph = time.to_graph()
     from pops._balance_due_contract import BalanceDueContract
 

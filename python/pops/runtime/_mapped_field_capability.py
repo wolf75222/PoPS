@@ -1,6 +1,13 @@
 """Native admission for the versioned consumed-Field mapping contract."""
 from collections.abc import Mapping
 
+from pops._generated_release_contract import NATIVE_ABI_VERSION
+
+# The versioned endpoint capabilities remain published by the ABI11 release.
+# Never infer compatibility with an ABI newer than this Python release.
+_MAPPED_OUTPUT_FIRST_ABI = 9
+_MAPPED_AMR_FIRST_ABI = 10
+
 
 def requires_mapped_consumed_field_output(value):
     """Inspect the exact serialized Program, without inferring from its maximum IR version."""
@@ -37,8 +44,15 @@ def require_mapped_field_native_facts(*, capability_reader=None, adaptive=False)
         capability_reader = _module_capabilities
     facts = capability_reader("production")
     if not isinstance(facts, Mapping) or type(facts.get("abi_version")) is not int \
-            or facts["abi_version"] not in (9, 10) or facts.get("mapped_consumed_field_output") is not True:
-        raise RuntimeError("mapped-consumed-output@1 requires Native ABI9/10 and mapped_consumed_field_output; rebuild/install this exact source before bind")
+            or not (_MAPPED_OUTPUT_FIRST_ABI <= facts["abi_version"] <= NATIVE_ABI_VERSION) \
+            or facts.get("mapped_consumed_field_output") is not True:
+        raise RuntimeError(
+            f"mapped-consumed-output@1 requires Native ABI9..{NATIVE_ABI_VERSION} and "
+            "mapped_consumed_field_output; rebuild/install this exact source before bind"
+        )
 
-    if adaptive and (facts["abi_version"] != 10 or facts.get("mapped_consumed_field_output_amr") is not True):
-        raise RuntimeError("AMR scalar endpoint@1 requires mapped_consumed_field_output_amr")
+    if adaptive and (facts["abi_version"] < _MAPPED_AMR_FIRST_ABI or facts.get("mapped_consumed_field_output_amr") is not True):
+        raise RuntimeError(
+            f"AMR scalar endpoint@1 requires Native ABI10..{NATIVE_ABI_VERSION} and "
+            "mapped_consumed_field_output_amr"
+        )
