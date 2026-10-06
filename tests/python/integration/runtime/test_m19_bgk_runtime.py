@@ -1,5 +1,6 @@
 """Prospective installed isolated BGK witness; Source collection is not Native proof."""
 import hashlib
+import json
 from pathlib import Path
 import sys
 import numpy as np
@@ -12,6 +13,7 @@ from tests.python.support.collective_checks import collective_attempt,collective
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.evolved_stage_v_capture import retain_v_provenance,pin,save_json
+from tests.python.support.evidence_json import ENCODING, evidence_dumps
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 
 
@@ -35,7 +37,8 @@ def retain_mapping_sources(artifact,providers,directory):
         for payload in package.payloads:
             target=root/payload.path;target.parent.mkdir(parents=True,exist_ok=True)
             target.write_bytes(payload.content);payloads[payload.path]=pin(target)
-        entries.append(dict(compiled=component.to_data(),binary=pin(binary),payloads=payloads,
+        entries.append(dict(compiled=json.loads(evidence_dumps(component.to_data())),
+            compiled_encoding=ENCODING,binary=pin(binary),payloads=payloads,
             source_manifest=save_json(root/'source-package.json',package.to_data())))
     if len(entries)!=6 or {c.source_package.token for c in artifact.component_artifacts}!=set(packages):
         raise ValueError('complete six-transfer source/binary closure required')
