@@ -8,11 +8,7 @@ void collective(const ExecutionLane& lane, const char* operation, Function&& fun
   } catch (...) {
     error = std::current_exception();
   }
-  if (all_reduce_max(error ? 1L : 0L, lane)) {
-    if (lane.size() == 1 && error)
-      std::rethrow_exception(error);
-    throw std::runtime_error(std::string(operation) + " failed on a hierarchy rank");
-  }
+  collectively_rethrow_exception(error, lane, operation);
 }
 }  // namespace amr_layout_transfer_bridge_detail
 

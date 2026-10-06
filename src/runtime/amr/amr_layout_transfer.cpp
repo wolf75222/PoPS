@@ -2,6 +2,7 @@
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/parallel/region_transfer.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 
@@ -60,11 +61,7 @@ void collective(const ExecutionLane& lane, const char* operation, Function&& fun
   } catch (...) {
     error = std::current_exception();
   }
-  if (all_reduce_max(error ? 1L : 0L, lane)) {
-    if (lane.size() == 1 && error)
-      std::rethrow_exception(error);
-    throw std::runtime_error(std::string(operation) + " failed on a lane rank");
-  }
+  collectively_rethrow_exception(error, lane, operation);
 }
 
 void agree(const ExecutionLane& lane, std::string_view key, const std::string& value) {
