@@ -1804,5 +1804,95 @@
       "No GPU, official OpenMPI or Kokkos4.4 native reception claim.",
       "Source/native build commits and runtime owners remain distinct; later source is not assigned an older native pass."
     ]
+  },
+  "scoped_receptions_20261006": {
+    "schema": "pops.api040.scoped-scientific-receptions@1",
+    "historical_snapshot_rows_preserved": true,
+    "whole_M19_or_94_obligations_received": false,
+    "consumed_field_AMR_local": {
+      "ids": [
+        "M19"
+      ],
+      "production_source_revision": "7edddce1255012700fac7d098c94a3bf18d23141",
+      "native_sha256": "d725dcc30a411f7782ee290de989143f83a14bf2bca6c8b17579e545a0e6994c",
+      "backend": "local Apple LLVM, MPI-enabled Dim2 CPU; MPI1 and MPI2",
+      "original_cases": [
+        "False",
+        "True"
+      ],
+      "steps_per_case": 2,
+      "saved_CP12_NPY_regrid_nonfinite_State_cursor_rollback_received": true,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk42-collective-cause-local-reception-20261006.json",
+      "root_receipt_sha256": "36badef6adae93922833e3e6f2eac3cf0ffb8e56d827e9a91e2abc3c72d3f0b6",
+      "independent_pins_sha256": "eb90dffc9f79527e2e2a1920b96f3a7ff40eb4f5d3cca2a0b2e7c38ea3aa8feb",
+      "documentation": "amr_mapped_field_buffers_and_publication_20261006.md",
+      "broader_Field_history_Aux_semantics_or_PDE_convergence_received": false
+    },
+    "consumed_field_AMR_ROMEO": {
+      "ids": [
+        "M19"
+      ],
+      "job": "735312",
+      "source_revision": "b1203435aa5fc5017233fa22a04e78373e3f80b5",
+      "native_sha256": "cf3d2fd4c6071650a8d9382485fc2022c1437a906c07afb130c2b49c9f32932d",
+      "backend": "ROMEO GNU15.3 Dim2, actual MPI world1/OpenMP concurrency8",
+      "terminal": "COMPLETED 0:0",
+      "original_cases": [
+        "False",
+        "True"
+      ],
+      "steps_per_case": 2,
+      "native_seven_TU_build_wheel_install_doctor_received": true,
+      "saved_CP12_NPY_regrid_nonfinite_State_cursor_rollback_received": true,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk28-amr-vp-units-dim2-preparation-20261003/root-sdk42-amr-build-reception-735312.json",
+      "root_receipt_sha256": "6af39e06bd229a0ef8fdb26da60c75992ec7cf0e44757c93a857fa1ce30ade35",
+      "independent_pins_sha256": "d222c8b3f2fa26d76dee4ba8f5b32cdff57f121b71d824578e749917039a0e0f",
+      "preservation": {
+        "CPU_prefixes": 18,
+        "GPU_prefixes": 7,
+        "Sources": 15,
+        "Home_scope": "Conda registry only"
+      },
+      "current_local_Native_d725_or_MPI2_GPU_3D_CI_received_by_this_lot": false
+    },
+    "isolated_self_BGK_local": {
+      "ids": [
+        "M19"
+      ],
+      "production_source_revision": "7edddce1255012700fac7d098c94a3bf18d23141",
+      "test_source_revision": "190cd3c60de7ca8be947beaf745d59df4a5a9eee",
+      "native_sha256": "d725dcc30a411f7782ee290de989143f83a14bf2bca6c8b17579e545a0e6994c",
+      "backend": "local Apple LLVM, MPI-enabled Dim2 CPU singleton",
+      "original_cases": [
+        "32-32-False",
+        "64-64-True"
+      ],
+      "method": "SSPRK2",
+      "steps_per_case": 2,
+      "dt": [
+        1,
+        128
+      ],
+      "nu": [
+        3,
+        2
+      ],
+      "continuous_self_Maxwellian_without_discrete_fit": true,
+      "independent_distribution_error_max": 1.1102230246251565e-16,
+      "independent_moment_error_max": 8.881784197001252e-16,
+      "independent_conservation_error_max": 9.325873406851315e-15,
+      "NPY_CP9_payloads_bitwise_equal": true,
+      "checkpoint_restore_exercised": false,
+      "C25_Models_per_case": 8,
+      "C25_Programs_per_case": 2,
+      "source_compiled_transfer_components_per_case": 6,
+      "installed_whole_members_preserved": 2563,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-m19-bgk-local-reception-20261006.json",
+      "root_receipt_sha256": "3d16db81a8f76d99cab527bb47e6cf27dad70be75841f0294788d7dd678a263e",
+      "independent_pins_sha256": "5f2f90b0a03d45d1547c2d4170d4e6c24eb97142b9ea8115e42f184089065134",
+      "documentation": "m19_isolated_bgk_native_reception_20261006.md",
+      "compiler_to_binary_graph_or_populated_Field_history_cache_received": false,
+      "transport_Landau_full_BGK_convergence_costs_MPI2_GPU_ROMEO_CI_received": false
+    }
   }
 }
