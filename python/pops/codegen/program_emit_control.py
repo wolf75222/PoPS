@@ -465,12 +465,14 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     )
     values = list(program._values)
     from pops.codegen.program_emit_hierarchy_regions import (
-        hierarchy_region_solves, hierarchy_path_rhs, open_hierarchy_continuation,
+        hierarchy_region_solves, hierarchy_path_rhs, hierarchy_field_publications,
+        open_hierarchy_continuation,
     )
     hierarchy_solves = (hierarchy_region_solves(program) if target == "amr_system" else ())
     hierarchy_solve_ids = {value.id for value in hierarchy_solves}
     path_ids = {value.id for value in hierarchy_path_rhs(program)} if target == "amr_system" else set()
-    hierarchy_enabled = bool(hierarchy_solves or path_ids)
+    hierarchy_enabled = target == "amr_system" and bool(
+        hierarchy_solves or path_ids or hierarchy_field_publications(program))
     legacy_path_prefix = bool(path_ids and any(
         "hierarchy_field_identity" not in value.attrs for value in hierarchy_solves))
     if legacy_path_prefix:

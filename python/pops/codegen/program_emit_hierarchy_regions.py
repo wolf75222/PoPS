@@ -21,7 +21,19 @@ def hierarchy_path_rhs(program: Any) -> tuple[Any, ...]:
 
 
 def has_hierarchy_continuations(program: Any) -> bool:
-    return bool(hierarchy_region_solves(program) or hierarchy_path_rhs(program))
+    return bool(hierarchy_region_solves(program) or hierarchy_path_rhs(program)
+                or hierarchy_field_publications(program))
+
+
+def hierarchy_field_publications(program: Any) -> tuple[Any, ...]:
+    """A destination may publish a mapped field solved by another layout."""
+    from pops.codegen.program_lowerability import all_ops
+
+    selected = tuple(value for value in all_ops(program) if value.op == "field_publication")
+    top_level = {id(value) for value in program._values}
+    if any(id(value) not in top_level for value in selected):
+        raise NotImplementedError("hierarchy field continuations require top-level qualified barriers")
+    return selected
 
 
 def hierarchy_region_solves(program: Any) -> tuple[Any, ...]:

@@ -2,6 +2,7 @@
 from fractions import Fraction
 from pathlib import Path
 import pops
+import pytest
 from pops.model import Module, Rate, FieldSpace, Handle, OwnerPath, PhysicalSupport, PhysicalDimension
 from pops.fields import FieldProblem, FieldBoundary, FieldDiscretization, bcs
 from pops.fields.methods import CellCenteredSecondOrder
@@ -110,3 +111,50 @@ def test_public_route_resolves_and_emits_private_scalar_candidate(tmp_path):
         sources.append(emit_program_graph(p.to_graph(),lowering_program=p,model_graph=ProgramModelGraph.from_resolved_blocks(blocks),target="system",field_plans={}))
     assert any("mapped_field_" in source for source in sources)
     assert sum("publish_field_components" in source for source in sources)==1
+
+
+@pytest.mark.parametrize("adaptive", (False, True))
+def test_consumed_field_mapping_scratch_retains_solve_or_state_authority(tmp_path, adaptive):
+    from pops.codegen.program_slicing import slice_program
+    from pops.time._program.detach import detach_compiled_program
+    from pops.codegen.program_models import ProgramModelGraph
+    from pops.codegen.program_graph_lowering import emit_program_graph
+    from pops.fields._mapped_publication import validate_pack
+
+    resolved = route(tmp_path, adaptive=adaptive)
+    assignments = {row.subject.local_id: row.layout for row in resolved.layout_plan.assignments
+                   if row.subject_kind == "block"}
+    packs = imports = 0
+    for layout in resolved.layout_plan.layouts:
+        blocks = tuple(block for block in resolved.blocks if assignments[block.name] == layout.handle)
+        program = detach_compiled_program(slice_program(resolved.time, tuple(block.name for block in blocks)))
+        source = emit_program_graph(
+            program.to_graph(), lowering_program=program,
+            model_graph=ProgramModelGraph.from_resolved_blocks(blocks),
+            target="amr_system" if adaptive else "system", field_plans={})
+        for node in program._values:
+            if node.op == "field_map_pack":
+                packs += 1
+                _, _, solve = validate_pack(node)
+                for subslot, suffix in ((0, ""), (1, "_status")):
+                    token = f"mapped_field_{node.id}{suffix}"
+                    if adaptive:
+                        assert (f"{token}_pointer = &ctx.hierarchy_field_scratch("
+                                f"{solve.id}, {node.id}, {subslot}, 1, 0)") in source
+                        assert f"{token}_pointer = &ctx.scalar_scratch(" not in source
+                    else:
+                        assert f"{token}_pointer = &ctx.scalar_scratch(" in source
+            elif node.op == "layout_map_import":
+                imports += 1
+                # Destination candidates still derive from their authenticated
+                # State input. They must not be rerouted to the source solve.
+                assert f"u{node.id}_pointer = &ctx.scalar_scratch(" in source
+                assert f"u{node.id}_pointer = &ctx.hierarchy_field_scratch(" not in source
+        if adaptive and any(node.op == "field_publication" for node in program._values):
+            # This destination has no local solve: its mapped field still needs
+            # a complete hierarchy publication before the provider-backed RHS.
+            assert not any(node.op == "solve_linear" for node in program._values)
+            assert "HierarchyBarrierKind::field_publication" in source
+            assert source.index("ctx.publish_staged_field_components();") < source.index(
+                "ctx.prepare_provider_values(", source.index("ctx.publish_staged_field_components();"))
+    assert packs == imports == 1

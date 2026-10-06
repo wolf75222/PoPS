@@ -3,11 +3,15 @@ from pops.identity.scalar import scalar_cpp
 from pops.fields._mapped_publication import validate_pack
 
 
-def scalar_candidate_rows(token, value_id, subslot, prototype):
+def scalar_candidate_rows(token, value_id, subslot, prototype, *, solve_id=None):
+    allocation = "ctx.scalar_scratch(%d, %d, %s, 1, 0)" % (value_id, subslot, prototype)
+    if solve_id is not None:
+        allocation = "ctx.hierarchy_field_scratch(%d, %d, %d, 1, 0)" % (
+            solve_id, value_id, subslot)
     return [
         "pops::MultiFab<pops::kNativeDimension>* %s_pointer = nullptr;" % token,
         "std::exception_ptr %s_allocation_error;" % token,
-        "try { %s_pointer = &ctx.scalar_scratch(%d, %d, %s, 1, 0); }" % (token, value_id, subslot, prototype),
+        "try { %s_pointer = &%s; }" % (token, allocation),
         "catch (...) { %s_allocation_error = std::current_exception(); }" % token,
         'pops::collectively_rethrow_exception(%s_allocation_error, ctx.prepared_execution_lane(), "mapped Field candidate allocation");' % token,
         "auto& %s = *%s_pointer;" % (token, token),
@@ -17,7 +21,7 @@ def scalar_candidate_rows(token, value_id, subslot, prototype):
 def emit_mapped_field_pack(value, var, lines, *, target):
     if target not in ("system", "amr_system"):
         raise NotImplementedError("mapped consumed Field output requires a native System hierarchy")
-    _component, exact_factor, _solve = validate_pack(value)
+    _component, exact_factor, solve = validate_pack(value)
     source = value.inputs[0]
     if var.get(("field_observation", source.id)) != source.attrs["field_problem_identity"]:
         raise ValueError("mapped Field source lacks emitted consumed-solve authority")
@@ -25,8 +29,12 @@ def emit_mapped_field_pack(value, var, lines, *, target):
     source_cpp = var[source.id]
     component = value.attrs["source_component"]
     factor = scalar_cpp(exact_factor)
-    lines += scalar_candidate_rows(token, value.id, 0, source_cpp)
-    lines += scalar_candidate_rows(token + "_status", value.id, 1, source_cpp)
+    # Equation-owned AMR observations have an exact consumed solve, not a
+    # runtime State block owner. Both buffers retain that solve's level/layout
+    # authority and are reacquired on each invocation after rollback/regrid.
+    solve_id = solve.id if target == "amr_system" else None
+    lines += scalar_candidate_rows(token, value.id, 0, source_cpp, solve_id=solve_id)
+    lines += scalar_candidate_rows(token + "_status", value.id, 1, source_cpp, solve_id=solve_id)
     lines += [
         "std::exception_ptr %s_error;" % token,
         "pops::Real %s_invalid = 0;" % token,
