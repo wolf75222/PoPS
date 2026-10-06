@@ -18,6 +18,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- AMR physical transfers use the actual Kokkos field memory and borrowed native stream,
+  retain buffers through failure fences, and budget backend staging before publication.
+  The existing integral, MPI authority and transactional acceptance contracts are preserved.
 - Consolidate CI documentation/watchdog plumbing and extend native formatting coverage.
   Move runnable teaching scripts to `docs/tutorials`, update build commands and thread controls,
   refresh the project/architecture/algorithm guides, and remove obsolete headers and prose.

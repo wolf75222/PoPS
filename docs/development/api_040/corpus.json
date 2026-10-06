@@ -1805,6 +1805,49 @@
       "Source/native build commits and runtime owners remain distinct; later source is not assigned an older native pass."
     ]
   },
+  "scoped_receptions_20261007": {
+    "schema": "pops.api040.scoped-scientific-receptions@1",
+    "historical_snapshot_rows_preserved": true,
+    "whole_M19_or_94_obligations_received": false,
+    "consumed_field_AMR_backend_memory_local": {
+      "ids": ["M19"],
+      "production_source_revision": "069be5055a218c809f0df35e5226ff1c40446f20",
+      "MPI1_source_scope": "False at 069be; True at a084 documentary descendant, production and fixture byte-identical",
+      "MPI2_fixture_source_revision": "01d2cd22e7b6a75561b04feb6f1a657496efb2d3",
+      "native_sha256": "ce024e70e66a9258f4e39d3405f93d4919e9189f502b0d2a1c205cabed0baacf",
+      "wheel_sha256": "62be9f0487e4f7cfa3b27111267a86bb17f2b9534a836d3041d344effa0d0b72",
+      "backend": "local Apple LLVM, MPI-enabled Dim2 Host; MPI1 and MPI2",
+      "original_cases": ["False", "True"],
+      "steps_per_case": 2,
+      "saved_CP12_NPY_regrid_nonfinite_State_cursor_rollback_received": true,
+      "original_numerical_audits_pass": 4,
+      "CPP_unique_MPI1_PASS": 13,
+      "CPP_original_MPI1_multirank_skips": 2,
+      "CPP_unique_MPI2_PASS_per_rank": 15,
+      "CPP_MPI2_skips": 0,
+      "CPP_unique_union": 16,
+      "old_d725_complete_installed_package_preserved": true,
+      "new_whole_package_inventory_interval": "after first MPI1 False through final comparison; wheel/install proof precedes first case",
+      "actual_M19_OpenMP_concurrency_measured": false,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk43-amr-residence-local-reception-20261007.json",
+      "root_receipt_sha256": "8ac7359ce474e2b3b269e130cae0224df62eea8a799774651bfbdd3a25d3eeb1",
+      "independent_pins_sha256": "04181e90e47b9ef860b8248db6714c858bdefec7b1d5c2075355df3fb7e9aa0b",
+      "documentation": "amr_backend_memory_reception_20261007.md",
+      "GPU_ROMEO_3D_CI_convergence_comparable_costs_received": false,
+      "broader_populated_Field_history_Aux_semantics_received": false
+    },
+    "consumed_field_AMR_CUDA_requested": {
+      "job": "735454",
+      "source_revision": "01d2cd22e7b6a75561b04feb6f1a657496efb2d3",
+      "production_source_revision": "069be5055a218c809f0df35e5226ff1c40446f20",
+      "actual_submission_and_release_received": true,
+      "initial_observation": "RUNNING romeo-a056; no scientific CUDA reception inferred",
+      "actuation_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk28-amr-vp-units-dim2-preparation-20261003/sdk43-cuda-actuation-e3bd35e0-9b33-4d02-9cb1-7c4c738e1eea/actuation-receipt.json",
+      "actuation_receipt_sha256": "1faef584d00273efc300a4838172c55a250fbba29257bc08ddbce1291a8b0bbe",
+      "CUDA_scientific_received": false,
+      "GPU_MPI2_replica_case_received": false
+    }
+  },
   "scoped_receptions_20261006": {
     "schema": "pops.api040.scoped-scientific-receptions@1",
     "historical_snapshot_rows_preserved": true,
