@@ -26,10 +26,20 @@ def has_hierarchy_continuations(program: Any) -> bool:
 
 
 def hierarchy_field_publications(program: Any) -> tuple[Any, ...]:
-    """A destination may publish a mapped field solved by another layout."""
+    """Select publication barriers on layouts without their own hierarchy solve.
+
+    A hierarchy solve's validated lowering already owns its publication barrier,
+    either through invocation continuations or the gather/solve/publish regions.
+    Only a consumer without such a solve needs a publication-only continuation.
+    """
     from pops.codegen.program_lowerability import all_ops
 
-    selected = tuple(value for value in all_ops(program) if value.op == "field_publication")
+    nodes = tuple(all_ops(program))
+    if any(value.op in ("solve_spatial_field", "solve_spatial_nonlinear")
+           or value.op == "solve_linear" and value.attrs.get("scope") == "hierarchy"
+           for value in nodes):
+        return ()
+    selected = tuple(value for value in nodes if value.op == "field_publication")
     top_level = {id(value) for value in program._values}
     if any(id(value) not in top_level for value in selected):
         raise NotImplementedError("hierarchy field continuations require top-level qualified barriers")
