@@ -28,6 +28,18 @@ namespace {
 constexpr std::string_view kCellAverageRepresentation = "pops://representations/cell-average@1";
 constexpr std::string_view kBeforeStepSynchronization = "pops://synchronization/before-step@1";
 
+template <int Dim, class InputView, class OutputView>
+struct CopyPhysicalTransferCarrier {
+  InputView input;
+  OutputView output;
+  int components;
+
+  KOKKOS_FUNCTION void operator()(const Index<Dim>& index) const {
+    for (int component = 0; component < components; ++component)
+      output(index, component) = input(index, component);
+  }
+};
+
 void require_text(const std::string& value, const char* where) {
   if (value.empty())
     throw std::invalid_argument(std::string("prepared System layout transfer requires ") + where);
@@ -624,12 +636,9 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     for (const auto& job : source_region_jobs) {
       const auto input = source_field.fab_global(job.source_patch).view();
       const auto output = source_snapshot.fab_global(job.destination_patch).view();
-      const int width = components;
-      for_each_cell(
-          job.source_region, KOKKOS_LAMBDA(const Index<Dim>& index) {
-            for (int component = 0; component < width; ++component)
-              output(index, component) = input(index, component);
-          });
+      for_each_cell(job.source_region,
+                    CopyPhysicalTransferCarrier<Dim, decltype(input), decltype(output)>{
+                        input, output, components});
     }
     device_fence();
   }
