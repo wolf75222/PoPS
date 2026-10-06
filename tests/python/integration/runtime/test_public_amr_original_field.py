@@ -256,7 +256,7 @@ def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_ca
     directory = collective_directory(world, tmp_path / "original-amr-field")
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     accepted = capture(world, runtime)
-    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / "accepted"))
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / "accepted-checkpoint"))
     with collective_check(world):
         assert accepted[3][:2] == (DT, 1)
         if world.rank == 0:
