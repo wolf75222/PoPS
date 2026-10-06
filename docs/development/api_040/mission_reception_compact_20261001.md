@@ -291,3 +291,22 @@ Corrected CPU job **734617** is actually submitted and released for the same Sou
 | GPU/MPI2 and all94 obligations | Existing scoped histories retained; current GPU preparation remains Source-only | Authenticate the latest CPU terminal/shared-Home quiescence before GPU setup; receive actual full builds, native/scientific cases and exact-revision CI |
 
 Production ABI11, checkpoint9/12, Source1217/seven bindings, equations, original thresholds and all94 obligation IDs remain unchanged. Current build/install/AMR, MPI2/GPU, science and CI are pending. Reproduction keeps `SOURCE=Q41/source`, existing `BUILT_PREFIX=Q41/envs/pops_api040_sdk41_mapped_abi11_amr_dim2` and new `RUN_ROOT=Q41/resume-job-734617`. The admitted workflow uses incremental `scripts/build_python.sh --dim 2 --mpi --wheel-dir RUN_ROOT/wheels`, then the exact built-prefix interpreter under `env -u PYTHONPATH` with identity capture and the two original `test_m19_amr_consumed_runtime.py` nodes in order. These commands describe the admitted workflow; their completion is not yet received.
+
+
+## 2026-10-06 — Baseline Conda réelle corrigée et reprise CPU734920
+
+Le job734617 est reçu FAILED1:0 avant compilation : [réception négative ROOT](/Users/romaindespoulain/dev/tmp/root-sdk28-amr-vp-units-dim2-preparation-20261003/root-sdk41-source6-negative-reception-734617.json), SHA `65e634a3e8f8917121724982e8fb304086f317a3b3bd7586d70a4321618795f6`, Raw22REG/0LINK, Native absent, aucun nœud AMR. Les anciens17CPU/7GPU/14Sources et le registre Home sont identiques avant/après. Le diagnostic réel83records démontre que tous les chemins installés `record.files` existent ; la capture associait à tort les chemins d’archive `paths_data._path` non relocalisés aux fichiers du préfixe.
+
+La baseline@4 conserve les métadonnées originales et tous les fichiers installés ; elle associe explicitement les chemins d’archive aux chemins installés selon les règles Conda noarch, sans exception par nom de paquet. Source de campagne@7 et bootstrap@7 authentifient98payloads ; la production reste Source92cf/headerc190/ABI11, sans changement d’équation ni de seuil. La contre-revue R7 est fermée, pins `f06eea84cb57a7e54e9e104c07b9dd433506eda5f1c6bb40dbf922da77481215`.
+
+La capture seule **734835 COMPLETED0:0,46s,c024** est reçue : [baseline réelle ROOT](/Users/romaindespoulain/dev/tmp/root-sdk28-amr-vp-units-dim2-preparation-20261003/root-sdk41-baseline4-mini-reception-734835.json), SHA `9ff0b1f9c71751558630548a4e53d48954819d0fd547b280116c300267e50156`,83records/21581chemins/1155relocations, métadonnées stables, Python installé3.12.14. Aucun compilateur ni Native exécuté ; la version de l’interpréteur de base n’est pas attestée par cette capture.
+
+La campagne CPU **734920**, OP `272a48c3-14a8-40f2-bef4-2afef00d423a`, est réellement soumise et libérée après vérification des118entrées, de la mini capture et de la quiescence fraîche. [Libération ROOT](/Users/romaindespoulain/dev/tmp/root-sdk28-amr-vp-units-dim2-preparation-20261003/root-source7-public-api-release-272a48c3-14a8-40f2-bef4-2afef00d423a-734920-c9bd861753184f3e88ae0955f3a11876.json), SHA `34600467c6f2fc857225a6c685204dad97f61855cc7a2589f8fb40f8da53d3cb`, RC0. [Observation ROOT](/Users/romaindespoulain/dev/tmp/root-sdk28-amr-vp-units-dim2-preparation-20261003/root-sdk41-source7-progress-734920-890319f78f3f43c0b69339a701baa27a.json), SHA `c4c9b3e5ca18e9af66362ca515074657359cce9a9069e079e41c95eae5b60b04`, RUNNING/c029 à2:44 pendant la préservation initiale. Aucun clone/setup répété.
+
+| Obligation | Acquis exact | Prochaine réception |
+|---|---|---|
+| M19 champ consommé AMR | Baseline4 réelle utilisable ; campagne734920 en cours sur Source92cf | Build sept unités C++, wheel/install/doctor/identité ; originaux `[False]` puis `[True]`, regrid et rollback nonfinite |
+| Non-régression C++ et HPC | Préparations conservées, aucun résultat hérité du job734617 | Contexte MPI/Kokkos réel,27cas C++, puis MPI2/GPU sur les artefacts reconstruits |
+| Mission94 et principes1.1–1.8 | Production1217/sept bindings, équations, API et contrats physiques inchangés | Réceptions scientifiques complètes, coûts comparables et CI de la révision finale restent ouverts |
+
+Reproduction du build admis : `Q41/source/scripts/build_python.sh --dim 2 --mpi --wheel-dir Q41/resume-job-734920/wheels`, exécuté depuis Source avec le préfixe Q41 existant et `env -u PYTHONPATH`. La commande et les nœuds originaux sont conservés dans request/transport de la campagne ; leur réussite est encore à recevoir.
