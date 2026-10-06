@@ -342,7 +342,19 @@ def fault_provider(requirement, directory):
     char* end=nullptr;errno=0;long parsed=std::strtol(target,&end,10);
     if (errno || !end || end==target || *end || parsed<0 || parsed>INT_MAX) return 93;
     if (parsed==rank && request->destination.data) {
-      static_cast<double*>(request->destination.data)[0]=std::numeric_limits<double>::quiet_NaN();
+      auto* destination=static_cast<double*>(request->destination.data);
+      const double invalid=std::numeric_limits<double>::quiet_NaN();
+      if (request->destination.memory_space==POPS_MEMORY_SPACE_HOST_V1) {
+        destination[0]=invalid;
+      } else {
+        if (!pops::component::physical_transfer_detail::supports_device_context(
+                request->execution, request->destination.memory_space)) return 94;
+        using ExecutionSpace=Kokkos::DefaultExecutionSpace;
+        const auto execution=pops::component::physical_transfer_detail::execution_instance<ExecutionSpace>(request->execution);
+        Kokkos::parallel_for("m19_fault_exact_residence", Kokkos::RangePolicy<ExecutionSpace>(execution,0,1),
+                            KOKKOS_LAMBDA(const int) { destination[0]=invalid; });
+        execution.fence();
+      }
       if (const char* trace=std::getenv("POPS_AMR_FIELD_MAP_TRACE")) { if(auto* file=std::fopen(trace,"a")){std::fprintf(file,"injected:%d\n",rank);std::fclose(file);} }
     }
   }
