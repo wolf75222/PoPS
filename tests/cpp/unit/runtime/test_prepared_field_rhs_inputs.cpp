@@ -984,8 +984,8 @@ TEST(PreparedFieldRhsInputs, ActualFieldPublicationReopensCoarseAuxWhileFineRema
   system.seal_auxiliary_providers();
   system.register_elliptic_field("material", "phi", {phi}, 1);
   system.register_elliptic_field("material", "psi", {psi}, 1);
-  const auto phi_rhs = make_poisson_rhs_v2<D>(IncidencePhiRhs{});
-  const auto psi_rhs = make_poisson_rhs_v2<D>(IncidencePsiRhs{});
+  const auto phi_rhs = make_poisson_rhs_v2(IncidencePhiRhs{});
+  const auto psi_rhs = make_poisson_rhs_v2(IncidencePsiRhs{});
   system.set_block_elliptic_field_v2("material", "phi", "test.amr-aux.phi-rhs",
     "test.amr-aux.phi-binding", "test.amr-aux.phi-consumer", 0,
     [&observed, phi_rhs](const Inputs& inputs, Field& rhs) {
