@@ -2,6 +2,7 @@
 /// @brief Exact owner-qualified auxiliary-provider registry and carrier publication for System.
 
 #include "system_impl.hpp"
+#include "auxiliary_consumer_preparation.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -325,54 +326,25 @@ AuxiliaryPublicationStatus System<Dim>::prepare_program_auxiliary_consumer_for_s
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
     int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
-  AuxiliaryEvaluationPoint auxiliary_point;
-  std::exception_ptr preflight_error;
-  try {
-    if (point.clock.empty() || point.tick != p_->macro_step_ || point.level != 0 ||
-        point.substep < 0 || point.stage < 0 || point.stage_fraction.denominator <= 0 ||
-        point.stage_fraction.numerator < 0 ||
-        point.stage_fraction.numerator > point.stage_fraction.denominator ||
-        amr::Rational(point.stage_fraction.numerator, point.stage_fraction.denominator) != point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
-        !std::isfinite(point.physical_time) || evaluation_sequence < 0)
-      throw std::invalid_argument("Program auxiliary read requires its complete current point");
-    const auto& accepted = block_state(block);
-    if (stage_state.layout() != accepted.layout() ||
-        stage_state.distribution() != accepted.distribution() ||
-        stage_state.local_rank() != accepted.local_rank() ||
-        stage_state.ncomp() != accepted.ncomp())
-      throw std::invalid_argument("Program auxiliary read SSA state differs from its block layout");
-    (void)p_->auxiliary_registry_.consumer_plan(consumer_qid);
-    auxiliary_point.clock = point.clock;
-    auxiliary_point.accepted_step = static_cast<std::uint64_t>(point.tick);
-    auxiliary_point.layout_generation = p_->embedded_boundary_generation_;
-    auxiliary_point.substep = point.substep;
-    auxiliary_point.stage = point.stage;
-    auxiliary_point.nonlinear_iteration = evaluation_sequence;
-    auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
-    auxiliary_point.qualify_physical_evaluation(point);
-  } catch (...) {
-    preflight_error = std::current_exception();
-  }
-  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-      preflight_error, &lane, "Program auxiliary read preflight failed collectively");
-  ExactContractBuilder exact;
-  exact.text("pops.system.program-auxiliary-read")
-      .scalar(std::uint32_t{1})
-      .text(consumer_qid)
-      .scalar(block)
-      .text(point.clock)
-      .scalar(point.tick)
-      .scalar(point.level)
-      .scalar(point.substep)
-      .scalar(point.stage)
-      .scalar(point.stage_fraction.numerator)
-      .scalar(point.stage_fraction.denominator)
-      .scalar(point.dt)
-      .scalar(point.physical_time)
-      .scalar(evaluation_sequence);
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"program-auxiliary-read", std::move(exact).release()}}, lane))
-    throw std::invalid_argument("Program auxiliary read identity differs across MPI ranks");
+  const auto auxiliary_point = runtime::system::detail::prepare_auxiliary_consumer_point(
+      point, p_->embedded_boundary_generation_, p_->embedded_boundary_generation_,
+      evaluation_sequence, runtime::system::AuxiliaryEvaluationEvent::before_residual,
+      lane, consumer_qid, block, "system-program-residual", [&] {
+        if (point.clock.empty() || point.tick != p_->macro_step_ || point.level != 0 ||
+            point.substep < 0 || point.stage < 0 || point.stage_fraction.denominator <= 0 ||
+            point.stage_fraction.numerator < 0 ||
+            point.stage_fraction.numerator > point.stage_fraction.denominator ||
+            amr::Rational(point.stage_fraction.numerator, point.stage_fraction.denominator) != point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
+            !std::isfinite(point.physical_time) || evaluation_sequence < 0)
+          throw std::invalid_argument("Program auxiliary read requires its complete current point");
+        const auto& accepted = block_state(block);
+        if (stage_state.layout() != accepted.layout() ||
+            stage_state.distribution() != accepted.distribution() ||
+            stage_state.local_rank() != accepted.local_rank() ||
+            stage_state.ncomp() != accepted.ncomp())
+          throw std::invalid_argument("Program auxiliary read SSA state differs from its block layout");
+        (void)p_->auxiliary_registry_.consumer_plan(consumer_qid);
+      });
 
   return refresh_auxiliary_(auxiliary_point, {consumer_qid});
 }

@@ -190,3 +190,43 @@ is an AMR physical-clock error consistent with the unqualified topology-remateri
 point in Source; its exact runtime call stack is not captured. Core fixes, default
 Derived policy alignment and independent MPI admission review precede the next build.
 These failures and their real binaries/XML remain retained; no np2 result is claimed.
+
+## Field event and accepted physical point correction
+
+The Core correction uses a source-private consumer preparation seam. It retains
+the same source/layout validation and collective agreement before publication,
+with the actual execution event included in the private protocol@1. Numerical
+residuals remain `before_residual`; Field RHS uses `before_field_solve`, including
+native accepted initial points. The existing input/read2 and public ABI13/package8
+contracts, SDK headers and checkpoint formats are unchanged. Core objects and native
+libraries must be recompiled and relinked before receiving this implementation.
+
+AMR topology rematerialization distinguishes diagnostic topology labels from
+physical Clocks. V2 Field closures use the actual installed primary Clock, or an
+exact registered accepted-halo/request Clock, with runtime-owned step/time/dt,
+session, epochs, metadata, Field bindings, actual State carriers and bitwise RuntimeParams
+validation. Parameter mutation is refused only while this V2 accepted borrow is live.
+Initial qualification retains the existing native zero-interval guard. V1 and
+unrelated opaque legacy refresh retain their existing path and receive no invented
+physical-point authority. The internal rematerialization request is version2.
+
+All output ComponentKeys enter accepted-halo dependencies, Field ordering and the
+V2 physical closure. A public potential-plus-gradient Source composition has three
+distinct provider identities; its non-first dependency exposed the previous map
+error. Setup, point copies, candidate bookkeeping, witness allocation and DAG
+serialization now agree collectively before the next collective operation.
+
+The generated default Derived/Analytic policy uses the existing vector policy@2
+for `before_residual` and `before_field_solve`, with evaluation freshness. Input and
+Field-output initialization/once policies and explicitly authored policies retain
+their semantics. A six-event candidate was discarded: unrelated temporal expressions
+could become due on the unqualified legacy topology tail. V2 rematerialization already
+forces its exact dirty closure; broad default permission for `after_regrid` is unnecessary.
+
+The coherent Source reception is Core R4 review SHA
+`c6a294e82c386d56e001602350c73bcd12868e8dfe9fed8a0e70e558a25e49aa`
+and policy R2 review SHA
+`75927544c21541571ab532968d3d0e00a08ff4ed59602e83eaa8c45a30619d6d`.
+Fifty policy tests pass in Main without Native loading. No corrected Native runtime,
+MPI2 or GPU result is implied. The earlier AMR failure lacks a captured stack; this
+Source correction addresses a demonstrated invalid-point path, pending actual execution.

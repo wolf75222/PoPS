@@ -2,6 +2,7 @@
 /// @brief Exact compile-time-ranked AMR facade over runtime::amr::AmrRuntime<Dim>.
 
 #include <pops/runtime/amr_system.hpp>
+#include "../system/auxiliary_consumer_preparation.hpp"
 #include <pops/runtime/amr/amr_layout_transfer_bridge.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
@@ -3592,6 +3593,7 @@ struct AmrSystem<Dim>::Impl {
   std::vector<std::vector<std::string>> last_continuation_transition_rows;
   std::shared_ptr<void> field_rhs_session = std::make_shared<int>(0);
   const runtime::system::FieldSolveRequest<Dim>* active_field_rhs_request = nullptr;
+  const runtime::system::detail::NativeAcceptedAuxiliaryPoint* active_accepted_auxiliary_point = nullptr;
   std::shared_ptr<runtime::system::FieldRhsExecutionRecovery> field_rhs_recovery =
       std::make_shared<runtime::system::FieldRhsExecutionRecovery>();
   AmrSystem<Dim>* facade = nullptr;
@@ -10002,8 +10004,9 @@ struct AmrSystem<Dim>::Impl {
     const auto& registry = prepared_hierarchy->auxiliary_registries.front();
     for (const auto& [slot, plan] : field_plans) {
       outputs.emplace(std::make_pair(plan.output_block, plan.output_key), slot);
-      if (plan.output && !plan.output_keys.empty())
-        provider_outputs.emplace(registry.provider_for_key(plan.output_keys.front()).identity(), slot);
+      if (plan.output)
+        for (const auto& key : plan.output_keys)
+          provider_outputs.emplace(registry.provider_for_key(key).identity(), slot);
     }
     bool changed = true;
     while (changed) {
@@ -12398,42 +12401,30 @@ void AmrSystem<Dim>::prepare_single_level_program_auxiliary_consumer(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
     int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
   const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR Program auxiliary read");
-  runtime::system::AuxiliaryEvaluationPoint auxiliary_point;
-  std::exception_ptr preflight_error;
-  try {
-    if (point.level < 0 || static_cast<std::size_t>(point.level) >=
-                              p_->engine->hierarchy().num_levels())
-      throw std::invalid_argument("AMR auxiliary read requires an actual live hierarchy level");
-    if (point.clock.empty() || point.tick < 0 || point.substep < 0 ||
-        point.stage < 0 || point.stage_fraction.denominator <= 0 ||
-        point.stage_fraction.numerator < 0 ||
-        point.stage_fraction.numerator > point.stage_fraction.denominator ||
-        amr::Rational(point.stage_fraction.numerator, point.stage_fraction.denominator) != point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
-        !std::isfinite(point.physical_time) || evaluation_sequence < 0)
-      throw std::invalid_argument("AMR Program auxiliary read requires its complete current point");
-    if (block < 0 || static_cast<std::size_t>(block) >= p_->blocks.size())
-      throw std::out_of_range("AMR Program auxiliary read block is outside the hierarchy");
-    const auto& accepted = p_->block_state(static_cast<std::size_t>(block), static_cast<std::size_t>(point.level));
-    if (stage_state.layout() != accepted.layout() ||
-        stage_state.distribution() != accepted.distribution() ||
-        stage_state.local_rank() != accepted.local_rank() ||
-        stage_state.ncomp() != accepted.ncomp())
-      throw std::invalid_argument("AMR Program auxiliary read SSA state differs from its block");
-    (void)p_->prepared_hierarchy->auxiliary_registries.at(point.level).consumer_plan(consumer_qid);
-    auxiliary_point.clock = point.clock;
-    auxiliary_point.accepted_step = static_cast<std::uint64_t>(point.tick);
-    auxiliary_point.layout_generation = p_->engine->materialization_generation();
-    auxiliary_point.level = point.level;
-    auxiliary_point.substep = point.substep;
-    auxiliary_point.stage = point.stage;
-    auxiliary_point.nonlinear_iteration = evaluation_sequence;
-    auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
-    auxiliary_point.qualify_physical_evaluation(point);
-  } catch (...) {
-    preflight_error = std::current_exception();
-  }
-  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-      preflight_error, &lane, "AMR Program auxiliary read preflight failed collectively");
+  const auto auxiliary_point = runtime::system::detail::prepare_auxiliary_consumer_point(
+      point, p_->engine->topology_epoch(), p_->engine->materialization_generation(),
+      evaluation_sequence, runtime::system::AuxiliaryEvaluationEvent::before_residual,
+      lane, consumer_qid, block, "amr-program-residual", [&] {
+        if (point.level < 0 || static_cast<std::size_t>(point.level) >=
+                                  p_->engine->hierarchy().num_levels())
+          throw std::invalid_argument("AMR auxiliary read requires an actual live hierarchy level");
+        if (point.clock.empty() || point.tick < 0 || point.substep < 0 ||
+            point.stage < 0 || point.stage_fraction.denominator <= 0 ||
+            point.stage_fraction.numerator < 0 ||
+            point.stage_fraction.numerator > point.stage_fraction.denominator ||
+            amr::Rational(point.stage_fraction.numerator, point.stage_fraction.denominator) != point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
+            !std::isfinite(point.physical_time) || evaluation_sequence < 0)
+          throw std::invalid_argument("AMR Program auxiliary read requires its complete current point");
+        if (block < 0 || static_cast<std::size_t>(block) >= p_->blocks.size())
+          throw std::out_of_range("AMR Program auxiliary read block is outside the hierarchy");
+        const auto& accepted = p_->block_state(static_cast<std::size_t>(block), static_cast<std::size_t>(point.level));
+        if (stage_state.layout() != accepted.layout() ||
+            stage_state.distribution() != accepted.distribution() ||
+            stage_state.local_rank() != accepted.local_rank() ||
+            stage_state.ncomp() != accepted.ncomp())
+          throw std::invalid_argument("AMR Program auxiliary read SSA state differs from its block");
+        (void)p_->prepared_hierarchy->auxiliary_registries.at(point.level).consumer_plan(consumer_qid);
+      });
   authenticate_generated_block_point<Dim>(
       "auxiliary-read", block, p_->blocks[static_cast<std::size_t>(block)].name, point,
       p_->multiblock_hierarchy->collective_contract(), lane.communicator());
@@ -12635,19 +12626,24 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
         // Their transactions are discarded after sampling; only the requested level publishes.
         if (level_point.physical_evaluation &&
             level_point.physical_evaluation->native_accepted_initial()) {
-          if (!p_->active_field_rhs_request)
-            throw std::logic_error("initial auxiliary ancestor sample lacks native source request");
-          if (consumer_source_block < 0 || static_cast<std::size_t>(consumer_source_block) >= p_->blocks.size())
-            throw std::invalid_argument("initial auxiliary sample lacks its exact consuming block");
-          const auto& source = p_->active_field_rhs_request->source(consumer_source_block,
-                                                                  static_cast<int>(level));
-          const auto* proof = std::get_if<runtime::system::NativeAcceptedFieldSource<Dim>>(&source.proof);
-          if (!proof) throw std::invalid_argument("initial auxiliary ancestor has no native accepted source");
-          proof->validate();
+          runtime::multiblock::BoundaryEvaluationPoint initial;
+          if (p_->active_field_rhs_request) {
+            if (consumer_source_block < 0 || static_cast<std::size_t>(consumer_source_block) >= p_->blocks.size())
+              throw std::invalid_argument("initial auxiliary sample lacks its exact consuming block");
+            const auto& source = p_->active_field_rhs_request->source(consumer_source_block,
+                                                                    static_cast<int>(level));
+            const auto* proof = std::get_if<runtime::system::NativeAcceptedFieldSource<Dim>>(&source.proof);
+            if (!proof) throw std::invalid_argument("initial auxiliary ancestor has no native accepted source");
+            proof->validate();
+            initial = proof->birth_point();
+          } else if (p_->active_accepted_auxiliary_point) {
+            initial = p_->active_accepted_auxiliary_point->point_for_level(static_cast<int>(level));
+          } else {
+            throw std::logic_error("initial auxiliary ancestor sample lacks native accepted authority");
+          }
           runtime::system::AuxiliaryPhysicalEvaluation physical(
-              proof->birth_point().stage_fraction, proof->birth_point().dt,
-              proof->birth_point().physical_time);
-          physical.qualify_native_accepted_initial(proof->birth_point());
+              initial.stage_fraction, initial.dt, initial.physical_time);
+          physical.qualify_native_accepted_initial(initial);
           level_point.physical_evaluation = std::move(physical);
         }
         transactions[level].emplace(
@@ -17334,17 +17330,15 @@ void AmrSystem<Dim>::invoke_field_rhs_v2_(const std::string& field, int block, i
   const auto source = *source_storage;
   if (count != 0) {
     runtime::system::AuxiliaryEvaluationPoint auxiliary;
-    try {
-      auxiliary.clock = point.clock;
-      auxiliary.accepted_step = static_cast<std::uint64_t>(point.tick);
-      auxiliary.layout_generation = p_->engine->materialization_generation();
-      auxiliary.level = level;
-      auxiliary.substep = point.substep;
-      auxiliary.stage = point.stage;
-      auxiliary.nonlinear_iteration = point.stage;
-      auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
-      if (point.dt > 0) auxiliary.qualify_physical_evaluation(point);
-      else {
+    if (point.dt > 0) {
+      auxiliary = runtime::system::detail::prepare_auxiliary_consumer_point(
+          point, p_->engine->topology_epoch(), p_->engine->materialization_generation(),
+          point.stage, runtime::system::AuxiliaryEvaluationEvent::before_field_solve,
+          lane, consumer, block, "amr-field-rhs-v2", [&] { source.validate(); });
+    } else {
+      try {
+        auxiliary.layout_generation = p_->engine->materialization_generation();
+        auxiliary.level = level;
         const auto* proof = std::get_if<runtime::system::NativeAcceptedFieldSource<Dim>>(&source.proof);
         if (!proof) throw std::invalid_argument("zero-interval auxiliary lacks native accepted source");
         proof->validate();
@@ -17356,15 +17350,15 @@ void AmrSystem<Dim>::invoke_field_rhs_v2_(const std::string& field, int block, i
         auxiliary.stage = initial.stage;
         auxiliary.substep = initial.substep;
         auxiliary.nonlinear_iteration = 0;
-        auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::initialization;
+        auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::before_field_solve;
         runtime::system::AuxiliaryPhysicalEvaluation physical(
             initial.stage_fraction, initial.dt, initial.physical_time);
         physical.qualify_native_accepted_initial(initial);
         auxiliary.physical_evaluation = std::move(physical);
-      }
-    } catch (...) { error = std::current_exception(); }
-    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-        error, &lane, "AMR Field RHS V2 auxiliary point failed collectively");
+      } catch (...) { error = std::current_exception(); }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          error, &lane, "AMR Field RHS V2 auxiliary point failed collectively");
+    }
     refresh_auxiliary_on_prepared_lane(auxiliary, {consumer}, block);
   }
   try {
@@ -17905,10 +17899,10 @@ std::vector<std::string> AmrSystem<Dim>::prepare_topology_field_order(
     for (const auto& [slot, plan] : p_->field_plans) {
       dependencies.emplace(slot, std::set<std::string>{});
       output_slots.emplace(std::make_pair(plan.output_block, plan.output_key), slot);
-      if (plan.output && !plan.output_keys.empty()) {
+      if (plan.output) {
         const auto& registry = p_->prepared_hierarchy->auxiliary_registries.front();
-        output_provider_slots.emplace(
-            registry.provider_for_key(plan.output_keys.front()).identity(), slot);
+        for (const auto& key : plan.output_keys)
+          output_provider_slots.emplace(registry.provider_for_key(key).identity(), slot);
       }
     }
     for (const auto& [slot, plan] : p_->field_plans) {
@@ -17938,6 +17932,9 @@ std::vector<std::string> AmrSystem<Dim>::prepare_topology_field_order(
   }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       ordering_error, &lane, "AMR topology field DAG preparation failed collectively");
+  std::string dependency_contract;
+  std::exception_ptr dependency_contract_error;
+  try {
   ExactContractBuilder dependency_exact;
   dependency_exact.text("pops.amr.topology-rematerialization-field-dag")
       .scalar(std::uint32_t{1})
@@ -17958,7 +17955,12 @@ std::vector<std::string> AmrSystem<Dim>::prepare_topology_field_order(
     for (const std::string& source : required)
       dependency_exact.text(source);
   }
-  const std::string dependency_contract = std::move(dependency_exact).release();
+  dependency_contract = std::move(dependency_exact).release();
+  } catch (...) {
+    dependency_contract_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      dependency_contract_error, &lane, "AMR topology field DAG serialization failed collectively");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("amr-topology-rematerialization-field-dag"), dependency_contract}},
           lane))
@@ -18017,23 +18019,206 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::rematerialize_fields_after
     std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point) {
   const ExecutionLane& lane =
       p_->require_prepared_engine_lane("AMR topology field rematerialization");
+  std::exception_ptr entry_error;
+  try {
+    if (p_->active_topology_rematerialization_point || p_->active_accepted_auxiliary_point)
+      throw std::logic_error("AMR topology field rematerialization is already active");
+  } catch (...) { entry_error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      entry_error, &lane, "AMR topology rematerialization entry failed collectively");
   const std::vector<std::string> order = prepare_topology_field_order(reason, accepted_point);
-  const runtime::multiblock::BoundaryEvaluationPoint& point = accepted_point;
+  // Only V2 Fields and their actual Field prerequisites require physical authority.
+  // Opaque legacy V1 launchers retain their original unqualified topology path.
+  std::set<std::string> physical_slots;
+  std::exception_ptr selection_error;
+  std::string selection_contract;
+  try {
+    std::map<std::pair<std::string, std::string>, std::string> outputs;
+    std::map<std::string, std::string> output_providers;
+    for (const auto& [slot, plan] : p_->field_plans) {
+      outputs.emplace(std::make_pair(plan.output_block, plan.output_key), slot);
+      if (plan.output)
+        for (const auto& key : plan.output_keys)
+          output_providers.emplace(p_->prepared_hierarchy->auxiliary_registries.front()
+                                       .provider_for_key(key).identity(), slot);
+      for (const auto& providers : plan.rhs_by_block)
+        for (const auto& rhs : providers)
+          if (rhs.evaluate_v2) physical_slots.insert(slot);
+    }
+    for (bool changed = true; changed;) {
+      changed = false;
+      const auto selected = physical_slots;
+      for (const auto& slot : selected) {
+        const auto& plan = p_->field_plans.at(slot);
+        for (std::size_t index = 0; index < plan.boundary_field_blocks.size(); ++index)
+          changed = physical_slots.insert(outputs.at(
+              {plan.boundary_field_blocks[index], plan.boundary_field_keys[index]})).second || changed;
+        for (const auto& provider : plan.providers)
+          for (const auto& [output_provider, source] : output_providers) {
+            const auto downstream = p_->prepared_hierarchy->auxiliary_registries.front()
+                                        .dependent_provider_identities({output_provider});
+            if (provider.identity == output_provider ||
+                std::find(downstream.begin(), downstream.end(), provider.identity) != downstream.end())
+              changed = physical_slots.insert(source).second || changed;
+          }
+      }
+    }
+    ExactContractBuilder exact;
+    exact.text("pops.amr.topology-v2-physical-closure").scalar(std::uint32_t{1});
+    for (const auto& slot : physical_slots) exact.text(slot);
+    selection_contract = std::move(exact).release();
+  } catch (...) { selection_error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      selection_error, &lane, "AMR topology physical closure failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"topology-v2-physical-closure", selection_contract}}, lane))
+    throw std::invalid_argument("AMR topology V2 physical closure differs across MPI ranks");
+  runtime::system::AuxiliaryEvaluationPoint legacy_auxiliary_point;
+  std::exception_ptr legacy_point_error;
+  try {
+    legacy_auxiliary_point.clock = accepted_point.clock;
+    legacy_auxiliary_point.accepted_step = static_cast<std::uint64_t>(p_->macro_step);
+    legacy_auxiliary_point.layout_generation = p_->engine->materialization_generation();
+    legacy_auxiliary_point.level = accepted_point.level;
+    legacy_auxiliary_point.substep = accepted_point.substep;
+    legacy_auxiliary_point.stage = accepted_point.stage;
+    legacy_auxiliary_point.nonlinear_iteration = 0;
+    legacy_auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::after_regrid;
+  } catch (...) { legacy_point_error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      legacy_point_error, &lane, "AMR legacy topology auxiliary point failed collectively");
+  // Topology admission may carry a diagnostic identity. It is not a physical Clock.
+  // Issue a separate native accepted authority from the live runtime and installed
+  // Clock metadata; an active accepted-halo candidate keeps its original exact point.
+  std::optional<runtime::system::detail::NativeAcceptedAuxiliaryPoint> accepted_authority;
   runtime::system::AuxiliaryEvaluationPoint auxiliary_point;
-  auxiliary_point.clock = point.clock;
-  auxiliary_point.accepted_step = static_cast<std::uint64_t>(p_->macro_step);
-  auxiliary_point.layout_generation = p_->engine->materialization_generation();
-  auxiliary_point.level = point.level;
-  auxiliary_point.substep = point.substep;
-  auxiliary_point.stage = point.stage;
-  auxiliary_point.nonlinear_iteration = 0;
-  auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::after_regrid;
-  const auto refresh_required_auxiliary = [&](const std::string& slot) {
+  runtime::multiblock::BoundaryEvaluationPoint point;
+  std::exception_ptr authority_error;
+  if (!physical_slots.empty()) {
+    try {
+      const bool halo_candidate = reason == "accepted_halo_prepare" &&
+          p_->active_accepted_halo_point == &accepted_point && requests_accepted_halo_preparation();
+      if (!halo_candidate &&
+          (accepted_point.tick != p_->macro_step || accepted_point.physical_time != p_->accepted_time ||
+           accepted_point.dt != static_cast<double>(p_->program.last_dt_)))
+        throw std::invalid_argument("AMR topology auxiliary point is not the runtime accepted state");
+      auto physical_point = accepted_point;
+      const auto metadata = p_->program.checkpoint_metadata_;
+      const auto block_params = p_->program.block_params_;
+      const auto primary = metadata.primary_clock_identity;
+      const auto clocks = p_->program.checkpoint_metadata_.logical_clock_identities;
+      // A diagnostic topology label is never promoted to a physical Clock.
+      // Normal accepted state uses the installed primary; an exact halo/request point
+      // may retain its own registered clock. Neither path guesses an absent primary.
+      if (!halo_candidate && !primary.empty()) physical_point.clock = primary;
+      if (physical_point.clock.empty() ||
+          std::find(clocks.begin(), clocks.end(), physical_point.clock) == clocks.end())
+        throw std::invalid_argument("V2 topology auxiliary point lacks an installed physical Clock");
+      const auto topology = p_->engine->topology_epoch();
+      const auto generation = p_->engine->materialization_generation();
+      const auto step = p_->macro_step;
+      const auto time = p_->accepted_time;
+      const auto dt = p_->program.last_dt_;
+      const auto depth = step_transaction_depth();
+      const auto* halo_owner = p_->active_accepted_halo_point;
+      const auto halo_point = accepted_point;
+      std::vector<std::pair<std::string, std::string>> bindings;
+      for (const auto& [slot, plan] : p_->field_plans)
+        bindings.emplace_back(slot, Impl::exact_field_plan_contract(slot, plan, false));
+      std::weak_ptr<void> session = p_->field_rhs_session;
+      auto* owner = p_.get();
+      struct Carrier {
+        std::size_t block, level;
+        const MultiFab<Dim>* state;
+        std::vector<typename Fab<Dim>::storage_type> allocations;
+      };
+      auto carriers = std::make_shared<std::vector<Carrier>>();
+      for (std::size_t level = 0; level < p_->engine->hierarchy().num_levels(); ++level)
+        for (std::size_t block = 0; block < p_->blocks.size(); ++block) {
+          const auto* state = &p_->block_state(block, level);
+          Carrier carrier{block, level, state, {}};
+          for (std::size_t local = 0; local < state->local_size(); ++local)
+            carrier.allocations.push_back(state->fab(local).storage());
+          carriers->push_back(std::move(carrier));
+        }
+      auto validate = [owner, session, topology, generation, step, time, dt, depth,
+                       metadata, block_params, halo_candidate, halo_owner, halo_point, bindings, carriers] {
+        if (session.expired() || owner->engine->topology_epoch() != topology ||
+            owner->engine->materialization_generation() != generation ||
+            owner->macro_step != step || owner->accepted_time != time || owner->program.last_dt_ != dt ||
+            owner->facade->step_transaction_depth() != depth ||
+            owner->program.checkpoint_metadata_ != metadata ||
+            (halo_candidate && (owner->active_accepted_halo_point != halo_owner || !halo_owner ||
+             halo_owner->clock != halo_point.clock || halo_owner->tick != halo_point.tick ||
+             halo_owner->level != halo_point.level || halo_owner->substep != halo_point.substep ||
+             halo_owner->stage != halo_point.stage || halo_owner->stage_fraction != halo_point.stage_fraction ||
+             halo_owner->dt != halo_point.dt || halo_owner->physical_time != halo_point.physical_time)))
+          throw std::logic_error("AMR accepted auxiliary authority lost session/epoch/Clock/point");
+        if (owner->program.block_params_.size() != block_params.size())
+          throw std::logic_error("AMR accepted auxiliary runtime parameter registry changed");
+        for (const auto& [block, expected] : block_params) {
+          const auto found = owner->program.block_params_.find(block);
+          if (found == owner->program.block_params_.end() || found->second.count != expected.count ||
+              expected.count < 0 || expected.count > kMaxRuntimeParams)
+            throw std::logic_error("AMR accepted auxiliary runtime parameter shape changed");
+          for (int parameter = 0; parameter < expected.count; ++parameter)
+            if (std::bit_cast<std::array<std::byte, sizeof(Real)>>(found->second.values[parameter]) !=
+                std::bit_cast<std::array<std::byte, sizeof(Real)>>(expected.values[parameter]))
+              throw std::logic_error("AMR accepted auxiliary runtime parameter value changed");
+        }
+        if (owner->field_plans.size() != bindings.size())
+          throw std::logic_error("AMR accepted auxiliary Field binding registry changed");
+        for (const auto& [slot, contract] : bindings)
+          if (Impl::exact_field_plan_contract(slot, owner->field_plans.at(slot), false) != contract)
+            throw std::logic_error("AMR accepted auxiliary Field binding/parameters changed");
+        for (const auto& carrier : *carriers) {
+          const auto& live = owner->block_state(carrier.block, carrier.level);
+          if (&live != carrier.state || live.local_size() != carrier.allocations.size())
+            throw std::logic_error("AMR accepted auxiliary authority lost exact State membership");
+          for (std::size_t local = 0; local < live.local_size(); ++local)
+            if (live.fab(local).storage().data() != carrier.allocations[local].data())
+              throw std::logic_error("AMR accepted auxiliary State incarnation changed");
+        }
+      };
+      accepted_authority = runtime::system::detail::NativeAcceptedAuxiliaryPoint(
+          physical_point, p_->engine->hierarchy().num_levels(), std::move(validate));
+      point = accepted_authority->point_for_level(physical_point.level);
+      auxiliary_point.clock = physical_point.clock;
+      auxiliary_point.accepted_step = static_cast<std::uint64_t>(physical_point.tick);
+      auxiliary_point.layout_generation = generation;
+      auxiliary_point.level = physical_point.level;
+      auxiliary_point.substep = physical_point.substep;
+      auxiliary_point.stage = physical_point.stage;
+      auxiliary_point.nonlinear_iteration = 0;
+      auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::after_regrid;
+      if (physical_point.dt > 0) auxiliary_point.qualify_physical_evaluation(physical_point);
+      else {
+        runtime::system::AuxiliaryPhysicalEvaluation physical(
+            physical_point.stage_fraction, physical_point.dt, physical_point.physical_time);
+        physical.qualify_native_accepted_initial(physical_point);
+        auxiliary_point.physical_evaluation = std::move(physical);
+      }
+      auxiliary_point.validate();
+    } catch (...) { authority_error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        authority_error, &lane, "AMR accepted topology auxiliary authority failed collectively");
+  } else {
+    std::exception_ptr legacy_authority_error;
+    try {
+      point = accepted_point;
+      auxiliary_point = legacy_auxiliary_point;
+    } catch (...) { legacy_authority_error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        legacy_authority_error, &lane, "AMR legacy topology point copy failed collectively");
+  }
+  const auto refresh_required_auxiliary = [&](const std::string& slot,
+                                               const runtime::system::AuxiliaryEvaluationPoint& refresh_point,
+                                               bool physical) {
     std::vector<std::string> requested;
     std::vector<std::string> remaining;
     std::string request_contract;
     std::exception_ptr request_error;
     try {
+      if (physical) accepted_authority->validate();
       const auto& plan = p_->field_plans.at(slot);
       requested.reserve(plan.providers.size());
       remaining.reserve(p_->dirty_auxiliary_providers.size());
@@ -18047,12 +18232,13 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::rematerialize_fields_after
           remaining.push_back(identity);
       ExactContractBuilder exact;
       exact.text("pops.amr.topology-rematerialization-field-auxiliary-request")
-          .scalar(std::uint32_t{1})
+          .scalar(std::uint32_t{2})
           .text(reason)
-          .text(slot)
-          .sequence(requested, [](ExactContractBuilder& item, const std::string& identity) {
-            item.text(identity);
-          });
+          .text(slot);
+      refresh_point.serialize_exact(exact);
+      exact.sequence(requested, [](ExactContractBuilder& item, const std::string& identity) {
+        item.text(identity);
+      });
       request_contract = std::move(exact).release();
     } catch (...) {
       request_error = std::current_exception();
@@ -18067,40 +18253,77 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::rematerialize_fields_after
     if (requested.empty())
       return;
     p_->dirty_auxiliary_providers.swap(requested);
-    refresh_auxiliary_on_prepared_lane(auxiliary_point);
-    for (std::string& identity : remaining)
-      p_->dirty_auxiliary_providers.push_back(std::move(identity));
+    refresh_auxiliary_on_prepared_lane(refresh_point);
+    std::exception_ptr remaining_error;
+    try {
+      for (std::string& identity : remaining)
+        p_->dirty_auxiliary_providers.push_back(std::move(identity));
+    } catch (...) { remaining_error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        remaining_error, &lane, "AMR topology remaining auxiliary identities failed collectively");
   };
   std::vector<std::vector<std::string>> witness;
-  witness.reserve(order.size());
-  if (p_->active_topology_rematerialization_point)
-    throw std::logic_error("AMR topology field rematerialization is already active");
-  p_->active_topology_rematerialization_point = point;
+  std::vector<const MultiFab<Dim>*> states;
+  std::exception_ptr setup_error;
+  try {
+    witness.reserve(order.size());
+    states.resize(p_->blocks.size(), nullptr);
+  } catch (...) { setup_error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      setup_error, &lane, "AMR topology rematerialization setup failed collectively");
   struct ActivePointReset {
     Impl& owner;
-    ~ActivePointReset() { owner.active_topology_rematerialization_point.reset(); }
+    ~ActivePointReset() {
+      owner.active_accepted_auxiliary_point = nullptr;
+      owner.active_topology_rematerialization_point.reset();
+    }
   } active_point_reset{*p_};
   for (const std::string& slot : order) {
-    refresh_required_auxiliary(slot);
-    std::vector<const MultiFab<Dim>*> states(p_->blocks.size(), nullptr);
+    const bool physical = physical_slots.contains(slot);
+    const auto& solve_point = physical ? point : accepted_point;
+    std::exception_ptr slot_error;
+    try {
+      p_->active_topology_rematerialization_point = solve_point;
+      p_->active_accepted_auxiliary_point = physical ? &*accepted_authority : nullptr;
+    } catch (...) { slot_error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        slot_error, &lane, "AMR topology rematerialization slot setup failed collectively");
+    refresh_required_auxiliary(slot, physical ? auxiliary_point : legacy_auxiliary_point, physical);
     const SolveReport report = consume_solve_outcome(
-        solve_program_field_from_blocks_on_prepared_lane(point, slot, 0, states));
-    witness.push_back(
-        {slot, p_->field_plans.at(slot).plan_identity, p_->field_plans.at(slot).provider_identity,
-         std::to_string(p_->engine->topology_epoch()),
-         std::to_string(p_->engine->materialization_generation()), report.status_name(),
-         point.clock, std::to_string(point.tick), std::to_string(point.level),
-         std::to_string(point.substep), std::to_string(point.stage), "0",
-         std::to_string(point.stage_fraction.numerator),
-         std::to_string(point.stage_fraction.denominator),
-         std::to_string(std::bit_cast<std::uint64_t>(point.dt)),
-         std::to_string(std::bit_cast<std::uint64_t>(point.physical_time))});
+        solve_program_field_from_blocks_on_prepared_lane(solve_point, slot, 0, states));
+    std::exception_ptr witness_error;
+    try {
+      witness.push_back(
+          {slot, p_->field_plans.at(slot).plan_identity, p_->field_plans.at(slot).provider_identity,
+           std::to_string(p_->engine->topology_epoch()),
+           std::to_string(p_->engine->materialization_generation()), report.status_name(),
+           solve_point.clock, std::to_string(solve_point.tick), std::to_string(solve_point.level),
+           std::to_string(solve_point.substep), std::to_string(solve_point.stage), "0",
+           std::to_string(solve_point.stage_fraction.numerator),
+           std::to_string(solve_point.stage_fraction.denominator),
+           std::to_string(std::bit_cast<std::uint64_t>(solve_point.dt)),
+           std::to_string(std::bit_cast<std::uint64_t>(solve_point.physical_time))});
+    } catch (...) { witness_error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        witness_error, &lane, "AMR topology rematerialization witness failed collectively");
   }
+  std::exception_ptr tail_error;
+  try {
+    p_->active_accepted_auxiliary_point = nullptr;
+    p_->active_topology_rematerialization_point = accepted_point;
+  } catch (...) { tail_error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      tail_error, &lane, "AMR topology rematerialization legacy tail setup failed collectively");
   if (!p_->dirty_auxiliary_providers.empty())
-    refresh_auxiliary_on_prepared_lane(auxiliary_point);
-  p_->last_topology_rematerialization_epoch = p_->engine->topology_epoch();
-  p_->last_topology_rematerialization_generation = p_->engine->materialization_generation();
-  p_->last_topology_rematerialization_witness = witness;
+    refresh_auxiliary_on_prepared_lane(legacy_auxiliary_point);
+  std::exception_ptr metadata_error;
+  try {
+    p_->last_topology_rematerialization_witness = witness;
+    p_->last_topology_rematerialization_epoch = p_->engine->topology_epoch();
+    p_->last_topology_rematerialization_generation = p_->engine->materialization_generation();
+  } catch (...) { metadata_error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      metadata_error, &lane, "AMR topology rematerialization metadata failed collectively");
   return witness;
 }
 
@@ -20935,6 +21158,8 @@ std::string AmrSystem<Dim>::installed_program_hash() const {
 
 template <int Dim>
 void AmrSystem<Dim>::seed_program_params(int block, const std::vector<double>& defaults) {
+  if (p_->active_accepted_auxiliary_point)
+    throw std::logic_error("AMR runtime parameters are borrowed by accepted auxiliary preparation");
   p_->require_no_native_package_callback("seed_program_params");
   p_->program.seed_params(block, defaults);
   p_->field_candidate_observations.clear();
@@ -20943,6 +21168,8 @@ void AmrSystem<Dim>::seed_program_params(int block, const std::vector<double>& d
 
 template <int Dim>
 void AmrSystem<Dim>::set_program_params(int block, const std::vector<double>& values) {
+  if (p_->active_accepted_auxiliary_point)
+    throw std::logic_error("AMR runtime parameters are borrowed by accepted auxiliary preparation");
   p_->invalidate_checkpoint_capture();
   p_->require_no_native_package_callback("set_program_params");
   p_->program.set_params(block, values, "AmrSystem");

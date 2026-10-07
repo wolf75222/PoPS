@@ -487,6 +487,30 @@ def _consumer_owner_qid(model: Any, consumer_owner_qid: Any = None) -> str:
     return consumer_owner_qid
 
 
+def _default_auxiliary_evaluation_policy_cpp(kind):
+    """Default pure-expression providers follow the event of their actual consumer.
+
+    DerivedAux and AnalyticAux are lowered immutable expressions. Numeric reads
+    request residual or Field preparation at the actual consuming evaluation.
+    Forced invalidation handles layout recomputation separately; allowing a
+    generic after_regrid event would also select unrelated temporal expressions
+    on the legacy topology diagnostic point, which has no physical authority.
+    Permission does not trigger evaluation: the registry still selects the exact
+    required dependency closure and authenticates point, frame, owner and freshness.
+    Explicit native policies remain authoritative; this helper emits only defaults.
+    """
+    if kind != "AuxiliaryProviderKind::derived":
+        return ("AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::initialization, "
+                "AuxiliaryFreshness::once}")
+    events = (
+        "before_residual",      # residual and local implicit consumer prerequisites
+        "before_field_solve",   # Field RHS, including an accepted zero-interval source
+    )
+    return ("AuxiliaryEvaluationPolicy{std::vector<AuxiliaryEvaluationEvent>{%s}, "
+            "AuxiliaryFreshness::evaluation}" % ", ".join(
+                "AuxiliaryEvaluationEvent::" + event for event in events))
+
+
 def _emit_auxiliary_route_registration(
     model: Any,
     *,
@@ -830,13 +854,7 @@ def _emit_auxiliary_route_registration(
             row["key"]["space_name"],
             row["key"]["component"],
         )
-        policy = (
-            "AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::before_residual, "
-            "AuxiliaryFreshness::evaluation}"
-            if kind == "AuxiliaryProviderKind::derived"
-            else "AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::initialization, "
-            "AuxiliaryFreshness::once}"
-        )
+        policy = _default_auxiliary_evaluation_policy_cpp(kind)
         lines.extend(
             (
                 "  sys->install_prepared_auxiliary_provider(Provider{",

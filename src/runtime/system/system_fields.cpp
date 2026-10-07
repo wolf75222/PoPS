@@ -2,6 +2,7 @@
 /// @brief Exact compile-time-ranked System state and elliptic-field surface.
 
 #include "system_impl.hpp"
+#include "auxiliary_consumer_preparation.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
@@ -800,9 +801,22 @@ void System<Dim>::invoke_field_rhs_v2_(const std::string& field, int block,
       error, &lane, "System Field RHS V2 issuer preflight failed collectively");
   const auto source = *source_storage;
   if (count != 0) {
-    if (point.dt > 0)
-      prepare_program_auxiliary_consumer(point, consumer, block, state, point.stage);
-    else {
+    if (point.dt > 0) {
+      const auto auxiliary = runtime::system::detail::prepare_auxiliary_consumer_point(
+          point, p_->embedded_boundary_generation_, p_->embedded_boundary_generation_,
+          point.stage, runtime::system::AuxiliaryEvaluationEvent::before_field_solve,
+          lane, consumer, block, "system-field-rhs-v2", [&] {
+            source.validate();
+            if (point.tick != p_->macro_step_ || point.level != 0)
+              throw std::invalid_argument("Field auxiliary requires its complete current point");
+            const auto& accepted = block_state(block);
+            if (state.layout() != accepted.layout() || state.distribution() != accepted.distribution() ||
+                state.local_rank() != accepted.local_rank() || state.ncomp() != accepted.ncomp())
+              throw std::invalid_argument("Field auxiliary SSA state differs from its block layout");
+          });
+      if (refresh_auxiliary_(auxiliary, {consumer}) != runtime::system::AuxiliaryPublicationStatus::ready)
+        throw std::runtime_error("System Field auxiliary candidate is non-finite");
+    } else {
       runtime::system::AuxiliaryEvaluationPoint auxiliary;
       try {
         const auto* proof = std::get_if<runtime::system::NativeAcceptedFieldSource<Dim>>(&source.proof);
@@ -817,7 +831,7 @@ void System<Dim>::invoke_field_rhs_v2_(const std::string& field, int block,
         auxiliary.layout_generation = p_->embedded_boundary_generation_;
         auxiliary.stage = initial.stage;
         auxiliary.substep = initial.substep;
-        auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::initialization;
+        auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::before_field_solve;
         runtime::system::AuxiliaryPhysicalEvaluation physical(
             initial.stage_fraction, initial.dt, initial.physical_time);
         physical.qualify_native_accepted_initial(initial);
