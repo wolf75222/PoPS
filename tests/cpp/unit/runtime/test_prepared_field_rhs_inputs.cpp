@@ -6,6 +6,7 @@
 #include "amr_tagging_test_authority.hpp"
 #include "field_rhs_value_program_fixture.hpp"
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
+#include <pops/runtime/builders/compiled/dsl_block.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/dynamic/dynlib.hpp>
@@ -22,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -40,6 +42,12 @@ using Inputs = PreparedFieldRhsInputs<D>;
 static_assert(!std::is_default_constructible_v<Inputs>);
 static_assert(!std::is_aggregate_v<Inputs>);
 static_assert(std::is_copy_constructible_v<Inputs>);
+
+int kernel_component(std::size_t component) {
+  if (component > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+    throw std::overflow_error("Field RHS fixture component exceeds the kernel index range");
+  return static_cast<int>(component);
+}
 
 // Genuine Program-only storage via the production generated-block factory, not dummy closures.
 struct StorageModel {
@@ -135,7 +143,7 @@ template<class Runtime>
 AuxiliaryComponentKey install_auxiliaries(Runtime& system, int count) {
   const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "field", "scalar"};
   AuxiliaryStorageShape<D> shape;
-  shape.halo.fill(1);
+  for (int axis = 0; axis < D; ++axis) shape.halo[axis] = 1;
   const AuxiliaryComponentKey a{"test.field-rhs-v2.owner", "aux", "analytic", "a"};
   const AuxiliaryComponentKey b{"test.field-rhs-v2.owner", "aux", "derived", "b"};
   const AuxiliaryComponentKey phi{"test.field-rhs-v2.owner", "field", "potential", "potential"};
@@ -153,7 +161,7 @@ AuxiliaryComponentKey install_auxiliaries(Runtime& system, int count) {
           const int cells = kCells * (1 << launch.point.level);
           for (std::size_t local = 0; local < output.local_size(); ++local)
             for_each_cell(output.box(local), AnalyticAuxKernel{
-              output.fab(local).view(), address.component, cells, time});
+              output.fab(local).view(), kernel_component(address.component), cells, time});
           Kokkos::fence();
         })});
     system.install_prepared_auxiliary_provider(Provider{
@@ -171,7 +179,7 @@ AuxiliaryComponentKey install_auxiliaries(Runtime& system, int count) {
           for (std::size_t local = 0; local < output.local_size(); ++local)
             for_each_cell(output.box(local), DerivedAuxKernel{
               input.fab(local).view(), output.fab(local).view(),
-              source.component, target.component, parameter});
+              kernel_component(source.component), kernel_component(target.component), parameter});
           Kokkos::fence();
         })});
     system.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<D>{
@@ -683,7 +691,8 @@ TEST(PreparedFieldRhsInputs, ActualMultilevelAmrIssuesOneInputForEachLiveLevel) 
   system.bind_bootstrap_subject("test.field-rhs-v2.state", "material", "bound_level_zero");
   system.stage_bootstrap_array("test.field-rhs-v2.state", "material", "cell", "cell", 1,
     config.shape, initial());
-  Extent<D> prolongation{}, restriction{}; prolongation.fill(1);
+  Extent<D> prolongation{}, restriction{};
+  for (int axis = 0; axis < D; ++axis) prolongation[axis] = 1;
   system.register_bootstrap_transfer_route("test.field-rhs-v2.prolongation",
     {"test.field-rhs-v2.state"}, "test.field-rhs-v2.conservative-linear", "cell", "cell",
     "conservative", "dense", "prolongation", "conservative_linear", 2, prolongation,
