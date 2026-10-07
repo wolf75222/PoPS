@@ -175,3 +175,18 @@ as required by the frozen hierarchy/checkpoint-capacity authority. Neither bound
 validation nor capacity validation is removed. The three added lines and corrected
 argument preserve all115 assertion expressions. This Source review receives no new
 runtime success; the earlier v2 binary and13 failures remain preserved.
+
+The f1b4 world1 run reaches five guards successfully, with eight remaining failures.
+Four are corrected in the unit setup: V2 requires a nonempty consumer identity even
+when its pack has zero values; a foreign owner uses its declared installed Clock;
+and a copied Field has separate storage. The previous pointer-equality assertion is
+replaced by inequality plus shape and exact valid-cell value checks, while the refusal
+to use that copy as an SSA source remains. The test ledger retains114 previous assertion
+expressions, replaces one and adds five:120 expressions in the same13 cases.
+
+Three remaining failures establish a Core event mismatch: the Field RHS preparation
+used `before_residual` although its providers declared `before_field_solve`. The fourth
+is an AMR physical-clock error consistent with the unqualified topology-rematerialization
+point in Source; its exact runtime call stack is not captured. Core fixes, default
+Derived policy alignment and independent MPI admission review precede the next build.
+These failures and their real binaries/XML remain retained; no np2 result is claimed.

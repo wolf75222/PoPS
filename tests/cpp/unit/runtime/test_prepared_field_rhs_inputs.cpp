@@ -315,7 +315,7 @@ void install_uniform_field(System<D>& system, Observation& observed, int count =
   } else callback = observing_callback(observed);
   observed.inject_nonfinite = fault;
   system.set_block_elliptic_field_v2("material", "potential", "test.field-rhs-v2.binding",
-    count ? "test.field-rhs-v2.consumer" : "", count, std::move(callback));
+    "test.field-rhs-v2.consumer", count, std::move(callback));
   system.set_state("material", initial(cells)); system.set_program_block_map({0});
   system.seed_program_params(0, {double(kParameter)});
 }
@@ -521,7 +521,8 @@ TEST(PreparedFieldRhsInputs, WrongLevelAndForeignShapeRefuseBeforeCallbackOrPubl
   // The foreign runtime has real storage on another Frame/domain. Its field is not a proof token.
   install_uniform_field(foreign, foreign_observed, 2, false, kCells + 1, 2, 3);
   auto& foreign_context = installed_value_context(foreign);
-  foreign_context.configure_primary_clock("test.field-rhs-v2.foreign-clock");
+  // The installed clock is immutable. Keep it while testing a foreign state owner/Frame.
+  foreign_context.configure_primary_clock("test.field-rhs-v2.clock");
   EXPECT_ANY_THROW((void)context.solve_fields_from_program_values_at(context.boundary_evaluation_point(11),
     10, "test.field-rhs-v2.slot", {{0, &foreign_context.state(0), 1}}));
   EXPECT_FALSE(observed.copied.has_value());
@@ -640,8 +641,21 @@ TEST(PreparedFieldRhsInputs, DeclaredSourceAndExactOwnedBufferMustBothMatchInsta
     10, "test.field-rhs-v2.slot", {}));
   Field copied = first;
   ASSERT_EQ(copied.layout(), first.layout());
-  for (std::size_t local = 0; local < first.local_size(); ++local)
-    ASSERT_EQ(copied.fab(local).view().data, first.fab(local).view().data);
+  ASSERT_EQ(copied.distribution(), first.distribution());
+  ASSERT_EQ(copied.local_size(), first.local_size());
+  ASSERT_EQ(copied.ncomp(), first.ncomp());
+  ASSERT_EQ(copied.ghosts(), first.ghosts());
+  Field copy_error(first.layout(), first.distribution(), first.local_rank(), 1, first.ghosts());
+  copy_error.set_val(0);
+  for (std::size_t local = 0; local < first.local_size(); ++local) {
+    // Field/Fab copy owns independent storage, even when every copied value is exact.
+    ASSERT_NE(copied.fab(local).view().data, first.fab(local).view().data);
+    for_each_cell(first.box(local), ParityErrorKernel{
+      std::as_const(first).fab(local).view(), std::as_const(copied).fab(local).view(),
+      copy_error.fab(local).view()});
+  }
+  Kokkos::fence();
+  EXPECT_EQ(reduce_max_local(copy_error), Real(0));
   EXPECT_THROW((void)context.program_value(1, 0, copied), std::invalid_argument);
   EXPECT_FALSE(observed.copied.has_value());
   EXPECT_EQ(system.state_global("material"), state);
