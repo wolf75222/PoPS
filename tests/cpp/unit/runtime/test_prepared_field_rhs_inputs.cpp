@@ -49,6 +49,13 @@ int kernel_component(std::size_t component) {
   return static_cast<int>(component);
 }
 
+std::size_t local_valid_cell_count(const Field& field) {
+  std::size_t cells = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    cells += static_cast<std::size_t>(field.box(local).numPts());
+  return cells;
+}
+
 // Genuine Program-only storage via the production generated-block factory, not dummy closures.
 struct StorageModel {
   using State = StateVec<1>;
@@ -309,7 +316,13 @@ void install_uniform_field(System<D>& system, Observation& observed, int count =
           std::as_const(reference).fab(local).view(), std::as_const(rhs).fab(local).view(),
           error.fab(local).view()});
       inputs.execution().fence();
-      EXPECT_EQ(reduce_max_local(error), Real(0));
+      const auto local_cells = local_valid_cell_count(error);
+      ::testing::Test::RecordProperty("field_rhs_parity_local_fabs", std::to_string(error.local_size()));
+      ::testing::Test::RecordProperty("field_rhs_parity_local_valid_cells", std::to_string(local_cells));
+      if (local_cells == 0)
+        EXPECT_EQ(reduce_max_local(error), -std::numeric_limits<Real>::infinity());
+      else
+        EXPECT_EQ(reduce_max_local(error), Real(0));
       observed.copied.emplace(inputs); observed.levels.insert(inputs.level());
     };
   } else callback = observing_callback(observed);
@@ -657,7 +670,13 @@ TEST(PreparedFieldRhsInputs, DeclaredSourceAndExactOwnedBufferMustBothMatchInsta
       copy_error.fab(local).view()});
   }
   Kokkos::fence();
-  EXPECT_EQ(reduce_max_local(copy_error), Real(0));
+  const auto local_cells = local_valid_cell_count(copy_error);
+  RecordProperty("field_copy_local_fabs", std::to_string(copy_error.local_size()));
+  RecordProperty("field_copy_local_valid_cells", std::to_string(local_cells));
+  if (local_cells == 0)
+    EXPECT_EQ(reduce_max_local(copy_error), -std::numeric_limits<Real>::infinity());
+  else
+    EXPECT_EQ(reduce_max_local(copy_error), Real(0));
   EXPECT_THROW((void)context.program_value(1, 0, copied), std::invalid_argument);
   EXPECT_FALSE(observed.copied.has_value());
   EXPECT_EQ(system.state_global("material"), state);

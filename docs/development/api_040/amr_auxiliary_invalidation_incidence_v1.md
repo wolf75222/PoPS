@@ -95,3 +95,31 @@ label does not mint physical authority. Custom temporal prerequisites of that
 legacy publisher remain a separate preexisting unqualified-point limitation.
 Only the private fragment changes; SDK967e and the existing ABI values are retained.
 This correction still requires official compilation and native execution.
+
+## Bounded native reception after the publisher correction
+
+The corrected official build at9db passes and installs Native
+`d154b257484040c18b4a2a1439240e5ec963954715d6cb340cad0c7b12a8e2a1`
+with SDK967e. Five binding TUs are compiled in this build; two conforming SDK967e
+objects from the earlier793 partial build are reused, making seven authenticated
+bindings. The [original installed nonautonomous calculation](/Users/romaindespoulain/dev/tmp/root-sdk967e-nonautonomous-positive-reception-9db1c37-20261007.json)
+passes with unchanged references and bounds, exact checkpoint arrays and34 raw
+artifacts. Y is a reference without a direct stage snapshot. MPI world1 is observed;
+effective OpenMP concurrency is not measured in that test.
+
+The [C++ world1 cohort](/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-cohort-world1-positive-reception-9db1c37-20261007.json)
+passes13 Field and21 Registry cases with no skip, including the actual named
+multilevel guard path and six registry counter-tests. It retains74 raw artifacts
+and a genuinely rebuilt component DSO with SDK967e. Registry dimension templates
+are distinct from complete Native dimension qualification.
+
+The [first world2 run](/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-world2-first-negative-reception-9db1c37-20261007.json)
+executes13 cases on each rank:26 total,23 PASS and3 FAIL, zero skips. The multilevel
+case passes on both ranks. Three failures compare a local maximum of `-inf` with
+zero. The public reducer initializes the empty local range to negative infinity;
+the first run records no independent patch census. A test-only correction now
+keeps exact zero for real cells, checks exact empty identity and records actual
+local Fab/valid-cell counts for the next execution. It adds no collective or clamp
+and changes no physical criterion, reducer, guard or tolerance. Its
+[independent Source review](/Users/romaindespoulain/dev/tmp/PoPS-independent-emptyrank-test-only-review-20261007/review.json)
+does not receive a corrected MPI run yet. The original negative remains intact.

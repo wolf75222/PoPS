@@ -4,11 +4,11 @@
     "observed_source_commit": "c0f18d50efd454396d6761992a9817adf353f412",
     "full_94_obligations_closed": false,
     "scope": "Dated bounded reception; historical current_head/mapping_baseline and original obligations are unchanged",
-    "PDE": "Core R4/default Derived two actual numeric events; one installed CPU Dim2 one-level AMR world1 PDE PASS/0skip, Native b471/wheel7cd704; Y reference only; OMP concurrency unmeasured",
-    "Cpp13": "c0f18 executed11PASS/2FAIL/0SKIP. Incidence+lane+registrytests Source integrated; first SDK967e build793 failed on omitted .inc before Native relink/install/PDE. Corrective publisher Source integrated/reviewed with237localincludes, new official validation pending; installedb471/4b stays previous proven scope.",
+    "PDE": "New actual9dbSDK967e/NativeD154 built/installed originalonelevelworld1PASS, originalU/Fbounds+CP exact, Ynotmeasured and OMPeffectiveunmeasured",
+    "Cpp13": "World1 Field13/Registry21 PASS0skip. Firstworld2 13casesperrank/26exec total23PASS3FAIL emptylocalexpectations, multilevelcase bothPASS. FixturecorrectionSourceintegrated with actualfuturecensus, rerunpending.",
     "formal_order": "99de181 Main Source61 PASS via archived XML/command; separate frozen author Source cohort noSO, Root stdout absent; formal certificate, no PDE convergence qualification",
     "ROMEO735830": "FAILED1:0 in allocation before checkout/prefix/build; metadata omission corrected in staged inputs, 17 helpers reviewed, future Source/job freeze pending; nvcc version/driver queries occurred, no GPU PDE compilation",
-    "retry": "ede680/old Native ea0c reception remains historical; no new b471 original retry launched at this observation"
+    "retry": "Historical ede/ea0c retry retained; no originalretry NativeD154received yet."
   },
   "source": "PoPS_Codex_handoff_0.4.0/reference/PoPS_API_v0.4.0/results/corpus_matrix.json",
   "witness_source": "PoPS_Codex_handoff_0.4.0/context/CORPUS_ORIGINAL.md:278-289",
@@ -2538,6 +2538,74 @@
       "corrective_native_build_run_received": false,
       "GPU793admitted": false,
       "full_obligations_closed": false
+    },
+    "SDK967e_installed_nonauto_and_cpp_world1_native_positive_9db": {
+      "source": "9db1c37b6be06f0a11a1fad2041825492851394e",
+      "Native": "d154b257484040c18b4a2a1439240e5ec963954715d6cb340cad0c7b12a8e2a1",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "bindings": {
+        "new9db": 5,
+        "successful793cached": 2,
+        "totalauthenticated": 7
+      },
+      "root_PDE_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-nonautonomous-positive-reception-9db1c37-20261007.json",
+        "sha256": "8cbae51f8f5ed27a7f0f402e9d70b5d2a15c470f2e35364dee1d8955e52d030c"
+      },
+      "root_CPP_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-cohort-world1-positive-reception-9db1c37-20261007.json",
+        "sha256": "d7998d072289ae6a0af7346c32d821cb62b26e65b9117f5992e72ae5aff29328"
+      },
+      "PDE_counts": {
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "CPP_counts": {
+        "Field": 13,
+        "Registry": 21,
+        "passed": 34,
+        "failed": 0,
+        "skipped": 0
+      },
+      "MPI_world_size": 1,
+      "original_bounds_unchanged": true,
+      "checkpoint_exact_NPY": true,
+      "Y_directly_measured": false,
+      "effective_OMP_threads_measured": false,
+      "registry_template_dims_not_NativeDims13": true,
+      "package_unchanged_entries": 2793,
+      "scope": "One unchanged one-level original PDE plus two complete CPPunit suites, namedmultilevelguardpath; not allAMR incidence/runtime/fault cases",
+      "full94_received": false
+    },
+    "SDK967e_CPP_world2_first_negative_and_emptyrank_fixture_Source": {
+      "source_run": "9db1c37b6be06f0a11a1fad2041825492851394e",
+      "root_negative": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-world2-first-negative-reception-9db1c37-20261007.json",
+        "sha256": "27d72efeff90dcac526ab31c20d095aa260a61abdc50ad6cf7fe39b16099eaae"
+      },
+      "distinct_cases_per_rank": 13,
+      "rank_executions_total": 26,
+      "passed": 23,
+      "failed": 3,
+      "skipped": 0,
+      "multilevel_case_passes_both": true,
+      "failure": "Unconditional localmax zero expectation against observed-inf; exact emptylocalcensus not instrumented in first run",
+      "fixture_patch_sha256": "a88fbd2e4ace6610303a0183207d844e976cf56b0ea02ecac7941ae7053f2d64",
+      "integrated_CPP_sha256": "a02bfb676e30c92bcf5c6f7c3950e8011c5649acf0e11d43de209bafb1168049",
+      "independent_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-emptyrank-test-only-review-20261007/review.json",
+        "sha256": "159d80ac1ce2c29c8df2998db9307216af82e0789f4cac6cb1cac34105d7416c"
+      },
+      "original_13_cases_120_assertions_preserved": true,
+      "exact_empty_identity_assertions_added": 2,
+      "new_global_collectives": 0,
+      "Core_reducer_formula_guard_tolerance_changed": false,
+      "new_census_record_properties": "Actual local Fab and valid-cell counts in next XML only; not retroactive proof",
+      "corrected_runtime_received": false,
+      "scope": "Test-only correction Source integrated, no correctedworld2PDE/case acceptance yet",
+      "full94_received": false
     }
   },
   "scoped_receptions_20261006": {
