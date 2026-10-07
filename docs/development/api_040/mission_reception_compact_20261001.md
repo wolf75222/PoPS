@@ -457,3 +457,29 @@ domaine2817 entrées,2585 fichiers,231 dossiers et un lien.
 | Checkpoint-own Retry | Implémentation et contre-revue Source provider v6 ; témoin original préparé | Exécution Native réelle, même seal sans recapture, restart et continuation |
 | Extension Field State/Aux | Plan C++ commun contre-revu ; callbackV2 et inputs séparés en implémentation | Contrats read2/PackageABI8/NativeABI13, nouveaux headers, rebuild et gardes/fautes multi-niveaux/MPI/GPU |
 | CUDA et mission94 | Négatifs historiques et préparation d5b0 conservés ; aucun nouveau job lancé | Révision intégrée reçue, backends/science/coûts/non-régression et CI finale |
+
+## Nonautonome Native13 reçu, 7 octobre 2026
+
+Le contrat Field State/Aux read2, PackageABI8 et NativeABI13 est intégré ; les
+checkpoints Uniform9/AMR12 sont inchangés. Le build officiel3ee recompile sept bindings.
+Le premier calcul37ec compile, lie et avance, mais ses valeurs3.375 et6 violent les
+références3.36 et5.76. Son négatif et les25 artefacts réels sont préservés.
+
+Le correctif générique de préparation Aux du solveur local AMR au point implicite est
+intégré dansede680fe, avec74 tests Source et contre-revue indépendante. Le paquet
+nouveau réutilise exactement le Native13/Header4b2c. La tranche réelle
+validate/resolve/compile/bind/run passe : U3.359999999999518/F5.759999999998074,
+erreurs maximales4.82e-13/1.93e-12 sous les bornes originales, checkpoint exactement
+égal aux tableaux. Le C++ effectif ajoute une seule préparation avant la vue.
+Y48/25 reste une référence, pas une mesure. ROOT réception positive
+`root-field-rhs-native13-nonautonomous-positive-20261007.json`, SHA
+`03e911a86bb8909d0eff29eb3c39cb2c3e6698063b9176654e1344ae733bb37c`,
+joint l'auteur, le lecteur indépendant et26 artefacts. Commandes et portée sont dans
+[le contrat et sa réception](field_rhs_prepared_inputs_v2.md).
+
+| Domaine | Réception exacte | Prochaine exigence |
+|---|---|---|
+| Nonautonome et cinq séparations | Un rang CPU Kokkos Dim2/un niveau, oracles fixes et CP exacts reçus surede680fe | MPI2, autres compositions et multi-niveaux ; coûts comparables |
+| Checkpoint-own Retry original | Nouveau test Native13 terminal PASS ; lecture indépendante en cours | Joindre sceau, tableaux, restart et continuation réels avant réception |
+| Entrées Field State/Aux et producteurs SSA | Cœur13 intégré, première tranche publique reçue ;13 cas C++ indépendants écrits | Brancher catalogues/CMake et np2, compiler puis recevoir gardes/fautes/lifecycle |
+| Couverture méthodes et mission94 | Aucun ID ni critère réduit ; défaut split préexistant et producteurs avancés encore ouverts | Corriger et recevoir les cas manquants, MPI/GPU/3D, convergence, mesures et CI finale |

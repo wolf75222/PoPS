@@ -1317,6 +1317,12 @@ sources = ["tests/cpp/unit/runtime/test_residual_operator.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_field_rhs_inputs"
+sources = ["tests/cpp/unit/runtime/test_prepared_field_rhs_inputs.cpp"]
+labels = ["unit", "runtime", "elliptic", "amr", "native_loader", "compiler", "medium"]
+mpi_variants = [2]
+
+[[cpp.suite]]
 name = "test_prepared_field_solver_nd"
 sources = ["tests/cpp/unit/runtime/test_prepared_field_solver_nd.cpp"]
 labels = ["unit", "runtime", "elliptic", "components", "fast"]

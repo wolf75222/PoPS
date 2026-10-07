@@ -1,5 +1,6 @@
 {
   "_meta": {
+    "api040_prepared_field_rhs_estimate_source": "Unmeasured scheduling estimate added 2026-10-07 for test_prepared_field_rhs_inputs: 720.0 s copied from test_amr_synthetic_program_loader_transaction. Both build native-loader test executables and precompiled provider DSO fixtures through native_dso_compiler.hpp in the heavy-test pool; the analogue's six fixtures make this a conservative seed for the single Field value-authority fixture and context-heavy AMR test translation unit. This is not a measured build duration. Replace from the next complete cold-CI timing artifact.",
     "api040_named_device_kernel_estimate_source": "Unmeasured scheduling seed added 2026-10-04 for test_elliptic_named_device_kernels: catalog median 2.0 s, following estimate_policy. Replace from the next complete CI timing artifact. Host correctness runs are not cold-CI build or CTest timing measurements.",
     "captured_utc": "2026-07-26",
     "default_parallel_share_seconds": 2.0,
@@ -55,6 +56,7 @@
       "test_prepared_cartesian_nd",
       "test_prepared_diffusion",
       "test_prepared_embedded_boundary_nd",
+      "test_prepared_field_rhs_inputs",
       "test_prepared_field_solver_nd",
       "test_prepared_numerics_gate",
       "test_prepared_polar_poisson_inverse",
@@ -76,7 +78,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 200,
+    "target_count": 201,
     "v12_estimate_source": "No per-target cold-build receipt exists. History snapshot and AMR transition use the 300 s heavy-template tier; collective rejection uses the 2 s parallel-share floor. Replace from the next complete cold-CI build timing artifact.",
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor",
     "v18_estimate_source": "Unmeasured scheduling estimates: AMR publication and general composite solver use the existing 300 s heavy-template tier; small runtime contracts use the 2 s parallel-share floor. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -244,6 +246,7 @@
   "test_prepared_cartesian_nd": 2.0,
   "test_prepared_diffusion": 8.0,
   "test_prepared_embedded_boundary_nd": 300.0,
+  "test_prepared_field_rhs_inputs": 720.0,
   "test_prepared_field_solver_nd": 300.0,
   "test_prepared_hyperbolic_boundary": 2.0,
   "test_prepared_numerics_gate": 2.0,

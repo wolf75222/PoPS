@@ -105,3 +105,38 @@ solve actions, ARK stages and the Field/SSA cohort. A controlled exact-HEAD base
 reproduces the three AMR preparation omissions. A separate split-coordinate regression
 also fails before emission on that baseline and remains open; this cohort does not
 qualify the full split suite. Corrected numerical execution is still pending.
+
+The corrected tranche at `ede680fe00746c1bc7e5eeb4afabd9772b92cc33` is now received:
+validate, resolve, actual C++ compilation, binding, an accepted step and checkpoint all
+pass. All 64 State values are `3.359999999999518` and all 64 Field values are
+`5.759999999998074`. Maximum absolute errors are respectively
+`4.818367926873179e-13` and `1.9255708139098715e-12`, below the original fixed bounds.
+The checkpoint arrays equal the saved NPY arrays exactly. Its native clock is0.25,
+macro step1, one level and one rank. The authored physical origin1 is distinct from
+that measured native clock. `Y=48/25` remains an independent reference, not a captured
+intermediate value.
+
+The actually compiled Program differs from the failed Program by one preparation call
+before the provider view; the actual Field model compiler input is identical. Ninja
+reported no work for the unchanged C++ core. The new wheel has SHA256
+`b961309157ad80a05fc022a249e8f7125185e6754eb0419e2fa62d737371cf30` and contains
+the corrected Python emitter with the same Native13 extension. Independent offline
+reception verifies the numeric references, 26 retained artifacts, package joins and
+checkpoint. ROOT positive receipt SHA256 is
+`03e911a86bb8909d0eff29eb3c39cb2c3e6698063b9176654e1344ae733bb37c`.
+This receives one CPU Kokkos Dim2/MPI-enabled world1, one-level witness. MPI2, GPU,
+Dim3, populated-history lifecycle, convergence and comparable costs remain separate work.
+
+To reproduce this tranche, use the initialized `pops` environment from the integrated
+checkout, with a fresh output directory. The actual build and test commands are:
+
+```sh
+rtk proxy env -u PYTHONPATH -u PYTHONOPTIMIZE PYTHONDONTWRITEBYTECODE=1 POPS_ENV_NAME=pops Kokkos_ROOT=/Users/romaindespoulain/miniforge3/envs/pops POPS_KOKKOS_ROOT=/Users/romaindespoulain/miniforge3/envs/pops CMAKE_PREFIX_PATH=/Users/romaindespoulain/miniforge3/envs/pops POPS_NATIVE_DIM=2 POPS_HEAVY_MODULE_TU_POOL=2 CMAKE_BUILD_PARALLEL_LEVEL=4 OMP_NUM_THREADS=2 OMP_PROC_BIND=false bash scripts/build_python.sh --dim 2 --mpi --wheel-dir /tmp/pops-api040-nonautonomous-wheel
+rtk proxy env -u PYTHONPATH -u PYTHONOPTIMIZE PYTHONDONTWRITEBYTECODE=1 POPS_INCLUDE=/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include Kokkos_ROOT=/Users/romaindespoulain/miniforge3/envs/pops POPS_KOKKOS_ROOT=/Users/romaindespoulain/miniforge3/envs/pops CMAKE_PREFIX_PATH=/Users/romaindespoulain/miniforge3/envs/pops POPS_NATIVE_DIM=2 POPS_REQUIRE_NATIVE_TESTS=1 OMP_NUM_THREADS=2 OMP_PROC_BIND=false /Users/romaindespoulain/miniforge3/envs/pops/bin/python docs/development/api_040/run_installed_checks.py --output /tmp/pops-api040-nonautonomous-reception --test tests/python/integration/runtime/test_imex_nonautonomous_field.py
+```
+
+The installed-package driver checks the real package origin, extension and shipped source
+fingerprints before pytest. It keeps the actual C++, arrays, checkpoint, identity and
+test result in the output directory. An existing output directory must be preserved;
+choose another directory for a new run. Source tests and successful compilation do not
+replace this numeric receipt.

@@ -2185,6 +2185,46 @@
         "no checkpoint/restart/own Retry run",
         "no MPI2/GPU/3D/convergence/cost/CI/all94 receipt"
       ]
+    },
+    "nonautonomous_Field_State_Aux_native13_positive_ede680": {
+      "source_commit": "ede680fe00746c1bc7e5eeb4afabd9772b92cc33",
+      "contract": {
+        "field_input_read": 2,
+        "system_package_abi": 8,
+        "native_abi": 13,
+        "uniform_checkpoint": 9,
+        "amr_checkpoint": 12
+      },
+      "root_receipt": "root-field-rhs-native13-nonautonomous-positive-20261007.json",
+      "root_receipt_sha256": "03e911a86bb8909d0eff29eb3c39cb2c3e6698063b9176654e1344ae733bb37c",
+      "scope": "CPU Kokkos, Dim2, MPI-enabled world1, one AMR level, actual public validate/resolve/compile/bind/run/checkpoint",
+      "native_sha256": "ea0c7bf4e2a752469091030597cedd671291fc74bd9354ab8fbcdb6068eeec1d",
+      "sdk_header_signature": "4b2c57fbdc84b72f8b0c66c7c943eb2f793d519181d7f9032f02313032e8f04a",
+      "cpp_native_recompiled_for_python_fix": false,
+      "source_tests_passed": 74,
+      "native_tests_passed": 1,
+      "accepted_state": 3.359999999999518,
+      "field": 5.759999999998074,
+      "max_absolute_errors": {
+        "state": 4.818367926873179e-13,
+        "field": 1.9255708139098715e-12
+      },
+      "oracles_unchanged": true,
+      "Y_directly_measured": false,
+      "checkpoint_arrays_exact": true,
+      "actual_artifacts_verified": 26,
+      "full_obligations_closed": false,
+      "remaining": [
+        "MPI2",
+        "GPU",
+        "Dim3",
+        "multiple AMR levels",
+        "advanced SSA producer hooks",
+        "split-coordinate regression",
+        "convergence",
+        "comparable costs",
+        "exact-revision GitHub CI"
+      ]
     }
   },
   "scoped_receptions_20261006": {
