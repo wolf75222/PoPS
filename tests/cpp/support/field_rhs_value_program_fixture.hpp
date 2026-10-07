@@ -6,7 +6,7 @@ namespace pops::test::field_rhs_value_program {
 
 // A real source-built Program installation for bounded ownership/SSA unit witnesses. Its DSO
 // exposes the actual installer-created context; tests never manufacture a Context identity or Value.
-inline constexpr const char* identity = "tests.field-rhs-value-program/owned-lincomb-v1";
+inline constexpr const char* identity = "tests.field-rhs-value-program/owned-lincomb-v2";
 
 inline std::string source() {
   return R"CPP(
@@ -23,7 +23,7 @@ namespace {
 constexpr int D = pops::kNativeDimension;
 using UniformContext = pops::runtime::program::ProgramContext<D>;
 using AmrContext = pops::runtime::program::AmrProgramContext<D>;
-constexpr const char* identity = "tests.field-rhs-value-program/owned-lincomb-v1";
+constexpr const char* identity = "tests.field-rhs-value-program/owned-lincomb-v2";
 std::map<void*, std::weak_ptr<UniformContext>> uniform_contexts;
 std::map<void*, std::weak_ptr<AmrContext>> amr_contexts;
 
@@ -102,6 +102,9 @@ extern "C" int pops_program_checkpoint_history_components(int) { return 0; }
 extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
 extern "C" const char* pops_program_checkpoint_logical_clock_identity(int i) {
   return i == 0 ? "test.field-rhs-v2.clock" : "";
+}
+extern "C" const char* pops_program_checkpoint_primary_clock_identity() {
+  return "test.field-rhs-v2.clock";
 }
 extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {
   return "pops.temporal-partition.global@1";

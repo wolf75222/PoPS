@@ -140,3 +140,28 @@ fingerprints before pytest. It keeps the actual C++, arrays, checkpoint, identit
 test result in the output directory. An existing output directory must be preserved;
 choose another directory for a new run. Source tests and successful compilation do not
 replace this numeric receipt.
+
+## Added C++ witness specification v2
+
+The first world1 run executed all13 newly added unit cases but refused their setup:
+the Uniform direct closure image lacked authoritative block metadata, and the AMR
+Program was installed after hierarchy materialization. No Field guard coverage was
+received from those failures. The corrected unit fixture uses the public compiled-block
+facade, with a model-owned ADL preparer delegating to the real generated storage factory.
+It installs the genuine Program before AMR bootstrap, completes bootstrap before the
+first step and exports its actual primary clock. Its fixture identity becomes
+`tests.field-rhs-value-program/owned-lincomb-v2`; the fixture DSO must be rebuilt.
+
+The earlier Uniform periodic montage also had an inconsistent pure Poisson source:
+`rho=u*u+a+b`, `u=2+cos(2*pi*x)`, `a=sin(2*pi*x)+3*t`, `b=2*a+5/4` has mean
+`23/4+9*t`. The v2 unit specification explicitly chooses homogeneous Dirichlet faces
+and nonperiodic geometry. The source formulas,13 case assertions, finite/ownership
+guards and solver tolerances are preserved. No reaction, neutralizing background,
+mean removal or silent projection is introduced. The AMR unit witness retains its
+periodic screened Poisson equation with reaction one; original scientific examples
+retain their authored physical specifications. This changes an added test specification,
+not a production ABI, language contract or solver compatibility guard.
+
+The source patch is independently reviewed and the 115 assertion expressions are
+byte-identical. Its corrected build, runtime results and backend coverage remain
+pending; the earlier13 failures and their actual XML/binary identities are retained.

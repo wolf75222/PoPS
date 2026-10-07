@@ -69,6 +69,13 @@ struct StorageModel {
   POPS_HD nd::StateConversionStatus admissibility(const State&) const { return {}; }
   POPS_HD Real elliptic_rhs(const State& u) const { return u[0] - Real(2); }
 };
+
+// The public facade adapter authenticates name, arity, variables, geometry and cadence.
+// Its model-owned preparer delegates the complete request to the real Core storage factory.
+PreparedSystemBlock<D> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<D, StorageModel> request) {
+  return prepare_generated_system_block(std::move(request));
+}
 struct ProviderRhsModel {
   using State = StateVec<1>;
   static constexpr int dimension = D, n_vars = 1, n_providers = 2;
@@ -87,7 +94,7 @@ SystemConfig<D> uniform_config() {
   SystemConfig<D> c;
   for (int axis = 0; axis < D; ++axis) {
     c.shape[axis] = kCells; c.lower[axis] = 0; c.upper[axis] = 1;
-    c.periodicity[axis] = true;
+    c.periodicity[axis] = false;
   }
   return c;
 }
@@ -258,12 +265,16 @@ void install_uniform_field(System<D>& system, Observation& observed, int count =
     extent[axis] = cells; lower[axis] = domain_lower; upper[axis] = domain_upper;
   }
   const auto frame = Geometry<D>::from_bounds(Box<D>::from_extents(extent), lower, upper);
+  const auto& actual_frame = system.prepared_block_geometry();
+  if (actual_frame.domain() != frame.domain() || actual_frame.lower() != frame.lower() ||
+      actual_frame.upper() != frame.upper())
+    throw std::invalid_argument("Field RHS fixture geometry differs from its actual System");
   system.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
     ExecutionLane::duplicate_world_collectively("test.field-rhs-v2.execution")));
   system.install_block_state_route("material", "test.field-rhs-v2.state");
-  system.install_prepared_block(prepare_generated_system_block(
-    CompiledSystemBlockPreparation<D, StorageModel>{"material", StorageModel{},
-      {"state_storage", "unavailable", "conservative", "explicit"}, frame, {}, {}, {}}));
+  system.install_prepared_block(prepare_compiled_system_block<D>(
+    system, "material", StorageModel{}, "state_storage", "unavailable", "conservative",
+    "explicit", 1.4, 1, true, 1));
   system.register_configured_field_solver_provider("cartesian_cg", "test.field-rhs-v2.slot",
     {"pops.system.cartesian-cg-options@1",
      {{"abs_tol", 0.0}, {"max_iterations", std::int64_t{200}}, {"rel_tol", 1e-12}}});
@@ -272,8 +283,11 @@ void install_uniform_field(System<D>& system, Observation& observed, int count =
     {"test.field-rhs-v2.binding"}, {"material"}, {"potential"}, {1.0}, "test.field-rhs-v2.slot");
   const auto faces = std::vector<double>(2 * D, 0.0);
   system.set_field_topology_authority("test.field-rhs-v2.slot", "builtin_rectangular_cell_graph_v1",
-    "test.field-rhs-v2.periodic", "test.field-rhs-v2.periodic.v1");
-  system.set_field_boundary_plan("test.field-rhs-v2.slot", std::vector<std::string>(2 * D, "periodic"),
+    "test.field-rhs-v2.dirichlet", "test.field-rhs-v2.dirichlet.v1");
+  // These added unit witnesses solve pure Poisson with rho=u*u+3*a+P. Its mean is
+  // 5.75+9*time for the authored profile, so homogeneous Dirichlet faces are required.
+  // No reaction, neutralizing background or silent RHS projection is introduced.
+  system.set_field_boundary_plan("test.field-rhs-v2.slot", std::vector<std::string>(2 * D, "dirichlet"),
     faces, faces, faces);
   system.set_field_nullspace("test.field-rhs-v2.slot", "pops.field-nullspace.operator-topology-derived",
     {"pops.field-nullspace.operator-topology-derived.options@1", {{"gauge.value", 0.0}}});
@@ -305,9 +319,13 @@ void install_uniform_field(System<D>& system, Observation& observed, int count =
   system.seed_program_params(0, {double(kParameter)});
 }
 
-template<class Context, class Runtime>
-Context& installed_value_context(Runtime& system, const char* symbol) {
+template<class Runtime>
+void install_value_program(Runtime& system) {
   system.install_program(POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO);
+}
+
+template<class Context, class Runtime>
+Context& started_value_context(Runtime& system, const char* symbol) {
   // Plan installation runs inside the real first Program entry after official hash publication.
   system.step(.03125);
   if (system.installed_program_hash() != test::field_rhs_value_program::identity)
@@ -323,11 +341,14 @@ Context& installed_value_context(Runtime& system, const char* symbol) {
 }
 
 runtime::program::ProgramContext<D>& installed_value_context(System<D>& system) {
-  return installed_value_context<runtime::program::ProgramContext<D>>(
+  install_value_program(system);
+  return started_value_context<runtime::program::ProgramContext<D>>(
     system, "pops_test_field_rhs_uniform_context");
 }
 runtime::program::AmrProgramContext<D>& installed_value_context(AmrSystem<D>& system) {
-  return installed_value_context<runtime::program::AmrProgramContext<D>>(
+  // The AMR caller installed the real artifact before any hierarchy materialization,
+  // then completed bootstrap. Starting it here must never reinstall a live runtime.
+  return started_value_context<runtime::program::AmrProgramContext<D>>(
     system, "pops_test_field_rhs_amr_context");
 }
 
@@ -687,7 +708,7 @@ TEST(PreparedFieldRhsInputs, ActualMultilevelAmrIssuesOneInputForEachLiveLevel) 
     "test.field-rhs-v2.binding", "test.field-rhs-v2.consumer", 2, observing_callback(observed));
   test::install_prepared_threshold_union(system,
     {{"material", "u", 2.4, test::PreparedThresholdRelation::Above, "test.field-rhs-v2.state"}},
-    "test.field-rhs-v2.tagging");
+    "test.field-rhs-v2.tagging", "test.field-rhs-v2.clock");
   system.bind_bootstrap_subject("test.field-rhs-v2.state", "material", "bound_level_zero");
   system.stage_bootstrap_array("test.field-rhs-v2.state", "material", "cell", "cell", 1,
     config.shape, initial());
@@ -701,13 +722,16 @@ TEST(PreparedFieldRhsInputs, ActualMultilevelAmrIssuesOneInputForEachLiveLevel) 
     {"test.field-rhs-v2.state"}, "test.field-rhs-v2.volume-average", "cell", "cell",
     "conservative", "dense", "restriction", "volume_average", 1, restriction,
     config.transition_ratios.front());
-  system.begin_bootstrap_plan(); system.set_program_block_map({0});
+  install_value_program(system);
+  system.begin_bootstrap_plan();
   system.seed_program_params(0, {double(kParameter)});
   (void)system.materialize_bootstrap_action("test.field-rhs-v2.state", "initialize_level_zero",
     "bound_level_zero", 0);
   ASSERT_TRUE(system.bootstrap_next_level()); // A real hierarchy action, not a declared level count.
   (void)system.materialize_bootstrap_action("test.field-rhs-v2.state", "prolong_from_parent",
     "conservative_linear", 1);
+  system.commit_bootstrap_level();
+  system.mark_bound();
   auto& context = installed_value_context(system);
   context.configure_primary_clock("test.field-rhs-v2.clock"); context.begin_step(.25);
   context.set_stage_time(1, 2);
