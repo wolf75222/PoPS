@@ -52,6 +52,11 @@ class _OperatorViewMixin(_HyperbolicModel):
         read = sorted(expanded & aux_set)
         return {"aux": read} if read else {}
 
+    def _field_requirements(self, exprs: Any) -> tuple[str, ...]:
+        """Solved FieldSpace components, distinct from declared imposed AuxSpace reads."""
+        return tuple(name for name in self._aux_requirements(exprs).get("aux", ())
+                     if name in self._provider_components)
+
     def _source_callback_expressions(self) -> list[Any]:
         """All formulas emitted on the default source's native provider role."""
         expressions = list(self._source or ())
@@ -134,7 +139,7 @@ class _OperatorViewMixin(_HyperbolicModel):
         fields = self.field_space()
 
         def reads_fields(exprs: Any) -> bool:
-            return bool(self._aux_requirements(exprs))
+            return bool(self._field_requirements(exprs))
 
         stability_exprs = self._stability_callback_expressions()
 
@@ -242,6 +247,11 @@ class _OperatorViewMixin(_HyperbolicModel):
         for nm in sorted(self._linear_sources):
             coeffs = [c for row in self._linear_sources[nm] for c in row]
             rf = reads_fields(coeffs)
+            declared = getattr(self, "_declared_linear_operator_inputs", {}).get(nm)
+            if declared is not None:
+                if rf and not declared:
+                    raise ValueError("explicit operator inputs omit a solved FieldSpace dependency")
+                rf = bool(declared)
             reg.register(
                 _model.Operator(
                     nm,

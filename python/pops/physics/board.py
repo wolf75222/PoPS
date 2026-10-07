@@ -82,6 +82,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 "Model frame must expose typed axes, canonical_id and to_dict()")
         from ._facade import Model as _PdeModel  # lazy: the facade pulls numpy
         self._dsl = _PdeModel(name)
+        # Keep positional Field declarations on the authoritative legacy registry owner.
+        # None means dependency inference; an explicit tuple (including ()) is a contract.
+        self._dsl._m._declared_linear_operator_inputs = {}
         self.name = self._dsl.name
         self._frame = frame
         self._states = {}
@@ -1098,7 +1101,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         """Register a typed, callable operator under ``name`` from a math object.
 
         ``returns`` (or the positional ``handle``) is the operator body; ``inputs`` names
-        its field dependencies (metadata for requirements). A
+        its FieldSpace operands; omitted inputs infer actual solved-field reads, while ()
+        declares no Field operand. Imposed AuxSpace reads remain provider requirements. A
         :class:`LocalLinearOperatorExpr` registers as a ``local_linear_operator``
         ``Fields -> LocalLinearOperator(U, U)``. Returns an immutable
         :class:`pops.model.OperatorHandle`.
@@ -1124,6 +1128,17 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 if len(set(input_names)) != len(input_names) or any(n not in fields for n in input_names):
                     raise ValueError("operator inputs must name distinct declared FieldSpaces")
                 body = [[self._to_expr(e) for e in row] for row in obj.matrix]
+                from pops._ir.visitors import _dependencies
+
+                dependencies = _dependencies([_wrap(e) for row in body for e in row])
+                required_fields = tuple(
+                    field_name for field_name, space in fields.items()
+                    if any(symbol.qualified_id in dependencies
+                           for symbol in module.field_symbols(space)))
+                if inputs is None:
+                    input_names = required_fields
+                elif not set(required_fields).issubset(input_names):
+                    raise ValueError("explicit operator inputs omit a solved FieldSpace dependency")
                 registry = module.operator_registry()
                 with atomic_attrs(
                         (registry, "_by_name"), (registry, "_order"),
@@ -1137,11 +1152,21 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     result = self._registered_operator_handle(reg)
                 return result
             hyp = self._dsl._m
+            matrix = [[_wrap(self._to_expr(e)) for e in row] for row in obj.matrix]
+            fields = hyp.field_space()
+            if len(set(input_names)) != len(input_names) or any(
+                    input_name != fields.name for input_name in input_names):
+                raise ValueError("operator inputs must name distinct declared FieldSpaces")
+            required_fields = hyp._field_requirements([e for row in matrix for e in row])
+            if inputs is not None and required_fields and not input_names:
+                raise ValueError("explicit operator inputs omit a solved FieldSpace dependency")
             with atomic_attrs(
                     (hyp, "_provider_components"), (hyp, "_linear_sources"),
+                    (hyp, "_declared_linear_operator_inputs"),
                     (self, "_operators"), (self, "_operator_inputs")):
-                self._dsl.linear_source(
-                    reg, [[_wrap(self._to_expr(e)) for e in row] for row in obj.matrix])
+                hyp._declared_linear_operator_inputs[reg] = (
+                    None if inputs is None else input_names)
+                self._dsl.linear_source(reg, matrix)
                 self._operators[reg] = obj
                 self._operator_inputs[reg] = input_names
                 result = self._registered_operator_handle(reg)

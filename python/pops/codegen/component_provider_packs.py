@@ -18,6 +18,7 @@ from pops.model.provider_pack import (
     build_operator_provider_pack,
     build_provider_pack,
     compact_auxiliary_provider_pack,
+    _field_input_spaces_after_binding,
 )
 
 
@@ -381,6 +382,28 @@ def resolve_component_provider_packs(module: Any) -> ComponentProviderPacks:
         for name, pack in by_operator.items()
     }
     routes, route_metadata = auxiliary_provider_routes(module, complete)
+    # Producers may be registered after Program clock authoring. Do not rewrite an operator's
+    # sealed signature at that point: refuse a hidden solved-field dependency instead.
+    for operator in module.operator_registry():
+        if operator.kind != "local_linear_operator":
+            continue
+        declared_fields = {name for _, name in _field_input_spaces_after_binding(
+            module, [("field", space.name) for space in operator.signature.inputs
+                     if getattr(space, "kind", None) == "field"], pack=complete)}
+        pending = list(by_operator[operator.name])
+        seen = set()
+        while pending:
+            key = pending.pop()
+            if key in seen:
+                continue
+            seen.add(key)
+            if key.space_kind == "field" and key.space_name not in declared_fields:
+                raise ValueError(
+                    "local-linear operator %r hides solved FieldSpace dependency %r; "
+                    "declare its Field operand explicitly" % (operator.name, key.space_name))
+            route = routes.get(key)
+            if route is not None:
+                pending.extend(route.get("dependencies", ()))
     return ComponentProviderPacks(
         complete=complete,
         by_operator=by_operator,
