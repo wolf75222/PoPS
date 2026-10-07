@@ -93,17 +93,17 @@ def test_public_nonautonomous_imex_field_reads_explicit_time(
         assert native.module_capabilities("production")["abi_version"] == NATIVE_ABI_VERSION
         assert runtime.time() == 0 and runtime.macro_step() == 0
         assert state_bound < abs(float(WRONG_FIELD_TIME_ACCEPTED - ACCEPTED_EXACT)) / 1000
-    before = collective_call(world, lambda: np.asarray(runtime.state_global("material")).copy())
+    before = collective_call(world, lambda: np.asarray(runtime.block_level_state_global("material", 0)).copy())
     collective_call(world, lambda: np.save(directory / ("initial-rank%d.npy" % world.rank),
         before, allow_pickle=False))
     with collective_check(world):
         np.testing.assert_array_equal(before, authored.initial)
     result = collective_call(world, lambda: pops.run(runtime, t_end=float(H), max_steps=1, console=False))
-    actual = collective_call(world, lambda: np.asarray(runtime.state_global("material")).copy())
+    actual = collective_call(world, lambda: np.asarray(runtime.block_level_state_global("material", 0)).copy())
     slots = collective_call(world, runtime.field_provider_slots)
     with collective_check(world):
         assert len(slots) == 1
-    field = collective_call(world, lambda: np.asarray(runtime.field_potential_global(slots[0])).copy())
+    field = collective_call(world, lambda: np.asarray(runtime.field_potential_level_global(slots[0], 0)).copy())
     checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / "accepted"))
     collective_call(world, lambda: np.save(directory / ("accepted-rank%d.npy" % world.rank),
         actual, allow_pickle=False))
