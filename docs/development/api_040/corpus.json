@@ -2095,6 +2095,66 @@
       "physical_DIR": 1312,
       "scope": "Standalone genuine C++ runtime, not execution of Python extension77d or original manual IMEX; first shared-XML MPI2 capture preserved",
       "original_IMEX_restart_partitioned_MPI_GPU_3D_received": false
+    },
+    "IMEX_original_AMR_and_publication_rollback_local": {
+      "source_original": "2ded3ffae3b740fba26c0e409206498e2721b894",
+      "source_injection_test_only": "f550b73010b5aaa9c5b6e80c9a82103187597b1f",
+      "source_cursor_fixture_test_only": "29ad1c9c379d5cfeb0a560902fcff66c722254b7",
+      "native_abi": 12,
+      "Native_sha256": "77d5e29cd8146cdb17cba08c88d03fc63e9b14ea32673ff99f3baff8db800a4c",
+      "header_signature": "c04a7fa8d0852fb3dd8542ed7907485264350e1764227d077a993fe5e8712c77",
+      "wheel_sha256": "b9d067e91c11c8c2d02c85dc56aa6c22e0fb501625521f82813b50d25834b238",
+      "official_repackage_RC": 0,
+      "seven_bindings": "Reused; no C++ work in Ninja",
+      "original_workflows_PASS": 2,
+      "original_seconds": [
+        91.26,
+        185.48
+      ],
+      "original_context": "Dim2 Host MPIworld1 measured OpenMP concurrency2",
+      "original_exact_comparisons": [
+        "accepted/restored",
+        "continuous/restarted",
+        "manual/preset",
+        "singular rejection before/after"
+      ],
+      "actual_diagnostic_bytes": 345,
+      "declared_diagnostic_capacity_per_rank": 383,
+      "actual_diagnostic_records": "Integral only; frontier duration is potential but absent in saved image",
+      "original_ledger_rows": 920,
+      "original_regrid_levels": [
+        2,
+        3
+      ],
+      "publication_fault_PASS": 1,
+      "publication_fault_seconds": 61.81,
+      "publication_fault_checkpoint_time": 0.0001,
+      "publication_fault_checkpoint_step": 1,
+      "publication_fault_State_Field_changed_then_restored": true,
+      "publication_fault_CP_arrays_exact": 52,
+      "publication_fault_CP_arrays_total": 54,
+      "publication_fault_changed_arrays": "Only two reseals",
+      "publication_fault_Program_exact_bytes": 7654,
+      "publication_fault_output_files_observed_then_compensated": [
+        7,
+        0
+      ],
+      "publication_fault_histories_ledger_cache_populated": false,
+      "publication_fault_effective_OpenMP_measured": false,
+      "installed_package_2563_members_exact_before_after": true,
+      "initial_affected_units": {
+        "atomic_PASS": 10,
+        "budget_PASS": 10,
+        "step_PASS": 9,
+        "step_fixture_FAIL": 22
+      },
+      "corrected_step_fixture_PASS": 31,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-imex-original-and-publication-rollback-reception-2ded-20261007.json",
+      "root_receipt_sha256": "32e9b400894f5be5ac9cadd77ff2fa2b112cc52c951013490138d91f8c289afc",
+      "independent_pins_sha256": "82e60bb1c9b44755ebf18ce2523783f52a3c5fea76eed3311769b84f89d59696",
+      "documentation": "prepared_amr_checkpoint_capture_v1.md",
+      "PDE_MPI2_GPU_3D_CI_convergence_costs_received": false,
+      "nonautonomous_Field_time_CP_own_Retry_whole94_received": false
     }
   },
   "scoped_receptions_20261006": {

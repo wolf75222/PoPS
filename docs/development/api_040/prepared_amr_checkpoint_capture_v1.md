@@ -176,3 +176,82 @@ Author and independent Source cohorts each pass32 tests. The original declared b
 The independent pins are `8b455036d8d9fdf8df592426d0132b6f6ff115d8f6f6d88a30b91f00b581400d`.
 No wire, API, ABI12, header signature, equation or numerical threshold changes. A new official
 package and original Native run are required to receive accepted State/Field/restart behavior.
+
+## Received original workflows and publication failure
+
+Source `2ded3ffae3b740fba26c0e409206498e2721b894` is officially repackaged and installed,
+wheel `b9d067e91c11c8c2d02c85dc56aa6c22e0fb501625521f82813b50d25834b238`.
+The unchanged Native77d/c04a/ABI12 is reused by Ninja rather than recompiled. Both original
+workflows pass: manual State/Field/checkpoint/restart/continuation (91.26s) and preset parity
+with singular rejected-attempt rollback (185.48s), each one test without failure/error/skip.
+The contexts measure MPIworld1 and Kokkos OpenMP concurrency2. The 2563 installed package
+members and the complete previous a67 backup remain exact through the tests.
+
+The independent offline reader confirms accepted/restored and continuous/restarted State,
+Field, Program bytes and JSON are exact, as are manual/preset and rejected before/after.
+The original regrid moves from two to three levels and topology epochs2 to3. The accepted
+step is1e-4, its child duration5e-5; the saved ledger contains920 rows at levels0/1 with
+weights1/2 and real reflux/average_down phases. An independent composite valid-cell integral
+is `.07943456046642411`, then `.07902655953037416`; saved diagnostic differences are at most
+one ULP, reported without changing any criterion. The Native diagnostic image is345 bytes,
+contains the Integral record and fits the declared383-byte bound. The potential frontier
+duration name is absent from this specific image.
+
+The non-author [publication-failure test](../../../tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py)
+is integrated at test-only Sourcef550, production byte-identical to2ded. Its single real run
+passes in61.81s. At the retained fault point, the actual CP12 is at t1e-4/step1, State and Field
+on two levels have changed, Integral is `.07943456046642412`, and seven outputs have been
+published. The deterministic fault then restores all four saved State/Field array pairs,
+the full snapshot JSON and7654 Program bytes exactly. CP52 of54 arrays are bit-exact, with
+only the two reseals changed; times, clocks, cursors and all saved statistics are unchanged.
+Outputs return to zero files, and the in-process fence/recovery/report assertions pass.
+The histories and protected ledger/cache are empty before this fault, so it does not receive
+nontrivial history rollback. OpenMP2 is configured but unmeasured in the injection process.
+
+ROOT physically authenticates the original3101-entry domain (2780 files,311 directories,
+10 literal links), the fault82-entry domain (60 files,21 directories,one literal link), the
+independent reader and the fixture receipt. The producer's earlier oral fault count of22
+directories/zero links is corrected here from its manifest and lstat; closed evidence is
+not rewritten. Receipt
+`/Users/romaindespoulain/dev/tmp/root-imex-original-and-publication-rollback-reception-2ded-20261007.json`
+has SHA `32e9b400894f5be5ac9cadd77ff2fa2b112cc52c951013490138d91f8c289afc`.
+Independent pins: `82e60bb1c9b44755ebf18ce2523783f52a3c5fea76eed3311769b84f89d59696`.
+
+Atomic10 and consumer-budget10 installed tests pass. The first transaction-helper cohort
+retains9 PASS/22 FAIL from its incomplete cursor-authority doubles. A test-only correction
+at Source29ad restores the real reserve/commit/release protocol; all31 cases pass on the
+same installed Native77d, with every test assertion and physical `_Native` fixture unchanged.
+These unit fixtures are separate from the genuine original numerical runs.
+
+This receives the finite original Dim2/Host/MPIworld1 workflows and the publication-fault
+witness. PDE MPI2/spatial partitioning, CUDA,3D, convergence, comparable costs, populated
+history variants, nonautonomous Field-time reception and checkpoint-own Retry remain open.
+
+## Reproduction in the built environment
+
+Use the actual PoPS checkout and its activated `pops` environment, with the Kokkos roots
+provided by project setup. Setup has already run once for the integrated worktree; the
+incremental build is the required next step after changing a shipped C++ header. Select a
+new output directory for each run. The following commands execute the original tests and
+the non-author publication failure through the installed-package identity driver:
+
+```sh
+rtk proxy env -u PYTHONPATH -u PYTHONOPTIMIZE PYTHONDONTWRITEBYTECODE=1 \
+  bash scripts/build_python.sh --dim 2 --mpi --wheel-dir "$POPS_RUN_ROOT/wheels"
+rtk proxy env -u PYTHONPATH -u PYTHONOPTIMIZE PYTHONDONTWRITEBYTECODE=1 \
+  OMP_NUM_THREADS=2 POPS_THREADS=2 OMP_PROC_BIND=false POPS_NATIVE_DIM=2 \
+  Kokkos_ROOT="$CONDA_PREFIX" POPS_KOKKOS_ROOT="$CONDA_PREFIX" \
+  KOKKOS_PREFIX="$CONDA_PREFIX" POPS_REQUIRE_NATIVE_TESTS=1 \
+  python docs/development/api_040/run_installed_checks.py \
+  --output "$POPS_RUN_ROOT/original-and-fault" \
+  --test tests/python/integration/runtime/test_final_imex_original_reception.py \
+  --test tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py
+```
+
+Define `POPS_RUN_ROOT` before running these commands. The closed Source2ded receipt above
+retains its exact effective argv separately in `effective-commands.json`; it used two
+separate original-test processes and a third fault process, with private compilation caches.
+The commands here reproduce the test selections on a freshly rebuilt revision and must
+produce their own Python, Native, header and execution-context identities. The Sourcec1b7
+visibility correction changes a shipped header, so Native77d/c04a is no longer evidence of
+that corrected header's compilation or CUDA execution.

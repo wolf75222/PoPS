@@ -27,3 +27,18 @@ L'appel original `run_manual_and_restart` atteint compilation, bind et avance, p
 La réception indépendante ROOT (`/Users/romaindespoulain/dev/tmp/root-imex-original-negative-reception-9d4-20261007.json`, SHA `11c10d361aa20093c3a782e0c71c8505d3c0ffdb94ccb78d64e5e3b0fa93a58c`) authentifie les 2 845 entrées déclarées du lot fermé : 2 602 fichiers réguliers, 242 dossiers et un lien, 90 023 689 octets réguliers. Le lot auteur conserve le négatif, le wheel, les DSO compilés, C25, contexte, XML et backup du paquet antérieur ; pins `05e9e2fc1e97a2b29985e182d313c3cb96bb1e66bef899d3e55816e6c604a893`. Ce résultat impose une capture candidate transactionnelle distincte : figer les octets avant commit, publier après commit et conserver le rollback ainsi que les gardes publiques. Son code, sa nouvelle identité Native et ses tests doivent être reçus séparément.
 
 Le cas original advection/relaxation IMEX AMR doit encore vérifier états acceptés, solves consommés, coordonnées, restart et critères scientifiques inchangés. CUDA, MPI2, 3D, convergence, coûts et tous les autres critères des 94 IDs gardent leurs preuves distinctes.
+
+## Réception ultérieure de l'original, 7 octobre 2026
+
+La capture candidate ABI12, la projection transactionnelle des diagnostics et le budget
+du graphe complet des consommateurs lèvent successivement les refus précédents, conservés
+avec leurs artefacts. Sur Source2ded/Native77d/Headerc04a, les deux workflows originaux
+passent dans le vrai paquet installé : manuel/restart/continuation, puis preset/parité/rejet.
+La contre-lecture reçoit les vrais états, champs, checkpoints et regrid de deux à trois niveaux.
+Un test non-auteur publie réellement le checkpoint, déclenche un échec, puis reçoit le rollback
+exact des données sauvegardées et la suppression des fichiers publiés.
+
+Le [reçu détaillé](prepared_amr_checkpoint_capture_v1.md#received-original-workflows-and-publication-failure)
+porte les identités, les commandes et les limites de ces essais Dim2/Host/MPIworld1.
+Il ne reçoit pas encore le cas nonautonome fixé ci-dessus, le Retry propre au checkpoint,
+les historiques non vides, MPI2, CUDA,3D, convergence ni coûts comparables.

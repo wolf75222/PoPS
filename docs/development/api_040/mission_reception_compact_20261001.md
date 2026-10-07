@@ -402,3 +402,32 @@ Le [contrat de capture candidate](prepared_amr_checkpoint_capture_v1.md) est int
 La non-régression Uniform du paquet77d reçoit7 PASS et4 FAIL de fixtures antérieures incomplètes, sur11 cas : vrai System initialisé et six protocoles de checkpoint passent ; les anciens doubles Native omettent `checkpoint_state_carriers()`. Source de la capture et fixture sont inchangées depuis9d4, aucune répétition de ces échecs. Le paquet complet reste exact avant/après. World1/OpenMP2 sont mesurés dans des sondes séparées ; concurrence du processus pytest non reçue séparément. Ces tests ne qualifient pas une PDE IMEX.
 
 La [campagne CUDA735570](amr_backend_memory_reception_20261007.md), Sourceeae/ABI11, est maintenant reçue entière comme `FAILED 1:0`,01:07:02. Après la correction a17, NVCC rencontre les types privés `PackKernel` et `UnpackKernel` de RegionTransport. ROOT seal `5293aeec956a09667fa349929f6f86d5a188120fec38d39753a22e6cf77dd8dc`, TAR104/raw97, cinq inventaires avant/après exacts et contre-lecture indépendante sont distincts du correctif de visibilité encore à intégrer. Aucun wheel/Native/PDE CUDA. Les94 IDs et les autres preuves gardent leurs limites exactes.
+
+## IMEX original et échec de publication reçus, 7 octobre 2026
+
+Les négatifs précédents restent conservés. La projection des diagnostics avant capture
+et le budget dérivé du graphe complet des consommateurs sont intégrés, Source2ded.
+Le build officiel et l'installation passent ; Native77d/Headerc04a/ABI12 restent identiques,
+car ces deux corrections sont Python. Les deux workflows originaux passent sur Dim2/Host,
+MPIworld1 et OpenMP2 mesuré : manuel/restart/continuation, puis preset/parité/rejet singulier.
+La contre-lecture indépendante confirme les états et champs sauvegardés, les Program bytes,
+le regrid original de deux à trois niveaux et les intégrales composites, sans changer de seuil.
+Le diagnostic réellement capturé occupe345 octets pour une capacité déclarée383.
+
+Le [test non-auteur d'échec après publication](../../../tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py)
+passe sur le même paquet. Il publie réellement le checkpoint puis déclenche l'échec :
+State/Field,7654 Program bytes, JSON, horloges, statistiques et cursors sont restaurés ;
+les fichiers publiés sont supprimés. Les historiques et le ledger protégés étaient vides
+avant cet essai : leur rollback non trivial reste à qualifier. La correction de fixture
+Source29ad reçoit31 PASS, sans modification des assertions scientifiques.
+
+Le [reçu détaillé et ses commandes](prepared_amr_checkpoint_capture_v1.md#received-original-workflows-and-publication-failure)
+donne les domaines physiques, les identités et les limites. Seal ROOT
+`root-imex-original-and-publication-rollback-reception-2ded-20261007.json`, SHA
+`32e9b400894f5be5ac9cadd77ff2fa2b112cc52c951013490138d91f8c289afc`.
+
+| Domaine | Acquis exact | Réception restante |
+|---|---|---|
+| IMEX original et checkpoint | Deux workflows originaux et un échec réel après publication reçus, Source2ded/Native77d/Host/world1 | Champ nonautonome, Retry propre au checkpoint et variantes avec historiques remplis |
+| C++ CUDA | Sourcec1b7 rend les deux types de foncteurs accessibles aux stubs NVCC ; corps, offsets, gardes et fences exacts | Reconstruire les sept bindings et les artefacts avec la nouvelle HeaderSignature ; aucune réussite CUDA héritée |
+| Mission94 et principes1.1–1.8 | IDs, équations, API et critères préservés ; chaque preuve garde son backend et sa portée | PDE MPI2/partitionnement, GPU,3D, convergence, coûts comparables et CI finale restent ouverts |
