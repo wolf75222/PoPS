@@ -72,6 +72,10 @@ class _Model:
     def operator_registry(self) -> OperatorRegistry:
         return self._registry
 
+    def primitive_recipes(self):
+        """This metadata-only fixture declares no primitive expression recipes."""
+        return MappingProxyType({})
+
 
 class _FieldMethod(Descriptor):
     category = "field_method"
