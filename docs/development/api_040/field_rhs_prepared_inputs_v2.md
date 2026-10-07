@@ -165,3 +165,13 @@ not a production ABI, language contract or solver compatibility guard.
 The source patch is independently reviewed and the 115 assertion expressions are
 byte-identical. Its corrected build, runtime results and backend coverage remain
 pending; the earlier13 failures and their actual XML/binary identities are retained.
+
+The first v2 world1 run still refused all13 admission paths. Uniform faces require
+the public residual arguments `(alpha,beta,value)=(1,0,0)` for homogeneous Dirichlet;
+the earlier all-zero vectors did not express that boundary. The corrected fixture
+passes these arguments in the actual API order. The two-level AMR fixture also
+declares its2:1 parent/child temporal relation with `integral_only` before materialization,
+as required by the frozen hierarchy/checkpoint-capacity authority. Neither boundary
+validation nor capacity validation is removed. The three added lines and corrected
+argument preserve all115 assertion expressions. This Source review receives no new
+runtime success; the earlier v2 binary and13 failures remain preserved.

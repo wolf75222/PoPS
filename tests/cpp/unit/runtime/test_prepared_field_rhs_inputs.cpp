@@ -282,13 +282,14 @@ void install_uniform_field(System<D>& system, Observation& observed, int count =
     "test.field-rhs-v2.provider", "test.field-rhs-v2.owner", "material", "potential",
     {"test.field-rhs-v2.binding"}, {"material"}, {"potential"}, {1.0}, "test.field-rhs-v2.slot");
   const auto faces = std::vector<double>(2 * D, 0.0);
+  const auto dirichlet_alpha = std::vector<double>(2 * D, 1.0);
   system.set_field_topology_authority("test.field-rhs-v2.slot", "builtin_rectangular_cell_graph_v1",
     "test.field-rhs-v2.dirichlet", "test.field-rhs-v2.dirichlet.v1");
   // These added unit witnesses solve pure Poisson with rho=u*u+3*a+P. Its mean is
   // 5.75+9*time for the authored profile, so homogeneous Dirichlet faces are required.
   // No reaction, neutralizing background or silent RHS projection is introduced.
   system.set_field_boundary_plan("test.field-rhs-v2.slot", std::vector<std::string>(2 * D, "dirichlet"),
-    faces, faces, faces);
+    dirichlet_alpha, faces, faces);
   system.set_field_nullspace("test.field-rhs-v2.slot", "pops.field-nullspace.operator-topology-derived",
     {"pops.field-nullspace.operator-topology-derived.options@1", {{"gauge.value", 0.0}}});
   const auto output = install_auxiliaries(system, count);
@@ -693,6 +694,7 @@ TEST(PreparedFieldRhsInputs, ActualMultilevelAmrIssuesOneInputForEachLiveLevel) 
   system.install_prepared_amr_block(prepare_compiled_amr_system_block<D>(
     "material", StorageModel{}, "state_storage", "unavailable", "conservative", "imex",
     1.4, 1, 1, 0.0, double(kWenoEpsilon), false, "test.field-rhs-v2.state-model"));
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
   const AuxiliaryComponentKey output{"test.field-rhs-v2.owner", "field", "potential", "potential"};
   const AmrFieldHierarchyPolicyAuthority hierarchy{
     "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
