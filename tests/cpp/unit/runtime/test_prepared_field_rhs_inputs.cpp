@@ -809,7 +809,7 @@ struct IncidenceStorageModel {
 struct IncidencePhiRhs {
   using State = StateVec<2>;
   static constexpr int dimension = D, n_vars = 2, n_providers = 0;
-  POPS_HD Real elliptic_rhs(const State& state, const ProviderValues<0>&) const { return state[0]; }
+  POPS_HD Real elliptic_rhs(const State& state) const { return state[0]; }
 };
 struct IncidencePsiRhs {
   using State = StateVec<2>;
