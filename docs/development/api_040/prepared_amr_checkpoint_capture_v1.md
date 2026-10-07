@@ -68,3 +68,89 @@ diagnostic mutation counts before fresh capture and a one-rank stale handle afte
 and Uniform checkpoint-consumer non-regression. Source parsing/review does not establish
 these Native results. The negative9d4, W11 and running CUDA artifacts remain immutable and
 cannot qualify this new interface.
+
+## Native reception at Source23810
+
+The official incremental build/install passes on Source
+`23810e143d24b901d1ba1410a0e8b1c64a6f7770`, without repeating setup. All seven binding
+translation units compile. Native SHA is
+`77d5e29cd8146cdb17cba08c88d03fc63e9b14ea32673ff99f3baff8db800a4c`,
+header signature `c04a7fa8d0852fb3dd8542ed7907485264350e1764227d077a993fe5e8712c77`,
+ABI12 and release contract `d71b9667557abba7bb87e8e0a5f6a4d5e32dc91bd4bb9b9424b6dc37ec9ce823`.
+The first original manual IMEX run captures and seals the candidate checkpoint successfully,
+then fails during its publication: `AMR prepared checkpoint capture owner/session/point is not live`.
+One XML test has one error, no failure/skip; no accepted scientific step or restart is received.
+
+The preceding HDF5 effect carries an Integral diagnostic. Its publication calls
+`_publish_diagnostics()`, which writes the Native inspection registry and correctly invalidates
+the earlier checkpoint token. This identifies a missing preparation rule for the joint effect
+transaction: the candidate Native diagnostic projection must be prepared before immutable
+checkpoint capture; its Python inspection registry and external effects still publish after
+commit. The stale-token guard must remain strict. Correction and a new original execution
+are required; this negative is not a successful checkpoint reception.
+
+ROOT authenticates all2 845 declared entries (2 602 files,242 directories,one link) in
+`/Users/romaindespoulain/dev/tmp/root-imex-publication-negative-reception-23810-20261007.json`,
+SHA `ee91711a02f96c7876682a410ca67111d1ec6b2a200d4b57fb899e743f4fc741`.
+The closed producer pins are
+`92e30bdf1fbc1562c4d93795b56e104c5d7fe5d1cabaf0b9e1512d1923347ba5`.
+The complete2563-member installed package is unchanged through the attempted run, and
+the preceding ABI11/64c package is preserved in full.
+
+The initialized real Uniform routing regression and six bounded checkpoint unit protocols
+pass on the same installed package. Four older capture fixtures fail because their local
+Native doubles omit `checkpoint_state_carriers()`. Both the fixture and Uniform capture
+source are byte-identical to parent9d4; the four failures are preserved separately.
+ROOT receipt `root-uniform-native12-bounded-nonreg-reception-23810-20261007.json` has SHA
+`17eda869a7792ccb92de17bcfbfe51ae01450afefa7ddffcdedd199d289fc495`.
+World1/OpenMP2 are measured by separate probes under the same controls; pytest-process
+effective concurrency is not independently recorded. These unit protocols do not qualify
+physical IMEX, MPI2, CUDA or3D.
+
+
+The original direct C++ transaction case now passes in a separate standalone runtime:
+MPI1 one test,85ms; MPI2 one test per rank,112ms, zero failure/error/skip. It executes the
+clock-setter refusal, current-candidate image, mutation invalidation, unequal local
+revision counters, one-rank collective refusal, nested rollback, commit validation and
+finalization expiry. All706 C++ source entries remain exact to Source23810. Runtime is
+O3/C++20; the heavy test TU is O0 per repository policy. The first MPI2 shared-XML capture
+is preserved, followed by the correctly ranked capture. ROOT seal
+`root-cpp-candidate-checkpoint-control-reception-23810-20261007.json` has SHA
+`7c54ea8648543a5b7e1f69f7ba3d6654d6dcb8917c1d607550b150f741cc995c`.
+The standalone binary SHA is
+`33b2e258bdd53f3096b1a047564efeaf004832e7542278949d34d3d8a6e2a5d5`;
+it is distinct from the preserved installed extension77d. This confirms direct C++ commit
+and lifetime behavior; Python IMEX/publication/restart, spatial partitioning, GPU and3D
+remain separate qualification requirements.
+
+## Candidate diagnostic projection @1
+
+The corrective Python rule is `pops.consumer.candidate-diagnostics@1`: within an active
+outer rollback transaction that prepares a final checkpoint, prepare each Native diagnostic
+projection before checkpoint capture. Its prepared receipt distinguishes these writes from
+publication of Python registries, baselines, console samples and cursors after commit.
+The ordinary initial/end route and SkipSampleReported without a checkpoint retain their
+existing behavior. A rank-local staging failure is voted before peers enter writer or
+checkpoint collectives; the outer Native snapshot restores the diagnostic map on failure.
+
+A transaction-local immutable projection cache preserves the same values and baseline
+updates across a ScientificOutput publication Retry. Re-preparation restores pending
+Python data without reducing the State or writing Native diagnostics again after commit.
+The checkpoint remains sealed at the prepared revision. The cursor override is cleared
+even if construction of this preparation mode fails. Equations, C++ ABI12, headerc04a,
+archive formats and stale-token guards are unchanged by this Python correction.
+
+The author and independent Source cohorts each pass22 tests. The independent report is
+`/Users/romaindespoulain/dev/tmp/sol61-diagnostic-candidate-source-independent-20261007/report.json`,
+pins `706d481666b9eed953c5d14745cec5be1153e1f6306c93551b53a0f5db532fd9`.
+Imports explicitly use Main/python and load no PoPS Native module. The first independent
+command selected the older IR17 site package and failed ten cases; that targeting error
+and its XML remain preserved. The corrected Source replay changes no product code.
+These Source protocol tests do not receive a real IMEX run or distributed MPI execution.
+
+Retry of the checkpoint itself remains an identified extension requirement: rollback
+destroys the current provider's staging proof, and re-preparation after commit cannot
+call the uncommitted candidate factory. It requires a versioned retain/replay interface
+for the same sealed checkpoint image and new tests. It is not qualified by the diagnostic
+projection cache. The next required reception is the rebuilt original manual IMEX,
+then its parity, rollback and independent publication-failure variants.

@@ -1081,6 +1081,7 @@ class RuntimeInstance:
         *,
         at_start: bool = False,
         at_end: bool = False,
+        outer_rollback_authoritative: bool = False,
     ) -> tuple[ConsumerTransaction, ...]:
         cursor_snapshot = self._consumer_cursor_authority.cursors
         plans = tuple(
@@ -1117,9 +1118,19 @@ class RuntimeInstance:
 
         staged = []
         try:
+            publisher = self._publisher
+            if (
+                outer_rollback_authoritative
+                and checkpoint_effects
+                and callable(getattr(self._executor, "_prepare_checkpoint_candidate", None))
+                and isinstance(publisher, RuntimeConsumerPublisher)
+            ):
+                # Native accepted diagnostics belong to the same outer candidate as the final
+                # checkpoint. FailRun and preparation Retry share this rollback authority.
+                publisher = publisher.checkpoint_candidate_preparation()
             for plan in plans:
                 staged.append(ConsumerTransaction(
-                    plan, cursor_snapshot, self._publisher,
+                    plan, cursor_snapshot, publisher,
                     self._consumer_cursor_authority))
         except BaseException as error:
             cleanup_error = self._abort_consumers(tuple(staged))
@@ -1509,7 +1520,8 @@ class RuntimeInstance:
             phase = "effect"
             self._attempt += attempts
             transactions = self._stage_consumers(
-                at_end=bool(at_end() if callable(at_end) else at_end)
+                at_end=bool(at_end() if callable(at_end) else at_end),
+                outer_rollback_authoritative=native_active,
             )
             phase = "commit"
             commit()

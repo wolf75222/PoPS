@@ -50,3 +50,31 @@ La campagne 735454 termine ensuite `FAILED 1:0`, durée `01:04:23`. Le vrai NVCC
 Le correctif [du transfert System](../../../src/runtime/system/system_layout_transfer.cpp), commit `a17a304`, remplace uniquement cette lambda par le foncteur nommé `CopyPhysicalTransferCarrier`, hors de `Impl`. La contre-revue Source confirme les mêmes vues, indices, composants, région et fences, sans nouveau header ou ABI. Ce correctif nécessite sa propre reconstruction et ne reçoit pas de PASS CUDA de l'ancien lot.
 
 Restent ouverts : résultats CUDA effectivement sauvés et reçus, GPU MPI2, 3D, CI de la révision finale, convergence et mesures à calcul comparable, sémantique de Field/history/Aux peuplés, ainsi que les autres critères des 94 IDs. Les deux pas AMR et leur rollback ne clôturent pas le cas cinétique M19 complet.
+## Additional CUDA735570 compilation refusal
+
+The later immutable Source `eae21965f1f156d78328f53ca94a20924eb6b854` was actually rebuilt
+in job735570, which ends `FAILED 1:0`,01:07:02 on romeo-a049. It passes the earlier named
+physical-carrier copy location, then NVCC's generated host stub cannot name the private
+`RegionTransport<2,Kokkos::CudaSpace>::PackKernel` and `UnpackKernel` types at
+`include/pops/mesh/parallel/region_transfer.hpp:475/493`. The exact errors are in the original
+build log at2340/2346, SHA `d36c9f17eeecbd8c1565971219125f2845182b0dd4017d8e6683c5175b2f5086`.
+The compiled TU is `src/runtime/system/system_layout_transfer.cpp`, NVCC/O3/C++20/sm80,
+with `--fmad=false`; official build RC1 is not a timeout. No wheel, full-seven-unit build,
+installed Native or PDE GPU result is received.
+
+The whole archive is received and independently counter-read:104 TAR entries
+(84 files,20 directories),97 raw entries (79 files,18 directories,zero links), and
+114 entries in the producer manifest. ROOT receipt
+`/Users/romaindespoulain/dev/tmp/root-cuda44-negative-reception-735570-20261007.json` has SHA
+`5293aeec956a09667fa349929f6f86d5a188120fec38d39753a22e6cf77dd8dc`;
+closed producer pins are `17657577f9a653bd4fcba6a49f882f2b3a2b30336754e87f02dd319a96b7058d`.
+Archive publication succeeds, late exit0; the original failure remains unchanged.
+Five before/after joins are exact, preserving19 CPU prefixes,8 GPU prefixes,17 Sources,
+declared Home registry/config,87 dependency records and the borrowed driver.
+The allocation records GH200120GB/compute9.0, as an observation only.
+
+The bounded Source review proposes exposing only the two named kernel types to the NVCC
+stub, retaining private transport storage and unchanged kernel bodies, views, offsets,
+validation, fences and capacity. This compiler-visibility correction is still to integrate
+and rebuild. It changes shipped header bytes; the job's ABI11/c190 identity and failure
+cannot qualify the separate ABI12/c04a transaction-capture Source.

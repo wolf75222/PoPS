@@ -206,7 +206,9 @@ class _Runtime(RuntimeInstance):
         self.temporaries = set()
         self.artifacts = set()
 
-    def _stage_consumers(self, *, at_start=False, at_end=False):
+    def _stage_consumers(
+        self, *, at_start=False, at_end=False, outer_rollback_authoritative=False
+    ):
         return (_EffectTransaction(self, at_start=at_start, at_end=at_end),)
 
 

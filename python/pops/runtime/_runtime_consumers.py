@@ -9,6 +9,7 @@ import stat
 import tempfile
 import threading
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -413,6 +414,13 @@ def _post_commit_root_consensus(
         )
 
 
+@dataclass(frozen=True)
+class _DiagnosticProjection:
+    values: tuple[DiagnosticPayload, ...]
+    baseline_updates: tuple[tuple[str, float], ...]
+    unavailable: str | None
+
+
 class _PreparedDiagnostic(PreparedPublication):
     def __init__(
         self,
@@ -421,10 +429,18 @@ class _PreparedDiagnostic(PreparedPublication):
         publish: Callable[[AcceptedSideEffect, tuple[DiagnosticPayload, ...]], None],
         discard: Callable[[AcceptedSideEffect], None],
         rollback: Callable[[AcceptedSideEffect, tuple[DiagnosticPayload, ...]], None],
+        *,
+        native_staged: bool = False,
     ) -> None:
         self._effect, self._values = effect, values
         self._publish, self._discard, self._rollback = publish, discard, rollback
         self._published = self._discarded = False
+        self._native_staged = native_staged
+
+    @property
+    def native_staged(self) -> bool:
+        """Whether the outer rollback boundary already owns the Native diagnostic writes."""
+        return self._native_staged
 
     @property
     def effect_identity(self) -> Identity:
@@ -1441,6 +1457,19 @@ class _PreparedRootExternalWriter(PreparedPublication):
     def finalize(self) -> None:
         self._cleanup("finalize")
         return None
+
+
+class _CheckpointCandidatePublisher(ConsumerPublisher):
+    """Prepare diagnostics inside the outer candidate, before its checkpoint is sealed."""
+
+    def __init__(self, publisher: RuntimeConsumerPublisher) -> None:
+        self._publisher = publisher
+        self._diagnostic_projections: dict[str, _DiagnosticProjection] = {}
+
+    def prepare(self, effect: AcceptedSideEffect) -> PreparedPublication:
+        return self._publisher.prepare(
+            effect, native_staged=True, diagnostic_projections=self._diagnostic_projections
+        )
 
 
 class RuntimeConsumerPublisher(ConsumerPublisher):
@@ -4273,16 +4302,18 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         return tuple(values), baseline_updates
 
     def _publish_diagnostics(
-        self, effect: AcceptedSideEffect, values: tuple[DiagnosticPayload, ...]
+        self, effect: AcceptedSideEffect, values: tuple[DiagnosticPayload, ...],
+        *, native_staged: bool = False,
     ) -> None:
         baseline_updates = self._pending_baselines.get(effect.identity.token, {})
         for key, value in baseline_updates.items():
             self._baselines.setdefault(key, value)
         for value in values:
             self._diagnostics[value.key.identity.token] = value
-            recorder = getattr(self._owner._executor, "record_program_diagnostic", None)
-            if callable(recorder):
-                recorder(_diagnostic_record_name(value), value.value)
+            if not native_staged:
+                recorder = getattr(self._owner._executor, "record_program_diagnostic", None)
+                if callable(recorder):
+                    recorder(_diagnostic_record_name(value), value.value)
         self._pending.pop(effect.identity.token, None)
         self._pending_baselines.pop(effect.identity.token, None)
 
@@ -4341,23 +4372,33 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         self._pending.pop(effect.identity.token, None)
         self._pending_baselines.pop(effect.identity.token, None)
 
-    def _prepare_diagnostic(self, effect: AcceptedSideEffect, manifest: Any) -> Any:
+    def _prepare_diagnostic(
+        self, effect: AcceptedSideEffect, manifest: Any, *, native_staged: bool = False,
+        diagnostic_projections: dict[str, _DiagnosticProjection] | None = None,
+    ) -> Any:
         unavailable = None
-        try:
-            values, baseline_updates = self._diagnostic_values(manifest)
-        except RuntimeError as error:
-            message = str(error)
-            if manifest.kind is not ConsumerKind.DIAGNOSTIC:
-                raise
-            if "step-change L2 unavailable after an AMR topology change" in message:
-                unavailable = "AMR regrid"
-            elif "step_change_l2 requires an active external step transaction" in message:
-                unavailable = "initial state"
-            else:
-                raise
-            values, baseline_updates = self._diagnostic_values(
-                manifest, skip_reductions=frozenset({"step_change_l2"})
-            )
+        projection = (None if diagnostic_projections is None
+                      else diagnostic_projections.get(effect.identity.token))
+        if projection is not None:
+            values = projection.values
+            baseline_updates = dict(projection.baseline_updates)
+            unavailable = projection.unavailable
+        else:
+            try:
+                values, baseline_updates = self._diagnostic_values(manifest)
+            except RuntimeError as error:
+                message = str(error)
+                if manifest.kind is not ConsumerKind.DIAGNOSTIC:
+                    raise
+                if "step-change L2 unavailable after an AMR topology change" in message:
+                    unavailable = "AMR regrid"
+                elif "step_change_l2 requires an active external step transaction" in message:
+                    unavailable = "initial state"
+                else:
+                    raise
+                values, baseline_updates = self._diagnostic_values(
+                    manifest, skip_reductions=frozenset({"step_change_l2"})
+                )
         previous = {
             value.key.identity.token: self._diagnostics.get(value.key.identity.token)
             for value in values
@@ -4390,24 +4431,66 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             self._pending.pop(_effect.identity.token, None)
             self._pending_baselines.pop(_effect.identity.token, None)
 
-        self._pending[effect.identity.token] = values
-        self._pending_baselines[effect.identity.token] = baseline_updates
+        if native_staged:
+            # The active outer Native snapshot restores this map if preparation/publication
+            # fails. All ranks must decide staging before writer/checkpoint collectives.
+            local_error = None
+            try:
+                self._pending[effect.identity.token] = values
+                self._pending_baselines[effect.identity.token] = baseline_updates
+                if projection is None:
+                    recorder = getattr(self._owner._executor, "record_program_diagnostic", None)
+                    if values and not callable(recorder):
+                        raise RuntimeError("checkpoint candidate diagnostics require a Native recorder")
+                    for value in values:
+                        recorder(_diagnostic_record_name(value), value.value)
+                    if diagnostic_projections is not None:
+                        diagnostic_projections[effect.identity.token] = _DiagnosticProjection(
+                            values, tuple(sorted(baseline_updates.items())), unavailable
+                        )
+            except BaseException as error:
+                local_error = error
+            try:
+                from pops.output._checkpoint_collective import CheckpointTopology, consensus
+
+                consensus(
+                    CheckpointTopology(self._rank, self._size, self._communicator),
+                    "candidate diagnostic staging", error=local_error,
+                )
+            except BaseException:
+                self._discard_diagnostics(effect)
+                if diagnostic_projections is not None and projection is None:
+                    diagnostic_projections.pop(effect.identity.token, None)
+                raise
+        else:
+            self._pending[effect.identity.token] = values
+            self._pending_baselines[effect.identity.token] = baseline_updates
         publish_callback: Callable[[AcceptedSideEffect, tuple[DiagnosticPayload, ...]], None]
         if manifest.kind is ConsumerKind.DIAGNOSTIC:
 
             def publish_console(
                 accepted_effect: AcceptedSideEffect, accepted_values: tuple[DiagnosticPayload, ...]
             ) -> None:
-                self._publish_diagnostics(accepted_effect, accepted_values)
+                self._publish_diagnostics(
+                    accepted_effect, accepted_values, native_staged=native_staged
+                )
                 self._render_console_diagnostics(
                     accepted_effect, manifest, accepted_values, unavailable=unavailable
                 )
 
             publish_callback = publish_console
         else:
-            publish_callback = self._publish_diagnostics
+            def publish_registry(
+                accepted_effect: AcceptedSideEffect, accepted_values: tuple[DiagnosticPayload, ...]
+            ) -> None:
+                self._publish_diagnostics(
+                    accepted_effect, accepted_values, native_staged=native_staged
+                )
+
+            publish_callback = publish_registry
         return _PreparedDiagnostic(
-            effect, values, publish_callback, self._discard_diagnostics, rollback
+            effect, values, publish_callback, self._discard_diagnostics, rollback,
+            native_staged=native_staged,
         )
 
     def _snapshot_for_effect(
@@ -4507,15 +4590,28 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             size=self._size,
         )
 
-    def prepare(self, effect: AcceptedSideEffect) -> PreparedPublication:
+    def checkpoint_candidate_preparation(self) -> ConsumerPublisher:
+        """Bind one explicit preparation mode to the final-checkpoint transaction only."""
+        return _CheckpointCandidatePublisher(self)
+
+    def prepare(
+        self, effect: AcceptedSideEffect, *, native_staged: bool = False,
+        diagnostic_projections: dict[str, _DiagnosticProjection] | None = None,
+    ) -> PreparedPublication:
         if type(effect) is not AcceptedSideEffect:
             raise TypeError("RuntimeConsumerPublisher requires an exact AcceptedSideEffect")
         manifest = self._manifest(effect)
         if manifest.kind is ConsumerKind.DIAGNOSTIC:
-            return self._prepare_diagnostic(effect, manifest)
+            return self._prepare_diagnostic(
+                effect, manifest, native_staged=native_staged,
+                diagnostic_projections=diagnostic_projections,
+            )
         if manifest.kind is ConsumerKind.MONITOR:
             diagnostic = (
-                self._prepare_diagnostic(effect, manifest)
+                self._prepare_diagnostic(
+                    effect, manifest, native_staged=native_staged,
+                    diagnostic_projections=diagnostic_projections,
+                )
                 if manifest.diagnostic_quantities
                 else None
             )
@@ -4528,7 +4624,10 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             return live if diagnostic is None else _PreparedScientificOutput(live, diagnostic)
         if manifest.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
             diagnostic = (
-                self._prepare_diagnostic(effect, manifest)
+                self._prepare_diagnostic(
+                    effect, manifest, native_staged=native_staged,
+                    diagnostic_projections=diagnostic_projections,
+                )
                 if manifest.diagnostic_quantities
                 else None
             )

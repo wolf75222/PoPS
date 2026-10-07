@@ -18,6 +18,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Prepare Native diagnostic projections before sealing a candidate checkpoint, then publish
+  Python registries after commit; scientific-output retries reuse the same immutable projection.
+  Candidate-diagnostics contract@1 retains collective staging failure and strict checkpoint guards.
 - Prepare AMR checkpoint-consumer images under an opaque outer-transaction lease,
   publish their sealed candidate proof after commit, and invalidate it on mutation or rollback.
   Public accepted-checkpoint guards and archive formats remain strict; the new native interface
