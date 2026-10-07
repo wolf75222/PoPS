@@ -255,6 +255,7 @@ sdk-support pops/runtime/builders/compiled/generated_system_block.hpp
 sdk-root pops/runtime/builders/compiled/model_runtime_params.hpp
 sdk-support pops/runtime/builders/compiled/native_loader.hpp
 test-only pops/runtime/builders/factory/brick_catalog.hpp
+test-only pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp
 sdk-support pops/runtime/builders/factory/model_factory.hpp
 sdk-support pops/runtime/builders/scheme_dispatch.hpp
 sdk-support pops/runtime/checkpoint/spatial_contract.hpp

@@ -17,6 +17,8 @@
 #include <pops/runtime/amr/field_solver_options.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -783,4 +785,393 @@ TEST(PreparedFieldRhsInputs, ActualMultilevelAmrIssuesOneInputForEachLiveLevel) 
   EXPECT_THROW((void)observed.copied->frame(), std::logic_error);
 }
 
+// A separate real two-slot composition, leaving the thirteen original witnesses intact.
+// u is constant; tag is a passive mesh selector, not an elliptic unknown.
+struct IncidenceStorageModel {
+  using State = StateVec<2>;
+  using Primitive = State;
+  static constexpr int dimension = D, n_vars = 2, n_providers = 0;
+  static constexpr bool program_only_storage = true;
+  static constexpr int program_state_ghost_depth = 1;
+  static PreparedProviderIdentity provider_identity() { return {"test.amr-aux.incidence-state", 1}; }
+  void serialize_exact_parameters(ExactContractBuilder& exact) const { exact.scalar(std::uint32_t{1}); }
+  static VariableSet conservative_vars() {
+    return {VariableKind::Conservative, {"u", "tag"}, 2, {VariableRole::Scalar, VariableRole::Scalar}};
+  }
+  static VariableSet primitive_vars() {
+    return {VariableKind::Primitive, {"u", "tag"}, 2, {VariableRole::Scalar, VariableRole::Scalar}};
+  }
+  POPS_HD nd::StateConversion<Primitive> recover(const State& value) const { return {value, {}}; }
+  POPS_HD nd::StateConversion<State> make_conservative(const Primitive& value) const { return {value, {}}; }
+  POPS_HD nd::StateConversionStatus admissibility(const State&) const { return {}; }
+  POPS_HD Real elliptic_rhs(const State& state) const { return state[0]; }
+};
+struct IncidencePhiRhs {
+  using State = StateVec<2>;
+  static constexpr int dimension = D, n_vars = 2, n_providers = 0;
+  POPS_HD Real elliptic_rhs(const State& state, const ProviderValues<0>&) const { return state[0]; }
+};
+struct IncidencePsiRhs {
+  using State = StateVec<2>;
+  static constexpr int dimension = D, n_vars = 2, n_providers = 1;
+  POPS_HD Real elliptic_rhs(const State&, const ProviderValues<1>& values) const { return values[0]; }
+};
+struct IncidenceScaleKernel {
+  FieldView<const Real, D> source;
+  FieldView<Real, D> target;
+  int source_component, target_component;
+  POPS_HD void operator()(const Index<D>& cell) const {
+    target(cell, target_component) = Real(2) * source(cell, source_component);
+  }
+};
+struct IncidenceConstantErrorKernel {
+  FieldView<const Real, D> values;
+  FieldView<Real, D> error;
+  int component;
+  Real expected;
+  POPS_HD void operator()(const Index<D>& cell) const {
+    error(cell, 0) = Kokkos::abs(values(cell, component) - expected);
+  }
+};
+struct IncidenceDependencyErrorKernel {
+  FieldView<const Real, D> phi, Q;
+  FieldView<Real, D> error;
+  int phi_component, Q_component;
+  POPS_HD void operator()(const Index<D>& cell) const {
+    error(cell, 0) = Kokkos::abs(Q(cell, Q_component) - Real(2) * phi(cell, phi_component));
+  }
+};
+using IncidenceCheckpoint = AuxiliaryCheckpointAcceptedState<D>;
+constexpr const char* kIncidenceOwner = "test.amr-aux.incidence-owner";
+constexpr const char* kIncidenceQProvider = "test.amr-aux.incidence-Q";
+struct IncidenceCallbackSnapshot {
+  int level;
+  runtime::multiblock::BoundaryEvaluationPoint actual_point;
+  std::vector<IncidenceCheckpoint> metadata;
+};
+struct IncidenceObservation {
+  bool capture = false, fail_fine_Q = false;
+  std::vector<IncidenceCallbackSnapshot> snapshots;
+  std::vector<AuxiliaryEvaluationPoint> Q_launches;
+  std::optional<AuxiliaryEvaluationPoint> fine_Q_fault_point;
+  std::vector<std::optional<runtime::multiblock::BoundaryEvaluationPoint>> phi_points{2};
+};
+bool incidence_invalidated(const IncidenceCheckpoint& image, const std::string& identity) {
+  return std::find(image.invalidated_providers.begin(), image.invalidated_providers.end(), identity) !=
+         image.invalidated_providers.end();
+}
+std::optional<AuxiliaryEvaluationPoint> incidence_provenance(
+    const IncidenceCheckpoint& image, const std::string& identity) {
+  const auto provider = std::find_if(image.providers.begin(), image.providers.end(),
+      [&](const auto& item) { return item.identity == identity; });
+  if (provider == image.providers.end()) throw std::logic_error("incidence witness provider absent");
+  return provider->accepted_point;
+}
+Real incidence_local_constant_error(AmrSystem<D>& system, const AuxiliaryComponentKey& key,
+                                    int level, Real expected) {
+  const auto address = system.auxiliary_address(key);
+  const auto* groups = system.prepared_amr_provider_storage_groups(level);
+  if (!groups) throw std::logic_error("incidence witness has no actual level carriers");
+  const auto* values = groups->find(address.group);
+  if (!values) throw std::logic_error("incidence witness group absent");
+  Field error(values->layout(), values->distribution(), values->local_rank(), 1, values->ghosts());
+  error.set_val(0);
+  for (std::size_t local = 0; local < values->local_size(); ++local)
+    for_each_cell(values->box(local), IncidenceConstantErrorKernel{
+      values->fab(local).view(), error.fab(local).view(), kernel_component(address.component), expected});
+  Kokkos::fence();
+  return reduce_max_local(error);
+}
+Real incidence_local_dependency_error(AmrSystem<D>& system, const AuxiliaryComponentKey& phi,
+                                      const AuxiliaryComponentKey& Q, int level) {
+  const auto phi_address = system.auxiliary_address(phi);
+  const auto Q_address = system.auxiliary_address(Q);
+  const auto* groups = system.prepared_amr_provider_storage_groups(level);
+  if (!groups) throw std::logic_error("incidence witness level carriers absent");
+  const auto* phi_values = groups->find(phi_address.group);
+  const auto* Q_values = groups->find(Q_address.group);
+  if (!phi_values || !Q_values) throw std::logic_error("incidence witness dependency carriers absent");
+  Field error(Q_values->layout(), Q_values->distribution(), Q_values->local_rank(), 1, Q_values->ghosts());
+  error.set_val(0);
+  for (std::size_t local = 0; local < Q_values->local_size(); ++local)
+    for_each_cell(Q_values->box(local), IncidenceDependencyErrorKernel{
+      phi_values->fab(local).view(), Q_values->fab(local).view(), error.fab(local).view(),
+      kernel_component(phi_address.component), kernel_component(Q_address.component)});
+  Kokkos::fence();
+  return reduce_max_local(error);
+}
+runtime::program::AmrProgramContext<D>& incidence_context(AmrSystem<D>& system) {
+  system.step(.03125); // Real installer entry, value plan and hierarchy advance.
+  if (system.installed_program_hash() != test::aux_incidence_value_program::identity)
+    throw std::logic_error("incidence Program identity differs from its real DSO");
+  const auto library = dynlib::open(POPS_TEST_FIELD_RHS_AUX_INCIDENCE_PROGRAM_SO);
+  if (!dynlib::valid(library)) throw std::runtime_error("cannot reopen incidence Program");
+  const auto getter = reinterpret_cast<void* (*)(AmrSystem<D>*)>(
+      dynlib::sym(library, "pops_test_aux_incidence_amr_context"));
+  auto* context = getter ? static_cast<runtime::program::AmrProgramContext<D>*>(getter(&system)) : nullptr;
+  dynlib::close(library); // Official installation retains the actual DSO.
+  if (!context) throw std::logic_error("incidence Program lost its installed context");
+  return *context;
+}
+
+TEST(PreparedFieldRhsInputs, ActualFieldPublicationReopensCoarseAuxWhileFineRemainsDirty) {
+  ready();
+  AmrSystemConfig<D> config;
+  config.level_count = 2; config.regrid_every = 0; config.explicit_bootstrap = true;
+  for (int axis = 0; axis < D; ++axis) {
+    config.shape[axis] = kCells; config.lower[axis] = 0; config.upper[axis] = 1;
+    config.periodicity[axis] = true; config.coarse_max_grid[axis] = kCells;
+    config.transition_buffers.front()[axis] = 1;
+    config.transition_lookaheads.front()[axis] = 1;
+  }
+  IncidenceObservation observed;
+  AmrSystem<D> system(config);
+  test::install_amr_runtime_authority(system, "test.amr-aux.incidence-execution");
+  system.install_block_state_route("material", "test.amr-aux.incidence-state");
+  system.install_prepared_amr_block(prepare_compiled_amr_system_block<D>(
+    "material", IncidenceStorageModel{}, "state_storage", "unavailable", "conservative", "imex",
+    1.4, 1, 1, 0.0, double(kWenoEpsilon), false, "test.amr-aux.incidence-state-model"));
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "field", "scalar"};
+  AuxiliaryStorageShape<D> shape;
+  for (int axis = 0; axis < D; ++axis) shape.halo[axis] = 1;
+  const AuxiliaryComponentKey phi{kIncidenceOwner, "field", "phi", "phi"};
+  const AuxiliaryComponentKey psi{kIncidenceOwner, "field", "psi", "psi"};
+  const AuxiliaryComponentKey Q{kIncidenceOwner, "aux", "Q", "Q"};
+  const AmrFieldHierarchyPolicyAuthority hierarchy{
+    "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
+  const auto install_plan = [&](const std::string& slot, const std::string& field,
+                               const std::string& binding, const AuxiliaryComponentKey& output) {
+    system.set_field_solver_plan(slot, slot + "/plan", slot + "/provider", kIncidenceOwner,
+      "material", field, {output}, 1, {binding}, {"material"}, {field}, {1.0},
+      "geometric_mg", hierarchy,
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{}));
+    system.set_field_reaction(slot, 1.0); // Screened equations have no periodic mean constraint.
+  };
+  install_plan("test.amr-aux.phi-slot", "phi", "test.amr-aux.phi-binding", phi);
+  install_plan("test.amr-aux.psi-slot", "psi", "test.amr-aux.psi-binding", psi);
+  using Provider = PreparedAuxiliaryProvider<D>;
+  const AuxiliaryEvaluationPolicy numerical{
+    AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::evaluation};
+  const AuxiliaryEvaluationPolicy external_output{
+    AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once};
+  system.install_prepared_auxiliary_provider(Provider{
+    "test.amr-aux.phi-output", AuxiliaryProviderKind::field_output, external_output, {{phi, contract, shape}}, {}});
+  system.install_prepared_auxiliary_provider(Provider{
+    "test.amr-aux.psi-output", AuxiliaryProviderKind::field_output, external_output, {{psi, contract, shape}}, {}});
+  system.install_prepared_auxiliary_provider(Provider{
+    kIncidenceQProvider, AuxiliaryProviderKind::derived, numerical, {{Q, contract, shape}},
+    {{phi, contract, shape}}, Provider::launcher_type::trusted_extension(
+      PreparedProviderIdentity{kIncidenceQProvider, 1}, "Q=2phi; controlled fine publication failure",
+      [&observed](const AuxiliaryKernelLaunchContext<D>& launch) {
+        observed.Q_launches.push_back(launch.point);
+        if (observed.fail_fine_Q && launch.point.level == 1) {
+          observed.fine_Q_fault_point = launch.point; // Record only the actual throwing branch.
+          throw std::runtime_error("intentional fine Q publication failure");
+        }
+        const auto source = launch.dependencies.at(0).address;
+        const auto target = launch.outputs.at(0).address;
+        const auto* input = launch.storage.candidate->find(source.group);
+        auto* output = launch.storage.candidate->find(target.group);
+        if (!input || !output) throw std::logic_error("actual phi/Q carrier absent");
+        for (std::size_t local = 0; local < output->local_size(); ++local)
+          for_each_cell(output->box(local), IncidenceScaleKernel{
+            input->fab(local).view(), output->fab(local).view(),
+            kernel_component(source.component), kernel_component(target.component)});
+        Kokkos::fence();
+      })});
+  system.install_auxiliary_consumer_plan({"test.amr-aux.psi-consumer", {{{Q, contract, shape}, 0}}});
+  system.seal_auxiliary_providers();
+  system.register_elliptic_field("material", "phi", {phi}, 1);
+  system.register_elliptic_field("material", "psi", {psi}, 1);
+  const auto phi_rhs = make_poisson_rhs_v2<D>(IncidencePhiRhs{});
+  const auto psi_rhs = make_poisson_rhs_v2<D>(IncidencePsiRhs{});
+  system.set_block_elliptic_field_v2("material", "phi", "test.amr-aux.phi-rhs",
+    "test.amr-aux.phi-binding", "test.amr-aux.phi-consumer", 0,
+    [&observed, phi_rhs](const Inputs& inputs, Field& rhs) {
+      phi_rhs(inputs, rhs);
+      if (inputs.boundary_point().dt > 0)
+        observed.phi_points.at(static_cast<std::size_t>(inputs.level())) = inputs.boundary_point();
+    });
+  system.set_block_elliptic_field_v2("material", "psi", "test.amr-aux.psi-rhs",
+    "test.amr-aux.psi-binding", "test.amr-aux.psi-consumer", 1,
+    [&system, &observed, psi_rhs](const Inputs& inputs, Field& rhs) {
+      psi_rhs(inputs, rhs);
+      if (observed.capture)
+        observed.snapshots.push_back({inputs.level(), inputs.boundary_point(),
+          system.capture_auxiliary_checkpoint_accepted_state()});
+    });
+  test::install_prepared_threshold_union(system,
+    {{"material", "tag", 2.4, test::PreparedThresholdRelation::Above, "test.amr-aux.incidence-state"}},
+    "test.amr-aux.incidence-tagging", "test.field-rhs-v2.clock");
+  system.bind_bootstrap_subject("test.amr-aux.incidence-state", "material", "bound_level_zero");
+  const auto tagging = initial();
+  std::vector<double> state(2 * tagging.size());
+  for (std::size_t cell = 0; cell < tagging.size(); ++cell) {
+    state[cell] = 3.; state[tagging.size() + cell] = tagging[cell]; // Public component-major array.
+  }
+  system.stage_bootstrap_array("test.amr-aux.incidence-state", "material", "cell", "cell", 2,
+    config.shape, state);
+  Extent<D> prolongation{}, restriction{};
+  for (int axis = 0; axis < D; ++axis) prolongation[axis] = 1;
+  system.register_bootstrap_transfer_route("test.amr-aux.incidence-prolongation",
+    {"test.amr-aux.incidence-state"}, "test.amr-aux.conservative-linear", "cell", "cell",
+    "conservative", "dense", "prolongation", "conservative_linear", 2, prolongation,
+    config.transition_ratios.front());
+  system.register_bootstrap_transfer_route("test.amr-aux.incidence-restriction",
+    {"test.amr-aux.incidence-state"}, "test.amr-aux.volume-average", "cell", "cell",
+    "conservative", "dense", "restriction", "volume_average", 1, restriction,
+    config.transition_ratios.front());
+  system.install_program(POPS_TEST_FIELD_RHS_AUX_INCIDENCE_PROGRAM_SO);
+  system.begin_bootstrap_plan();
+  system.seed_program_params(0, {double(kParameter)});
+  (void)system.materialize_bootstrap_action("test.amr-aux.incidence-state", "initialize_level_zero",
+    "bound_level_zero", 0);
+  ASSERT_TRUE(system.bootstrap_next_level());
+  (void)system.materialize_bootstrap_action("test.amr-aux.incidence-state", "prolong_from_parent",
+    "conservative_linear", 1);
+  system.commit_bootstrap_level();
+  system.mark_bound();
+  auto& context = incidence_context(system);
+  const auto& actual_fine = system.prepared_amr_block_state(0, 1);
+  Real local_fine_cells = 0;
+  for (std::size_t local = 0; local < actual_fine.local_size(); ++local)
+    local_fine_cells += static_cast<Real>(actual_fine.box(local).numPts());
+  const Real actual_fine_cells = actual_fine.distribution().replicated()
+      ? local_fine_cells : all_reduce_sum(local_fine_cells, context.prepared_execution_lane());
+  const Real full_fine_cells = static_cast<Real>(system.prepared_amr_level_geometry(1).domain().numPts());
+  ASSERT_GT(actual_fine_cells, Real(0));
+  ASSERT_LT(actual_fine_cells, full_fine_cells) << "the real refined layout must be sparse";
+  context.begin_step(.25); context.set_stage_time(1, 2);
+  ASSERT_EQ(system.step_transaction_depth(), 0U);
+  auto& baseline_stage = produce_stage(context);
+  auto baseline = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(13),
+    13, "test.amr-aux.psi-slot", {{0, &baseline_stage, 1}});
+  ASSERT_TRUE(baseline.report().solved_value_available()) << baseline.report().reason;
+  (void)baseline.consume(SolveConsumption::kAccept);
+  const auto baseline_image = system.capture_auxiliary_checkpoint_accepted_state();
+  ASSERT_EQ(baseline_image.size(), 2U);
+  for (const auto& level : baseline_image) {
+    ASSERT_TRUE(incidence_provenance(level, kIncidenceQProvider).has_value());
+    EXPECT_FALSE(incidence_invalidated(level, kIncidenceQProvider));
+  }
+
+  context.set_stage_time(3, 4);
+  auto& stage = produce_stage(context);
+  auto phi_solve = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(14),
+    10, "test.amr-aux.phi-slot", {{0, &stage, 1}});
+  ASSERT_TRUE(phi_solve.report().solved_value_available()) << phi_solve.report().reason;
+  (void)phi_solve.consume(SolveConsumption::kAccept);
+  const auto dirty_after_phi = system.capture_auxiliary_checkpoint_accepted_state();
+  ASSERT_EQ(dirty_after_phi.size(), 2U);
+  for (const auto& level : dirty_after_phi) EXPECT_TRUE(incidence_invalidated(level, kIncidenceQProvider));
+
+  for (const auto& actual_point : observed.phi_points) ASSERT_TRUE(actual_point.has_value());
+  const auto collect_current_phi = [&] {
+    std::vector<AmrSystem<D>::ProgramFieldLevel> publication;
+    const auto address = system.auxiliary_address(phi);
+    for (int level = 0; level < 2; ++level) {
+      const auto* carriers = system.prepared_amr_provider_storage_groups(level);
+      if (!carriers) throw std::logic_error("current phi observation has no actual level carriers");
+      const auto* values = carriers->find(address.group);
+      if (!values) throw std::logic_error("current phi observation has no actual provider group");
+      publication.push_back({*observed.phi_points.at(static_cast<std::size_t>(level)),
+        {{phi, "test.amr-aux.phi-output", values, kernel_component(address.component)}}});
+    }
+    return publication;
+  };
+  {
+    const auto publication = collect_current_phi();
+    auto fine_comparison = publication[1].point;
+    fine_comparison.level = publication[0].point.level; // Comparison only; actual points are retained.
+    ASSERT_EQ(fine_comparison, publication[0].point);
+    // Real public publisher; this borrowed observation ends before any restore.
+    system.publish_program_field_components("test.amr-aux.phi-republication-first", publication);
+  }
+  observed.capture = true; observed.fail_fine_Q = true; observed.snapshots.clear();
+  observed.Q_launches.clear(); observed.fine_Q_fault_point.reset();
+  EXPECT_THROW((void)context.solve_fields_from_program_values_at(context.boundary_evaluation_point(15),
+    13, "test.amr-aux.psi-slot", {{0, &stage, 1}}), std::exception);
+  ASSERT_TRUE(observed.fine_Q_fault_point.has_value());
+  EXPECT_EQ(observed.fine_Q_fault_point->level, 1);
+  EXPECT_EQ(observed.fine_Q_fault_point->event, AuxiliaryEvaluationEvent::before_field_solve);
+  const auto fault_launches = std::count(observed.Q_launches.begin(), observed.Q_launches.end(),
+                                       *observed.fine_Q_fault_point);
+  EXPECT_EQ(fault_launches, 1);
+  const auto coarse_launches = std::count_if(observed.Q_launches.begin(), observed.Q_launches.end(),
+      [](const auto& point) { return point.level == 0; });
+  EXPECT_GE(coarse_launches, 1);
+  const auto partial = system.capture_auxiliary_checkpoint_accepted_state();
+  ASSERT_EQ(partial.size(), 2U);
+  EXPECT_FALSE(incidence_invalidated(partial[0], kIncidenceQProvider));
+  EXPECT_TRUE(incidence_invalidated(partial[1], kIncidenceQProvider));
+  EXPECT_EQ(incidence_provenance(partial[1], kIncidenceQProvider),
+            incidence_provenance(baseline_image[1], kIncidenceQProvider));
+  ASSERT_FALSE(observed.snapshots.empty());
+  EXPECT_EQ(observed.snapshots.front().level, 0);
+  EXPECT_EQ(observed.fine_Q_fault_point->clock, observed.snapshots.front().actual_point.clock);
+  EXPECT_EQ(observed.fine_Q_fault_point->accepted_step,
+            static_cast<std::uint64_t>(observed.snapshots.front().actual_point.tick));
+  EXPECT_EQ(observed.fine_Q_fault_point->stage, observed.snapshots.front().actual_point.stage);
+  EXPECT_FALSE(incidence_invalidated(observed.snapshots.front().metadata[0], kIncidenceQProvider));
+  EXPECT_TRUE(incidence_invalidated(observed.snapshots.front().metadata[1], kIncidenceQProvider));
+  // Public POPSAUX3 capture/restore keeps distinct level memberships; no Input or
+  // never-published marker and no live physical payload is manufactured here.
+  system.restore_auxiliary_checkpoint_accepted_state(partial);
+  EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), partial);
+  const auto dirty_union = system.dirty_auxiliary_provider_identities();
+  EXPECT_TRUE(std::find(dirty_union.begin(), dirty_union.end(), kIncidenceQProvider) != dirty_union.end());
+
+  {
+    // Restore replaced the provider allocations. Reacquire every actual group/value
+    // and reconstruct observations; only the genuinely issued point values are reused.
+    const auto current_publication = collect_current_phi();
+    system.publish_program_field_components("test.amr-aux.phi-republication-reopens-coarse",
+                                           current_publication);
+  }
+  const auto reopened = system.capture_auxiliary_checkpoint_accepted_state();
+  ASSERT_EQ(reopened.size(), 2U);
+  EXPECT_TRUE(incidence_invalidated(reopened[0], kIncidenceQProvider));
+  EXPECT_TRUE(incidence_invalidated(reopened[1], kIncidenceQProvider));
+  observed.fail_fine_Q = false; observed.snapshots.clear();
+  auto complete = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(15),
+    13, "test.amr-aux.psi-slot", {{0, &stage, 1}});
+  ASSERT_TRUE(complete.report().solved_value_available()) << complete.report().reason;
+  (void)complete.consume(SolveConsumption::kAccept);
+  ASSERT_EQ(observed.snapshots.size(), 2U);
+  const auto& coarse = observed.snapshots[0];
+  const auto& fine = observed.snapshots[1];
+  EXPECT_EQ(coarse.level, 0); EXPECT_EQ(fine.level, 1);
+  EXPECT_FALSE(incidence_invalidated(coarse.metadata[0], kIncidenceQProvider));
+  EXPECT_TRUE(incidence_invalidated(coarse.metadata[1], kIncidenceQProvider));
+  EXPECT_FALSE(incidence_invalidated(fine.metadata[0], kIncidenceQProvider));
+  EXPECT_FALSE(incidence_invalidated(fine.metadata[1], kIncidenceQProvider));
+  EXPECT_EQ(coarse.metadata[0], fine.metadata[0]) << "a rejected fine ancestor is not an accepted publication";
+  const auto clean = system.capture_auxiliary_checkpoint_accepted_state();
+  for (const auto& level : clean) EXPECT_FALSE(incidence_invalidated(level, kIncidenceQProvider));
+  const Real field_bound = Real(1e-9); // New constant screened-field witness; old 13 bounds unchanged.
+  for (int level = 0; level < 2; ++level) {
+    const auto* groups = system.prepared_amr_provider_storage_groups(level);
+    ASSERT_NE(groups, nullptr);
+    for (const auto& component : std::array<std::pair<AuxiliaryComponentKey, Real>, 3>{
+           {{phi, Real(3)}, {Q, Real(6)}, {psi, Real(6)}}}) {
+      const auto address = system.auxiliary_address(component.first);
+      const auto* actual_values = groups->find(address.group);
+      ASSERT_NE(actual_values, nullptr);
+      const auto cells = local_valid_cell_count(*actual_values);
+      const Real error = incidence_local_constant_error(system, component.first, level, component.second);
+      if (cells == 0)
+        EXPECT_EQ(error, -std::numeric_limits<Real>::infinity());
+      else
+        EXPECT_LE(error, field_bound);
+    }
+    const auto* actual_Q = groups->find(system.auxiliary_address(Q).group);
+    ASSERT_NE(actual_Q, nullptr);
+    const Real dependency_error = incidence_local_dependency_error(system, phi, Q, level);
+    if (local_valid_cell_count(*actual_Q) == 0)
+      EXPECT_EQ(dependency_error, -std::numeric_limits<Real>::infinity());
+    else
+      EXPECT_EQ(dependency_error, Real(0));
+  }
+}
 } // namespace

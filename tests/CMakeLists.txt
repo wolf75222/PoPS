@@ -731,6 +731,27 @@ add_dependencies(test_prepared_field_rhs_inputs pops_field_rhs_value_program_fix
 target_compile_definitions(test_prepared_field_rhs_inputs PRIVATE
   POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO="${_field_rhs_fixture_stem}.so")
 
+# A separate real Program declares the phi -> Q -> psi incidence witness.
+add_executable(pops_build_field_rhs_aux_incidence_program_fixture EXCLUDE_FROM_ALL
+  cpp/support/build_field_rhs_aux_incidence_program_fixture.cpp)
+target_link_libraries(pops_build_field_rhs_aux_incidence_program_fixture PRIVATE pops::pops)
+target_compile_features(pops_build_field_rhs_aux_incidence_program_fixture PRIVATE cxx_std_${POPS_CXX_STD})
+target_compile_definitions(pops_build_field_rhs_aux_incidence_program_fixture PRIVATE ${_field_rhs_native_defs})
+set(_field_rhs_aux_incidence_stem "${CMAKE_CURRENT_BINARY_DIR}/field-rhs-aux-incidence-program-fixture")
+add_custom_command(OUTPUT "${_field_rhs_aux_incidence_stem}.so" "${_field_rhs_aux_incidence_stem}.cpp"
+  COMMAND $<TARGET_FILE:pops_build_field_rhs_aux_incidence_program_fixture>
+    "${_field_rhs_aux_incidence_stem}.cpp" "${_field_rhs_aux_incidence_stem}.so"
+  DEPENDS pops_build_field_rhs_aux_incidence_program_fixture
+    "${POPS_HEADER_ROOT}/pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp"
+    cpp/support/native_dso_compiler.hpp "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
+  JOB_POOL pops_heavy_test_tu
+  VERBATIM)
+add_custom_target(pops_field_rhs_aux_incidence_program_fixture
+  DEPENDS "${_field_rhs_aux_incidence_stem}.so" "${_field_rhs_aux_incidence_stem}.cpp")
+add_dependencies(test_prepared_field_rhs_inputs pops_field_rhs_aux_incidence_program_fixture)
+target_compile_definitions(test_prepared_field_rhs_inputs PRIVATE
+  POPS_TEST_FIELD_RHS_AUX_INCIDENCE_PROGRAM_SO="${_field_rhs_aux_incidence_stem}.so")
+
 pops_test_source(_src test_amr_system_contract)
 pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
