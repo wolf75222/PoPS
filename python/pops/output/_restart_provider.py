@@ -556,12 +556,16 @@ class _RestartSnapshot:
         "_published_entry",
         "_published_parent_fd",
         "_discarded",
+        "_prepared_capture",
     )
 
-    def __init__(self, runtime: Any, directory: Any) -> None:
+    def __init__(self, runtime: Any, directory: Any, *, prepared_capture: Any = None) -> None:
         from ._checkpoint_collective import root_attempt
 
         self._runtime = runtime
+        self._prepared_capture = prepared_capture
+        if prepared_capture is not None:
+            runtime._validate_prepared_checkpoint_candidate(prepared_capture)
         self._topology = checkpoint_topology(runtime)
         self._proof: _CheckpointPayloadProof | None = None
         self._staging_owned = False
@@ -641,6 +645,7 @@ class _RestartSnapshot:
             proof = runtime._checkpoint_payload(
                 transaction.staging_path,
                 transaction_receipt=transaction,
+                **({} if prepared_capture is None else {"prepared_capture": prepared_capture}),
             )
         except _CheckpointTransportFailure:
             self._discarded = True
@@ -801,6 +806,8 @@ class _RestartSnapshot:
             raise RuntimeError("discarded restart snapshot cannot be published")
         if self._proof is None:
             raise RuntimeError("restart snapshot has no checkpoint payload proof")
+        if self._prepared_capture is not None:
+            self._runtime._validate_committed_checkpoint_candidate(self._prepared_capture)
         local_target = canonical_checkpoint_path(target)
         target_error = None
         try:
@@ -1087,9 +1094,10 @@ class RestartV3:
         if self.bit_identical and self.hierarchy.mode == "regrid_on_restart":
             raise ValueError("RestartV3 cannot combine bit_identical=True with RegridOnRestart()")
 
-    def snapshot(self, runtime: Any, directory: Any) -> Any:
+    def snapshot(self, runtime: Any, directory: Any, *, prepared_capture: Any = None) -> Any:
         self.validate_configuration()
-        return self.validate_snapshot(_RestartSnapshot(runtime, directory))
+        return self.validate_snapshot(_RestartSnapshot(runtime, directory,
+                                                       prepared_capture=prepared_capture))
 
     @staticmethod
     def validate_snapshot(snapshot: Any) -> Any:

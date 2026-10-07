@@ -86,6 +86,20 @@
 namespace pops {
 namespace {
 
+struct CompletedCheckpointAdvancePoint {
+  double time = 0;
+  int macro_step = 0;
+  std::uint64_t topology_epoch = 0;
+};
+
+struct PreparedCheckpointLease {
+  std::uint64_t generation = 0;
+  std::uint64_t revision = 0;
+  bool committed = false;
+  bool valid = true;
+  std::optional<CompletedCheckpointAdvancePoint> completed;
+};
+
 std::string prepared_field_boundary_pair_key(const PreparedBoundaryComponentSpec& spec);
 void require_prepared_field_boundary_pair(const PreparedBoundaryComponentSpec& residual,
                                           const PreparedBoundaryComponentSpec& jvp);
@@ -2567,6 +2581,19 @@ void append_execution_context_contract(ExactContractBuilder& contract,
 }  // namespace
 
 template <int Dim>
+struct AmrSystem<Dim>::PreparedCheckpointCapture::State {
+  const void* owner = nullptr;
+  std::weak_ptr<PreparedCheckpointLease> lease;
+  std::uint64_t generation = 0;
+  std::uint64_t revision = 0;
+  double time = 0;
+  int macro_step = 0;
+  std::uint64_t topology_epoch = 0;
+  std::vector<std::uint8_t> carriers;
+  std::vector<std::uint8_t> diagnostics;
+};
+
+template <int Dim>
 struct AmrSystem<Dim>::Impl {
   using engine_type = runtime::amr::AmrRuntime<Dim>;
   using field_type = MultiFab<Dim>;
@@ -3628,6 +3655,8 @@ struct AmrSystem<Dim>::Impl {
     std::vector<::pops::amr::ParentChildClockRelation> temporal_relations;
     double accepted_time = 0.0;
     int macro_step = 0;
+    std::uint64_t checkpoint_completion_generation = 0;
+    std::optional<CompletedCheckpointAdvancePoint> checkpoint_completion;
     int checkpoint_regrid_count_value = 0;
     std::vector<int> last_replay_regrid_steps;
     std::vector<std::uint8_t> program_accepted_bytes;
@@ -3665,6 +3694,10 @@ struct AmrSystem<Dim>::Impl {
           temporal_relations(owner.temporal_relations),
           accepted_time(owner.accepted_time),
           macro_step(owner.macro_step),
+          checkpoint_completion_generation(owner.checkpoint_capture_lease
+              ? owner.checkpoint_capture_lease->generation : 0),
+          checkpoint_completion(owner.checkpoint_capture_lease
+              ? owner.checkpoint_capture_lease->completed : std::nullopt),
           checkpoint_regrid_count_value(owner.checkpoint_regrid_count_value),
           last_replay_regrid_steps(owner.last_replay_regrid_steps),
           program_accepted_bytes(owner.program_accepted_bytes),
@@ -3715,6 +3748,8 @@ struct AmrSystem<Dim>::Impl {
       std::vector<::pops::amr::ParentChildClockRelation> temporal_relations;
       double accepted_time = 0.0;
       int macro_step = 0;
+      std::uint64_t checkpoint_completion_generation = 0;
+      std::optional<CompletedCheckpointAdvancePoint> checkpoint_completion;
       int checkpoint_regrid_count_value = 0;
       std::vector<int> last_replay_regrid_steps;
       std::vector<std::uint8_t> program_accepted_bytes;
@@ -3747,6 +3782,8 @@ struct AmrSystem<Dim>::Impl {
             temporal_relations(snapshot.temporal_relations),
             accepted_time(snapshot.accepted_time),
             macro_step(snapshot.macro_step),
+            checkpoint_completion_generation(snapshot.checkpoint_completion_generation),
+            checkpoint_completion(snapshot.checkpoint_completion),
             checkpoint_regrid_count_value(snapshot.checkpoint_regrid_count_value),
             last_replay_regrid_steps(snapshot.last_replay_regrid_steps),
             program_accepted_bytes(snapshot.program_accepted_bytes),
@@ -3882,6 +3919,11 @@ struct AmrSystem<Dim>::Impl {
       owner.temporal_relations.swap(prepared.temporal_relations);
       owner.accepted_time = prepared.accepted_time;
       owner.macro_step = prepared.macro_step;
+      if (owner.checkpoint_capture_lease) {
+        owner.checkpoint_capture_lease->completed =
+            owner.checkpoint_capture_lease->generation == prepared.checkpoint_completion_generation
+                ? prepared.checkpoint_completion : std::nullopt;
+      }
       owner.checkpoint_regrid_count_value = prepared.checkpoint_regrid_count_value;
       owner.last_replay_regrid_steps.swap(prepared.last_replay_regrid_steps);
       owner.program_accepted_bytes.swap(prepared.program_accepted_bytes);
@@ -4016,6 +4058,17 @@ struct AmrSystem<Dim>::Impl {
     return candidate;
   }
 
+  // A fresh control block identifies each outer session even when snapshot addresses are reused.
+  std::shared_ptr<PreparedCheckpointLease> checkpoint_capture_lease;
+  std::uint64_t checkpoint_capture_generation = 0;
+  std::vector<std::uint8_t> capture_checkpoint_state_carriers() const;
+  void invalidate_checkpoint_capture() const noexcept {
+    if (!checkpoint_capture_lease) return;
+    if (checkpoint_capture_lease->revision == std::numeric_limits<std::uint64_t>::max())
+      checkpoint_capture_lease->valid = false;
+    else
+      ++checkpoint_capture_lease->revision;
+  }
   std::unique_ptr<AcceptedSnapshot> external_step_transaction;
   bool external_step_committed = false;
   std::vector<std::unique_ptr<AcceptedSnapshot>> parent_step_transactions;
@@ -8608,6 +8661,7 @@ struct AmrSystem<Dim>::Impl {
       throw std::logic_error("AMR history mutation cannot change a committed restart");
     if (all_reduce_max(history_regrid_sequence_sources ? 1L : 0L, lane) != 0)
       throw std::logic_error("AMR history mutation cannot change a frozen restart regrid image");
+    invalidate_checkpoint_capture();
   }
 
   void require_restart_auxiliary_restoration(const ExecutionLane& lane) const {
@@ -11317,6 +11371,7 @@ void AmrSystem<Dim>::seal_auxiliary_providers() {
 template <int Dim>
 void AmrSystem<Dim>::stage_auxiliary_input(const runtime::system::AuxiliaryComponentKey& key,
                                            const std::vector<double>& values) {
+  p_->invalidate_checkpoint_capture();
   seal_auxiliary_providers();
   const ExecutionLane& lane = p_->require_package_assembly_lane();
   std::optional<runtime::system::AuxiliaryStorageAddress<Dim>> address;
@@ -11525,22 +11580,32 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
 template <int Dim>
 std::vector<std::uint8_t> AmrSystem<Dim>::checkpoint_state_carriers() const {
   const auto& lane = p_->require_package_assembly_lane();
-  using namespace runtime::checkpoint;
-  std::string shard;
   std::exception_ptr error;
   try {
     if (step_transaction_depth() != 0 || p_->restart_transaction || !p_->engine ||
         !p_->prepared_hierarchy)
       throw std::logic_error("state carrier checkpoint requires prepared accepted state");
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "state carrier accepted capture preflight");
+  return p_->capture_checkpoint_state_carriers();
+}
+
+template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::Impl::capture_checkpoint_state_carriers() const {
+  const auto& lane = require_package_assembly_lane();
+  using namespace runtime::checkpoint;
+  std::string shard;
+  std::exception_ptr error;
+  try {
     StateCarrierArchive<Dim> image;
     image.real_bits = sizeof(RealBits) * 8;
     image.ranks = lane.size(); image.shard = lane.rank();
-    image.levels = p_->engine->hierarchy().num_levels();
-    for (const auto& block : p_->blocks) image.blocks.push_back(block.name);
+    image.levels = engine->hierarchy().num_levels();
+    for (const auto& block : blocks) image.blocks.push_back(block.name);
     Kokkos::fence();
-    for (std::size_t block = 0; block < p_->blocks.size(); ++block)
+    for (std::size_t block = 0; block < blocks.size(); ++block)
       for (std::size_t level = 0; level < image.levels; ++level) {
-        const auto& field = p_->block_state(block, level);
+        const auto& field = block_state(block, level);
         for (std::size_t local = 0; local < field.local_size(); ++local) {
           const auto& fab = field.fab(local);
           StateCarrierPatch<Dim> row;
@@ -11608,6 +11673,112 @@ std::vector<std::uint8_t> AmrSystem<Dim>::checkpoint_state_carriers() const {
   } catch (...) { error = std::current_exception(); }
   collectively_rethrow_exception(error, lane, "state carrier capture canonicalization");
   return result;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::require_checkpoint_capture_(
+    const PreparedCheckpointCapture& capture, bool committed) const {
+  const auto& lane = p_->require_prepared_engine_lane("AMR prepared checkpoint capture");
+  std::exception_ptr error;
+  std::string contract;
+  try {
+    const auto* state = capture.state_.get();
+    const auto lease = state ? state->lease.lock() : nullptr;
+    if (!state || state->owner != p_.get() || !lease ||
+        !lease->valid || lease != p_->checkpoint_capture_lease ||
+        state->generation != p_->checkpoint_capture_generation ||
+        state->generation != lease->generation || state->revision != lease->revision ||
+        step_transaction_depth() != 1 || !p_->external_step_transaction ||
+        p_->restart_transaction || p_->bootstrap_transaction || p_->accepted_transaction_active ||
+        p_->external_step_committed != committed || lease->committed != committed ||
+        p_->program.resource_refresh_pending_ || p_->program.cadence_dispatch_active_ ||
+        !lease->completed ||
+        lease->completed->time != state->time ||
+        lease->completed->macro_step != state->macro_step ||
+        lease->completed->topology_epoch != state->topology_epoch ||
+        state->time != p_->accepted_time || state->macro_step != p_->macro_step ||
+        state->topology_epoch != checkpoint_topology_epoch())
+      throw std::logic_error("AMR prepared checkpoint capture owner/session/point is not live");
+    ExactContractBuilder exact;
+    exact.text("pops.amr.prepared-checkpoint-capture@1")
+        .scalar(state->generation).scalar(state->time)
+        .scalar(state->macro_step).scalar(state->topology_epoch).scalar(committed);
+    contract = std::move(exact).release();
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "prepared checkpoint authority");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("prepared-checkpoint-capture"), contract}}, lane))
+    throw std::runtime_error("AMR prepared checkpoint point differs between ranks");
+}
+
+template <int Dim>
+typename AmrSystem<Dim>::PreparedCheckpointCapture
+AmrSystem<Dim>::prepare_checkpoint_capture() const {
+  const auto& lane = p_->require_prepared_engine_lane("AMR candidate checkpoint preparation");
+  std::shared_ptr<typename PreparedCheckpointCapture::State> state;
+  std::exception_ptr error;
+  try {
+    if (step_transaction_depth() != 1 || !p_->external_step_transaction ||
+        p_->external_step_committed || !p_->checkpoint_capture_lease ||
+        (p_->checkpoint_capture_lease->committed || !p_->checkpoint_capture_lease->valid) || p_->restart_transaction ||
+        p_->bootstrap_transaction || p_->accepted_transaction_active ||
+        p_->program.resource_refresh_pending_ || p_->program.cadence_dispatch_active_ ||
+        !p_->checkpoint_capture_lease->completed ||
+        p_->checkpoint_capture_lease->completed->time != p_->accepted_time ||
+        p_->checkpoint_capture_lease->completed->macro_step != p_->macro_step ||
+        p_->checkpoint_capture_lease->completed->topology_epoch != checkpoint_topology_epoch() ||
+        p_->macro_step <= p_->external_step_transaction->macro_step ||
+        p_->accepted_time <= p_->external_step_transaction->accepted_time)
+      throw std::logic_error("AMR candidate checkpoint requires one prepared outer transaction");
+    state = std::make_shared<typename PreparedCheckpointCapture::State>();
+    state->owner = p_.get(); state->lease = p_->checkpoint_capture_lease;
+    state->generation = p_->checkpoint_capture_generation;
+    state->revision = p_->checkpoint_capture_lease->revision;
+    state->time = p_->accepted_time; state->macro_step = p_->macro_step;
+    state->topology_epoch = checkpoint_topology_epoch();
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "candidate checkpoint preparation");
+  PreparedCheckpointCapture result(state);
+  validate_prepared_checkpoint_capture(result);
+  const auto capacity = checkpoint_state_carriers_byte_capacity();
+  state->carriers = p_->capture_checkpoint_state_carriers();
+  error = {};
+  try {
+    if (state->carriers.size() > capacity)
+      throw std::length_error("AMR candidate state image exceeds its sealed carrier capacity");
+    Kokkos::fence();
+    state->diagnostics = runtime::program::checkpoint_program_diagnostics(
+        p_->program.diagnostics_, lane.rank(), lane.size());
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "candidate checkpoint immutable images");
+  validate_prepared_checkpoint_capture(result);
+  return result;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::validate_prepared_checkpoint_capture(
+    const PreparedCheckpointCapture& capture) const {
+  require_checkpoint_capture_(capture, false);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::validate_committed_checkpoint_capture(
+    const PreparedCheckpointCapture& capture) const {
+  require_checkpoint_capture_(capture, true);
+}
+
+template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::prepared_checkpoint_state_carriers(
+    const PreparedCheckpointCapture& capture) const {
+  validate_prepared_checkpoint_capture(capture);
+  return capture.state_->carriers;
+}
+
+template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::prepared_checkpoint_program_diagnostics(
+    const PreparedCheckpointCapture& capture) const {
+  validate_prepared_checkpoint_capture(capture);
+  return capture.state_->diagnostics;
 }
 
 template <int Dim>
@@ -16566,6 +16737,7 @@ template <int Dim>
 void AmrSystem<Dim>::set_field_composite_mean_neutralizing(const std::string& provider_slot,
                                                            const std::string& block, int component,
                                                            double eps) {
+  p_->invalidate_checkpoint_capture();
   if (provider_slot.empty() || block.empty() || component < 0 || !std::isfinite(eps) || eps == 0.0)
     throw std::invalid_argument("AMR composite-mean neutralizing requires a finite nonzero eps");
   auto found = p_->field_plans.find(provider_slot);
@@ -16675,6 +16847,7 @@ void AmrSystem<Dim>::set_field_boundary_kernel(const std::string& provider_slot,
 template <int Dim>
 void AmrSystem<Dim>::set_field_logical_timepoint(const std::string& provider_slot,
                                                  const FieldLogicalTimePoint& point) {
+  p_->invalidate_checkpoint_capture();
   p_->require_no_native_package_callback("set_field_logical_timepoint");
   const ExecutionLane& package_lane = p_->require_package_assembly_lane();
   const long materialized = p_->engine ? 1L : 0L;
@@ -17250,6 +17423,7 @@ void AmrSystem<Dim>::restore_field_potentials(
 template <int Dim>
 void AmrSystem<Dim>::set_field_potential_level(const std::string& provider_slot, int level,
                                                const std::vector<double>& phi) {
+  p_->invalidate_checkpoint_capture();
   const std::string slot = p_->resolve_field_slot(provider_slot);
   p_->materialize_field(slot);
   typename Impl::FieldPlan& plan = p_->field_plans.at(slot);
@@ -17738,6 +17912,7 @@ void AmrSystem<Dim>::discard_hyperbolic_boundaries() {
 
 template <int Dim>
 void AmrSystem<Dim>::set_density(const std::string& name, const std::vector<double>& density) {
+  p_->invalidate_checkpoint_capture();
   p_->require_no_native_package_callback("set_density");
   const std::size_t block_index = p_->block_index(name);
   typename Impl::BlockSpec& block = p_->blocks[block_index];
@@ -17753,6 +17928,7 @@ void AmrSystem<Dim>::set_density(const std::string& name, const std::vector<doub
 template <int Dim>
 void AmrSystem<Dim>::set_conservative_state(const std::string& name,
                                             const std::vector<double>& state) {
+  p_->invalidate_checkpoint_capture();
   p_->require_no_native_package_callback("set_conservative_state");
   const std::size_t block_index = p_->block_index(name);
   typename Impl::BlockSpec& block = p_->blocks[block_index];
@@ -18953,6 +19129,7 @@ std::string AmrSystem<Dim>::last_dt_bound() const {
 
 template <int Dim>
 void AmrSystem<Dim>::step(double dt) {
+  p_->invalidate_checkpoint_capture();
   p_->require_no_native_package_callback("step");
   p_->program.require_step_installed("AmrSystem::step");
   runtime::program::ProfileScope scope(p_->program.profiler_, "step");
@@ -18978,6 +19155,9 @@ void AmrSystem<Dim>::step(double dt) {
         "AMR Program completion failed collectively", [&] { complete_program_step_(); });
   });
   p_->discard_level_evaluations();
+  if (p_->checkpoint_capture_lease)
+    p_->checkpoint_capture_lease->completed = CompletedCheckpointAdvancePoint{
+        p_->accepted_time, p_->macro_step, checkpoint_topology_epoch()};
 }
 
 template <int Dim>
@@ -19029,6 +19209,9 @@ void AmrSystem<Dim>::suspend_program_map(std::string identity, bool target,
 
 template <int Dim>
 std::string AmrSystem<Dim>::advance_program_region(double dt) {
+  p_->invalidate_checkpoint_capture();
+  if (p_->checkpoint_capture_lease)
+    p_->checkpoint_capture_lease->completed.reset();
   (void)p_->require_prepared_engine_lane("AMR Program region");
   // A resumed region may complete a scheduled regrid before its collective result is published.
   const auto& lane = p_->require_package_assembly_lane();
@@ -19059,6 +19242,9 @@ std::string AmrSystem<Dim>::advance_program_region(double dt) {
     throw;
   }
   p_->discard_level_evaluations();
+  if (port.empty() && p_->checkpoint_capture_lease)
+    p_->checkpoint_capture_lease->completed = CompletedCheckpointAdvancePoint{
+        p_->accepted_time, p_->macro_step, checkpoint_topology_epoch()};
   return port;
 }
 
@@ -19382,8 +19568,19 @@ void AmrSystem<Dim>::begin_step_transaction() {
       !p_->external_step_transaction && !p_->restart_transaction,
       "AmrSystem::begin_step_transaction");
   Kokkos::fence();
+  std::shared_ptr<PreparedCheckpointLease> capture_lease;
+  std::exception_ptr capture_error;
+  try {
+    if (p_->checkpoint_capture_generation == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("AMR checkpoint outer-session generation overflow");
+    capture_lease = std::make_shared<PreparedCheckpointLease>();
+    capture_lease->generation = p_->checkpoint_capture_generation + 1;
+  } catch (...) { capture_error = std::current_exception(); }
+  collectively_rethrow_exception(capture_error, lane, "checkpoint outer-session preparation");
   p_->external_step_transaction =
       p_->prepare_accepted_snapshot_collectively("external step transaction");
+  p_->checkpoint_capture_generation = capture_lease->generation;
+  p_->checkpoint_capture_lease = std::move(capture_lease);
   p_->external_step_committed = false;
   p_->program.accepted_exchanges_.clear();
   p_->program.begin_step_projection_report();
@@ -19396,6 +19593,14 @@ void AmrSystem<Dim>::begin_nested_step_transaction() {
       lane, 1, static_cast<long>(step_transaction_depth()),
       p_->external_step_transaction && !p_->external_step_committed && !p_->restart_transaction,
       "AmrSystem::begin_nested_step_transaction");
+  std::exception_ptr capture_error;
+  try {
+    if (!p_->checkpoint_capture_lease ||
+        p_->checkpoint_capture_lease->revision == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("AMR checkpoint candidate revision exhausted");
+  } catch (...) { capture_error = std::current_exception(); }
+  collectively_rethrow_exception(capture_error, lane, "checkpoint nested-session invalidation");
+  ++p_->checkpoint_capture_lease->revision;
   Kokkos::fence();
   auto candidate = p_->prepare_accepted_snapshot_collectively("nested step transaction");
   std::exception_ptr error;
@@ -19420,6 +19625,7 @@ std::size_t AmrSystem<Dim>::step_transaction_depth() const noexcept {
 
 template <int Dim>
 void AmrSystem<Dim>::stage_program_exchange(runtime::program::ExchangeRecord record) {
+  p_->invalidate_checkpoint_capture();
   const auto& lane = p_->require_prepared_engine_lane("AMR exchange staging");
   auto& ledger = p_->program.accepted_exchanges_;
   const auto prior_size = ledger.records().size();
@@ -19439,6 +19645,7 @@ void AmrSystem<Dim>::stage_program_exchange(runtime::program::ExchangeRecord rec
 
 template <int Dim>
 void AmrSystem<Dim>::stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records) {
+  p_->invalidate_checkpoint_capture();
   runtime::program::stage_exchange_batch_collectively(
       p_->program.accepted_exchanges_, records,
       p_->require_prepared_engine_lane("AMR exchange batch staging"));
@@ -19451,6 +19658,7 @@ std::vector<runtime::program::ExchangeRecord> AmrSystem<Dim>::program_exchange_r
 
 template <int Dim>
 void AmrSystem<Dim>::declare_program_integral(const std::string& identity, double initial) {
+  p_->invalidate_checkpoint_capture();
   runtime::program::declare_integral_collectively(
       p_->program.accepted_exchanges_, identity, initial,
       p_->require_prepared_engine_lane("AMR integral state declaration"));
@@ -19465,6 +19673,7 @@ template <int Dim>
 double AmrSystem<Dim>::consume_program_external_trace(
     const std::string& identity,
     const runtime::program::AcceptedExchangeLedger::TraceSelection& selection, double scale) {
+  p_->invalidate_checkpoint_capture();
   return runtime::program::consume_external_trace_collectively(
       p_->program.accepted_exchanges_, identity, selection, scale,
       p_->require_prepared_engine_lane("AMR external trace integral transfer"));
@@ -19521,6 +19730,8 @@ void AmrSystem<Dim>::commit_step_transaction() {
       "AmrSystem::commit_step_transaction");
   Kokkos::fence();
   p_->external_step_committed = true;
+  if (step_transaction_depth() == 1 && p_->checkpoint_capture_lease)
+    p_->checkpoint_capture_lease->committed = true;
 }
 
 template <int Dim>
@@ -19532,6 +19743,8 @@ void AmrSystem<Dim>::finalize_step_transaction() {
           !p_->program.resource_refresh_pending_,
       "AmrSystem::finalize_step_transaction");
   Kokkos::fence();
+  if (p_->parent_step_transactions.empty())
+    p_->checkpoint_capture_lease.reset();
   p_->external_step_transaction.reset();
   if (!p_->parent_step_transactions.empty()) {
     p_->external_step_transaction = std::move(p_->parent_step_transactions.back());
@@ -19549,6 +19762,8 @@ void AmrSystem<Dim>::rollback_step_transaction() {
   Kokkos::fence();
   p_->external_step_committed = false;
   p_->external_step_transaction->restore(*p_);
+  if (p_->parent_step_transactions.empty())
+    p_->checkpoint_capture_lease.reset();
   p_->external_step_transaction.reset();
   if (!p_->parent_step_transactions.empty()) {
     p_->external_step_transaction = std::move(p_->parent_step_transactions.back());
@@ -20339,6 +20554,7 @@ void AmrSystem<Dim>::restore_program_cadence_window(double accumulated_dt, int h
                                                     double window_start_time,
                                                     double accepted_last_dt, double accepted_time,
                                                     int macro_step) {
+  p_->invalidate_checkpoint_capture();
   p_->require_no_native_package_callback("restore_program_cadence_window");
   p_->program.restore_cadence_window(accumulated_dt, held_steps, window_start_time,
                                      accepted_last_dt, accepted_time, macro_step, "AmrSystem");
@@ -20346,6 +20562,7 @@ void AmrSystem<Dim>::restore_program_cadence_window(double accumulated_dt, int h
 
 template <int Dim>
 void AmrSystem<Dim>::set_program_block_map(const std::vector<int>& program_to_runtime) {
+  p_->invalidate_checkpoint_capture();
   p_->require_no_native_package_callback("set_program_block_map");
   if (program_to_runtime.size() != p_->blocks.size())
     throw std::invalid_argument(
@@ -20384,6 +20601,7 @@ void AmrSystem<Dim>::seed_program_params(int block, const std::vector<double>& d
 
 template <int Dim>
 void AmrSystem<Dim>::set_program_params(int block, const std::vector<double>& values) {
+  p_->invalidate_checkpoint_capture();
   p_->require_no_native_package_callback("set_program_params");
   p_->program.set_params(block, values, "AmrSystem");
   p_->field_candidate_observations.clear();
@@ -20419,6 +20637,7 @@ runtime::program::ProgramRuntimeState<Dim>& AmrSystem<Dim>::program_runtime_stat
 
 template <int Dim>
 void AmrSystem<Dim>::record_program_diagnostic(const std::string& name, double value) {
+  p_->invalidate_checkpoint_capture();
   p_->require_no_native_package_callback("record_program_diagnostic");
   p_->program.record_diagnostic(name, static_cast<Real>(value));
 }
@@ -20426,6 +20645,7 @@ void AmrSystem<Dim>::record_program_diagnostic(const std::string& name, double v
 template <int Dim>
 void AmrSystem<Dim>::record_program_balance_term(const std::string& route, const std::string& term,
                                                  double value) {
+  p_->invalidate_checkpoint_capture();
   p_->program.record_balance_term(route, term, static_cast<Real>(value), "AmrSystem");
 }
 
@@ -20608,6 +20828,7 @@ int AmrSystem<Dim>::macro_step() const {
 
 template <int Dim>
 void AmrSystem<Dim>::set_clock(double accepted_time, int macro_step) {
+  p_->invalidate_checkpoint_capture();
   p_->require_no_native_package_callback("set_clock");
   if (!std::isfinite(accepted_time) || macro_step < 0)
     throw std::invalid_argument("AmrSystem clock requires finite time and non-negative step");
@@ -20878,6 +21099,7 @@ std::vector<double> AmrSystem<Dim>::block_level_state_global(const std::string& 
 template <int Dim>
 void AmrSystem<Dim>::set_block_level_state(const std::string& name, int level,
                                            const std::vector<double>& state) {
+  p_->invalidate_checkpoint_capture();
   const std::size_t block_index = p_->block_index(name);
   p_->ensure_engine();
   if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
@@ -22231,6 +22453,7 @@ std::size_t AmrSystem<Dim>::checkpoint_program_history_flux_snapshot_capacity() 
 
 template <int Dim>
 void AmrSystem<Dim>::publish_program_history_flux_snapshots(ProgramHistoryFluxSnapshots snapshots) {
+  p_->invalidate_checkpoint_capture();
   if (snapshots.empty()) {
     p_->program_history_flux_snapshots.clear();
     return;
@@ -22888,6 +23111,7 @@ void AmrSystem<Dim>::copy_program_accepted_state_into(std::vector<std::uint8_t>&
 
 template <int Dim>
 void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8_t>& state) {
+  p_->invalidate_checkpoint_capture();
   p_->ensure_engine();
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AMR Program accepted-state restore requires its prepared lane");
@@ -23807,6 +24031,17 @@ template void AmrSystem<kNativeDimension>::publish_program_field_components(
 template std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>>
 AmrSystem<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
 template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::checkpoint_state_carriers() const;
+template AmrSystem<kNativeDimension>::PreparedCheckpointCapture
+AmrSystem<kNativeDimension>::prepare_checkpoint_capture() const;
+template void AmrSystem<kNativeDimension>::validate_prepared_checkpoint_capture(
+    const PreparedCheckpointCapture&) const;
+template void AmrSystem<kNativeDimension>::validate_committed_checkpoint_capture(
+    const PreparedCheckpointCapture&) const;
+template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::prepared_checkpoint_state_carriers(
+    const PreparedCheckpointCapture&) const;
+template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::prepared_checkpoint_program_diagnostics(
+    const PreparedCheckpointCapture&) const;
+
 template std::uint64_t AmrSystem<kNativeDimension>::checkpoint_state_carriers_byte_capacity() const;
 template void AmrSystem<kNativeDimension>::validate_checkpoint_state_carriers(
     std::span<const std::uint8_t> (*)(const void*), const void*) const;

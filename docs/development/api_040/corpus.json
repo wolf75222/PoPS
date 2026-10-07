@@ -1912,6 +1912,72 @@
       "documentation": "accepted_trace_regions_v2.md",
       "partitioned_MPI2_regional_AMR_GPU_3D_CI_convergence_costs_received": false,
       "complete_W11_M14_or_94_received": false
+    },
+    "IMEX_exact_field_stage_original_negative": {
+      "source_revision": "9d4cdcca19abd7d8acfc2151497d8f2a967cddcc",
+      "change": "Field and explicit rate consume identical State SSA at c_explicit; implicit rate remains at c_implicit",
+      "source_author_tests_pass": 47,
+      "source_manual_preset_tests_pass": 3,
+      "source_independent_tests_pass": 16,
+      "official_incremental_build_RC": 0,
+      "setup_repeated": false,
+      "native_sha256": "64c8922e58cf484a1b1188b899e25e84569707ae2090ecbd26f515daf2e1e9c6",
+      "wheel_sha256": "bbb3e87eefd048b64f92a134a9aed9bf715f0f31911bc941612c782494b9d395",
+      "installed_imex_sha256": "e6158934c813658741655e5e4d55df6680b7802b29161b5953481589b007c7a7",
+      "actual_context_after": "Dim2 MPIworld1 Kokkos OpenMP concurrency2 Host",
+      "original_entrypoint": "run_manual_and_restart",
+      "C25_receipt_sha256": "7aefd61a368635090a7f51b815c5619993947ede52e3a4d14b7ad5c5472b7277",
+      "test_XML": {
+        "tests": 1,
+        "errors": 1,
+        "failures": 0,
+        "skipped": 0
+      },
+      "failure": "ConsumerPublicationError: state carrier checkpoint requires prepared accepted state",
+      "failure_location": "stage consumers before native commit, transaction depth1 versus public depth0 guard",
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-imex-original-negative-reception-9d4-20261007.json",
+      "root_receipt_sha256": "11c10d361aa20093c3a782e0c71c8505d3c0ffdb94ccb78d64e5e3b0fa93a58c",
+      "author_pins_sha256": "05e9e2fc1e97a2b29985e182d313c3cb96bb1e66bef899d3e55816e6c604a893",
+      "all_declared_entries_authenticated": 2845,
+      "physical_domain": {
+        "regular": 2602,
+        "directories": 242,
+        "links": 1,
+        "regular_bytes": 90023689
+      },
+      "scientific_accepted_steps_restart_or_variants_received": false,
+      "next": "Integrate versioned immutable transaction-candidate capture, rebuild exact source, rerun original without weakening accepted-state guards",
+      "documentation": "imex_exact_field_stage_20261007.md",
+      "whole_94_received": false
+    },
+    "CUDA44_same_job_actuation": {
+      "job": "735570",
+      "source_revision": "eae21965f1f156d78328f53ca94a20924eb6b854",
+      "operation": "9723bb14-9ec5-435b-baee-fe77eba75ef9",
+      "actual_submission_count": 1,
+      "actual_submission_release_RC": [
+        0,
+        0
+      ],
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-cuda44-actuation-reception-735570-20261007.json",
+      "root_receipt_sha256": "9606b7c220c315136da5c2aeed17c5187a97cc9eeba4af4d7ef72af0455ef388",
+      "producer_pins_sha256": "8edcc8ab0de0fc4d221b030cac1d40d7b2551252e9b8df0cb23aec2579b2de2a",
+      "physical_actuation_files_authenticated": 21,
+      "actuation_preservation": {
+        "CPU_prefixes": 19,
+        "GPU_prefixes": 8,
+        "Sources": 17,
+        "scope": "root lstat, Native leaves, Source HEAD/status and declared Home; whole batch inventory separate"
+      },
+      "initial_observation": "2026-10-07T01:36:01.009727Z RUNNING romeo-a049 originals-before",
+      "later_independent_observation": "2026-10-07T02:21:06Z RUNNING romeo-a049 45:38; declared phase build-python",
+      "GPU_build_wheel_Native_PDE_received": false,
+      "previous_735454_negative_preserved": true,
+      "IMEX_9d4_and_ABI12_candidate_capture_in_this_source": false,
+      "whole_94_received": false,
+      "later_independent_observation_pins_sha256": "d7a5e939fe2e825d57704e0f839b99767b124186edd21718dee806e37dcd9530",
+      "later_independent_observation_report": "/Users/romaindespoulain/dev/tmp/sol61-sdk44-cuda-735570-observation-r2-20261007/report.json",
+      "later_independent_observation_report_sha256": "fd1bf614e9e341e5ceeecb51930c0f696b61b1f39c8e91643154cfbc867efe37"
     }
   },
   "scoped_receptions_20261006": {

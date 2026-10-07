@@ -18,6 +18,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Prepare AMR checkpoint-consumer images under an opaque outer-transaction lease,
+  publish their sealed candidate proof after commit, and invalidate it on mutation or rollback.
+  Public accepted-checkpoint guards and archive formats remain strict; the new native interface
+  is versioned ABI12.
 - IMEX fields and explicit rates read the same copied stage at the explicit tableau
   coordinate while implicit rates retain their own coordinate and authored coefficients.
 - Carry accepted FV trace quadratures through logical child-clock regions with exact local

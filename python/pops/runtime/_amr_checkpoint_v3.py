@@ -595,7 +595,7 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     )
 
 
-def _capture_v3(owner, sim, prepared):
+def _capture_v3(owner, sim, prepared, *, prepared_capture=None):
     """Execute the agreed AMR gather order and seal the in-memory payload."""
     if not isinstance(prepared, _PreparedAMRCapture):
         raise TypeError("AMR checkpoint capture requires its exact prepared plan")
@@ -733,7 +733,7 @@ def _capture_v3(owner, sim, prepared):
     out["amr_accepted_contract"] = final_accepted_contract
     from pops.runtime._checkpoint_state_carriers import capture_checkpoint_state_carriers
 
-    capture_checkpoint_state_carriers(owner, sim, out)
+    capture_checkpoint_state_carriers(owner, sim, out, prepared_capture=prepared_capture)
     auxiliary_checkpoint = sim.capture_auxiliary_checkpoint_accepted_state()
     if type(auxiliary_checkpoint) is not list or len(auxiliary_checkpoint) != prepared.levels:
         raise RuntimeError(
@@ -750,7 +750,7 @@ def _capture_v3(owner, sim, prepared):
     from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
     capture_checkpoint_continuation(owner, out)
     from pops.runtime._checkpoint_program_diagnostics import capture_checkpoint_program_diagnostics
-    capture_checkpoint_program_diagnostics(owner, out)
+    capture_checkpoint_program_diagnostics(owner, out, prepared_capture=prepared_capture)
     identity = seal_checkpoint_payload(owner, out, runtime_kind="amr")
     return out, identity.token
 
@@ -764,6 +764,7 @@ def write_v3(
     *,
     precreated_inode=False,
     precreated_descriptor=None,
+    prepared_capture=None,
 ):
     """Capture exact AMR accepted state with preflight consensus before native gathers."""
     import os
@@ -781,7 +782,12 @@ def write_v3(
         return prepared, prepared.capture_identity
 
     def capture(prepared):
-        return _capture_v3(owner, sim, prepared)
+        if prepared_capture is not None:
+            sim._validate_prepared_checkpoint_capture(prepared_capture)
+        result = _capture_v3(owner, sim, prepared, prepared_capture=prepared_capture)
+        if prepared_capture is not None:
+            sim._validate_prepared_checkpoint_capture(prepared_capture)
+        return result
 
     def publish(payload):
         prepared = prepared_holder["plan"]

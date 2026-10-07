@@ -29,7 +29,8 @@ def _exact_native_image(image, *, rank=None, ranks=None):
     return image
 
 
-def capture_checkpoint_program_diagnostics(owner, payload, *, provisional_capture=False):
+def capture_checkpoint_program_diagnostics(owner, payload, *, provisional_capture=False,
+                                         prepared_capture=None):
     from pops.output._checkpoint_collective import checkpoint_topology, consensus
     from pops._native_collectives import allgather_bytes
 
@@ -45,12 +46,14 @@ def capture_checkpoint_program_diagnostics(owner, payload, *, provisional_captur
         capacity = getattr(owner, "_checkpoint_program_diagnostic_capacity_per_rank", None)
         if type(capacity) is not int:
             raise ValueError(_CAPACITY_ERROR)
-        method_name = ("_checkpoint_capture_program_diagnostics" if provisional_capture
+        method_name = ("_prepared_checkpoint_program_diagnostics" if prepared_capture is not None
+                       else "_checkpoint_capture_program_diagnostics" if provisional_capture
                        else "_checkpoint_program_diagnostics")
         capture = getattr(owner._s, method_name, None)
         if not callable(capture):
             raise TypeError("checkpoint engine lacks its exact Program diagnostic capture route")
-        local = _exact_native_image(capture(), rank=topology.rank, ranks=topology.size)
+        local = _exact_native_image(capture() if prepared_capture is None else capture(prepared_capture),
+                                    rank=topology.rank, ranks=topology.size)
         if len(local) > capacity:
             raise ValueError(_CAPACITY_ERROR)
     except BaseException as exc:

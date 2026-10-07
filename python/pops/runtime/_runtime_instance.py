@@ -1885,7 +1885,18 @@ class RuntimeInstance:
             safe_console_completed(console_session, report)
         return report
 
-    def _checkpoint_payload(self, path: Any, *, transaction_receipt: Any = None) -> Any:
+    def _prepare_checkpoint_candidate(self) -> Any:
+        prepare = getattr(self._executor, "_prepare_checkpoint_candidate", None)
+        return prepare() if callable(prepare) else None
+
+    def _validate_prepared_checkpoint_candidate(self, capture: Any) -> None:
+        self._executor._validate_prepared_checkpoint_capture(capture)
+
+    def _validate_committed_checkpoint_candidate(self, capture: Any) -> None:
+        self._executor._validate_committed_checkpoint_capture(capture)
+
+    def _checkpoint_payload(self, path: Any, *, transaction_receipt: Any = None,
+                            prepared_capture: Any = None) -> Any:
         from pops.output._checkpoint_collective import (
             canonical_checkpoint_path,
             checkpoint_topology,
@@ -1925,7 +1936,11 @@ class RuntimeInstance:
         seam_kind = None
         seam_error = None
         try:
-            precreated_capture = getattr(self._executor, "_checkpoint_precreated_inode", None)
+            method = ("_checkpoint_precreated_inode" if prepared_capture is None
+                      else "_checkpoint_candidate_precreated_inode")
+            precreated_capture = getattr(self._executor, method, None)
+            if prepared_capture is not None and not callable(precreated_capture):
+                raise RuntimeError("prepared checkpoint candidate lacks its native inode capture seam")
             seam_kind = "precreated-inode" if callable(precreated_capture) else "path-only"
         except BaseException as error:
             seam_error = error
@@ -1998,9 +2013,10 @@ class RuntimeInstance:
             if seam_kind == "precreated-inode":
                 if not callable(precreated_capture):
                     raise RuntimeError("checkpoint capture seam lost its precreated-inode callable")
-                target = canonical_checkpoint_path(
-                    precreated_capture(str(expected), precreated_descriptor=precreated_descriptor)
-                )
+                arguments = dict(precreated_descriptor=precreated_descriptor)
+                if prepared_capture is not None:
+                    arguments["prepared_capture"] = prepared_capture
+                target = canonical_checkpoint_path(precreated_capture(str(expected), **arguments))
             else:
                 target = canonical_checkpoint_path(self._executor.checkpoint(str(expected)))
             if target != expected:

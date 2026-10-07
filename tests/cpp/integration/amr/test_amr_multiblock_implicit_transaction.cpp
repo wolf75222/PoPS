@@ -288,12 +288,44 @@ TEST(test_amr_multiblock_implicit_transaction,
       EXPECT_EQ(system.step_transaction_depth(), 1u);
     }
   };
+  const auto accepted_carriers = system.checkpoint_state_carriers();
+  system.begin_step_transaction();
+  EXPECT_THROW(system.prepare_checkpoint_capture(), std::exception); // No completed advance yet.
+  system.set_clock(dt + 0.1, 2);
+  EXPECT_THROW(system.prepare_checkpoint_capture(), std::exception); // A setter cannot mint completion.
+  system.rollback_step_transaction(); // Restore the genuine clock/cadence image, not only its time.
   system.begin_step_transaction();
   nested_steps();
   const auto attempted_slow = system.block_level_state_global("slow", 0);
   const auto attempted_fast = system.block_level_state_global("fast", 0);
   ASSERT_EQ(system.program_exchange_records().size(), 2u);
+  const auto first_capture = system.prepare_checkpoint_capture();
+  EXPECT_NE(system.prepared_checkpoint_state_carriers(first_capture), accepted_carriers);
+  EXPECT_THROW(system.checkpoint_state_carriers(), std::exception);
+  EXPECT_THROW(system.validate_committed_checkpoint_capture(first_capture), std::exception);
+  // Same-time writes invalidate the old image even if their numerical values are unchanged.
+  system.set_block_level_state("slow", 0, attempted_slow);
+  EXPECT_THROW(system.validate_prepared_checkpoint_capture(first_capture), std::exception);
+  if (pops::my_rank() == 0)
+    system.record_program_diagnostic("checkpoint_local_extra", 1.0);
+  // Local diagnostic tables legitimately give each rank a different mutation count.
+  const auto rank_local_capture = system.prepare_checkpoint_capture();
+  EXPECT_NO_THROW(system.validate_prepared_checkpoint_capture(rank_local_capture));
+  if (pops::my_rank() == 0)
+    system.record_program_diagnostic("checkpoint_local_extra", 2.0);
+  // One stale owner votes failure for the entire authenticated runtime lane.
+  EXPECT_THROW(system.validate_prepared_checkpoint_capture(rank_local_capture), std::exception);
+  const auto rollback_capture = system.prepare_checkpoint_capture();
+  system.begin_nested_step_transaction();
+  EXPECT_THROW(system.validate_prepared_checkpoint_capture(rollback_capture), std::exception);
+  system.step(0.01);
   system.rollback_step_transaction();
+  // Restore completion authority for the earlier real point, but never revive an old image.
+  EXPECT_THROW(system.validate_prepared_checkpoint_capture(rollback_capture), std::exception);
+  const auto restored_point_capture = system.prepare_checkpoint_capture();
+  EXPECT_NO_THROW(system.validate_prepared_checkpoint_capture(restored_point_capture));
+  system.rollback_step_transaction();
+  EXPECT_THROW(system.validate_committed_checkpoint_capture(rollback_capture), std::exception);
   EXPECT_EQ(system.step_transaction_depth(), 0u);
   EXPECT_EQ(system.macro_step(), 1);
   EXPECT_DOUBLE_EQ(system.time(), dt);
@@ -304,9 +336,16 @@ TEST(test_amr_multiblock_implicit_transaction,
             accepted_exchange.front().evaluation_context);
 
   system.begin_step_transaction();
+  EXPECT_THROW(system.validate_prepared_checkpoint_capture(rollback_capture), std::exception);
   nested_steps();
+  const auto final_capture = system.prepare_checkpoint_capture();
+  const auto final_carriers = system.prepared_checkpoint_state_carriers(final_capture);
   system.commit_step_transaction();
+  EXPECT_NO_THROW(system.validate_committed_checkpoint_capture(final_capture));
+  EXPECT_THROW(system.checkpoint_state_carriers(), std::exception); // Commit alone is not finalize.
   system.finalize_step_transaction();
+  EXPECT_THROW(system.validate_committed_checkpoint_capture(final_capture), std::exception);
+  EXPECT_EQ(system.checkpoint_state_carriers(), final_carriers);
   EXPECT_EQ(system.step_transaction_depth(), 0u);
   EXPECT_EQ(system.macro_step(), 3);
   EXPECT_NEAR(system.time(), dt + 0.025 + 0.075, 1e-15);

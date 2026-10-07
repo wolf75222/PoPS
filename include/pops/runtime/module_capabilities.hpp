@@ -35,9 +35,10 @@ namespace pops {
 /// Discrete, monotonic native ABI revision. Bump when a public native layout or capability meaning
 /// changes, so an older per-artifact manifest can be distinguished from the rebuilt module.
 /// ABI11 includes the auxiliary accepted-state DTO and physical evaluation point layout changes.
+/// ABI12 adds the opaque, transaction-owned prepared AMR checkpoint capture interface.
 /// The complete textual abi_key() also authenticates compiler, standard and header bytes; the
 /// release capability vocabulary has its own independent version.
-inline constexpr int kAbiVersion = 11;
+inline constexpr int kAbiVersion = 12;
 static_assert(kAbiVersion == release_contract::kReleaseNativeAbiVersion,
               "native ABI and generated release contract drifted");
 

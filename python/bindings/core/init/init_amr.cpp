@@ -1236,6 +1236,19 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
         const auto bytes = s.checkpoint_state_carriers();
         return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
       })
+      .def("_prepare_checkpoint_capture", &AmrSystem::prepare_checkpoint_capture)
+      .def("_validate_prepared_checkpoint_capture", &AmrSystem::validate_prepared_checkpoint_capture)
+      .def("_validate_committed_checkpoint_capture", &AmrSystem::validate_committed_checkpoint_capture)
+      .def("_prepared_checkpoint_state_carriers",
+           [](const AmrSystem& s, const AmrSystem::PreparedCheckpointCapture& capture) {
+             const auto bytes = s.prepared_checkpoint_state_carriers(capture);
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def("_prepared_checkpoint_program_diagnostics",
+           [](const AmrSystem& s, const AmrSystem::PreparedCheckpointCapture& capture) {
+             const auto bytes = s.prepared_checkpoint_program_diagnostics(capture);
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
       .def("validate_checkpoint_state_carriers", [](const AmrSystem& s, py::object payload) {
         s.validate_checkpoint_state_carriers(
             +[](const void* context) -> std::span<const std::uint8_t> {
@@ -1912,6 +1925,10 @@ void init_amr(py::module_& m) {
           py::arg("options"));
 
   // AmrSystem: generic single-species composition on AMR.
+  py::class_<NativeAmrSystem::PreparedCheckpointCapture>(m, "_PreparedAMRCheckpointCapture")
+      .def_property_readonly("contract", [](const NativeAmrSystem::PreparedCheckpointCapture&) {
+        return "pops.amr.prepared-checkpoint-capture@1";
+      });
   py::class_<NativeAmrSystem> cls(m, "AmrSystem");
   bind_amr_assembly(cls);
   bind_amr_physics(cls);

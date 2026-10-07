@@ -706,7 +706,11 @@ class _PreparedCheckpoint(PreparedPublication):
         self._effect, self._target, self._operation = effect, Path(target), operation
         # ``snapshot`` is the same collective prepared transaction used by
         # RuntimeInstance.checkpoint(); it captures now but remains unpublished and compensatable.
-        self._snapshot = operation.snapshot(engine, self._target.parent)
+        prepare = getattr(engine, "_prepare_checkpoint_candidate", None)
+        candidate = prepare() if callable(prepare) else None
+        self._snapshot = (operation.snapshot(engine, self._target.parent) if candidate is None
+                          else operation.snapshot(engine, self._target.parent,
+                                                  prepared_capture=candidate))
         operation.validate_snapshot(self._snapshot)
         self._published = self._discarded = False
 

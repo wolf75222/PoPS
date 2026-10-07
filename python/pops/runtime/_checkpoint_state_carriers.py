@@ -25,14 +25,15 @@ def _method(sim, name):
     return method
 
 
-def capture_checkpoint_state_carriers(owner, sim, payload):
+def capture_checkpoint_state_carriers(owner, sim, payload, *, prepared_capture=None):
     from pops.output._checkpoint_collective import checkpoint_topology, consensus
 
     topology = checkpoint_topology(owner)
     error = None
     capture = None
     try:
-        capture = _method(sim, "checkpoint_state_carriers")
+        capture = _method(sim, "checkpoint_state_carriers" if prepared_capture is None
+                          else "_prepared_checkpoint_state_carriers")
     except BaseException as exc:
         error = exc
     # A missing method on one rank must fail before peers enter native collectives.
@@ -40,7 +41,7 @@ def capture_checkpoint_state_carriers(owner, sim, payload):
     error = None
     image = None
     try:
-        image = _native_image(capture())
+        image = _native_image(capture() if prepared_capture is None else capture(prepared_capture))
         payload[STATE_CARRIERS_KEY] = np.frombuffer(image, dtype=np.uint8).copy()
     except BaseException as exc:
         error = exc

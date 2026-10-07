@@ -946,6 +946,28 @@ class AmrSystem {
   capture_auxiliary_checkpoint_accepted_state() const;
   /// Canonical all-source-patch POPSCAR1 image, including every accepted ghost bit.
   [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_state_carriers() const;
+  /// Opaque immutable candidate image, bound to one live outer step transaction. The rollback
+  /// AcceptedSnapshot supplies its lifetime authority, never the candidate's numerical content.
+  /// pops.amr.prepared-checkpoint-capture@1 does not change the checkpoint wire format.
+  class PreparedCheckpointCapture {
+    struct State;
+    std::shared_ptr<const State> state_;
+    explicit PreparedCheckpointCapture(std::shared_ptr<const State> state)
+        : state_(std::move(state)) {}
+    friend class AmrSystem<Dim>;
+   public:
+    PreparedCheckpointCapture(const PreparedCheckpointCapture&) = default;
+    PreparedCheckpointCapture(PreparedCheckpointCapture&&) noexcept = default;
+    PreparedCheckpointCapture& operator=(const PreparedCheckpointCapture&) = default;
+    PreparedCheckpointCapture& operator=(PreparedCheckpointCapture&&) noexcept = default;
+  };
+  [[nodiscard]] POPS_EXPORT PreparedCheckpointCapture prepare_checkpoint_capture() const;
+  POPS_EXPORT void validate_prepared_checkpoint_capture(const PreparedCheckpointCapture&) const;
+  POPS_EXPORT void validate_committed_checkpoint_capture(const PreparedCheckpointCapture&) const;
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> prepared_checkpoint_state_carriers(
+      const PreparedCheckpointCapture&) const;
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> prepared_checkpoint_program_diagnostics(
+      const PreparedCheckpointCapture&) const;
   /// Configured POPSCAR1 maximum bytes from sealed block storage and ranked hierarchy; collective.
   [[nodiscard]] POPS_EXPORT std::uint64_t checkpoint_state_carriers_byte_capacity() const;
   /// Schema/source coverage validation before target hierarchy rebuild. Collective, nonmutating.
@@ -1639,6 +1661,7 @@ class AmrSystem {
   POPS_EXPORT SolveOutcome solve_program_default_field(int active_level);
   void complete_program_step_();
   struct Impl;
+  void require_checkpoint_capture_(const PreparedCheckpointCapture&, bool committed) const;
   std::unique_ptr<Impl> p_;
 };
 
