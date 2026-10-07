@@ -154,3 +154,25 @@ call the uncommitted candidate factory. It requires a versioned retain/replay in
 for the same sealed checkpoint image and new tests. It is not qualified by the diagnostic
 projection cache. The next required reception is the rebuilt original manual IMEX,
 then its parity, rollback and independent publication-failure variants.
+
+## Diagnostic inventory correction
+
+The rebuilt a67 original reaches prepared diagnostic capture, then its declared78-byte budget
+refuses the larger image. The compiler-retained Program contains only `pops.frontier.duration`:
+40 envelope bytes plus16 record bytes plus22 UTF-8 name bytes. The failing Native image and
+extra key were not saved by that process; their exact values remain unknown. ROOT receives
+all2 849 declared entries in `root-imex-diagnostic-capacity-negative-reception-a67-20261007.json`,
+SHA `a3d5019d84337277139de3f15fb0cc841a9da05aac028b49a69ebefab00d9dd6`.
+
+The corrected default inventories the union of verified Program records and all potential
+ConsumerGraph diagnostic records. The canonical naming helper is shared with the actual sink,
+including conservation and accepted-balance reductions. Records aggregate across selected AMR
+levels; there is no record per cell or arbitrary level multiplier. Deduplication and UTF-8 byte
+lengths follow the existing POPSDIA1 formula. Dynamic Program names remain unknown, requiring
+explicit configuration; user-chosen capacities and the collective over-budget guard remain strict.
+
+Author and independent Source cohorts each pass32 tests. The original declared bound becomes
+383 bytes per rank from two names; this is a Source calculation, not an observed new Native image.
+The independent pins are `8b455036d8d9fdf8df592426d0132b6f6ff115d8f6f6d88a30b91f00b581400d`.
+No wire, API, ABI12, header signature, equation or numerical threshold changes. A new official
+package and original Native run are required to receive accepted State/Field/restart behavior.

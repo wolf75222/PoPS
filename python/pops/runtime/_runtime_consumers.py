@@ -265,11 +265,29 @@ def _conservative_names(owner: Any, block: str) -> tuple[str, ...]:
 
 def _diagnostic_record_name(payload: DiagnosticPayload) -> str:
     """Exact inspection key; distinct level/role declarations must never overwrite each other."""
-    return "%s:%s:%s" % (
+    return _diagnostic_record_name_parts(
         payload.key.reference.qualified_id,
         payload.key.reduction,
         payload.key.state_id,
     )
+
+
+def _diagnostic_record_name_parts(reference: str, reduction: str, state_id: str) -> str:
+    return "%s:%s:%s" % (reference, reduction, state_id)
+
+
+def _potential_diagnostic_record_names(quantity: Any) -> tuple[str, ...]:
+    """Inventory aggregate records declared by one exact diagnostic quantity."""
+    execution = quantity.execution
+    operations = execution["operations"]
+    if {operation["reduction"] for operation in operations} == {"accepted_balance"}:
+        reductions = ("discrete_balance",)
+    else:
+        prefix = "conservation:" if execution["conservation"] is not None else ""
+        reductions = tuple(prefix + operation["name"] for operation in operations)
+    return tuple(_diagnostic_record_name_parts(
+        quantity.handle.qualified_id, reduction, quantity.identity.token
+    ) for reduction in reductions)
 
 
 def _identity_payload(value: Any, *, path: str = "layout") -> Any:

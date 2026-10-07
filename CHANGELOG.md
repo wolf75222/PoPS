@@ -18,6 +18,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Include potential ConsumerGraph diagnostics in the checkpoint capacity derived from verified
+  Program records, preserving the exact record names and explicit collective capacity overrides.
 - Prepare Native diagnostic projections before sealing a candidate checkpoint, then publish
   Python registries after commit; scientific-output retries reuse the same immutable projection.
   Candidate-diagnostics contract@1 retains collective staging failure and strict checkpoint guards.

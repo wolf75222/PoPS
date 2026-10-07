@@ -442,7 +442,7 @@ _DIAGNOSTIC_CAPACITY_CONTRACT = "pops.program-diagnostics.checkpoint-capacity@1"
 
 
 def _compiled_diagnostic_inventory(artifact):
-    """Inventory literal names only after compiler-retained source evidence verifies."""
+    """Inventory Program and ConsumerGraph records from verified retained authorities."""
     artifact.verify()
     # A multi-layout artifact deliberately has no scalar Program. Its registered
     # executable slices are still compiler-retained and covered by verify() above.
@@ -465,6 +465,16 @@ def _compiled_diagnostic_inventory(artifact):
         if len(calls) != len(literals):
             return None
         names.update(json.loads(match.group(1)) for match in literals)
+    # Consumer diagnostics are also Native accepted records. Their reductions are aggregated
+    # across selected levels, so each declared operation contributes one canonical name, not
+    # one name per cell/level. Include outputs/monitors even before their first due occurrence.
+    graph = getattr(getattr(artifact, "plan", None), "consumer_graph", None)
+    if graph is not None:
+        from ._runtime_consumers import _potential_diagnostic_record_names
+
+        for manifest in graph.nodes:
+            for quantity in manifest.diagnostic_quantities:
+                names.update(_potential_diagnostic_record_names(quantity))
     names.add("pops.frontier.duration")
     return tuple(sorted(names))
 
