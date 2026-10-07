@@ -261,9 +261,10 @@ link command are authenticated. Eight extra HDF5 discovery keys are retained;
 The temporary test source is restored exactly and all 2793 package entries remain
 unchanged. Prior configuration-drift and pre-run gate attempts retain separate receipts.
 
-The proposed correction tracks invalidations and actual accepted publications by
+The integrated Source correction tracks invalidations and actual accepted publications by
 provider and live level, including rollback and the existing POPSAUX3 per-level
 metadata. It also gives invalidation cleanup its own registry selection purpose.
-This candidate is under Source review and is not installed or natively qualified.
+The [versioned correction](amr_auxiliary_invalidation_incidence_v1.md) has independent
+Source reception; it is not installed or natively qualified.
 Its SDK header change requires a new signature and genuine reconstruction before
 Cpp13, registry counter-tests, the original retry and MPI2 can receive new results.

@@ -3154,6 +3154,101 @@ struct AmrSystem<Dim>::Impl {
     }
   };
 
+  // Runtime-private forced invalidation incidence@1. The public identity list is
+  // its canonical union, never evidence that a particular level was published.
+  struct AuxiliaryInvalidations {
+    std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t revision = 0;
+    std::size_t levels = 0;
+    std::map<std::string, std::vector<std::uint64_t>> pending;
+    std::map<std::string, std::uint64_t> unmaterialized;
+    std::vector<std::string> identities;
+    friend bool operator==(const AuxiliaryInvalidations&, const AuxiliaryInvalidations&) = default;
+
+    void rebuild_union() {
+      std::erase_if(pending, [](const auto& row) {
+        return std::none_of(row.second.begin(), row.second.end(), [](auto value) { return value != 0; });
+      });
+      identities.clear();
+      for (const auto& [identity, values] : pending) identities.push_back(identity);
+      for (const auto& [identity, value] : unmaterialized)
+        if (!pending.contains(identity)) identities.push_back(identity);
+      std::sort(identities.begin(), identities.end());
+    }
+    std::uint64_t next_revision() {
+      if (revision == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("AMR auxiliary invalidation revision overflows");
+      return ++revision;
+    }
+    void bind(std::uint64_t topology, std::uint64_t generation, std::size_t count) {
+      if (topology_epoch == topology && materialization_generation == generation && levels == count)
+        return;
+      for (auto& [identity, values] : pending) {
+        const auto value = *std::max_element(values.begin(), values.end());
+        values.assign(count, value);
+        if (count == 0) unmaterialized[identity] = value;
+      }
+      for (const auto& [identity, value] : unmaterialized)
+        if (count != 0) pending[identity].assign(count, value);
+      if (count != 0) unmaterialized.clear();
+      topology_epoch = topology;
+      materialization_generation = generation;
+      levels = count;
+      rebuild_union();
+    }
+    void invalidate(const std::vector<std::string>& ids, std::optional<std::size_t> level = {}) {
+      if (ids.empty()) return;
+      if (level && *level >= levels) throw std::out_of_range("AMR auxiliary invalidation level is not live");
+      const auto value = next_revision();
+      for (const auto& id : ids) {
+        if (levels == 0) unmaterialized[id] = value;
+        else {
+          auto& row = pending[id];
+          if (row.empty()) row.resize(levels);
+          if (level) row[*level] = value;
+          else std::fill(row.begin(), row.end(), value);
+        }
+      }
+      rebuild_union();
+    }
+    std::vector<std::string> at_level(std::size_t level) const {
+      if (level >= levels) throw std::out_of_range("AMR auxiliary invalidation level is not live");
+      std::vector<std::string> result;
+      for (const auto& [id, values] : pending)
+        if (values.at(level) != 0) result.push_back(id);
+      return result;
+    }
+    void acknowledge(std::size_t level, const std::string& id, std::uint64_t expected) {
+      const auto found = pending.find(id);
+      if (found != pending.end() && expected != 0 && found->second.at(level) == expected)
+        found->second[level] = 0;
+    }
+    std::uint64_t obligation(std::size_t level, const std::string& id) const {
+      const auto found = pending.find(id);
+      return found == pending.end() ? 0 : found->second.at(level);
+    }
+    void serialize_exact(ExactContractBuilder& exact) const {
+      exact.text("pops.amr.auxiliary-invalidation-incidence").scalar(std::uint32_t{1})
+          .scalar(topology_epoch).scalar(materialization_generation)
+          .scalar(static_cast<std::uint64_t>(levels)).scalar(revision);
+      exact.sequence(identities, [](auto& item, const auto& id) { item.text(id); });
+      exact.scalar(static_cast<std::uint64_t>(unmaterialized.size()));
+      for (const auto& [id, value] : unmaterialized) exact.text(id).scalar(value);
+      for (std::size_t level = 0; level < levels; ++level) {
+        const auto ids = at_level(level);
+        exact.scalar(static_cast<std::uint64_t>(level)).scalar(static_cast<std::uint64_t>(ids.size()));
+        for (const auto& id : ids) exact.text(id).scalar(obligation(level, id));
+      }
+    }
+    void swap(AuxiliaryInvalidations& other) noexcept {
+      std::swap(topology_epoch, other.topology_epoch);
+      std::swap(materialization_generation, other.materialization_generation);
+      std::swap(revision, other.revision); std::swap(levels, other.levels);
+      pending.swap(other.pending); unmaterialized.swap(other.unmaterialized); identities.swap(other.identities);
+    }
+  };
+
   struct FieldPlan {
     std::string plan_identity;
     std::string provider_identity;
@@ -3203,6 +3298,8 @@ struct AmrSystem<Dim>::Impl {
     std::vector<auxiliary_groups_type*> candidate_provider_storage;
     std::vector<std::optional<auxiliary_publication_type>> candidate_provider_publications;
     std::vector<std::string> stale_auxiliary_providers;
+    std::optional<AuxiliaryInvalidations> candidate_auxiliary_invalidations;
+    std::optional<AuxiliaryInvalidations> candidate_auxiliary_invalidations_source;
     std::vector<std::unique_ptr<field_type>> contribution_scratch;
     std::vector<std::shared_ptr<const field_type>> active_coverage;
     std::shared_ptr<std::vector<PreparedBoundaryContext>> boundary_context_storage;
@@ -3232,6 +3329,8 @@ struct AmrSystem<Dim>::Impl {
       candidate_provider_storage.clear();
       candidate_provider_publications.clear();
       stale_auxiliary_providers.clear();
+      candidate_auxiliary_invalidations.reset();
+      candidate_auxiliary_invalidations_source.reset();
       contribution_scratch.clear();
       active_coverage.clear();
       boundary_context_storage.reset();
@@ -3581,7 +3680,61 @@ struct AmrSystem<Dim>::Impl {
   mutable std::shared_ptr<const provider_registry_snapshot_type> pending_provider_registry_restore;
   auxiliary_registry_type auxiliary_registry;
   std::map<std::string, std::vector<double>> staged_auxiliary_inputs;
-  std::vector<std::string> dirty_auxiliary_providers;
+  AuxiliaryInvalidations auxiliary_invalidations;
+  // Borrowed only for the synchronous, collectively authenticated cleanup scope.
+  const std::vector<std::string>* auxiliary_drain_roots = nullptr;
+  bool auxiliary_drain_all = false;
+  bool auxiliary_invalidation_suppressed = false;
+
+  AuxiliaryInvalidations bound_auxiliary_invalidations() const {
+    auto candidate = auxiliary_invalidations;
+    if (engine)
+      candidate.bind(engine->topology_epoch(), engine->materialization_generation(),
+                     engine->hierarchy().num_levels());
+    return candidate;
+  }
+
+  // Called only with the due set of a complete transaction whose accepted
+  // publication is part of this same atomic candidate. Rejected ancestor samples
+  // never reach this seam. Fine transports carry the parent's provider components
+  // into genuinely allocated ghosts, so their accepted images/dependents are stale.
+  void record_auxiliary_publication(
+      AuxiliaryInvalidations& candidate, std::size_t level,
+      const std::vector<std::string>& published,
+      const std::map<std::string, std::uint64_t>& captured_obligations) const {
+    const auto& registries = prepared_hierarchy->auxiliary_registries;
+    candidate.invalidate(registries.at(level).accepted_dependent_provider_identities(published), level);
+    for (std::size_t fine = level + 1; fine < candidate.levels; ++fine) {
+      std::vector<std::string> transported;
+      for (const auto& id : published) {
+        if (!registries.at(fine).last_accepted_point(id)) continue;
+        for (const auto index : registries.at(fine).topological_order()) {
+          const auto& route = registries.at(fine).provider(index);
+          if (route.identity() != id) continue;
+          for (const auto& output : route.outputs()) {
+            const auto address = registries.at(fine).address_of(output.key);
+            const auto* group = prepared_hierarchy->provider_storage.at(fine)->find(address.group);
+            if (!group) throw std::logic_error("AMR auxiliary transport lost its provider group");
+            bool has_transport_ghosts = false;
+            for (int axis = 0; axis < Dim; ++axis)
+              has_transport_ghosts = has_transport_ghosts || group->ghosts()[axis] > 0;
+            if (has_transport_ghosts) {
+              transported.push_back(id);
+              break;
+            }
+          }
+        }
+      }
+      auto dependent = registries.at(fine).accepted_dependent_provider_identities(transported);
+      transported.insert(transported.end(), dependent.begin(), dependent.end());
+      std::sort(transported.begin(), transported.end());
+      transported.erase(std::unique(transported.begin(), transported.end()), transported.end());
+      candidate.invalidate(transported, fine);
+    }
+    for (const auto& id : published)
+      candidate.acknowledge(level, id, captured_obligations.at(id));
+    candidate.rebuild_union();
+  }
   bool topology_regrid_auxiliary_invalidation_pending = false;
   std::optional<runtime::multiblock::BoundaryEvaluationPoint>
       active_topology_rematerialization_point;
@@ -3676,7 +3829,7 @@ struct AmrSystem<Dim>::Impl {
     std::map<std::string, std::vector<field_type>> field_potentials;
     std::set<std::string> field_plan_slots;
     std::map<std::string, std::optional<FieldLogicalTimePoint>> field_boundary_points;
-    std::vector<std::string> dirty_auxiliary_providers;
+    AuxiliaryInvalidations auxiliary_invalidations;
     std::uint64_t last_topology_rematerialization_epoch = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t last_topology_rematerialization_generation =
         std::numeric_limits<std::uint64_t>::max();
@@ -3715,7 +3868,7 @@ struct AmrSystem<Dim>::Impl {
           program_history_flux_snapshots(owner.program_history_flux_snapshots),
           checkpoint_history_flux_snapshot_capacity(
               owner.checkpoint_history_flux_snapshot_capacity),
-          dirty_auxiliary_providers(owner.dirty_auxiliary_providers),
+          auxiliary_invalidations(owner.auxiliary_invalidations),
           last_topology_rematerialization_epoch(owner.last_topology_rematerialization_epoch),
           last_topology_rematerialization_generation(
               owner.last_topology_rematerialization_generation),
@@ -3769,7 +3922,7 @@ struct AmrSystem<Dim>::Impl {
       std::shared_ptr<const provider_snapshot_type> pending_provider_restore;
       std::shared_ptr<const provider_registry_snapshot_type> pending_provider_registry_restore;
       std::vector<PreparedFieldRestore> fields;
-      std::vector<std::string> dirty_auxiliary_providers;
+      AuxiliaryInvalidations auxiliary_invalidations;
       std::uint64_t last_topology_rematerialization_epoch =
           std::numeric_limits<std::uint64_t>::max();
       std::uint64_t last_topology_rematerialization_generation =
@@ -3803,7 +3956,7 @@ struct AmrSystem<Dim>::Impl {
                 snapshot.checkpoint_history_flux_snapshot_capacity),
             pending_provider_restore(snapshot.provider_storage),
             pending_provider_registry_restore(snapshot.provider_registries),
-            dirty_auxiliary_providers(snapshot.dirty_auxiliary_providers),
+            auxiliary_invalidations(snapshot.auxiliary_invalidations),
             last_topology_rematerialization_epoch(snapshot.last_topology_rematerialization_epoch),
             last_topology_rematerialization_generation(
                 snapshot.last_topology_rematerialization_generation),
@@ -3898,7 +4051,7 @@ struct AmrSystem<Dim>::Impl {
       static_assert(std::is_nothrow_swappable_v<decltype(owner.bootstrap_materialized_actions)>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.pending_provider_restore)>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.pending_provider_registry_restore)>);
-      static_assert(std::is_nothrow_swappable_v<decltype(owner.dirty_auxiliary_providers)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.auxiliary_invalidations)>);
       static_assert(
           std::is_nothrow_swappable_v<decltype(owner.last_topology_rematerialization_witness)>);
       static_assert(std::is_nothrow_swappable_v<std::vector<std::unique_ptr<field_type>>>);
@@ -3943,7 +4096,7 @@ struct AmrSystem<Dim>::Impl {
       owner.program_accepted_bytes_runtime_owned = prepared.program_accepted_bytes_runtime_owned;
       owner.pending_provider_restore.swap(prepared.pending_provider_restore);
       owner.pending_provider_registry_restore.swap(prepared.pending_provider_registry_restore);
-      owner.dirty_auxiliary_providers.swap(prepared.dirty_auxiliary_providers);
+      owner.auxiliary_invalidations.swap(prepared.auxiliary_invalidations);
       owner.last_topology_rematerialization_epoch = prepared.last_topology_rematerialization_epoch;
       owner.last_topology_rematerialization_generation =
           prepared.last_topology_rematerialization_generation;
@@ -6684,6 +6837,8 @@ struct AmrSystem<Dim>::Impl {
     plan.candidate_provider_publications.clear();
     plan.candidate_provider_storage.clear();
     plan.stale_auxiliary_providers.clear();
+    plan.candidate_auxiliary_invalidations.reset();
+    plan.candidate_auxiliary_invalidations_source.reset();
     plan.candidate_ready = false;
   }
 
@@ -7040,6 +7195,8 @@ struct AmrSystem<Dim>::Impl {
           plan.candidate_provider_storage.clear();
           plan.candidate_provider_publications.clear();
           plan.stale_auxiliary_providers.clear();
+          plan.candidate_auxiliary_invalidations.reset();
+          plan.candidate_auxiliary_invalidations_source.emplace(auxiliary_invalidations);
           plan.candidate_provider_storage.reserve(publication_level_count);
           plan.candidate_provider_publications.reserve(publication_level_count);
           provider_identities.reserve(plan.output_keys.size());
@@ -7188,6 +7345,33 @@ struct AmrSystem<Dim>::Impl {
         static_assert(
             noexcept(plan.stale_auxiliary_providers.swap(prepared_stale_auxiliary_providers)));
         plan.stale_auxiliary_providers.swap(prepared_stale_auxiliary_providers);
+        std::exception_ptr incidence_error;
+        std::string incidence_contract;
+        try {
+          if (!plan.candidate_auxiliary_invalidations_source ||
+              *plan.candidate_auxiliary_invalidations_source != auxiliary_invalidations)
+            throw std::logic_error("AMR field-output invalidation changed during candidate production");
+          plan.candidate_auxiliary_invalidations.emplace(bound_auxiliary_invalidations());
+          for (std::size_t level = 0; level < publication_level_count; ++level) {
+            std::vector<std::string> published;
+            for (const auto index : prepared_hierarchy->auxiliary_registries[level].topological_order()) {
+              const auto& id = prepared_hierarchy->auxiliary_registries[level].provider(index).identity();
+              if (plan.candidate_provider_publications[level]->requires_staging(id)) published.push_back(id);
+            }
+            std::map<std::string, std::uint64_t> captured;
+            for (const auto& id : published)
+              captured.emplace(id, plan.candidate_auxiliary_invalidations->obligation(level, id));
+            record_auxiliary_publication(*plan.candidate_auxiliary_invalidations, level, published, captured);
+          }
+          ExactContractBuilder incidence;
+          plan.candidate_auxiliary_invalidations->serialize_exact(incidence);
+          incidence_contract = std::move(incidence).release();
+        } catch (...) { incidence_error = std::current_exception(); }
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            incidence_error, &lane, "AMR field-output incidence preparation failed collectively");
+        if (!all_ranks_agree_exact_ordered_byte_pairs(
+                {{"amr-field-output-invalidation-incidence", incidence_contract}}, lane))
+          throw std::invalid_argument("AMR field-output invalidation incidence differs across ranks");
       }
     } catch (...) {
       candidate_error = std::current_exception();
@@ -7245,6 +7429,10 @@ struct AmrSystem<Dim>::Impl {
   }
 
   void validate_field_candidate_for_consumption() const {
+    if (const auto& plan = field_plans.at(active_field_slot); plan.output &&
+        (!plan.candidate_auxiliary_invalidations || !plan.candidate_auxiliary_invalidations_source ||
+         *plan.candidate_auxiliary_invalidations_source != auxiliary_invalidations))
+      throw std::logic_error("AMR field candidate auxiliary invalidation source changed");
     // SolveOutcome::collective_lane catches this rank-local validation and performs the exact-lane
     // consensus before it marks the outcome consumed or invokes the irreversible accept hook.
     validate_field_candidate();
@@ -7262,13 +7450,13 @@ struct AmrSystem<Dim>::Impl {
           plan.candidate_provider_publications[level]->accept();
         }
       }
-      for (const std::string& identity : plan.stale_auxiliary_providers)
-        if (std::find(dirty_auxiliary_providers.begin(), dirty_auxiliary_providers.end(),
-                      identity) == dirty_auxiliary_providers.end())
-          dirty_auxiliary_providers.push_back(identity);
+      if (plan.candidate_auxiliary_invalidations)
+        auxiliary_invalidations.swap(*plan.candidate_auxiliary_invalidations);
       plan.candidate_provider_publications.clear();
       plan.candidate_provider_storage.clear();
       plan.stale_auxiliary_providers.clear();
+      plan.candidate_auxiliary_invalidations.reset();
+      plan.candidate_auxiliary_invalidations_source.reset();
       plan.candidate_ready = false;
       active_field_slot.clear();
     } catch (...) {
@@ -8441,9 +8629,14 @@ struct AmrSystem<Dim>::Impl {
           "AMR topology regrid auxiliary invalidation lacks its prepared hierarchy authority");
     const ExecutionLane& lane = *prepared_hierarchy->lane;
     std::vector<std::string> dirty;
+    AuxiliaryInvalidations invalidations;
     std::string contract;
     std::exception_ptr preparation_error;
     try {
+      for (const auto& level_registry : prepared_hierarchy->auxiliary_registries)
+        if (level_registry.has_pending_publication())
+          throw std::logic_error("AMR topology invalidation cannot change a pending auxiliary publication");
+      invalidations = bound_auxiliary_invalidations();
       const auxiliary_registry_type& registry = prepared_hierarchy->auxiliary_registries.front();
       dirty.reserve(registry.provider_count());
       ExactContractBuilder exact;
@@ -8459,6 +8652,8 @@ struct AmrSystem<Dim>::Impl {
         if (provider.kind() != runtime::system::AuxiliaryProviderKind::field_output)
           dirty.push_back(provider.identity());
       }
+      invalidations.invalidate(dirty);
+      invalidations.serialize_exact(exact);
       contract = std::move(exact).release();
     } catch (...) {
       preparation_error = std::current_exception();
@@ -8494,7 +8689,7 @@ struct AmrSystem<Dim>::Impl {
     }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         preparation_error, &lane, "AMR topology regrid auxiliary invalidation failed collectively");
-    dirty_auxiliary_providers.swap(dirty);
+    auxiliary_invalidations.swap(invalidations);
   }
 
   void discard_level_evaluations() const noexcept {
@@ -10183,8 +10378,9 @@ struct AmrSystem<Dim>::Impl {
       try {
         validate_field_candidate();
         plan.accepted_halo_producer_point = point; // Real solved candidate, not a setter witness.
-        dirty_auxiliary_providers.reserve(checked_size_sum(dirty_auxiliary_providers.size(),
-            plan.stale_auxiliary_providers.size(), "accepted halo Field dirty identity capacity exceeds size_t"));
+        if (plan.output && (!plan.candidate_auxiliary_invalidations_source ||
+            *plan.candidate_auxiliary_invalidations_source != auxiliary_invalidations))
+          throw std::logic_error("accepted halo Field invalidation source changed");
       } catch (...) { error = std::current_exception(); }
       const auto discard_candidate = [&] {
         (void)outcome.consume(SolveConsumption::kDiscardCandidate);
@@ -10219,9 +10415,8 @@ struct AmrSystem<Dim>::Impl {
       try {
         for (auto& publication : plan.candidate_provider_publications)
           if (publication) publication->accept();
-        for (const auto& identity : plan.stale_auxiliary_providers)
-          if (std::find(dirty_auxiliary_providers.begin(), dirty_auxiliary_providers.end(), identity) ==
-              dirty_auxiliary_providers.end()) dirty_auxiliary_providers.push_back(identity);
+        if (plan.candidate_auxiliary_invalidations)
+          auxiliary_invalidations.swap(*plan.candidate_auxiliary_invalidations);
       } catch (...) { error = std::current_exception(); }
       discard_candidate();
       runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
@@ -11438,6 +11633,10 @@ void AmrSystem<Dim>::stage_auxiliary_input(const runtime::system::AuxiliaryCompo
   std::string payload;
   std::exception_ptr local_error;
   try {
+    if (p_->prepared_hierarchy)
+      for (const auto& registry : p_->prepared_hierarchy->auxiliary_registries)
+        if (registry.has_pending_publication())
+          throw std::logic_error("AMR auxiliary input cannot change during pending publication");
     address.emplace(p_->auxiliary_registry.address_of(key));
     for (std::size_t provider = 0; provider < p_->auxiliary_registry.provider_count(); ++provider) {
       const auto& candidate = p_->auxiliary_registry.provider(provider);
@@ -11463,24 +11662,34 @@ void AmrSystem<Dim>::stage_auxiliary_input(const runtime::system::AuxiliaryCompo
           lane))
     throw std::invalid_argument("AMR auxiliary input differs across MPI ranks");
   std::map<std::string, std::vector<double>> staged_inputs;
-  std::vector<std::string> dirty_providers;
+  typename Impl::AuxiliaryInvalidations dirty_providers;
   local_error = {};
   try {
     staged_inputs = p_->staged_auxiliary_inputs;
     staged_inputs[payload_key] = values;
-    dirty_providers = p_->dirty_auxiliary_providers;
-    if (std::find(dirty_providers.begin(), dirty_providers.end(), provider_identity) ==
-        dirty_providers.end())
-      dirty_providers.push_back(provider_identity);
+    dirty_providers = p_->bound_auxiliary_invalidations();
+    dirty_providers.invalidate({provider_identity});
   } catch (...) {
     local_error = std::current_exception();
   }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       local_error, &lane, "AMR auxiliary input publication preparation failed collectively");
+  std::string input_incidence_contract;
+  local_error = {};
+  try {
+    ExactContractBuilder exact;
+    dirty_providers.serialize_exact(exact);
+    input_incidence_contract = std::move(exact).release();
+  } catch (...) { local_error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR auxiliary input incidence failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"amr-auxiliary-input-incidence", input_incidence_contract}}, lane))
+    throw std::invalid_argument("AMR auxiliary input incidence differs across ranks");
   static_assert(std::is_nothrow_swappable_v<decltype(p_->staged_auxiliary_inputs)>);
-  static_assert(std::is_nothrow_swappable_v<decltype(p_->dirty_auxiliary_providers)>);
+  static_assert(std::is_nothrow_swappable_v<decltype(p_->auxiliary_invalidations)>);
   p_->staged_auxiliary_inputs.swap(staged_inputs);
-  p_->dirty_auxiliary_providers.swap(dirty_providers);
+  p_->auxiliary_invalidations.swap(dirty_providers);
   (void)address;
 }
 
@@ -11570,7 +11779,7 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
       if (registries[level].has_pending_publication())
         throw std::logic_error("AMR auxiliary checkpoint refuses pending publication");
       auto accepted = runtime::system::capture_auxiliary_checkpoint_state(
-          registries[level], p_->dirty_auxiliary_providers);
+          registries[level], p_->bound_auxiliary_invalidations().at_level(level));
       runtime::system::require_auxiliary_checkpoint_storage(accepted, *groups[level]);
       const Box<Dim>& domain = p_->engine->hierarchy().layout(level).domain();
       payloads[level].reserve(accepted.groups.size());
@@ -12068,7 +12277,7 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_rank_local_carr
 
 template <int Dim>
 std::vector<std::string> AmrSystem<Dim>::dirty_auxiliary_provider_identities() const {
-  return p_->dirty_auxiliary_providers;
+  return p_->auxiliary_invalidations.identities;
 }
 
 template <int Dim>
@@ -12078,9 +12287,10 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_auxiliary_level_c
     throw std::logic_error("AMR auxiliary checkpoint capacity requires a prepared hierarchy");
   std::size_t metadata_bytes = 0;
   std::size_t components = 0;
-  for (const auto& registry : p_->prepared_hierarchy->auxiliary_registries) {
+  for (std::size_t level = 0; level < p_->prepared_hierarchy->auxiliary_registries.size(); ++level) {
+    const auto& registry = p_->prepared_hierarchy->auxiliary_registries[level];
     const auto state = runtime::system::capture_auxiliary_checkpoint_state(
-        registry, p_->dirty_auxiliary_providers);
+        registry, p_->bound_auxiliary_invalidations().at_level(level));
     metadata_bytes = std::max(metadata_bytes,
                               runtime::system::serialize_auxiliary_checkpoint_state(state).size());
     std::size_t level_components = 0;
@@ -12114,11 +12324,12 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
   try {
     if (p_->restart_transaction_committed)
       throw std::logic_error("AMR auxiliary checkpoint cannot change a committed restart");
-    for (const auto& registry : p_->prepared_hierarchy->auxiliary_registries) {
+    for (std::size_t level = 0; level < p_->prepared_hierarchy->auxiliary_registries.size(); ++level) {
+      const auto& registry = p_->prepared_hierarchy->auxiliary_registries[level];
       if (registry.has_pending_publication())
         throw std::logic_error("AMR auxiliary checkpoint restore refuses pending publication");
       (void)runtime::system::capture_auxiliary_checkpoint_state(
-          registry, p_->dirty_auxiliary_providers);
+          registry, p_->bound_auxiliary_invalidations().at_level(level));
     }
     const auto& groups = p_->prepared_hierarchy->provider_storage;
     const auto& registries = p_->prepared_hierarchy->auxiliary_registries;
@@ -12162,17 +12373,17 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
   std::vector<std::unique_ptr<storage_type>> accepted_candidates;
   std::vector<std::unique_ptr<storage_type>> transaction_candidates;
   std::vector<registry_type> candidate_registries;
-  decltype(p_->dirty_auxiliary_providers) candidate_dirty;
+  decltype(p_->auxiliary_invalidations) candidate_dirty;
   std::exception_ptr preparation_error;
   try {
     accepted_candidates.reserve(state.size());
     transaction_candidates.reserve(state.size());
     candidate_registries = p_->prepared_hierarchy->auxiliary_registries;
-    // Invalidation is hierarchy-wide; every level must retain the same lazy authority.
-    if (!state.empty()) candidate_dirty = state.front().invalidated_providers;
+    // POPSAUX3 carries stale membership in each level, not a hierarchy-wide mask.
+    candidate_dirty.revision = p_->auxiliary_invalidations.revision;
+    candidate_dirty.bind(p_->engine->topology_epoch(), p_->engine->materialization_generation(), state.size());
     for (std::size_t level = 0; level < state.size(); ++level) {
-      if (state[level].invalidated_providers != candidate_dirty)
-        throw std::invalid_argument("AMR auxiliary checkpoint level invalidations differ");
+      candidate_dirty.invalidate(state[level].invalidated_providers, level);
       const auto& live = p_->prepared_hierarchy->provider_storage[level];
       if (!live)
         throw std::logic_error("AMR auxiliary checkpoint has an empty accepted carrier");
@@ -12195,6 +12406,18 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
       preparation_error, &lane,
       "AMR auxiliary checkpoint candidate preparation failed collectively before validation");
 
+  std::string restored_incidence_contract;
+  preparation_error = {};
+  try {
+    ExactContractBuilder exact;
+    candidate_dirty.serialize_exact(exact);
+    restored_incidence_contract = std::move(exact).release();
+  } catch (...) { preparation_error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      preparation_error, &lane, "AMR checkpoint incidence preparation failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"amr-checkpoint-restored-incidence", restored_incidence_contract}}, lane))
+    throw std::invalid_argument("AMR checkpoint restored incidence differs across ranks");
   // Every candidate and registry allocation is now complete.  The following canonical per-level
   // phases contain only their named collectives and leave the live accepted carriers untouched.
   for (std::size_t level = 0; level < state.size(); ++level)
@@ -12290,7 +12513,7 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
   static_assert(std::is_nothrow_swappable_v<
                 typename decltype(p_->prepared_hierarchy->provider_storage)::value_type>);
   static_assert(noexcept(p_->prepared_hierarchy->auxiliary_registries.swap(candidate_registries)));
-  static_assert(noexcept(p_->dirty_auxiliary_providers.swap(candidate_dirty)));
+  static_assert(noexcept(p_->auxiliary_invalidations.swap(candidate_dirty)));
   for (std::size_t level = 0; level < state.size(); ++level) {
     p_->prepared_hierarchy->provider_storage[level].swap(accepted_candidates[level]);
     p_->prepared_hierarchy->provider_candidate_storage[level].swap(transaction_candidates[level]);
@@ -12299,7 +12522,7 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
         next_candidate_identity[level]);
   }
   p_->prepared_hierarchy->auxiliary_registries.swap(candidate_registries);
-  p_->dirty_auxiliary_providers.swap(candidate_dirty);
+  p_->auxiliary_invalidations.swap(candidate_dirty);
   if (p_->restart_transaction && !p_->restart_transaction_committed)
     p_->restart_auxiliary_replacement_pending = false;
 }
@@ -12481,8 +12704,45 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       hierarchy_error, &lane, "AMR auxiliary hierarchy preflight failed collectively");
   auto& hierarchy = *p_->prepared_hierarchy;
-  std::vector<std::string> forced = p_->dirty_auxiliary_providers;
-  std::vector<std::string> remaining_dirty = p_->dirty_auxiliary_providers;
+  typename Impl::AuxiliaryInvalidations next_invalidations;
+  std::vector<std::string> selected_required;
+  std::vector<std::string> forced;
+  std::string incidence_contract;
+  std::exception_ptr incidence_error;
+  const bool invalidation_drain = p_->auxiliary_drain_roots != nullptr;
+  try {
+    next_invalidations = p_->bound_auxiliary_invalidations();
+    forced = !consumer_qids.empty() ? next_invalidations.at_level(point.level) :
+             next_invalidations.identities;
+    if (p_->auxiliary_invalidation_suppressed) forced.clear();
+    ExactContractBuilder exact;
+    exact.text("pops.amr.auxiliary-refresh-selection").scalar(std::uint32_t{3})
+        .scalar(runtime::system::ExactAuxiliaryRegistry<Dim>::invalidation_drain_contract_version)
+        .scalar(invalidation_drain).scalar(p_->auxiliary_drain_all)
+        .scalar(p_->auxiliary_invalidation_suppressed);
+    point.serialize_exact(exact);
+    next_invalidations.serialize_exact(exact);
+    if (invalidation_drain)
+      exact.sequence(*p_->auxiliary_drain_roots, [](auto& item, const auto& id) { item.text(id); });
+    incidence_contract = std::move(exact).release();
+  } catch (...) { incidence_error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      incidence_error, &lane, "AMR auxiliary incidence selection failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"amr-auxiliary-refresh-incidence", incidence_contract}}, lane))
+    throw std::invalid_argument("AMR auxiliary refresh incidence differs across ranks");
+  const auto forced_at_level = [&](std::size_t level) {
+    auto result = p_->auxiliary_invalidation_suppressed ? std::vector<std::string>{} :
+                  next_invalidations.at_level(level);
+    const auto* filter = invalidation_drain ?
+                         (p_->auxiliary_drain_all ? nullptr : p_->auxiliary_drain_roots) :
+                         consumer_qids.empty() ? nullptr : &selected_required;
+    if (filter)
+      std::erase_if(result, [&](const auto& id) {
+        return std::find(filter->begin(), filter->end(), id) == filter->end();
+      });
+    return result;
+  };
   // A flat Program read selects its exact dependency closure. In particular it must not
   // publish unrelated dirty inputs or consume a field-output provider owned by another solve.
   if (!consumer_qids.empty()) {
@@ -12502,6 +12762,7 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
       for (const auto& qid : consumer_qids)
         for (const auto& value : registry.consumer_plan(qid).values)
           require_provider(require_provider, registry.provider_for_key(value.key));
+      selected_required = required;
       std::erase_if(forced, [&](const auto& identity) {
         return std::find(required.begin(), required.end(), identity) == required.end();
       });
@@ -12523,7 +12784,7 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
         item.text(value);
       };
       exact.text("pops.amr.exact-level-auxiliary-selection")
-          .scalar(std::uint32_t{2}).scalar(point.level)
+          .scalar(std::uint32_t{3}).scalar(point.level)
           .scalar(registry.accepted_generation())
           .scalar(has_due_provider)
           .sequence(consumer_qids, identity)
@@ -12548,7 +12809,8 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
   std::optional<storage_snapshot_type> storage_snapshot;
   std::optional<registry_snapshot_type> registry_snapshot;
   std::vector<std::optional<transaction_type>> transactions;
-  decltype(p_->dirty_auxiliary_providers) dirty_snapshot;
+  std::vector<std::map<std::string, std::uint64_t>> captured_obligations;
+  decltype(p_->auxiliary_invalidations) dirty_snapshot;
   const std::size_t level_count = hierarchy.provider_storage.size();
   std::exception_ptr snapshot_error;
   try {
@@ -12561,7 +12823,8 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
     }
     registry_snapshot.emplace(hierarchy.auxiliary_registries);
     transactions.resize(level_count);
-    dirty_snapshot = p_->dirty_auxiliary_providers;
+    captured_obligations.resize(level_count);
+    dirty_snapshot = p_->auxiliary_invalidations;
   } catch (...) {
     snapshot_error = std::current_exception();
   }
@@ -12591,7 +12854,7 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
     }
     try {
       hierarchy.auxiliary_registries.swap(*registry_snapshot);
-      p_->dirty_auxiliary_providers.swap(dirty_snapshot);
+      p_->auxiliary_invalidations.swap(dirty_snapshot);
     } catch (...) {
       if (!rollback_error)
         rollback_error = std::current_exception();
@@ -12646,30 +12909,37 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
           physical.qualify_native_accepted_initial(initial);
           level_point.physical_evaluation = std::move(physical);
         }
-        transactions[level].emplace(
-            registry->begin_publication(level_point, forced, consumer_qids));
-        if (!consumer_qids.empty()) {
-          std::vector<std::string> published;
-          for (std::size_t index : registry->topological_order()) {
-            const auto& identity = registry->provider(index).identity();
-            if (transactions[level]->requires_staging(identity))
-              published.push_back(identity);
-          }
-          for (const auto& identity : registry->dependent_provider_identities(published))
-            if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) ==
-                remaining_dirty.end())
-              remaining_dirty.push_back(identity);
-          if (level_count == 1)
-            std::erase_if(remaining_dirty, [&](const auto& identity) {
-              return transactions[level]->requires_staging(identity);
-            });
+        auto level_forced = forced_at_level(level);
+        if (invalidation_drain && p_->auxiliary_drain_all) {
+          // Accepted dependents become stale if these roots really publish. Include
+          // them in the same private complete DAG, not a later diagnostic replay.
+          auto downstream = registry->accepted_dependent_provider_identities(level_forced);
+          next_invalidations.invalidate(downstream, level);
+          level_forced.insert(level_forced.end(), downstream.begin(), downstream.end());
+          std::sort(level_forced.begin(), level_forced.end());
+          level_forced.erase(std::unique(level_forced.begin(), level_forced.end()), level_forced.end());
         }
+        if (invalidation_drain && level_forced.empty()) {
+          // A clean parent remains a read-only accepted prerequisite of fine transports.
+          copy_auxiliary_groups_in_place(*hierarchy.provider_storage[level], *candidate);
+        } else if (invalidation_drain) {
+          transactions[level].emplace(registry->begin_invalidated_publication(level_point, level_forced));
+        } else {
+          transactions[level].emplace(registry->begin_publication(level_point, level_forced, consumer_qids));
+        }
+        if (transactions[level])
+          for (const auto index : registry->topological_order()) {
+            const auto& id = registry->provider(index).identity();
+            if (transactions[level]->requires_staging(id))
+              captured_obligations[level].emplace(id, next_invalidations.obligation(level, id));
+          }
       } catch (...) {
         candidate_error = std::current_exception();
       }
       runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
           candidate_error, &lane,
           "AMR auxiliary candidate preparation failed collectively before input staging");
+      if (!transactions[level]) continue;
       auto& transaction = *transactions[level];
       if (hierarchy.provider_storage[level]->groups.empty())
         continue;
@@ -12793,6 +13063,20 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
           fence_error, &lane, "AMR auxiliary device fence failed collectively");
       runtime::system::require_finite_auxiliary_groups(*candidate, &lane,
                                                        "AMR auxiliary publication");
+      std::exception_ptr completed_level_error;
+      try {
+        transaction.validate_complete();
+        if (consumer_qids.empty() || static_cast<int>(level) == point.level) {
+          std::vector<std::string> published;
+          for (const auto index : registry->topological_order()) {
+            const auto& id = registry->provider(index).identity();
+            if (transaction.requires_staging(id)) published.push_back(id);
+          }
+          p_->record_auxiliary_publication(next_invalidations, level, published, captured_obligations[level]);
+        }
+      } catch (...) { completed_level_error = std::current_exception(); }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          completed_level_error, &lane, "AMR completed auxiliary level incidence failed collectively");
     }
     for (const auto& transaction : transactions)
       if (transaction) transaction->validate_complete();
@@ -12806,6 +13090,27 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
     return;
   }
 
+  std::string accepted_incidence_contract;
+  std::exception_ptr accepted_incidence_error;
+  try {
+    if (p_->auxiliary_invalidations != dirty_snapshot)
+      throw std::logic_error("AMR auxiliary invalidation changed during candidate production");
+    ExactContractBuilder exact;
+    next_invalidations.serialize_exact(exact);
+    accepted_incidence_contract = std::move(exact).release();
+  } catch (...) { accepted_incidence_error = std::current_exception(); }
+  if (all_reduce_max(accepted_incidence_error ? 1L : 0L, lane) != 0) {
+    rollback_and_rethrow(accepted_incidence_error, "AMR auxiliary accepted incidence preparation failed collectively");
+    return;
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"amr-auxiliary-accepted-incidence", accepted_incidence_contract}}, lane)) {
+    std::exception_ptr agreement_error;
+    try { throw std::invalid_argument("AMR auxiliary accepted incidence differs across ranks"); }
+    catch (...) { agreement_error = std::current_exception(); }
+    rollback_and_rethrow(agreement_error, "AMR auxiliary accepted incidence differs collectively");
+    return;
+  }
   std::exception_ptr storage_commit_error;
   try {
     for (std::size_t level = 0; level < level_count; ++level)
@@ -12842,10 +13147,7 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
                          "AMR auxiliary multi-level metadata commit failed collectively");
     return;
   }
-  if (consumer_qids.empty())
-    p_->dirty_auxiliary_providers.clear();
-  else
-    p_->dirty_auxiliary_providers.swap(remaining_dirty);
+  p_->auxiliary_invalidations.swap(next_invalidations);
 }
 
 template <int Dim>
@@ -14511,7 +14813,7 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
   std::map<std::string, std::vector<MultiFab<Dim>>> field_backup;
   std::shared_ptr<const typename Impl::provider_snapshot_type> provider_backup;
   std::vector<typename Impl::auxiliary_registry_type> registry_backup;
-  std::vector<std::string> dirty_backup;
+  typename Impl::AuxiliaryInvalidations dirty_backup;
   bool has_field_dependencies = false;
   std::size_t levels = 0;
   std::string request_contract;
@@ -14627,7 +14929,7 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
     }
     provider_backup = p_->snapshot_provider_storage();
     registry_backup = p_->prepared_hierarchy->auxiliary_registries;
-    dirty_backup = p_->dirty_auxiliary_providers;
+    dirty_backup = p_->auxiliary_invalidations;
     Kokkos::fence();
     prior = p_->program_hierarchy_candidates;
     bindings.resize(candidates.size(), nullptr);
@@ -14642,7 +14944,12 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
     ~RestoreBindings() { slot.swap(saved); }
   } restore{p_->program_hierarchy_candidates, prior};
   p_->program_hierarchy_candidates.swap(bindings);
-  if (has_field_dependencies) p_->dirty_auxiliary_providers.clear();
+  const bool previous_suppression = p_->auxiliary_invalidation_suppressed;
+  struct RestoreInvalidationSuppression {
+    Impl& owner; bool previous;
+    ~RestoreInvalidationSuppression() { owner.auxiliary_invalidation_suppressed = previous; }
+  } invalidation_suppression{*p_, previous_suppression};
+  if (has_field_dependencies) p_->auxiliary_invalidation_suppressed = true;
   const auto restore_accepted = [&] {
     std::exception_ptr restore_error;
     try {
@@ -14666,7 +14973,7 @@ void AmrSystem<Dim>::prepare_accepted_halo_candidates(
         restore_error, &lane, "accepted halo staging restoration failed collectively");
     for (std::size_t level = 0; level < registry_backup.size(); ++level)
       p_->prepared_hierarchy->auxiliary_registries[level].swap_accepted_publication(registry_backup[level]);
-    p_->dirty_auxiliary_providers.swap(dirty_backup);
+    p_->auxiliary_invalidations.swap(dirty_backup);
   };
   try {
     // All block/level valid states are candidates while typed BCs execute, including cross-block
@@ -18214,22 +18521,19 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::rematerialize_fields_after
                                                const runtime::system::AuxiliaryEvaluationPoint& refresh_point,
                                                bool physical) {
     std::vector<std::string> requested;
-    std::vector<std::string> remaining;
     std::string request_contract;
     std::exception_ptr request_error;
     try {
       if (physical) accepted_authority->validate();
       const auto& plan = p_->field_plans.at(slot);
       requested.reserve(plan.providers.size());
-      remaining.reserve(p_->dirty_auxiliary_providers.size());
+
       for (const auto& provider : plan.providers)
-        if (std::find(p_->dirty_auxiliary_providers.begin(), p_->dirty_auxiliary_providers.end(),
-                      provider.identity) != p_->dirty_auxiliary_providers.end() &&
+        if (std::find(p_->auxiliary_invalidations.identities.begin(), p_->auxiliary_invalidations.identities.end(),
+                      provider.identity) != p_->auxiliary_invalidations.identities.end() &&
             std::find(requested.begin(), requested.end(), provider.identity) == requested.end())
           requested.push_back(provider.identity);
-      for (const std::string& identity : p_->dirty_auxiliary_providers)
-        if (std::find(requested.begin(), requested.end(), identity) == requested.end())
-          remaining.push_back(identity);
+
       ExactContractBuilder exact;
       exact.text("pops.amr.topology-rematerialization-field-auxiliary-request")
           .scalar(std::uint32_t{2})
@@ -18252,15 +18556,17 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::rematerialize_fields_after
       throw std::logic_error("AMR topology field auxiliary request differs between MPI ranks");
     if (requested.empty())
       return;
-    p_->dirty_auxiliary_providers.swap(requested);
+    const auto* previous_roots = p_->auxiliary_drain_roots;
+    struct RestoreDrainRoots {
+      Impl& owner; const std::vector<std::string>* previous; bool previous_all;
+      ~RestoreDrainRoots() {
+        owner.auxiliary_drain_roots = previous;
+        owner.auxiliary_drain_all = previous_all;
+      }
+    } restore_roots{*p_, previous_roots, p_->auxiliary_drain_all};
+    p_->auxiliary_drain_roots = &requested;
+    p_->auxiliary_drain_all = false;
     refresh_auxiliary_on_prepared_lane(refresh_point);
-    std::exception_ptr remaining_error;
-    try {
-      for (std::string& identity : remaining)
-        p_->dirty_auxiliary_providers.push_back(std::move(identity));
-    } catch (...) { remaining_error = std::current_exception(); }
-    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-        remaining_error, &lane, "AMR topology remaining auxiliary identities failed collectively");
   };
   std::vector<std::vector<std::string>> witness;
   std::vector<const MultiFab<Dim>*> states;
@@ -18314,8 +18620,20 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::rematerialize_fields_after
   } catch (...) { tail_error = std::current_exception(); }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       tail_error, &lane, "AMR topology rematerialization legacy tail setup failed collectively");
-  if (!p_->dirty_auxiliary_providers.empty())
+  if (!p_->auxiliary_invalidations.identities.empty()) {
+    const auto& roots = p_->auxiliary_invalidations.identities;
+    const auto* previous_roots = p_->auxiliary_drain_roots;
+    struct RestoreTailDrainRoots {
+      Impl& owner; const std::vector<std::string>* previous; bool previous_all;
+      ~RestoreTailDrainRoots() {
+        owner.auxiliary_drain_roots = previous;
+        owner.auxiliary_drain_all = previous_all;
+      }
+    } restore_roots{*p_, previous_roots, p_->auxiliary_drain_all};
+    p_->auxiliary_drain_roots = &roots;
+    p_->auxiliary_drain_all = true;
     refresh_auxiliary_on_prepared_lane(legacy_auxiliary_point);
+  }
   std::exception_ptr metadata_error;
   try {
     p_->last_topology_rematerialization_witness = witness;
@@ -19320,7 +19638,7 @@ void AmrSystem<Dim>::commit_bootstrap_level() {
   // Topology publication defers provider rematerialization while bootstrap state is incomplete.
   // A bootstrap with no field-solver action still owns InputAux/DerivedAux values: publish those
   // on every live level before releasing the rollback image and exposing the accepted hierarchy.
-  if (!p_->dirty_auxiliary_providers.empty()) {
+  if (!p_->auxiliary_invalidations.identities.empty()) {
     runtime::multiblock::BoundaryEvaluationPoint point;
     point.clock = "pops.amr.topology-rematerialization.accepted";
     point.tick = p_->macro_step;

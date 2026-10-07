@@ -982,4 +982,249 @@ TEST(ExactAuxiliaryRegistryNd, UnpublishedDependentsRemainDueWithoutCheckpointIn
   verifies_unpublished_dependents_are_due_without_stale_publication<2>();
   verifies_unpublished_dependents_are_due_without_stale_publication<3>();
 }
+
+// Registry selection/provenance witnesses only. These do not substitute for AMR
+// accepted publication, per-level acknowledgement, carrier transport or rollback.
+template <int Dim>
+struct DrainPhysicalNativeLaunch {
+  std::shared_ptr<std::vector<AuxiliaryEvaluationPoint>> calls;
+  std::string expected_clock;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.exact-aux.drain-physical-launch", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& exact) const {
+    exact.text(expected_clock);
+  }
+  void operator()(const pops::runtime::system::AuxiliaryKernelLaunchContext<Dim>& context) const {
+    calls->push_back(context.point);
+    (void)context.point.require_physical_time(expected_clock);
+  }
+};
+
+AuxiliaryEvaluationPoint drain_physical_point(int stage, pops::amr::Rational fraction,
+                                             double time) {
+  auto requested = point("counterexample.physical-clock", 0,
+                         AuxiliaryEvaluationEvent::before_field_solve, 0, 0, 0, stage);
+  pops::runtime::multiblock::BoundaryEvaluationPoint actual;
+  actual.clock = requested.clock; actual.tick = 0; actual.level = 0;
+  actual.substep = 0; actual.stage = stage;
+  actual.stage_fraction = fraction; actual.dt = 1.; actual.physical_time = time;
+  requested.qualify_physical_evaluation(actual);
+  return requested;
+}
+
+AuxiliaryEvaluationPoint drain_diagnostic_point() {
+  return point("counterexample.legacy-topology", 0,
+               AuxiliaryEvaluationEvent::after_regrid, 7);
+}
+
+template <int Dim>
+struct DrainRegistryFixture {
+  std::shared_ptr<std::vector<AuxiliaryEvaluationPoint>> physical_calls =
+      std::make_shared<std::vector<AuxiliaryEvaluationPoint>>();
+  std::shared_ptr<std::vector<std::string>> legacy_calls =
+      std::make_shared<std::vector<std::string>>();
+  ExactAuxiliaryRegistry<Dim> registry;
+
+  explicit DrainRegistryFixture(bool legacy_depends_on_physical) {
+    using Provider = PreparedAuxiliaryProvider<Dim>;
+    using Launcher = typename Provider::launcher_type;
+    const auto physical = output<Dim>("physical-owner", "aux", "physical", 0);
+    const auto legacy = output<Dim>("legacy-owner", "aux", "legacy", 1);
+    registry.add(Provider{"physical", AuxiliaryProviderKind::derived,
+      AuxiliaryEvaluationPolicy{std::vector<AuxiliaryEvaluationEvent>{
+        AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryEvaluationEvent::after_regrid},
+        AuxiliaryFreshness::evaluation}, {physical}, {},
+      Launcher(DrainPhysicalNativeLaunch<Dim>{
+        physical_calls, "counterexample.physical-clock"})});
+    std::vector<AuxiliaryDependency<Dim>> dependencies;
+    if (legacy_depends_on_physical) dependencies.push_back(dependency(physical));
+    registry.add(derived<Dim>("legacy", legacy, std::move(dependencies), legacy_calls,
+      {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::once}));
+    registry.add_consumer_plan({"read-physical", {{dependency(physical), 0}}});
+    registry.add_consumer_plan({"read-legacy", {{dependency(legacy), 0}}});
+    registry.seal();
+  }
+
+  void publish_initial() {
+    auto publication = registry.begin_publication(
+        drain_physical_point(1, {1, 4}, .25), {}, {"read-physical", "read-legacy"});
+    publication.launch_ready_native();
+    publication.accept();
+  }
+};
+
+template <int Dim>
+void verifies_drain_leaves_unrelated_clean_physical_provider_accepted() {
+  DrainRegistryFixture<Dim> fixture(false);
+  fixture.publish_initial();
+  const auto accepted = fixture.registry.last_accepted_point("physical");
+  ASSERT_EQ(fixture.physical_calls->size(), 1U);
+  const auto diagnostic = drain_diagnostic_point();
+  {
+    // Control: ordinary publication would select the clean physical provider by
+    // its authored after_regrid/evaluation policy, even with only legacy forced.
+    auto normal = fixture.registry.begin_publication(diagnostic, {"legacy"});
+    EXPECT_TRUE(normal.requires_staging("physical"));
+    normal.reject();
+  }
+  {
+    auto drain = fixture.registry.begin_invalidated_publication(diagnostic, {"legacy"});
+    EXPECT_FALSE(drain.requires_staging("physical"));
+    EXPECT_TRUE(drain.requires_staging("legacy"));
+    drain.launch_ready_native();
+    drain.accept();
+  }
+  EXPECT_EQ(fixture.physical_calls->size(), 1U);
+  EXPECT_EQ(fixture.legacy_calls->size(), 2U);
+  EXPECT_EQ(fixture.registry.last_accepted_point("physical"), accepted);
+  EXPECT_EQ(*fixture.registry.last_accepted_point("legacy"), diagnostic);
+}
+
+TEST(ExactAuxiliaryRegistryNd, InvalidationDrainDoesNotReevaluateUnrelatedCleanPhysicalProvider) {
+  verifies_drain_leaves_unrelated_clean_physical_provider_accepted<1>();
+  verifies_drain_leaves_unrelated_clean_physical_provider_accepted<2>();
+  verifies_drain_leaves_unrelated_clean_physical_provider_accepted<3>();
+}
+
+template <int Dim>
+void verifies_drain_uses_clean_accepted_physical_prerequisite() {
+  DrainRegistryFixture<Dim> fixture(true);
+  fixture.publish_initial();
+  const auto accepted = fixture.registry.last_accepted_point("physical");
+  ASSERT_TRUE(accepted.has_value());
+  const auto diagnostic = drain_diagnostic_point();
+  auto drain = fixture.registry.begin_invalidated_publication(diagnostic, {"legacy"});
+  EXPECT_FALSE(drain.requires_staging("physical"));
+  EXPECT_TRUE(drain.requires_staging("legacy"));
+  drain.launch_ready_native();
+  EXPECT_NO_THROW(drain.validate_complete());
+  drain.accept();
+  EXPECT_EQ(fixture.physical_calls->size(), 1U);
+  EXPECT_EQ(fixture.legacy_calls->size(), 2U);
+  EXPECT_EQ(fixture.registry.last_accepted_point("physical"), accepted);
+  EXPECT_EQ(*fixture.registry.last_accepted_point("legacy"), diagnostic);
+}
+
+TEST(ExactAuxiliaryRegistryNd, InvalidationDrainBorrowsCleanPhysicalPrerequisiteAtAcceptedProvenance) {
+  verifies_drain_uses_clean_accepted_physical_prerequisite<1>();
+  verifies_drain_uses_clean_accepted_physical_prerequisite<2>();
+  verifies_drain_uses_clean_accepted_physical_prerequisite<3>();
+}
+
+template <int Dim>
+void verifies_dirty_physical_provider_refuses_unqualified_drain() {
+  DrainRegistryFixture<Dim> fixture(true);
+  fixture.publish_initial();
+  const auto accepted = fixture.registry.accepted_points();
+  const auto generation = fixture.registry.accepted_generation();
+  auto same_clock_without_payload = drain_diagnostic_point();
+  same_clock_without_payload.clock = "counterexample.physical-clock";
+  for (const auto& requested : std::vector<AuxiliaryEvaluationPoint>{
+         drain_diagnostic_point(), same_clock_without_payload}) {
+    auto drain = fixture.registry.begin_invalidated_publication(requested, {"physical", "legacy"});
+    EXPECT_TRUE(drain.requires_staging("physical"));
+    EXPECT_THROW(drain.launch_ready_native(), std::invalid_argument);
+    EXPECT_THROW(drain.validate_complete(), std::logic_error);
+    drain.reject();
+    EXPECT_EQ(fixture.registry.accepted_points(), accepted);
+    EXPECT_EQ(fixture.registry.accepted_generation(), generation);
+  }
+  EXPECT_EQ(fixture.physical_calls->size(), 3U) << "both absent-payload paths must reach the guard";
+  EXPECT_EQ(fixture.legacy_calls->size(), 1U) << "a dependent cannot run after its prerequisite fails";
+  EXPECT_EQ(fixture.registry.accepted_points(), accepted);
+  EXPECT_EQ(fixture.registry.accepted_generation(), generation);
+}
+
+TEST(ExactAuxiliaryRegistryNd, DirtyPhysicalInvalidationDrainRetainsExactPhysicalClockGuard) {
+  verifies_dirty_physical_provider_refuses_unqualified_drain<1>();
+  verifies_dirty_physical_provider_refuses_unqualified_drain<2>();
+  verifies_dirty_physical_provider_refuses_unqualified_drain<3>();
+}
+
+template <int Dim>
+void verifies_normal_exact_consumer_rechecks_physical_freshness() {
+  DrainRegistryFixture<Dim> fixture(true);
+  fixture.publish_initial();
+  ASSERT_EQ(fixture.physical_calls->size(), 1U);
+  auto after_regrid = drain_physical_point(3, {7, 8}, .875);
+  after_regrid.event = AuxiliaryEvaluationEvent::after_regrid;
+  for (const auto& next : std::vector<AuxiliaryEvaluationPoint>{
+         drain_physical_point(2, {3, 4}, .75), after_regrid}) {
+    auto consumer = fixture.registry.begin_publication(next, {}, {"read-legacy"});
+    EXPECT_TRUE(consumer.requires_staging("physical"));
+    EXPECT_TRUE(consumer.requires_staging("legacy")) << "due dependency propagation remains active";
+    consumer.launch_ready_native();
+    consumer.accept();
+    EXPECT_EQ(fixture.physical_calls->back(), next);
+    EXPECT_EQ(*fixture.registry.last_accepted_point("physical"), next);
+    EXPECT_EQ(*fixture.registry.last_accepted_point("legacy"), next);
+  }
+  EXPECT_EQ(fixture.physical_calls->size(), 3U);
+  EXPECT_EQ(fixture.legacy_calls->size(), 3U);
+}
+
+TEST(ExactAuxiliaryRegistryNd, NormalExactConsumerStillReevaluatesCleanPhysicalProviderAtNewPoint) {
+  verifies_normal_exact_consumer_rechecks_physical_freshness<1>();
+  verifies_normal_exact_consumer_rechecks_physical_freshness<2>();
+  verifies_normal_exact_consumer_rechecks_physical_freshness<3>();
+}
+
+template <int Dim>
+void verifies_drain_cannot_invent_accepted_prerequisite() {
+  DrainRegistryFixture<Dim> fixture(true);
+  EXPECT_THROW((void)fixture.registry.begin_invalidated_publication(
+      drain_diagnostic_point(), {"legacy"}), std::logic_error);
+  EXPECT_TRUE(fixture.physical_calls->empty());
+  EXPECT_TRUE(fixture.legacy_calls->empty());
+  EXPECT_EQ(fixture.registry.accepted_generation(), 0U);
+  EXPECT_FALSE(fixture.registry.last_accepted_point("physical"));
+  EXPECT_FALSE(fixture.registry.last_accepted_point("legacy"));
+  // Refusal must leave the registry available for a real qualified publication.
+  EXPECT_NO_THROW(fixture.publish_initial());
+  EXPECT_EQ(fixture.registry.accepted_generation(), 1U);
+}
+
+TEST(ExactAuxiliaryRegistryNd, InvalidationDrainRefusesUnpublishedCleanPrerequisiteBeforeLaunch) {
+  verifies_drain_cannot_invent_accepted_prerequisite<1>();
+  verifies_drain_cannot_invent_accepted_prerequisite<2>();
+  verifies_drain_cannot_invent_accepted_prerequisite<3>();
+}
+
+template <int Dim>
+void verifies_rejected_drain_preserves_accepted_provenance_and_retry() {
+  DrainRegistryFixture<Dim> fixture(true);
+  fixture.publish_initial();
+  const auto accepted = fixture.registry.accepted_points();
+  const auto physical_accepted = fixture.registry.last_accepted_point("physical");
+  const auto generation = fixture.registry.accepted_generation();
+  const auto diagnostic = drain_diagnostic_point();
+  {
+    auto rejected = fixture.registry.begin_invalidated_publication(diagnostic, {"legacy"});
+    rejected.launch_ready_native();
+    EXPECT_NO_THROW(rejected.validate_complete());
+    rejected.reject();
+  }
+  EXPECT_EQ(fixture.registry.accepted_points(), accepted);
+  EXPECT_EQ(fixture.registry.accepted_generation(), generation);
+  {
+    auto retry = fixture.registry.begin_invalidated_publication(diagnostic, {"legacy"});
+    EXPECT_TRUE(retry.requires_staging("legacy"));
+    EXPECT_FALSE(retry.requires_staging("physical"));
+    retry.launch_ready_native();
+    retry.accept();
+  }
+  EXPECT_EQ(fixture.physical_calls->size(), 1U);
+  EXPECT_EQ(fixture.legacy_calls->size(), 3U);
+  EXPECT_EQ(fixture.registry.accepted_generation(), generation + 1);
+  EXPECT_EQ(*fixture.registry.last_accepted_point("legacy"), diagnostic);
+  EXPECT_EQ(fixture.registry.last_accepted_point("physical"), physical_accepted);
+}
+
+TEST(ExactAuxiliaryRegistryNd, RejectedInvalidationDrainDoesNotPublishOrConsumeRetryWork) {
+  verifies_rejected_drain_preserves_accepted_provenance_and_retry<1>();
+  verifies_rejected_drain_preserves_accepted_provenance_and_retry<2>();
+  verifies_rejected_drain_preserves_accepted_provenance_and_retry<3>();
+}
 } // namespace

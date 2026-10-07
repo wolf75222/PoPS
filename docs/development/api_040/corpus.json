@@ -5,7 +5,7 @@
     "full_94_obligations_closed": false,
     "scope": "Dated bounded reception; historical current_head/mapping_baseline and original obligations are unchanged",
     "PDE": "Core R4/default Derived two actual numeric events; one installed CPU Dim2 one-level AMR world1 PDE PASS/0skip, Native b471/wheel7cd704; Y reference only; OMP concurrency unmeasured",
-    "Cpp13": "c0f18 executed11PASS/2FAIL/0SKIP; lane expectation now integrated with independent review but no rerun. Coherent targeted AMR trace observes after_regrid diagnostic callback without physical payload during bootstrap; runtime candidate not installed.",
+    "Cpp13": "c0f18 executed11PASS/2FAIL/0SKIP; lane and AMR incidence/drain now Source integrated and independently reviewed,6registrytests added but0executed. New SDK967e requires official rebuild; installedb471/Header4b remains previous proven scope.",
     "formal_order": "99de181 Main Source61 PASS via archived XML/command; separate frozen author Source cohort noSO, Root stdout absent; formal certificate, no PDE convergence qualification",
     "ROMEO735830": "FAILED1:0 in allocation before checkout/prefix/build; metadata omission corrected in staged inputs, 17 helpers reviewed, future Source/job freeze pending; nvcc version/driver queries occurred, no GPU PDE compilation",
     "retry": "ede680/old Native ea0c reception remains historical; no new b471 original retry launched at this observation"
@@ -2474,6 +2474,37 @@
         "raw_cache_gate_blocked_runs": 0
       },
       "runtime_candidate_installed": false,
+      "full_obligations_closed": false
+    },
+    "AMR_aux_incidence_drain_R3_Source_integrated": {
+      "source_base": "c0f18d50efd454396d6761992a9817adf353f412",
+      "implementation_patch_sha256": "4f1ef99ed395e949136d4df292453bbd22c5b5b4347d6001de4ffa0630840eae",
+      "independent_Source_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-amr-aux-publication-protocol-review-20261007/candidate-r3-final-source-review.json",
+        "sha256": "56d99eda5cadf1af45df1236015fd0c55f7340f27e135e3730f37d491d4a3f81"
+      },
+      "independent_registry_tests_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-amr-aux-publication-protocol-review-20261007/six-registry-countertests-source-review.json",
+        "sha256": "c4155b43ca06ca97b073f0db7fe4e04f7ac9c04640c6387af166fd10bdcacce6"
+      },
+      "production_paths": [
+        "src/runtime/amr/amr_system.cpp",
+        "include/pops/runtime/system/exact_aux_registry.hpp"
+      ],
+      "signed_header_count": 383,
+      "HeaderSignature": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "NativeABI": 13,
+      "SystemPackageABI": 8,
+      "FieldInputContract": 2,
+      "POPSAUX3_wire_unchanged": true,
+      "normal_registry_methods_byte_unchanged": true,
+      "countertests_added": 6,
+      "dimension_instantiations": 18,
+      "old_registry_tests_preserved": 15,
+      "new_tests_executed": 0,
+      "native_rebuilt_installed_or_run": false,
+      "required_next": "Official reconstructed SDK967e/Native and fresh component DSOs, original nonautonomous installed run then reception, Cpp13 and registry21, retry, true AMR incidence/failure/transport/regrid/checkpoint/MPI2 witnesses",
+      "R1_R2_author_artefacts_preservation": "Overwritten; original emitted SHA only, not separately rehashable. Immutable R3 and original runtime negatives retained.",
       "full_obligations_closed": false
     }
   },
