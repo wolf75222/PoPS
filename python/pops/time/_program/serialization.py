@@ -289,11 +289,20 @@ class _ProgramSerialization(_ProgramBase):
         if self._dt_bound is not None:
             pending.extend(self._dt_bound[0])
         seen = set()
+        trace_rates = {row[1] for row in self._integral_transfers}
         while pending:
             node = pending.pop()
             if id(node) in seen:
                 continue
             seen.add(id(node))
+            if node.id in trace_rates and node.region != 0:
+                # Version25 authenticates region-owned accepted trace quadrature/carry semantics.
+                result["version"] = max(result["version"], 25)
+                result["external_trace_regions_v2"] = {
+                    "contract": "pops.accepted-trace-regions@2",
+                    "carry": "unit-affine",
+                    "duration": "exact-logical-child",
+                }
             if node.attrs.get("contract") == "mapped-consumed-output@1" or node.op == "field_map_pack":
                 result["version"] = max(result["version"], 24)
             if node.op == "affine_moment_update" and "basis" in node.attrs:

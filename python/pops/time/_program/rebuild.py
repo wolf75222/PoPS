@@ -406,7 +406,7 @@ def rebuild_program(
     for v in kept:
         clone(v)
     out._values = [idmap[v.id] for v in kept]
-    source_by_id = {value.id: value for value in self._values}
+    source_by_id = by_id  # Includes owned child-region evaluations retained by integral selectors.
     out._integral_transfers = [
         (name, idmap[rep(source_by_id[rate_id]).id].id,
          axis, side, component, scale)

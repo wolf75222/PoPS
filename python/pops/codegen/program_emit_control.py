@@ -554,7 +554,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         program, target=target, block_indices=block_idx,
         partition_stability_checked=var.get(("partition_stability_checked",), ())))
     from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
-    lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model))
+    lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model, target=target))
     from .program_integral_transfers import emit_integral_transfers
     integral_transfers = emit_integral_transfers(program, var)
     if target == "system":
@@ -983,6 +983,10 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
         _emit_op(
             program, w, base, frozenset(), sub, model, body_lines,
             prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
+    from .program_transport_quadrature import emit_accepted_transport_exchanges
+    from .program_integral_transfers import emit_integral_transfers
+    body_lines.extend(emit_accepted_transport_exchanges(program, sub, block_idx, model, region=v.id, target=target))
+    body_lines.extend(emit_integral_transfers(program, sub, region=v.id))
     body_lines.append(
         "ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
         "static_cast<pops::Real>(1), %s);" % (x, x, sub[v.attrs["body"].id]))

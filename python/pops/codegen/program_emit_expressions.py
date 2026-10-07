@@ -188,3 +188,12 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
                 (item.id, name, json.dumps(integral_identity(item.prog,item.attrs["integral"])),
                  json.dumps(item.attrs["units"])))
     return captures + body + _kernel_close()
+def prepared_scalar_input(value, var):
+    """Read a prepared global capture through its exact live owner/point contract."""
+    if value.op != "integral_candidate":
+        return var[value.id]
+    import json
+    from pops.codegen.program_integral_transfers import integral_identity
+    return "ctx.integral_candidate_value(%s,%s,%s)" % (
+        var[value.id], json.dumps(integral_identity(value.prog, value.attrs["integral"])),
+        json.dumps(value.attrs["units"]))

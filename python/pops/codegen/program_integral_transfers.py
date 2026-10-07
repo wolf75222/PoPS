@@ -17,15 +17,19 @@ def emit_integral_declarations(program) -> list[str]:
     ]
 
 
-def emit_integral_transfers(program, var) -> list[str]:
+def emit_integral_transfers(program, var, *, region=None) -> list[str]:
     from pops.codegen.program_transport_quadrature import accepted_transport_quadrature
 
     captured = {key[1]: item for key, item in var.items()
                 if isinstance(key, tuple) and len(key) == 2 and key[0] == "accepted_transport"}
-    selected = {rate_id for rate_id, _ in accepted_transport_quadrature(
-        program, {rate_id: row[0] for rate_id, row in captured.items()})}
+    regions = var.get(("accepted_transport_regions",))
+    selected = (set(regions.get(region, {})) if regions is not None else
+                {rate_id for rate_id, _ in accepted_transport_quadrature(
+                    program, {rate_id: row[0] for rate_id, row in captured.items()})})
     requested = {row[1] for row in program._integral_transfers}
-    if any(value.op == "diffusive_rhs" and value.id in requested for value in program._values):
+    root_diffusive = {value.id for value in program._values
+                      if value.op == "diffusive_rhs" and value.id in requested}
+    if region is None and root_diffusive:
         from pops.codegen.program_diffusion_exchanges import accepted_diffusive_quadrature
         from pops.codegen.program_emit_diffusion import _resolved_diffusive_trace_selection
 
@@ -36,6 +40,11 @@ def emit_integral_transfers(program, var) -> list[str]:
                 selected.add(value.id)
     lines = []
     for name, rate_id, axis, side, component, scale in program._integral_transfers:
+        if region is not None and rate_id in root_diffusive:
+            continue  # Top-level constitutive faces are staged by the parent diffusion phase.
+        if regions is not None and rate_id not in selected:
+            if any(rate_id in values for values in regions.values()):
+                continue  # Its faces and duration belong to a different executable region.
         if rate_id not in selected or rate_id not in captured:
             raise ValueError(
                 "integral transfer requires an accepted, exact conservative face occurrence"

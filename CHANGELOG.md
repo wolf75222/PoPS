@@ -18,6 +18,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Carry accepted FV trace quadratures through logical child-clock regions with exact local
+  duration and parent weights; bind their versioned IR25 contract to semantic identity.
+  Scalar consumers read prepared global captures through the existing ownership checks.
 - AMR physical transfers use the actual Kokkos field memory and borrowed native stream,
   retain buffers through failure fences, and budget backend staging before publication.
   The existing integral, MPI authority and transactional acceptance contracts are preserved.

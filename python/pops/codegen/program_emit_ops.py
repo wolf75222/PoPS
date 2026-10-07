@@ -1518,9 +1518,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # local. Used by the dt_bound expression cfl * hmin / max_wave_speed (spec s18).
         var[v.id] = "s%d" % v.id
         toks = []
+        from pops.codegen.program_emit_expressions import prepared_scalar_input
         for kind, val in v.attrs["operands"]:
             if kind == "v":
-                toks.append(var[v.inputs[val].id])
+                toks.append(prepared_scalar_input(v.inputs[val], var))
             else:  # a literal constant
                 toks.append(scalar_cpp(val))
         cppop = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[v.attrs["fn"]]
@@ -1535,11 +1536,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # A predicate over scalars -> an inline boolean C++ expression (no statement of its own; the
         # while op embeds it directly in `if (!(<expr>)) break;`).
         lhs = v.inputs[0]
+        from pops.codegen.program_emit_expressions import prepared_scalar_input
         if len(v.inputs) == 2:  # scalar vs scalar
-            rhs_tok = var[v.inputs[1].id]
+            rhs_tok = prepared_scalar_input(v.inputs[1], var)
         else:  # scalar vs float tolerance
             rhs_tok = scalar_cpp(v.attrs["rhs"])
-        var[v.id] = "(%s %s %s)" % (var[lhs.id], v.attrs["cmp"], rhs_tok)
+        var[v.id] = "(%s %s %s)" % (prepared_scalar_input(lhs, var), v.attrs["cmp"], rhs_tok)
         var[("when_predicate", v.id)] = var[v.id]  # emission-local schedule predicate token
     elif v.op == "acceptance_guard":
         value, condition = v.inputs

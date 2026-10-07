@@ -137,9 +137,18 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         "integral_states",
         "external_trace_transfers",
         "integral_units_v2",
+        "external_trace_regions_v2",
     }
     if not expected.issubset(serialized) or not set(serialized).issubset(expected | optional):
         raise TypeError("Program semantic projection received an unsupported IR schema")
+    if "external_trace_regions_v2" in serialized:
+        if (type(serialized["version"]) is not int or serialized["version"] < 25 or
+                serialized["external_trace_regions_v2"] != {
+                    "contract": "pops.accepted-trace-regions@2",
+                    "carry": "unit-affine",
+                    "duration": "exact-logical-child",
+                }):
+            raise TypeError("Program regional trace semantic contract is unsupported")
     program_clock_owner = serialized["clock"].get("owner")
     result = {
         "version": serialized["version"],
@@ -159,6 +168,7 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         "integral_states",
         "external_trace_transfers",
         "integral_units_v2",
+        "external_trace_regions_v2",
     ):
         if key in serialized:
             result[key] = serialized[key]
