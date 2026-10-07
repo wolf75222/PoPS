@@ -73,3 +73,35 @@ Its fixed references are `Y=48/25`, `F=144/25`, `U_next=84/25`; evaluating the F
 the wrong partition gives `87/25`. The test now retains the actual compiler input files.
 Only after this run and its independent receipt should the own-checkpoint Retry,
 affected non-regression, MPI2 and CUDA variants follow.
+
+The first integration build exposed a stale module-capability ABI constant. Commit
+`3ee0180808cfca7c2a93833ce792d83357aff81a` synchronizes it with Native13; the strict
+assertion remains in place. The official incremental build then compiled and linked
+seven bindings. The installed Dim2 extension has SHA256
+`ea0c7bf4e2a752469091030597cedd671291fc74bd9354ab8fbcdb6068eeec1d` and SDK signature
+`4b2c57fbdc84b72f8b0c66c7c943eb2f793d519181d7f9032f02313032e8f04a`.
+
+The actual nonautonomous run at `37ec76b04557f50de08683f8545fa7efd28c9bd7` compiled,
+bound, accepted one step and wrote a checkpoint, but failed its unchanged numerical
+oracles: every accepted State value was `3.374999999999498` instead of `3.36`, and
+every Field value was `5.999999999997994` instead of `5.76`. The 25 actual C++, DSO,
+array and checkpoint artifacts were retained and independently checked. The intermediate
+`Y` was not measured. The Root negative receipt has SHA256
+`94dfccb597bde138f918f93ea914294264126399602600e271fd525d36a3992e`.
+This receives an executed local CPU/MPI-enabled world1 failure, with no MPI2 or GPU
+qualification. The installed package's 2793 entries remained identical in bytes and modes.
+
+The retained Program C++ selects the implicit point before the local linear solve,
+then reads its Auxiliary view without preparing that consumer. The library correction
+prepares AMR prerequisites through the existing collective Context entry point before
+the Fab loop, at the exact RHS SSA state and evaluation identity. Uniform retains its
+existing solve-outcome route and authored failure action. Matrix assembly, finite and
+singular checks, equations, tableau and numeric bounds are unchanged. This repairs
+emission under the existing version2 contract and does not change an ABI.
+
+The correction passes 74 targeted Source tests without Native loading, including distinct
+implicit/explicit coordinates, renamed and spatial Auxiliaries, empty provider packs,
+solve actions, ARK stages and the Field/SSA cohort. A controlled exact-HEAD baseline
+reproduces the three AMR preparation omissions. A separate split-coordinate regression
+also fails before emission on that baseline and remains open; this cohort does not
+qualify the full split suite. Corrected numerical execution is still pending.

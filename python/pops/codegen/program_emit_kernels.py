@@ -716,10 +716,11 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
 
 
 def _prepare_provider_values(binding: Any, program_block: Any, state_var: Any) -> list[str]:
-    """Publish flat consumer prerequisites before any rank-local Fab loop.
+    """Publish exact consumer prerequisites before any rank-local Fab loop.
 
-    The AMR context restricts this seam to a live one-level hierarchy. Refined
-    execution keeps its existing hierarchy-qualified publication authority.
+    The AMR context authenticates the active hierarchy level and owning SSA stage
+    state, then publishes at its actual logical evaluation point. Generated kernels
+    consume the prepared registry rather than selecting hierarchy storage themselves.
     """
     if binding is None or not binding["count"] or binding["target"] not in {"system", "amr_system"}:
         return []

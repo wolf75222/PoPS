@@ -629,8 +629,12 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
     a_cpp = _coeff_cpp(a_coeff)
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(flat) else None
+    # Uniform prerequisites are prepared by the solve-outcome router, preserving its
+    # authored numerical failure action. AMR owns its collective publication seam;
+    # publish there before a local Fab view can observe a previous stage's values.
     body = _kernel_open(out_var, rhs_var, params_block, provider_binding=provider_binding,
-                        program_block=block_idx, prepare_providers=False)
+                        program_block=block_idx,
+                        prepare_providers=provider_binding["target"] == "amr_system")
     lambda_index = next(
         index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
