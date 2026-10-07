@@ -294,7 +294,7 @@ def resolve(
                     ResolvedAMRStateStorage(block, subject)
                     for block in blocks
                     if block_layouts[block.name] == layout_id
-                    and block.numerics is None
+                    and ResolvedAMRStateStorage.supports_block(block)
                     for subject in subjects
                     if block.state_identities == (subject.qualified_id,)
                 ),
