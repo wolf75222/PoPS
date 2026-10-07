@@ -5,7 +5,7 @@
     "full_94_obligations_closed": false,
     "scope": "Dated bounded reception; historical current_head/mapping_baseline and original obligations are unchanged",
     "PDE": "Core R4/default Derived two actual numeric events; one installed CPU Dim2 one-level AMR world1 PDE PASS/0skip, Native b471/wheel7cd704; Y reference only; OMP concurrency unmeasured",
-    "Cpp13": "c0f18 executed11PASS/2FAIL/0SKIP; lane and AMR incidence/drain now Source integrated and independently reviewed,6registrytests added but0executed. New SDK967e requires official rebuild; installedb471/Header4b remains previous proven scope.",
+    "Cpp13": "c0f18 executed11PASS/2FAIL/0SKIP. Incidence+lane+registrytests Source integrated; first SDK967e build793 failed on omitted .inc before Native relink/install/PDE. Corrective publisher Source integrated/reviewed with237localincludes, new official validation pending; installedb471/4b stays previous proven scope.",
     "formal_order": "99de181 Main Source61 PASS via archived XML/command; separate frozen author Source cohort noSO, Root stdout absent; formal certificate, no PDE convergence qualification",
     "ROMEO735830": "FAILED1:0 in allocation before checkout/prefix/build; metadata omission corrected in staged inputs, 17 helpers reviewed, future Source/job freeze pending; nvcc version/driver queries occurred, no GPU PDE compilation",
     "retry": "ede680/old Native ea0c reception remains historical; no new b471 original retry launched at this observation"
@@ -2505,6 +2505,38 @@
       "native_rebuilt_installed_or_run": false,
       "required_next": "Official reconstructed SDK967e/Native and fresh component DSOs, original nonautonomous installed run then reception, Cpp13 and registry21, retry, true AMR incidence/failure/transport/regrid/checkpoint/MPI2 witnesses",
       "R1_R2_author_artefacts_preservation": "Overwritten; original emitted SHA only, not separately rehashable. Immutable R3 and original runtime negatives retained.",
+      "full_obligations_closed": false
+    },
+    "AMR_sdk967e_793_compile_negative_and_publisher_correction": {
+      "failed_source": "79374592ffa3fe1ef1e386ee9bb552821a2b4c2b",
+      "root_negative_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-native793-compile-negative-reception-20261007.json",
+        "sha256": "d2e6c050d2601baa5caf31b36be9dab665d7168071e6bc81b939d9b19a76ca96"
+      },
+      "actual_successful_CXX": 18,
+      "failed_CXX_attempts": 1,
+      "successful_binding_TUs": 2,
+      "Native_relink_wheel_install_PDE": false,
+      "package_unchanged_entries": 2793,
+      "installed_Native": "b471e01b7d8e669e3d7c11f5cb8925a509edf2a17d9993a5211dc3bc4080f595",
+      "failure": "Four retired AMR member accesses in included genuine Program field publisher; prior56dreview coverage incomplete and retained",
+      "corrective_patch_sha256": "f5100d98f5e0461fe881c82c1fd800f9706829dc7aecbad46b038b040a5af76d",
+      "corrective_source_path": "src/runtime/amr/amr_program_field_publication.inc",
+      "corrective_source_sha256": "47ce87aa8f380908bf15e47f72b7cd8bdc29d5b621cd31d96cfbc6b2afe1289c",
+      "independent_corrective_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-native793-compile-negative-review-20261007/corrective-publisher-source-review.json",
+        "sha256": "b1ac7feca6252a2585752489d19534b463326b99155ac09bd6036f3472082c08"
+      },
+      "literal_local_include_files_audited": 237,
+      "inc_fragments_audited": 4,
+      "retired_AMR_references": 0,
+      "publication_contract": 2,
+      "publication_incidence_contract": 1,
+      "SDK_HeaderSignature": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "Point_construction_and_guards_unchanged": true,
+      "preexisting_limit": "Custom temporal prerequisites of legacy Program field publisher require actual physical authority; callerlabel/dt do not mint that authority",
+      "corrective_native_build_run_received": false,
+      "GPU793admitted": false,
       "full_obligations_closed": false
     }
   },

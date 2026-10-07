@@ -36,6 +36,8 @@ without physical authority still fails the original guard.
 | `pops.amr.auxiliary-invalidation-incidence` | 1: provider/level/topology/materialization/revision obligations |
 | `pops.amr.auxiliary-refresh-selection` | 3: exact publication purpose, roots, suppression mode and incidence |
 | `pops.amr.exact-level-auxiliary-selection` | 3: exact consumer closure and level selection |
+| `pops.amr.program-field-publication` | 2: genuine whole-hierarchy field component publication with source incidence |
+| `pops.amr.program-field-publication-incidence` | 1: complete candidate incidence agreed before acceptance |
 | Registry invalidation drain | 1: explicitly invalidated roots, clean accepted prerequisites |
 | POPSAUX3, Uniform checkpoint9, AMR checkpoint12 | Wire representations retained; AMR capture and restore use each level's actual invalidated providers |
 | Field input2, System package8, NativeABI13 | Existing data layouts and ABI values retained |
@@ -71,3 +73,25 @@ directory and are not independently rehashable; this
 [preservation limit](/Users/romaindespoulain/dev/tmp/PoPS-amr-aux-incidence-admission-r3-20261007/preservation-limit.json)
 is explicit. The runtime negatives, coherent diagnostic and R3 immutable admission
 are retained separately. No original user work is removed.
+
+The first official reconstruction at `79374592ffa3fe1ef1e386ee9bb552821a2b4c2b`
+fails before Native relink, wheel or installation. Four references to the removed
+global queue remain in the included `amr_program_field_publication.inc`. The
+[Root compile-negative reception](/Users/romaindespoulain/dev/tmp/root-native793-compile-negative-reception-20261007.json)
+retains 42 artifacts and independent reading: 18 successful C++ compilations,
+one failed AMR attempt and two successful binding TUs. The installed 2793 entries
+of Native b471/Header4b remain byte/mode exact. The initial producer count of
+19 successful C++ steps is retained as a corrected metadata claim; the nineteenth
+changed object includes a separate HDF5 configure probe.
+
+The omitted public publisher is now migrated with actual per-level production,
+captured revisions, collective candidate agreement and full rollback. Its
+[independent corrective review](/Users/romaindespoulain/dev/tmp/PoPS-independent-native793-compile-negative-review-20261007/corrective-publisher-source-review.json),
+SHA `b1ac7feca6252a2585752489d19534b463326b99155ac09bd6036f3472082c08`,
+authenticates 237 literal local include files and four `.inc` fragments with no
+retired AMR member access. The previous Source review is retained with its explicit
+coverage gap. The point construction and guards are unchanged: a positive caller
+label does not mint physical authority. Custom temporal prerequisites of that
+legacy publisher remain a separate preexisting unqualified-point limitation.
+Only the private fragment changes; SDK967e and the existing ABI values are retained.
+This correction still requires official compilation and native execution.
