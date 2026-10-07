@@ -255,11 +255,11 @@ def _manual_imex_program(core: IMEXAMRAuthoring, *, solve_action: Any) -> Progra
             ).consume(action=solve_action)
             stage = program.value("%sstage_%d" % (tag, index), stage, at=point)
 
-        # Match the library factory exactly: solve the Case-owned field from the implicit coordinate,
-        # then lift its authenticated FieldContext onto the joint additive StagePoint.
+        # E and its diagnostic field read the same Y_i at the explicit coordinate.
+        # I keeps the joint stage and its own implicit coordinate.
         field_state = program.value(
             "%sfield_state_%d" % (tag, index), stage,
-            at=point.time_for("implicit"),
+            at=point.time_for("explicit"),
         )
         outcome = core.diagnostic_field(field_state)
         fields = outcome.consume(action=solve_action)
@@ -267,7 +267,7 @@ def _manual_imex_program(core: IMEXAMRAuthoring, *, solve_action: Any) -> Progra
 
         explicit_rates.append(program.value(
             "%sk_exp_%d" % (tag, index),
-            core.explicit_rate(stage, fields),
+            core.explicit_rate(field_state, fields),
             at=point,
         ))
         with evaluation_partition(program, "implicit"):

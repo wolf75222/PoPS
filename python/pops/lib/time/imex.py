@@ -176,21 +176,23 @@ def _build_imex(
                 ).consume(action=solve_action)
                 stage = program.value("%sstage_%d" % (tag, i), stage, at=point)
         fields = None
+        explicit_state = stage
         if fields_operator is not None:
-            # A split StagePoint may carry different explicit/implicit abscissae. The field is
-            # solved from the actual implicit stage state, so give the solve one unambiguous
-            # logical TimePoint before lifting its FieldContext back onto the joint stage.
-            field_state = program.value(
+            # E reads Y_i and its field at c_explicit. Materializing that coordinate creates
+            # a new SSA state: the field solve and its reader must consume that same value.
+            # The implicit rate still reads the joint stage at c_implicit.
+            explicit_state = program.value(
                 "%sfield_state_%d" % (tag, i),
                 stage,
-                at=point.time_for("implicit"),
+                at=point.time_for("explicit"),
             )
-            outcome = fields_operator(field_state)
+            outcome = fields_operator(explicit_state)
             fields = outcome.consume(action=solve_action)
             fields = program.value("%sfields_%d" % (tag, i), fields, at=point)
         explicit_rates.append(
             call_at(
-                program, explicit_operator, stage, fields, name="%sk_exp_%d" % (tag, i), point=point
+                program, explicit_operator, explicit_state, fields,
+                name="%sk_exp_%d" % (tag, i), point=point
             )
         )
         with evaluation_partition(program, "implicit"):
