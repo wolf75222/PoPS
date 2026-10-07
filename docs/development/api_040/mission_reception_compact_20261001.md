@@ -431,3 +431,29 @@ donne les domaines physiques, les identités et les limites. Seal ROOT
 | IMEX original et checkpoint | Deux workflows originaux et un échec réel après publication reçus, Source2ded/Native77d/Host/world1 | Champ nonautonome, Retry propre au checkpoint et variantes avec historiques remplis |
 | C++ CUDA | Sourcec1b7 rend les deux types de foncteurs accessibles aux stubs NVCC ; corps, offsets, gardes et fences exacts | Reconstruire les sept bindings et les artefacts avec la nouvelle HeaderSignature ; aucune réussite CUDA héritée |
 | Mission94 et principes1.1–1.8 | IDs, équations, API et critères préservés ; chaque preuve garde son backend et sa portée | PDE MPI2/partitionnement, GPU,3D, convergence, coûts comparables et CI finale restent ouverts |
+
+## Source d5b0 et premier cas nonautonome, 7 octobre 2026
+
+La [distinction Aux imposé/Field](imex_imposed_aux_field_classification_20261007.md) reçoit
+69 tests Source auteur et10 tests rejoués indépendamment. L'[autorité AMR StateStorage](amr_explicit_local_storage_authority_20261007.md)
+reçoit24 tests Source et un vrai cas public validate/resolve/verify indépendant, avec les mêmes
+équations et oracles. Le [rejeu scellé du checkpoint](checkpoint_sealed_replay_v1.md) est intégré,
+provider v6/contrat@1, avec13 tests Source auteur et13 de contre-revue. Ces résultats restent
+distincts des exécutions Native originales Source2ded déjà reçues.
+
+Le rebuild d5b0 recompilant sept bindings passe : Native76af/Header773/ABI12, wheel266e.
+Le journal reçoit27 étapes numérotées sur un dénominateur annoncé28 ; aucun28e output n'est
+inventé. Le premier [témoin nonautonome](imex_exact_field_stage_20261007.md#témoin-nonautonome-intégré-et-compilation-du-champ-refusée)
+échoue avant bind/PDE : Aux non déclaré dans le RHS C++ du Field. Le C++ temporaire complet
+est absent, la commande et stderr sont reçus. ROOT seal
+`root-nonautonomous-field-compilation-negative-d5b0-20261007.json`, SHA
+`0cb650c4925c70834f34cfeec972b4cc14514a63ddf4d5ea7635418717c59b0b`,
+lie les rapports fermés et une lecture physique du Native actuel ; la contre-revue reçoit le
+domaine2817 entrées,2585 fichiers,231 dossiers et un lien.
+
+| Domaine | Acquis exact | Réception restante |
+|---|---|---|
+| Nonautonome, séparation des temps | Réalisation publique AMR/MG validée/résolue ; références48/25,144/25,84/25 conservées | Émission/préparation Native des Aux dans RHS Field, puis compile/bind/run et lecteur indépendant |
+| Checkpoint-own Retry | Implémentation et contre-revue Source provider v6 ; témoin original préparé | Exécution Native réelle, même seal sans recapture, restart et continuation |
+| Extension Field State/Aux | Plan C++ commun contre-revu ; callbackV2 et inputs séparés en implémentation | Contrats read2/PackageABI8/NativeABI13, nouveaux headers, rebuild et gardes/fautes multi-niveaux/MPI/GPU |
+| CUDA et mission94 | Négatifs historiques et préparation d5b0 conservés ; aucun nouveau job lancé | Révision intégrée reçue, backends/science/coûts/non-régression et CI finale |

@@ -42,3 +42,35 @@ Le [reçu détaillé](prepared_amr_checkpoint_capture_v1.md#received-original-wo
 porte les identités, les commandes et les limites de ces essais Dim2/Host/MPIworld1.
 Il ne reçoit pas encore le cas nonautonome fixé ci-dessus, le Retry propre au checkpoint,
 les historiques non vides, MPI2, CUDA,3D, convergence ni coûts comparables.
+
+## Témoin nonautonome intégré et compilation du champ refusée
+
+Source `d5b0cfbacc6a2bfe5778ceba95d6fe3bbc7cce5d` intègre le
+[cas public indépendant](../../../tests/python/support/imex_nonautonomous_field_case.py)
+et son [test numérique](../../../tests/python/integration/runtime/test_imex_nonautonomous_field.py).
+Les corrections de [distinction Aux/Field](imex_imposed_aux_field_classification_20261007.md)
+et d'[autorité StateStorage AMR](amr_explicit_local_storage_authority_20261007.md)
+lui permettent de franchir validate, resolve et verify. Sa réalisation utilise le vrai
+GeometricMG sur une hiérarchie AMR d'un niveau, aux mêmes64 cellules, tolérances et oracles.
+Les refus Uniform/MG, Uniform/CG screened et FAC explicite à un niveau sont conservés.
+Ce témoin ne reçoit aucune qualification coarse/fine ou Uniform screened.
+
+Le rebuild officiel d5b0 passe avec sept bindings réellement recompilés et le module relinké.
+Le Native installé a SHA
+`76af57236d6a65630febc1e974452a0010abef1c3e9c269ab32c5c15655daac3`,
+ABI12 et HeaderSignature
+`773b8630b18aa821b0e8394c460dfd62ec990f6d3866807bf7581b358f8420e8`.
+Le wheel retenu a SHA `266e42a0f88c4be08d6d4501b6b34398a8ffbcee7a1640cb5eb47ed59a7f4ea0`.
+Ces résultats reçoivent la reconstruction locale, pas une PDE ni CUDA.
+
+Le premier test échoue en5.95 secondes pendant la compilation du composant Field, avant
+bind : `model_native.cpp:146:30: use of undeclared identifier 'stage_tau'`.
+Le RHS généré contient `return ((pops::Real(3) + stage_tau) * u);` sans déclaration de l'Aux.
+La commande du compilateur, stderr, log et XML sont retenus. Le fichier C++ temporaire
+complet a été supprimé par le compilateur et n'est pas reçu ; il ne sera pas reconstitué
+comme preuve historique. Aucun état accepté, Field numérique, restart ou résultat Y n'existe
+pour ce test. La correction doit porter sur l'émission et la préparation génériques des Aux,
+avec le State, la frame et le point exact du solve, sans substitution spécifique de `stage_tau`.
+
+Lot fermé : `/Users/romaindespoulain/dev/tmp/sol61-imex-nonautonomous-native-d5b0cfb-20261007`,
+pins `67200763a39e83248c66290bd92f9bbf0cb2e074fa58bf83e0ecb7a671e9ded3`.

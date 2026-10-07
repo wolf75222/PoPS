@@ -20,6 +20,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 - Make the named region-transfer pack/unpack functor types accessible to NVCC host stubs,
   retaining private transport storage and unchanged kernels, offsets, guards and fences.
+- Distinguish imposed auxiliary requirements from solved Field operands when authoring
+  local-linear operators, and refuse hidden transitive Field dependencies at resolution.
+- Derive AMR local-storage authority from exact resolved pointwise StateStorage methods,
+  retaining qualified subjects, halo requirements and the separate spatial transfer contracts.
+- Version the built-in checkpoint provider to v6 with `pops.checkpoint.sealed-replay@1`,
+  replaying one completed archive for publication Retry without recapturing a committed step.
 - Include potential ConsumerGraph diagnostics in the checkpoint capacity derived from verified
   Program records, preserving the exact record names and explicit collective capacity overrides.
 - Prepare Native diagnostic projections before sealing a candidate checkpoint, then publish
