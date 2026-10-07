@@ -1810,14 +1810,19 @@
     "historical_snapshot_rows_preserved": true,
     "whole_M19_or_94_obligations_received": false,
     "consumed_field_AMR_backend_memory_local": {
-      "ids": ["M19"],
+      "ids": [
+        "M19"
+      ],
       "production_source_revision": "069be5055a218c809f0df35e5226ff1c40446f20",
       "MPI1_source_scope": "False at 069be; True at a084 documentary descendant, production and fixture byte-identical",
       "MPI2_fixture_source_revision": "01d2cd22e7b6a75561b04feb6f1a657496efb2d3",
       "native_sha256": "ce024e70e66a9258f4e39d3405f93d4919e9189f502b0d2a1c205cabed0baacf",
       "wheel_sha256": "62be9f0487e4f7cfa3b27111267a86bb17f2b9534a836d3041d344effa0d0b72",
       "backend": "local Apple LLVM, MPI-enabled Dim2 Host; MPI1 and MPI2",
-      "original_cases": ["False", "True"],
+      "original_cases": [
+        "False",
+        "True"
+      ],
       "steps_per_case": 2,
       "saved_CP12_NPY_regrid_nonfinite_State_cursor_rollback_received": true,
       "original_numerical_audits_pass": 4,
@@ -1845,7 +1850,24 @@
       "actuation_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk28-amr-vp-units-dim2-preparation-20261003/sdk43-cuda-actuation-e3bd35e0-9b33-4d02-9cb1-7c4c738e1eea/actuation-receipt.json",
       "actuation_receipt_sha256": "1faef584d00273efc300a4838172c55a250fbba29257bc08ddbce1291a8b0bbe",
       "CUDA_scientific_received": false,
-      "GPU_MPI2_replica_case_received": false
+      "GPU_MPI2_replica_case_received": false,
+      "terminal_observed": "FAILED 1:0 / 01:04:23 / romeo-a056",
+      "first_error": "NVCC private nested Impl device lambda in src/runtime/system/system_layout_transfer.cpp:629",
+      "wheel_install_Native_or_PDE_received": false,
+      "root_negative_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk43-cuda-negative-reception-735454-20261007.json",
+      "root_negative_receipt_sha256": "89ed904b09163911374ae01e0572c72b5409b09e45d2dcf594a33c73ed0f07a5",
+      "counter_negative_pins_sha256": "4655a622dc079490cb0e846d739435e07dfa622e2861bf91d83af2761cfcd000",
+      "full_TAR_entries": 103,
+      "raw_entries": 96,
+      "raw_regular_files": 78,
+      "raw_directories": 18,
+      "preservation": {
+        "CPU_prefixes": 19,
+        "GPU_prefixes": 7,
+        "Sources": 16,
+        "Home_scope": "Conda registry/config only"
+      },
+      "later_Source_fix": "a17a304 named physical carrier copy functor; Source review only, CUDA rebuild pending"
     }
   },
   "scoped_receptions_20261006": {

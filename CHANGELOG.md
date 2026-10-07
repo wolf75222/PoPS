@@ -21,6 +21,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - AMR physical transfers use the actual Kokkos field memory and borrowed native stream,
   retain buffers through failure fences, and budget backend staging before publication.
   The existing integral, MPI authority and transactional acceptance contracts are preserved.
+- Name the System physical-transfer copy kernel outside its private implementation class,
+  preserving its calculation while allowing NVCC to compile the device functor.
 - Consolidate CI documentation/watchdog plumbing and extend native formatting coverage.
   Move runnable teaching scripts to `docs/tutorials`, update build commands and thread controls,
   refresh the project/architecture/algorithm guides, and remove obsolete headers and prose.
