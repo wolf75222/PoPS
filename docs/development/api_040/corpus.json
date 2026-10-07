@@ -2225,6 +2225,48 @@
         "comparable costs",
         "exact-revision GitHub CI"
       ]
+    },
+    "original_checkpoint_own_retry_native13_positive_ede680": {
+      "source_commit": "ede680fe00746c1bc7e5eeb4afabd9772b92cc33",
+      "root_receipt": "root-own-checkpoint-retry-native13-positive-20261007.json",
+      "root_receipt_sha256": "1031e8befc07b2b38c0e4d5a147d2b46d0ecd408ab0e244eab1299e5809640e9",
+      "scope": "Original public IMEX, CPU Host Dim2, MPI world1, OpenMP concurrency2 recorded inside pytest",
+      "native_abi": 13,
+      "system_package_abi": 8,
+      "checkpoint_provider_version": 6,
+      "captures": 1,
+      "factories": 1,
+      "publications": 2,
+      "sealed_bytes": 178807,
+      "sealed_sha256": "b5acae1632f72b5032cc914f051b179b40d2c233d574afc1af2f828ac538d0d2",
+      "same_inode_and_bytes_reread": true,
+      "accepted_restored_reference_exact": true,
+      "continuous_restarted_exact": true,
+      "actual_artifacts_verified": 69,
+      "levels": [
+        2,
+        2
+      ],
+      "regrid_counter": [
+        2,
+        3
+      ],
+      "topology_epoch": [
+        2,
+        3
+      ],
+      "populated_ledger_rows": 920,
+      "histories_and_cache_populated": false,
+      "equations_oracles_unchanged": true,
+      "full_obligations_closed": false,
+      "remaining": [
+        "MPI2",
+        "GPU",
+        "Dim3",
+        "populated histories and cache",
+        "concurrent simulations",
+        "full mission94 and final CI"
+      ]
     }
   },
   "scoped_receptions_20261006": {

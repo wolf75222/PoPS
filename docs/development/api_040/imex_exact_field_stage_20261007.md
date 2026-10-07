@@ -34,7 +34,8 @@ La capture candidate ABI12, la projection transactionnelle des diagnostics et le
 du graphe complet des consommateurs lèvent successivement les refus précédents, conservés
 avec leurs artefacts. Sur Source2ded/Native77d/Headerc04a, les deux workflows originaux
 passent dans le vrai paquet installé : manuel/restart/continuation, puis preset/parité/rejet.
-La contre-lecture reçoit les vrais états, champs, checkpoints et regrid de deux à trois niveaux.
+La contre-lecture reçoit les vrais états, champs et checkpoints d'une hiérarchie à deux
+niveaux ; le regrid et ses compteurs de topologie passent de2 à3.
 Un test non-auteur publie réellement le checkpoint, déclenche un échec, puis reçoit le rollback
 exact des données sauvegardées et la suppression des fichiers publiés.
 

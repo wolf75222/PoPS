@@ -483,3 +483,43 @@ joint l'auteur, le lecteur indépendant et26 artefacts. Commandes et portée son
 | Checkpoint-own Retry original | Nouveau test Native13 terminal PASS ; lecture indépendante en cours | Joindre sceau, tableaux, restart et continuation réels avant réception |
 | Entrées Field State/Aux et producteurs SSA | Cœur13 intégré, première tranche publique reçue ;13 cas C++ indépendants écrits | Brancher catalogues/CMake et np2, compiler puis recevoir gardes/fautes/lifecycle |
 | Couverture méthodes et mission94 | Aucun ID ni critère réduit ; défaut split préexistant et producteurs avancés encore ouverts | Corriger et recevoir les cas manquants, MPI/GPU/3D, convergence, mesures et CI finale |
+
+## Retry original reçu et contrôles de montage C++, 7 octobre 2026
+
+Le [Retry propre au checkpoint](checkpoint_sealed_replay_v1.md#original-native-retry-received-7-october-2026)
+est reçu surede680fe/Native13/provider v6 : une factory, une capture, deux publications
+aux178807 mêmes octets et au même inode. Référence/accepté/restauré et continu/restart
+sont exacts, y compris les tableaux, le Programme et les curseurs de consommateurs.
+Le témoin garde deux niveaux AMR ; seuls les compteurs de regrid et de topologie passent
+de2 à3. Ledger920, clocks3 et synchronisations2 sont peuplés ; histories/cache sont
+des listes vides. ROOT réception SHA
+`1031e8befc07b2b38c0e4d5a147d2b46d0ecd408ab0e244eab1299e5809640e9`
+joint69 artefacts réels et la contre-lecture. Deux formulations historiques qui
+annonçaient trois niveaux ont été corrigées ; les anciens reçus sont préservés.
+
+Le test Source du splitting attribuait à tort le point final à une transformation
+de son état d'entrée. La correction de fixture reçoit32 tests dans Main et une
+contre-revue, avec8 nouveaux contrastes entrée/final, renommage et Aux temporel.
+Aucune équation, méthode ou production n'est modifiée. Sept certifications d'ordre
+échouent aussi dans un processus Source neuf sur la production inchangée : elles
+restent un défaut séparé, avec leurs logs, et ne sont pas masquées par ce cohort.
+
+Le nouveau C++ est enregistré dans les catalogues et la variante np2. Le build
+initial89d échoue sur des appels API du test ; son négatif est reçu. Le correctif
+test-only5439 est contre-revu et compile, avec le même vrai Programme DSO. Le run
+world1 exécute13 cas,13 FAIL/0skip, tous avant les validations Field : montages
+System incomplets et installation AMR après matérialisation. Ces failures restent
+conservées et ne qualifient aucune garde Field. La correction suit les factories
+publiques et leur lifecycle ; aucune garde de production n'est relâchée.
+
+CUDA735830 est réellement soumis et RUNNING sur la Source89d/Header4b2c/ABI13,
+dans un nouvel espace isolé ROMEO. Il vise uniquement build/wheel/doctor/identité,
+avec sept bindings et strict FP. Aucun build reçu ni calcul PDE GPU n'est déduit
+de cet état. Les inventaires CUDA1223 et local1217 ont des domaines distincts.
+
+| Domaine | Acquis exact | Suite obligatoire |
+|---|---|---|
+| Retry et publication | Original CPU Dim2/MPIworld1/OMP2 mesuré dans pytest,69 artefacts, deux niveaux et même sceau reçus | MPI2/GPU et historiques/cache peuplés |
+| Temps du splitting | Fixture correcte,32 Source tests et8 nouveaux contrastes ; production inchangée | Native et ordre restent des qualifications distinctes |
+| Entrées Field C++ | Nouveau target compilé ;13 montages refusés avant Field, négatifs préservés | Corriger montages, recevoir13 cas world1 puis np2 |
+| Méthodes et CUDA | Sept défauts Source d'ordre avérés ; job735830 en conservation initiale | Correctif générique contre-revu ; build GPU puis équations et critères originaux |

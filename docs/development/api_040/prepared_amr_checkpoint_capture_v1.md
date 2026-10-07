@@ -189,7 +189,8 @@ members and the complete previous a67 backup remain exact through the tests.
 
 The independent offline reader confirms accepted/restored and continuous/restarted State,
 Field, Program bytes and JSON are exact, as are manual/preset and rejected before/after.
-The original regrid moves from two to three levels and topology epochs2 to3. The accepted
+The original hierarchy retains two levels; regrid counters and topology epochs move from2
+to3. The accepted
 step is1e-4, its child duration5e-5; the saved ledger contains920 rows at levels0/1 with
 weights1/2 and real reflux/average_down phases. An independent composite valid-cell integral
 is `.07943456046642411`, then `.07902655953037416`; saved diagnostic differences are at most

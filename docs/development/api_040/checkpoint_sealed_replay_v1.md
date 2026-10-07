@@ -70,3 +70,38 @@ publication-retried run, retains both genuine publication files, counts the
 candidate factory and seal, restarts from the replayed checkpoint, and applies
 the original exact State/Field/Program/regrid and continuation oracles. It has
 not been executed by Source validation.
+
+## Original Native retry received, 7 October 2026
+
+The unchanged original witness now passes on the installed production package at
+`ede680fe00746c1bc7e5eeb4afabd9772b92cc33`, Native13/System package8 and checkpoint
+provider v6. The installed Dim2 extension is `ea0c7bf4e2a752469091030597cedd671291fc74bd9354ab8fbcdb6068eeec1d`,
+SDK signature `4b2c57fbdc84b72f8b0c66c7c943eb2f793d519181d7f9032f02313032e8f04a`.
+The pytest process records actual Host OpenMP concurrency2 and MPI rank0 of1.
+
+One candidate factory produces one captured seal. Both publications reuse its
+178807 bytes and device/inode pair `[16777231,338240147]`; the two retained files
+and published target are byte-identical, SHA256
+`b5acae1632f72b5032cc914f051b179b40d2c233d574afc1af2f828ac538d0d2`.
+Reference, accepted and restored State/Field arrays, Program data, full snapshot JSON
+and consumer cursors are exact; continuous and restarted trajectories are exact.
+The checkpoint has time1e-4, macro step1, two levels and one rank. The continuation
+changes patch boxes and data while retaining two levels: regrid counters and topology
+epochs change from2 to3. No growth to three levels is received.
+
+The saved flux ledger has920 entries at levels0/1; three clock entries, two
+synchronization entries, diagnostics and temporal state are populated. Histories
+and cache are empty lists in this witness. It therefore does not receive populated
+history/cache retry semantics. An independent offline reader verifies69 actual
+artifacts, the original fixture/oracles and the installation's2793 unchanged entries.
+ROOT positive receipt `root-own-checkpoint-retry-native13-positive-20261007.json`
+has SHA256 `1031e8befc07b2b38c0e4d5a147d2b46d0ecd408ab0e244eab1299e5809640e9`.
+This is one original CPU Dim2/MPI-enabled world1 case; MPI2, GPU, Dim3, concurrency
+between simulations and all94 mission obligations require their separate receipts.
+
+From the initialized `pops` environment and integrated checkout, reproduce with
+the official installed-package driver and a fresh output directory:
+
+```sh
+rtk proxy env -u PYTHONPATH -u PYTHONOPTIMIZE PYTHONDONTWRITEBYTECODE=1 POPS_INCLUDE=/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include Kokkos_ROOT=/Users/romaindespoulain/miniforge3/envs/pops POPS_KOKKOS_ROOT=/Users/romaindespoulain/miniforge3/envs/pops CMAKE_PREFIX_PATH=/Users/romaindespoulain/miniforge3/envs/pops POPS_NATIVE_DIM=2 POPS_REQUIRE_NATIVE_TESTS=1 OMP_NUM_THREADS=2 OMP_PROC_BIND=false /Users/romaindespoulain/miniforge3/envs/pops/bin/python docs/development/api_040/run_installed_checks.py --output /tmp/pops-api040-original-checkpoint-retry --test tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py
+```
