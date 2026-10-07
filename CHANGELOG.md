@@ -18,6 +18,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Make the named region-transfer pack/unpack functor types accessible to NVCC host stubs,
+  retaining private transport storage and unchanged kernels, offsets, guards and fences.
 - Include potential ConsumerGraph diagnostics in the checkpoint capacity derived from verified
   Program records, preserving the exact record names and explicit collective capacity overrides.
 - Prepare Native diagnostic projections before sealing a candidate checkpoint, then publish
