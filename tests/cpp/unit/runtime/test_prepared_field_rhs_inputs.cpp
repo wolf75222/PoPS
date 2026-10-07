@@ -471,9 +471,11 @@ TEST(PreparedFieldRhsInputs, CountZeroUsesTheActualLegacyFactory) {
 
 TEST(PreparedFieldRhsInputs, ExpiredIssuedCopyRetainsConsensusLaneAfterRuntimeDestruction) {
   Observation observed;
+  std::string expected_lane_identity;
   {
     System<D> system(uniform_config());
     install_uniform_field(system, observed, 0);
+    expected_lane_identity = std::string(system.prepared_boundary_execution_lane().identity());
     runtime::program::ProgramContext<D> context(&system);
     context.configure_primary_clock("test.field-rhs-v2.clock"); context.begin_step(.25);
     auto result = context.solve_fields_from_state_at(context.boundary_evaluation_point(3),
@@ -483,7 +485,7 @@ TEST(PreparedFieldRhsInputs, ExpiredIssuedCopyRetainsConsensusLaneAfterRuntimeDe
     ASSERT_TRUE(observed.copied.has_value());
   }
   expect_expired(*observed.copied);
-  EXPECT_EQ(observed.copied->consensus_lane().identity(), "test.field-rhs-v2.execution");
+  EXPECT_EQ(observed.copied->consensus_lane().identity(), expected_lane_identity);
   EXPECT_EQ(observed.copied->consensus_lane().size(), n_ranks());
   observed.copied.reset(); // Every rank releases the retained owning lane in the same order.
 }

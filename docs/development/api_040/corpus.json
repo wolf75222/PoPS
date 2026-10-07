@@ -1,4 +1,15 @@
 {
+  "current_scoped_summary_20261007": {
+    "date": "2026-10-07",
+    "observed_source_commit": "c0f18d50efd454396d6761992a9817adf353f412",
+    "full_94_obligations_closed": false,
+    "scope": "Dated bounded reception; historical current_head/mapping_baseline and original obligations are unchanged",
+    "PDE": "Core R4/default Derived two actual numeric events; one installed CPU Dim2 one-level AMR world1 PDE PASS/0skip, Native b471/wheel7cd704; Y reference only; OMP concurrency unmeasured",
+    "Cpp13": "c0f18 executed11PASS/2FAIL/0SKIP; lane expectation now integrated with independent review but no rerun. Coherent targeted AMR trace observes after_regrid diagnostic callback without physical payload during bootstrap; runtime candidate not installed.",
+    "formal_order": "99de181 Main Source61 PASS via archived XML/command; separate frozen author Source cohort noSO, Root stdout absent; formal certificate, no PDE convergence qualification",
+    "ROMEO735830": "FAILED1:0 in allocation before checkout/prefix/build; metadata omission corrected in staged inputs, 17 helpers reviewed, future Source/job freeze pending; nvcc version/driver queries occurred, no GPU PDE compilation",
+    "retry": "ede680/old Native ea0c reception remains historical; no new b471 original retry launched at this observation"
+  },
   "source": "PoPS_Codex_handoff_0.4.0/reference/PoPS_API_v0.4.0/results/corpus_matrix.json",
   "witness_source": "PoPS_Codex_handoff_0.4.0/context/CORPUS_ORIGINAL.md:278-289",
   "current_head": "5d1126811ff72fbe54d8686682ff2eb1ca6254d1",
@@ -2267,6 +2278,203 @@
         "concurrent simulations",
         "full mission94 and final CI"
       ]
+    },
+    "nonautonomous_Field_State_Aux_native13_CoreR4_c0f18_positive": {
+      "source_commit": "c0f18d50efd454396d6761992a9817adf353f412",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-field-rhs-native13-core-r4-nonautonomous-positive-20261007.json",
+        "sha256": "f1261ad6323964c675e94126678bbf09dbfe473162972b49abb6a9946460e931"
+      },
+      "policy_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-field-rhs-independent-default-policy-r2-review-20261007/review.json",
+        "sha256": "75927544c21541571ab532968d3d0e00a08ff4ed59602e83eaa8c45a30619d6d"
+      },
+      "scope": "Actual installed-package CPU Kokkos Dim2, one AMR level, MPI world1, one unchanged nonautonomous PDE",
+      "default_Derived_events": [
+        "before_residual",
+        "before_field_solve"
+      ],
+      "native_sha256": "b471e01b7d8e669e3d7c11f5cb8925a509edf2a17d9993a5211dc3bc4080f595",
+      "wheel_sha256": "7cd704765ee7f339a060fa7e90f451f948a2057beeefc2362beaf15886127982",
+      "rebuild": {
+        "core_objects": 3,
+        "binding_objects_reused": 7
+      },
+      "pytest_counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "references": {
+        "state": "84/25",
+        "field": "144/25",
+        "stage_Y": "48/25"
+      },
+      "Y_directly_measured": false,
+      "max_absolute_errors": {
+        "state": 4.818367926873179e-13,
+        "field": 1.9255708139098715e-12
+      },
+      "original_bounds_unchanged": true,
+      "checkpoint_arrays_exact": true,
+      "raw_artifacts_verified": 34,
+      "OMP_NUM_THREADS_declared": 2,
+      "OMP_effective_concurrency_measured": false,
+      "original_retry_on_b471_launched": false,
+      "full_obligations_closed": false,
+      "remaining": [
+        "MPI2",
+        "multi-level AMR",
+        "GPU",
+        "Dim3",
+        "other methods and producer paths",
+        "PDE convergence",
+        "comparable costs",
+        "exact-revision final CI"
+      ]
+    },
+    "Field_State_Aux_cpp13_c0f18_partial_negative": {
+      "source_commit": "c0f18d50efd454396d6761992a9817adf353f412",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-field-rhs-cpp13-c0f18-two-failure-reception-20261007.json",
+        "sha256": "abddfcf732af3d8a6b540ebbbe997a7e37fc82defbd5397ff247b130776bfdc5"
+      },
+      "counts": {
+        "executed": 13,
+        "passed": 11,
+        "failed": 2,
+        "skipped": 0
+      },
+      "scope": "Actual C++ world1 unit execution; 11 passing witnesses are partial coverage",
+      "lane_fixture": {
+        "status": "Owning live System lane identity capture patch integrated after independent review; no new C++ run",
+        "review": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-cpp13-c0f18-two-failure-review-20261007/lane-test-only-counter-signature.json",
+          "sha256": "b74e7f40bd5ecfa20aca54bf6ee16f3cadeb18cd11f8143159949b8f9b4e91a5"
+        },
+        "assertion_invocations": 120,
+        "unchanged_invocations": 119,
+        "changed_expectations": 1
+      },
+      "AMR_failure": {
+        "status": "Coherent targeted test-only execution observes physical before_field_solve points at levels0,0,1 followed by after_regrid diagnostic Clock without physical payload at level0; original guard raises during bootstrap. No full native stack captured.",
+        "guard": "analytic auxiliary requires its exact consuming physical Clock"
+      },
+      "world2_received": false,
+      "full_obligations_closed": false
+    },
+    "formal_explicit_order_Source_R2_99de181": {
+      "source_commit": "99de181d034384bc405bb3959dc50182f9a875b7",
+      "Main_Source_tests_passed": 61,
+      "Main_Source_xml": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-program-order-r2-integration-20261007/source.xml",
+        "sha256": "aeb254b05359ecd37b868f87fb26ead3066b1aca6c1b84450ab5248bc60dfc08"
+      },
+      "Main_Source_command": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-program-order-r2-integration-20261007/command.json",
+        "sha256": "1f8bd9089212af185b5d4d6146138f8897696ff7d25ee930b745c280db5e5809"
+      },
+      "Main_Source_stdout_archived": false,
+      "author_frozen_Source_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-program-certificate-ssa-source-r2-20261007/source-gel-receipt-r2.json",
+        "sha256": "f91c970db3a57918b6185ce44de820e7688d573dfd1ad086ba62b50807818177"
+      },
+      "author_native_modules_loaded": false,
+      "Main_Source_receipt_basis": "Actual Root XML/command; no standalone Root receipt or stdout retained. Frozen author and independent R2 Source cohorts are distinct",
+      "independent_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-program-certificate-independent-review-20261007/r2/review.json",
+        "sha256": "a4cb58c1c3cec4f3118f3c12ddad46f0dc909b2f47b775dcd44fa938fa624eed"
+      },
+      "scope": "Generic affine explicit-RK formal order from actual SSA, including extrapolated stage c; clock/cadence, prior-rate SSA, effects and polynomial guards preserved",
+      "PDE_convergence_received": false,
+      "Native_execution_inferred": false,
+      "R1_generic_claim": "Superseded; range-bound candidate and revoked review preserved separately",
+      "full_obligations_closed": false
+    },
+    "CUDA46_735830_whole_preparation_negative": {
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk46-cuda-735830-whole-negative-reception-20261007.json",
+        "sha256": "f9fed5b3700fe35eb49deb5ca9473311e6763d4292ee5735a7fdf39329392960"
+      },
+      "independent_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-romeo-735830-preparation-review-20261007/review.json",
+        "sha256": "bc0c330bfe1807fc4acf50dbeef716e38c2411d67f619eeac18f81edc53798da"
+      },
+      "job": "735830",
+      "state": "FAILED",
+      "exit": "1:0",
+      "elapsed": "01:04:05",
+      "phase": "allocation",
+      "received_members": 28,
+      "regular_files": 20,
+      "regular_bytes": 425537092,
+      "preserved_cohorts": {
+        "cpu_prefixes": 19,
+        "gpu_prefixes": 9,
+        "Sources": 18
+      },
+      "source_checkout_created": false,
+      "prefix_created": false,
+      "PoPS_compilation": false,
+      "GPU_PDE_executed": false,
+      "nvcc_version_query_executed": true,
+      "CUDA_driver_query_executed": true,
+      "staged_metadata": {
+        "status": "Missing preparation.json sibling corrected and 17 helper closure reviewed",
+        "candidate": {
+          "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk46-cuda-735830-monitor-20261007/metadata-correction-input/preparation.json",
+          "sha256": "f0f7e18196a63f5cbda584753570ddd1ac318bfc7115704a9ae232dc12a20186",
+          "bytes": 1011
+        },
+        "future_Source_frozen": false,
+        "new_job_launched": false
+      },
+      "scope": "Preparation failure; device/tool observations are separate from a build. Exact declared prefix/Source/registry/driver preservation, not whole Home or full external compiler dependency closure",
+      "full_obligations_closed": false
+    },
+    "AMR_aux_coherent_callback_diagnostic_c0f18": {
+      "source_commit": "c0f18d50efd454396d6761992a9817adf353f412",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-amr-aux-clock-coherent-diagnostic-reception-20261007.json",
+        "sha256": "d54478e6b0dddae0e9bc795b8f8737f8dabc230f3d55ced5bc16a8ead72ad67c"
+      },
+      "counts": {
+        "tests": 1,
+        "failed": 1,
+        "skipped": 0
+      },
+      "scope": "Test-only instrumented C++ world1 callback/phase diagnostic; production source and original guard unchanged; no scientific AMR acceptance",
+      "configuration_matches_c0": {
+        "all_compile_commands": true,
+        "all_existing_capabilities": true,
+        "exact_target_link": true,
+        "new_HDF5_discovery_keys_retained": 8
+      },
+      "actual_compilation_steps": 18,
+      "physical_before_field_levels": [
+        0,
+        0,
+        1
+      ],
+      "then_after_regrid_diagnostic_without_payload_level": 0,
+      "failure_phase": "commit_bootstrap_level",
+      "phases_not_reached": [
+        "mark_bound",
+        "begin_step",
+        "solve_fields"
+      ],
+      "native_full_stack_captured": false,
+      "raw_artifacts_verified": 54,
+      "baseline_test_restored_byte_exact": true,
+      "package_unchanged_entries": 2793,
+      "native_sha256": "b471e01b7d8e669e3d7c11f5cb8925a509edf2a17d9993a5211dc3bc4080f595",
+      "prior_attempts": {
+        "configuration_drift_runs": 1,
+        "raw_cache_gate_blocked_runs": 0
+      },
+      "runtime_candidate_installed": false,
+      "full_obligations_closed": false
     }
   },
   "scoped_receptions_20261006": {
