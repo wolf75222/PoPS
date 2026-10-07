@@ -11,7 +11,7 @@ import pytest
 from pops._bootstrap import StepAttemptRejected
 from pops.output._consumer_contracts import ConsumerCursorSet, ScheduleCursor
 from pops.output._writers.common import _OutputRecoveryRequired, _StagedOutputFile
-from pops.runtime._consumer_transaction import ConsumerTransactionReport
+from pops.runtime._consumer_transaction import ConsumerCursorAuthority, ConsumerTransactionReport
 from pops.runtime._multi_layout_executor import _CompositeTemporalRestartState
 from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._step_strategy import prepare_program_run
@@ -143,6 +143,12 @@ class _EffectTransaction:
         self.owner = owner
         self.report = (at_start, at_end)
         self.state = "staged"
+        authority = owner._consumer_cursor_authority
+        before = authority.cursors.for_consumer("sample")
+        self._cursor_after = ScheduleCursor("sample", "accepted", before.committed_samples + 1)
+        self._effects = (SimpleNamespace(
+            consumer_id="sample", cursor_before=before, cursor_after=self._cursor_after),)
+        authority.reserve(self, self._effects, authority.epoch)
         owner.temporaries.add("sample.tmp")
 
     def accept(self):
@@ -152,6 +158,8 @@ class _EffectTransaction:
         if self.owner.fail_effect:
             raise RuntimeError("fault injected during effect publication")
         self.state = "accepted"
+        self.owner._consumer_cursors = self.owner._consumer_cursor_authority.commit(
+            self, self._effects)
         if self.owner.fail_finalize:
             return ConsumerTransactionReport(
                 "accepted", self.owner._consumer_cursors, ("sample",))
@@ -159,7 +167,7 @@ class _EffectTransaction:
 
     @property
     def cursor_updates(self):
-        return (ScheduleCursor("sample", "accepted", 1),)
+        return (self._cursor_after,)
 
     @property
     def recoveries(self):
@@ -169,11 +177,13 @@ class _EffectTransaction:
         if self.state in {"staged", "accepted"}:
             self.owner.temporaries.discard("sample.tmp")
             self.owner.artifacts.discard("sample.out")
+            self.owner._consumer_cursor_authority.release(self, rollback=True)
             self.state = "rejected"
 
     def seal(self):
         assert self.state in {"accepted", "sealed"}
         self.state = "sealed"
+        self.owner._consumer_cursor_authority.release(self)
         self.owner.finalize_calls += 1
         if self.owner.finalize_calls > 1:
             self.owner.saw_retained_finalizer = any(
@@ -192,6 +202,7 @@ class _Runtime(RuntimeInstance):
     ):
         self._executor = native
         self._consumer_cursors = ConsumerCursorSet()
+        self._consumer_cursor_authority = ConsumerCursorAuthority(self._consumer_cursors)
         self._consumer_reports = ()
         self._consumer_finalize_pending = ()
         self._consumer_recoveries = {}
@@ -205,6 +216,13 @@ class _Runtime(RuntimeInstance):
         self.recovery_authorities = tuple(recoveries)
         self.temporaries = set()
         self.artifacts = set()
+
+    def _step_envelope_snapshot(self):
+        # Tests may seed their accepted cursor rows directly before entering the outer step.
+        # Real RuntimeInstance construction/publication owns this same authority continuously.
+        if self._consumer_cursors != self._consumer_cursor_authority.cursors:
+            self._consumer_cursor_authority.reset(self._consumer_cursors)
+        return super()._step_envelope_snapshot()
 
     def _stage_consumers(
         self, *, at_start=False, at_end=False, outer_rollback_authoritative=False
