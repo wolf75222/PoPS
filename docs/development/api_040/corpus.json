@@ -1868,6 +1868,50 @@
         "Home_scope": "Conda registry/config only"
       },
       "later_Source_fix": "a17a304 named physical carrier copy functor; Source review only, CUDA rebuild pending"
+    },
+    "W11_finite_FV_current_capacity": {
+      "ids": [
+        "W11",
+        "M14"
+      ],
+      "scope": "Finite FV/capacity witness, not complete sheath/circuit reception",
+      "source_revision": "eae21965f1f156d78328f53ca94a20924eb6b854",
+      "native_sha256": "64c8922e58cf484a1b1188b899e25e84569707ae2090ecbd26f515daf2e1e9c6",
+      "wheel_sha256": "d884d3035bcc6c34f48f600927d51fb15053f47d455c2908aaab567e63c7e582",
+      "variants_received": [
+        "Euler MPI1",
+        "SSPRK2 MPI1",
+        "Euler MPI2",
+        "SSPRK2 MPI2"
+      ],
+      "independent_State_error_max": 0.0,
+      "q_after_retry": {
+        "Euler": 0.74734,
+        "SSPRK2": 0.74718
+      },
+      "rollback_State_q_ledger_history_temporal_CP_arrays_exact_except_two_seals": true,
+      "nontrivial_child_history_received": true,
+      "q_consumption_before_actual_parent_guard_received": true,
+      "retry_t_end": 0.08,
+      "MPI2_layout": "replicated, not spatially partitioned",
+      "MPI2_ledger_record_counts_per_rank": {
+        "Euler": [
+          512,
+          0
+        ],
+        "SSPRK2": [
+          1024,
+          0
+        ]
+      },
+      "OpenMP_effective_concurrency_received": false,
+      "OpenMP_threads_configured": 2,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-w11-finite-current-native-reception-20261007.json",
+      "root_receipt_sha256": "49d5f9cc14828490fa2d7e7e7e78446dbab11b3c5725c56fdbfa7842ceb417fb",
+      "independent_pins_sha256": "81371f532c33cea76e65b6ec24a82a76abf2037098b132abb1ae9b910484b858",
+      "documentation": "accepted_trace_regions_v2.md",
+      "partitioned_MPI2_regional_AMR_GPU_3D_CI_convergence_costs_received": false,
+      "complete_W11_M14_or_94_received": false
     }
   },
   "scoped_receptions_20261006": {
