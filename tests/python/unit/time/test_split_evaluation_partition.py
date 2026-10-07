@@ -46,14 +46,22 @@ def test_actual_native_split_failure_program_emits_all_qualified_subflows():
         "source", "source", "local_transform", "source", "source"]
     assert [value.attrs["evaluation_partition"] for value in evaluations] == [
         "first", "first", "second", "first", "first"]
+    # The instantaneous second map reads its subflow's entry state. Its caller
+    # materializes a separate returned endpoint; this does not retag the map.
+    transformed = evaluations[2]
+    returned = next(value for value in detached._values if value.name == "second_candidate")
+    assert transformed.point == transformed.inputs[0].point
+    assert transformed.point.time_for("first").offset.to_python() == Fraction(1, 2)
+    assert transformed.point.time_for("second").offset.to_python() == 0
+    assert returned.point.time_for("second").offset.to_python() == 1
     assert [evaluation_stage_fraction(value) for value in evaluations] == [
-        0, 0, 1, Fraction(1, 2), Fraction(1, 2)]
+        0, 0, 0, Fraction(1, 2), Fraction(1, 2)]
     assert not any("evaluation_partition" in value.attrs for value in detached._values
                    if value.op in {"state", "linear_combine", "store_history"})
     source = emit_program_graph(detached.to_graph(), lowering_program=detached,
                                 model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
     assert re.findall(r"ctx.set_stage_time\((\d+), (\d+)\);", source) == [
-        ("0", "1"), ("0", "1"), ("1", "1"), ("1", "2"), ("1", "2")]
+        ("0", "1"), ("0", "1"), ("0", "1"), ("1", "2"), ("1", "2")]
     assert "ctx.pointwise_status_max(" in source and "StepAttemptRejected(" in source
     rebuilt = detached._rebuild(lambda _value: True)
     assert rebuilt.to_graph().graph_hash == detached.to_graph().graph_hash
