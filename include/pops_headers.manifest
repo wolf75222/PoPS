@@ -323,6 +323,7 @@ sdk-support pops/runtime/program/amr_program_context_history_checkpoint_definiti
 sdk-support pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc
 sdk-support pops/runtime/program/amr_program_context_history_checkpoint_services.inc
 sdk-root pops/runtime/program/amr_program_context.hpp
+sdk-support pops/runtime/program/amr_program_context_value_authority.inc
 sdk-support pops/runtime/program/amr_program_context_spatial.inc
 sdk-support pops/runtime/program/amr_program_context_rhs_input_trace.inc
 sdk-support pops/runtime/program/amr_program_context_path_rhs.inc
@@ -343,6 +344,9 @@ sdk-root pops/runtime/program/external_riemann_brick.hpp
 sdk-support pops/runtime/program/module_metadata.hpp
 sdk-support pops/runtime/program/profiler.hpp
 sdk-root pops/runtime/program/program_context.hpp
+sdk-support pops/runtime/program/program_value_authority.hpp
+sdk-support pops/runtime/program/program_context_value_authority.inc
+sdk-support pops/runtime/program/program_context_value_authority_private.inc
 sdk-support pops/runtime/program/program_context_moving_interval.inc
 sdk-support pops/runtime/program/program_context_moving_projection.inc
 sdk-support pops/runtime/program/moving_interval_geometry.hpp
@@ -384,6 +388,7 @@ sdk-support pops/runtime/system/provider_storage_binding.hpp
 sdk-support pops/runtime/system/program_field_publication.hpp
 sdk-support pops/runtime/system/prepared_embedded_boundary.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
+sdk-support pops/runtime/system/prepared_field_rhs_inputs.hpp
 sdk-support pops/runtime/system/system_block_store.hpp
 sdk-support pops/runtime/system/system_block_closures.hpp
 sdk-support pops/runtime/system/system_interface_core_session.hpp

@@ -615,6 +615,9 @@ pops_add_gtest_suite(NAME test_exb_seam SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_
 
 pops_test_source(_src test_coupled_fieldsolve)
 pops_add_gtest_suite(NAME test_coupled_fieldsolve SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+pops_test_source(_src test_prepared_field_rhs_inputs)
+pops_native_loader_definitions(_field_rhs_native_defs)
+pops_add_gtest_suite(NAME test_prepared_field_rhs_inputs SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_field_rhs_native_defs})
 pops_test_source(_src test_system_interface_core_session)
 pops_add_gtest_suite(NAME test_system_interface_core_session SOURCES "${_src}" EXTRA_LIBS pops_runtime_system)
 
@@ -706,6 +709,27 @@ add_custom_target(pops_synthetic_loader_fixtures DEPENDS ${_synthetic_fixture_ou
 add_dependencies(test_amr_synthetic_program_loader_transaction pops_synthetic_loader_fixtures)
 target_compile_definitions(test_amr_synthetic_program_loader_transaction PRIVATE
   POPS_TEST_SYNTHETIC_LOADER_FIXTURES="${_synthetic_fixture_dir}")
+
+# Compile the Field value-authority fixture through the same native DSO compiler.
+add_executable(pops_build_field_rhs_value_program_fixture EXCLUDE_FROM_ALL
+  cpp/support/build_field_rhs_value_program_fixture.cpp)
+target_link_libraries(pops_build_field_rhs_value_program_fixture PRIVATE pops::pops)
+target_compile_features(pops_build_field_rhs_value_program_fixture PRIVATE cxx_std_${POPS_CXX_STD})
+target_compile_definitions(pops_build_field_rhs_value_program_fixture PRIVATE ${_field_rhs_native_defs})
+set(_field_rhs_fixture_stem "${CMAKE_CURRENT_BINARY_DIR}/field-rhs-value-program-fixture")
+add_custom_command(OUTPUT "${_field_rhs_fixture_stem}.so" "${_field_rhs_fixture_stem}.cpp"
+  COMMAND $<TARGET_FILE:pops_build_field_rhs_value_program_fixture>
+    "${_field_rhs_fixture_stem}.cpp" "${_field_rhs_fixture_stem}.so"
+  DEPENDS pops_build_field_rhs_value_program_fixture
+    cpp/support/field_rhs_value_program_fixture.hpp cpp/support/native_dso_compiler.hpp
+    "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
+  JOB_POOL pops_heavy_test_tu
+  VERBATIM)
+add_custom_target(pops_field_rhs_value_program_fixture
+  DEPENDS "${_field_rhs_fixture_stem}.so" "${_field_rhs_fixture_stem}.cpp")
+add_dependencies(test_prepared_field_rhs_inputs pops_field_rhs_value_program_fixture)
+target_compile_definitions(test_prepared_field_rhs_inputs PRIVATE
+  POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO="${_field_rhs_fixture_stem}.so")
 
 pops_test_source(_src test_amr_system_contract)
 pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -895,6 +919,7 @@ if(POPS_HAS_MPI)
     TIMEOUT 20)
 
   set(POPS_MPI_RANKS_test_mpi_polar_schur 1 2 4)
+  set(POPS_MPI_RANKS_test_prepared_field_rhs_inputs 2)
   set(POPS_MPI_RANK_PARITY_test_mpi_amr_compiled_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
   set(POPS_MPI_RANK_PARITY_test_mpi_amr_distributed_coarse 1 2 4)

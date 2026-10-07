@@ -30,6 +30,7 @@
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/prepared_resource_cache.hpp>
 #include <pops/runtime/program/prepared_integral_capture.hpp>
+#include <pops/runtime/program/program_value_authority.hpp>
 #include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
@@ -50,6 +51,7 @@
 #include <functional>
 #include <initializer_list>
 #include <iomanip>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
@@ -331,6 +333,31 @@ public:
     std::map<std::tuple<int, std::int64_t, int>, field_type> scratches{};
   };
 
+  class StageEvaluationScope {
+   public:
+    StageEvaluationScope(const AmrProgramContext& owner, std::int64_t numerator,
+                         std::int64_t denominator) : owner_(&owner), prior_(owner.stage_time_) {
+      owner.set_stage_time(numerator, denominator);
+    }
+    StageEvaluationScope(const StageEvaluationScope&) = delete;
+    StageEvaluationScope& operator=(const StageEvaluationScope&) = delete;
+    StageEvaluationScope(StageEvaluationScope&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)), prior_(other.prior_) {}
+    ~StageEvaluationScope() {
+      if (owner_) {
+        owner_->stage_time_ = prior_;
+        owner_->active_operator_snapshot_.reset();
+      }
+    }
+   private:
+    const AmrProgramContext* owner_;
+    ::pops::amr::Rational prior_;
+  };
+  [[nodiscard]] StageEvaluationScope stage_evaluation_scope(
+      std::int64_t numerator, std::int64_t denominator) const {
+    return StageEvaluationScope(*this, numerator, denominator);
+  }
+
   class LogicalEvaluationScope {
    public:
     LogicalEvaluationScope(const AmrProgramContext& owner, int iteration, int count)
@@ -432,6 +459,8 @@ public:
   // Class-scope responsibility fragments preserve the public nested-type identities and member
   // layout of AmrProgramContext while making each semantic authority independently auditable.
 #include <pops/runtime/program/amr_program_context_spatial.inc>
+#include <pops/runtime/program/program_context_value_authority.inc>
+#include <pops/runtime/program/amr_program_context_value_authority.inc>
 #include <pops/runtime/program/amr_program_context_rhs_input_trace.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_public.inc>
 #include <pops/runtime/program/amr_program_context_diffusion.inc>
@@ -498,6 +527,7 @@ public:
   mutable std::map<std::string, int> history_levels_;
   mutable std::map<ScratchKey, field_type> scratches_;
   mutable PreparedResourceCache prepared_resources_;
+  mutable ProgramValueAuthority<Dim> program_values_;
   struct SpatialHierarchyResource {
     std::uint64_t epoch, generation;
     int block;

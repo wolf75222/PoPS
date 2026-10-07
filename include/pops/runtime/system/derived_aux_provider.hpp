@@ -27,6 +27,11 @@
 #include <utility>
 #include <vector>
 
+namespace pops {
+template <int> class System;
+template <int> class AmrSystem;
+}
+
 namespace pops::runtime::system {
 
 /// Producer class.  Input data is supplied by an external native uploader, derived data by a
@@ -288,6 +293,9 @@ enum class AuxiliaryPublicationStatus { ready, nonfinite_candidate };
 /// Physical stage payload transported from the authoritative Program boundary point.
 /// analytic-aux-time@1 is transient runtime authority, not a reconstructed checkpoint clock.
 struct AuxiliaryPhysicalEvaluation {
+  AuxiliaryPhysicalEvaluation() = default;
+  AuxiliaryPhysicalEvaluation(::pops::amr::Rational fraction, double interval, double time)
+      : stage_fraction(fraction), dt(interval), physical_time(time) {}
   ::pops::amr::Rational stage_fraction{0, 1};
   double dt = 0;
   double physical_time = 0;
@@ -297,17 +305,47 @@ struct AuxiliaryPhysicalEvaluation {
     if (stage_fraction.denominator <= 0 || stage_fraction.numerator < 0 ||
         stage_fraction.numerator > stage_fraction.denominator ||
         ::pops::amr::Rational(stage_fraction.numerator, stage_fraction.denominator) != stage_fraction ||
-        !std::isfinite(dt) || dt <= 0 ||
+        !std::isfinite(dt) || (dt <= 0 && !native_accepted_initial_) ||
         !std::isfinite(physical_time))
       throw std::invalid_argument("auxiliary physical evaluation requires an exact finite stage");
+    if (native_accepted_initial_ &&
+        (dt != 0 || std::signbit(dt) || stage_fraction != native_accepted_initial_->stage_fraction ||
+         physical_time != native_accepted_initial_->physical_time))
+      throw std::invalid_argument("auxiliary accepted initial physical authority changed");
+  }
+  [[nodiscard]] bool native_accepted_initial() const noexcept {
+    return native_accepted_initial_.has_value();
+  }
+  void require_logical_match(std::string_view clock, std::uint64_t tick, int level,
+                             int substep, int stage) const {
+    if (native_accepted_initial_ &&
+        (native_accepted_initial_->clock != clock ||
+         native_accepted_initial_->tick != static_cast<std::int64_t>(tick) ||
+         native_accepted_initial_->level != level || native_accepted_initial_->substep != substep ||
+         native_accepted_initial_->stage != stage))
+      throw std::invalid_argument("auxiliary accepted initial logical authority changed");
   }
   friend bool operator==(const AuxiliaryPhysicalEvaluation& a,
                          const AuxiliaryPhysicalEvaluation& b) noexcept {
-    return a.stage_fraction == b.stage_fraction &&
+    return a.native_accepted_initial_ == b.native_accepted_initial_ &&
+        a.stage_fraction == b.stage_fraction &&
         std::bit_cast<std::uint64_t>(a.dt) == std::bit_cast<std::uint64_t>(b.dt) &&
         std::bit_cast<std::uint64_t>(a.physical_time) ==
             std::bit_cast<std::uint64_t>(b.physical_time);
   }
+ private:
+  template <int> friend class ::pops::System;
+  template <int> friend class ::pops::AmrSystem;
+  void qualify_native_accepted_initial(const runtime::multiblock::BoundaryEvaluationPoint& point) {
+    if (point.clock.empty() || point.tick != 0 || point.level < 0 || point.substep != 0 ||
+        point.stage != 0 || point.stage_fraction != ::pops::amr::Rational(0, 1) ||
+        point.dt != 0 || std::signbit(point.dt) || !std::isfinite(point.physical_time))
+      throw std::invalid_argument("native auxiliary accepted initial point is malformed");
+    native_accepted_initial_ = point;
+    validate();
+  }
+  std::optional<runtime::multiblock::BoundaryEvaluationPoint> native_accepted_initial_;
+
 };
 
 /// Integer-identical evaluation point supplied by Program/AMR. An optional exact physical
@@ -332,7 +370,10 @@ struct AuxiliaryEvaluationPoint {
       throw std::invalid_argument(
           "auxiliary evaluation point requires a clock and non-negative "
           "level/substep/stage/iteration");
-    if (physical_evaluation) physical_evaluation->validate();
+    if (physical_evaluation) {
+      physical_evaluation->validate();
+      physical_evaluation->require_logical_match(clock, accepted_step, level, substep, stage);
+    }
   }
 
   void qualify_physical_evaluation(const runtime::multiblock::BoundaryEvaluationPoint& source) {
@@ -355,7 +396,8 @@ struct AuxiliaryEvaluationPoint {
   void serialize_exact(ExactContractBuilder& exact) const {
     validate();
     exact.text("pops.auxiliary-evaluation-point")
-        .scalar(std::uint32_t{physical_evaluation ? 3U : 2U})
+        .scalar(std::uint32_t{physical_evaluation && physical_evaluation->native_accepted_initial() ? 4U :
+                              (physical_evaluation ? 3U : 2U)})
         .text(clock)
         .scalar(accepted_step)
         .scalar(layout_generation)

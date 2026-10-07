@@ -178,6 +178,7 @@ void import_accepted_state_(bool force) const {
   const std::uint64_t revision = facade_->program_accepted_state_revision();
   if (!force && revision == accepted_state_revision_)
     return;
+  program_values_.revoke_();
   if (!active_attempt_states_.empty() ||
       (multiblock_subcycling_ && multiblock_subcycling_->has_attempt_candidates()) ||
       (interface_flux_ledger_ && interface_flux_ledger_->in_transaction()))

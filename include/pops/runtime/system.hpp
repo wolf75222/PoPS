@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
+
 #include <pops/runtime/program/accepted_exchange.hpp>
 #include <limits>
 
@@ -848,6 +850,12 @@ class System {
   POPS_EXPORT void set_block_elliptic_field(
       const std::string& block_name, const std::string& field,
       std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);
+  /// Attach a separately qualified State/Auxiliary Field density. Its inputs are issued only
+  /// from the current FieldSolveRequest, never from layout-compatible raw pointers.
+  POPS_EXPORT void set_block_elliptic_field_v2(
+      const std::string& block_name, const std::string& field,
+      const std::string& binding_identity, const std::string& consumer_qid,
+      std::size_t provider_count, runtime::system::FieldRhsCallbackV2<Dim> rhs);
   /// @}
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
@@ -1605,6 +1613,11 @@ class System {
   POPS_EXPORT SolveReport solve_fields_from_blocks_at_in_place_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
       const std::vector<const MultiFab<Dim>*>& U_stages);
+  POPS_EXPORT SolveReport solve_fields_from_request_in_place_(
+      const runtime::system::FieldSolveRequest<Dim>& request);
+  void invoke_field_rhs_v2_(const std::string& field, int block, const MultiFab<Dim>& state,
+      MultiFab<Dim>& rhs, const std::string& binding, const std::string& consumer,
+      std::size_t count, const runtime::system::FieldRhsCallbackV2<Dim>& callback);
   POPS_EXPORT void prepare_default_field_publication_storage_();
   POPS_EXPORT void prepare_named_field_publication_storage_(const std::string& field);
   POPS_EXPORT void begin_field_publication_transaction();

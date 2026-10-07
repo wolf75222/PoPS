@@ -67,6 +67,7 @@ void store_history_(const std::string& name, const field_type& value) const {
 
   const auto found = manager.histories.find(candidate.key);
   const auto flux_found = history_flux_expressions_.find(candidate.key);
+  for (const auto& slot : found->second) program_values_.revoke_buffer_(slot);
   // Public history() references name individual ring elements.  Keep those elements at stable
   // addresses.  A MultiFab valid-copy has no allocation path after its exact field contract has
   // been prepared above; nevertheless, converge a device/local exception before metadata moves.
@@ -145,6 +146,7 @@ void rotate_histories_(std::optional<std::string> clock_identity) const {
       "AMR Program history rotation");
   for (const std::string& key : candidate.selected) {
     auto& ring = manager.histories.at(key);
+    for (const auto& slot : ring) program_values_.revoke_buffer_(slot);
     for (std::size_t slot = ring.size(); slot-- > 1;)
       std::swap(ring[slot], ring[slot - 1]);
     auto& dts = manager.slot_dt.at(key);

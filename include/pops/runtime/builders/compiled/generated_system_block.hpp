@@ -19,6 +19,8 @@
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
+#include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
+#include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 
 #include <Kokkos_MathematicalFunctions.hpp>
@@ -178,6 +180,24 @@ struct MaterializePoissonRhs {
     const Real value = model.elliptic_rhs(load_state<Model>(state, index));
     status(index) = Kokkos::isfinite(value) ? Real(0) : Real(1);
     rhs(index) = value;
+  }
+};
+
+template <int Dim, class Model, int Count>
+struct MaterializePoissonRhsV2 {
+  Model model;
+  FieldView<const Real, Dim> state{};
+  ProviderStorageView<Dim, Count> providers{};
+  FieldView<Real, Dim> rhs{}, status{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    const auto input = load_state<Model>(state, index);
+    Real value;
+    if constexpr (Count == 0)
+      value = model.elliptic_rhs(input);
+    else
+      value = model.elliptic_rhs(input, load_provider_values<Count>(providers, index));
+    rhs(index) = value;
+    status(index) = Kokkos::isfinite(value) ? Real(0) : Real(1);
   }
 };
 
@@ -1469,6 +1489,84 @@ auto make_poisson_rhs(Model model) {
   return [model = std::move(model)](const MultiFab<kNativeDimension>& state,
                                     MultiFab<kNativeDimension>& rhs) {
     generated_system_detail::add_poisson_rhs<kNativeDimension>(model, state, rhs);
+  };
+}
+
+/// Provider-aware Field density on separately authenticated State and readonly Aux images.
+/// Every allocation/view is prepared and voted before the first rank launches a kernel.
+template <class Model>
+auto make_poisson_rhs_v2(Model model) {
+  constexpr int Dim = kNativeDimension;
+  constexpr int Count = [] {
+    if constexpr (requires { Model::n_providers; }) return Model::n_providers;
+    else return 0;
+  }();
+  static_assert(Count >= 0);
+  return [model = std::move(model)](
+      const runtime::system::PreparedFieldRhsInputs<Dim>& inputs, MultiFab<Dim>& rhs) {
+    const ExecutionLane& lane = inputs.consensus_lane();
+    struct Workspace {
+      Kokkos::DefaultExecutionSpace execution;
+      std::optional<MultiFab<Dim>> candidate, status;
+      std::vector<generated_system_detail::MaterializePoissonRhsV2<Dim, Model, Count>> kernels;
+      std::vector<std::pair<FieldView<Real, Dim>, FieldView<const Real, Dim>>> outputs;
+      std::vector<typename Fab<Dim>::storage_type> output_allocations;
+    };
+    std::shared_ptr<Workspace> workspace;
+    std::exception_ptr error;
+    try {
+      workspace = std::make_shared<Workspace>();
+      workspace->execution = inputs.execution();
+      inputs.template validate_provider_inputs<Count>();
+      const auto& state = inputs.state();
+      if (rhs.ncomp() != 1 || state.ncomp() != Model::n_vars)
+        throw std::invalid_argument("Field RHS V2 requires its exact scalar/physical-State arity");
+      generated_system_detail::require_same_layout(state, rhs, 1, "Field RHS V2");
+      workspace->candidate.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
+      workspace->status.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
+      workspace->kernels.reserve(state.local_size());
+      workspace->outputs.reserve(state.local_size());
+      workspace->output_allocations.reserve(state.local_size());
+      for (std::size_t local = 0; local < state.local_size(); ++local) {
+        workspace->kernels.push_back({model, state.fab(local).view(),
+            inputs.template provider_values_view<Count>(local),
+            workspace->candidate->fab(local).view(), workspace->status->fab(local).view()});
+        workspace->output_allocations.push_back(rhs.fab(local).storage());
+        workspace->outputs.emplace_back(rhs.fab(local).view(),
+            std::as_const(*workspace->candidate).fab(local).view());
+      }
+      inputs.retain_execution_owner(workspace);
+    } catch (...) { error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "Field RHS V2 input/allocation preparation failed collectively");
+    try {
+      for (std::size_t local = 0; local < workspace->kernels.size(); ++local)
+        for_each_cell(workspace->execution, workspace->candidate->box(local), workspace->kernels[local]);
+      workspace->execution.fence();
+      if (!workspace->kernels.empty() && reduce_max_local(*workspace->status) != Real(0))
+        throw std::runtime_error("Field RHS V2 produced a non-finite candidate");
+    } catch (...) {
+      error = std::current_exception();
+      try { workspace->execution.fence(); }
+      catch (...) { error = std::current_exception(); }
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "Field RHS V2 candidate failed collectively before publication");
+    try {
+      for (std::size_t local = 0; local < workspace->outputs.size(); ++local) {
+        const auto target = workspace->outputs[local].first;
+        const auto candidate = workspace->outputs[local].second;
+        for_each_cell(workspace->execution, workspace->candidate->box(local),
+            [=] POPS_HD(const Index<Dim>& index) { target(index) += candidate(index); });
+      }
+      workspace->execution.fence();
+    } catch (...) {
+      error = std::current_exception();
+      try { workspace->execution.fence(); }
+      catch (...) { error = std::current_exception(); }
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "Field RHS V2 publication failed collectively");
   };
 }
 

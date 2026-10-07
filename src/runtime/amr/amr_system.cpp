@@ -2688,6 +2688,9 @@ struct AmrSystem<Dim>::Impl {
     std::array<unsigned, Dim> state_read_cells{};
     std::string read_authority{};
     std::string declared_input_identity{};
+    runtime::system::FieldRhsCallbackV2<Dim> evaluate_v2;
+    std::string consumer_qid;
+    std::size_t provider_count = 0;
   };
 
   struct TaggingSpec {
@@ -3310,7 +3313,7 @@ struct AmrSystem<Dim>::Impl {
     };
 
     // The lane is declared first so every provider that pins it is destroyed before MPI_Comm_free.
-    std::optional<ExecutionLane> lane;
+    std::shared_ptr<ExecutionLane> lane;
     mutable std::recursive_mutex execution_mutex;
     /// One independent carrier per hierarchy level.  Each carrier owns storage groups keyed by
     /// the sealed owner-qualified registry; there is no shared slab or canonical component order.
@@ -3587,6 +3590,10 @@ struct AmrSystem<Dim>::Impl {
       std::numeric_limits<std::uint64_t>::max();
   std::vector<std::vector<std::string>> last_topology_rematerialization_witness;
   std::vector<std::vector<std::string>> last_continuation_transition_rows;
+  std::shared_ptr<void> field_rhs_session = std::make_shared<int>(0);
+  const runtime::system::FieldSolveRequest<Dim>* active_field_rhs_request = nullptr;
+  std::shared_ptr<runtime::system::FieldRhsExecutionRecovery> field_rhs_recovery =
+      std::make_shared<runtime::system::FieldRhsExecutionRecovery>();
   AmrSystem<Dim>* facade = nullptr;
   bool auxiliary_registry_consensus_verified = false;
   enum class NativePackagePhase {
@@ -4501,7 +4508,8 @@ struct AmrSystem<Dim>::Impl {
       for (std::size_t block = 0; block < plan.rhs_by_block.size(); ++block) {
         for (const PreparedFieldRhs& rhs : plan.rhs_by_block[block]) {
           if (rhs.provider_identity.empty() || rhs.block_identity != blocks[block].name ||
-              rhs.field_identity != slot || !rhs.evaluate ||
+              rhs.field_identity != slot ||
+              (static_cast<bool>(rhs.evaluate) == static_cast<bool>(rhs.evaluate_v2)) ||
               !std::isfinite(static_cast<double>(rhs.coefficient)))
             throw std::logic_error("AMR initial exact field RHS authority is incomplete");
         }
@@ -5285,7 +5293,10 @@ struct AmrSystem<Dim>::Impl {
         contract.text(rhs.provider_identity)
             .text(rhs.block_identity)
             .text(rhs.field_identity)
-            .scalar(rhs.coefficient);
+            .scalar(rhs.coefficient)
+            .presence(static_cast<bool>(rhs.evaluate_v2))
+            .text(rhs.consumer_qid)
+            .scalar(static_cast<std::uint64_t>(rhs.provider_count));
       for (const PreparedFieldRhs& rhs : plan.rhs_by_block[block])
         if (rhs.read_contract_version != 0)
           contract.text("pops.PreparedFieldRhs.StateReadExtent").scalar(rhs.read_contract_version)
@@ -6788,10 +6799,14 @@ struct AmrSystem<Dim>::Impl {
     bool has_rhs = false;
     std::vector<std::unique_ptr<field_type>> detached_rhs;
     std::vector<std::unique_ptr<field_type>> detached_candidates;
+    std::vector<std::unique_ptr<field_type>> detached_contributions;
+    std::vector<std::vector<const field_type*>> selected_states;
+    std::shared_ptr<std::vector<typename Fab<Dim>::storage_type>> assembly_allocations;
     DetachedFieldBoundaryContexts detached_boundary_contexts;
     DetachedFieldBoundaryContexts detached_initial_boundary_contexts;
     std::exception_ptr preparation_error;
     try {
+      assembly_allocations = std::make_shared<std::vector<typename Fab<Dim>::storage_type>>();
       detached_boundary_contexts = prepare_field_boundary_contexts(
           slot, plan, active_level, stage_overrides, evaluation_point);
       if (plan.boundary_kernel && !plan.boundary_contexts)
@@ -6799,65 +6814,102 @@ struct AmrSystem<Dim>::Impl {
             prepare_field_boundary_contexts(slot, plan, active_level, {}, evaluation_point);
       detached_rhs.reserve(level_count);
       detached_candidates.reserve(level_count);
+      detached_contributions.reserve(level_count);
+      selected_states.resize(level_count);
+      const auto retain_allocations = [&](const field_type& image) {
+        for (std::size_t local = 0; local < image.local_size(); ++local)
+          assembly_allocations->push_back(image.fab(local).storage());
+      };
       for (std::size_t level = 0; level < level_count; ++level) {
         const field_type& prepared_rhs = plan.prepared_solver->rhs_level(static_cast<int>(level));
         const field_type& prepared_candidate =
             plan.prepared_solver->candidate_level(static_cast<int>(level));
-        auto rhs_storage = std::make_unique<field_type>(
+        detached_rhs.push_back(std::make_unique<field_type>(
             prepared_rhs.layout(), prepared_rhs.distribution(), prepared_rhs.local_rank(),
-            prepared_rhs.ncomp(), prepared_rhs.ghosts());
-        auto candidate_storage = std::make_unique<field_type>(
+            prepared_rhs.ncomp(), prepared_rhs.ghosts()));
+        detached_candidates.push_back(std::make_unique<field_type>(
             prepared_candidate.layout(), prepared_candidate.distribution(),
-            prepared_candidate.local_rank(), prepared_candidate.ncomp(),
-            prepared_candidate.ghosts());
-        field_type& rhs = *rhs_storage;
-        field_type& candidate = *candidate_storage;
-        rhs.set_val(Real(0));
-        copy_full_field_in_place(*plan.accepted_potential[level], candidate);
-        std::unique_ptr<field_type> contribution;
-        if (!plan.rhs_by_block.empty()) {
-          contribution = std::make_unique<field_type>(
-              prepared_rhs.layout(), prepared_rhs.distribution(), prepared_rhs.local_rank(),
-              prepared_rhs.ncomp(), prepared_rhs.ghosts());
-          contribution->set_val(Real(0));
-        }
+            prepared_candidate.local_rank(), prepared_candidate.ncomp(), prepared_candidate.ghosts()));
+        detached_contributions.push_back(std::make_unique<field_type>(
+            prepared_rhs.layout(), prepared_rhs.distribution(), prepared_rhs.local_rank(),
+            prepared_rhs.ncomp(), prepared_rhs.ghosts()));
+        retain_allocations(*detached_rhs.back());
+        retain_allocations(*detached_candidates.back());
+        retain_allocations(*detached_contributions.back());
+        selected_states[level].resize(blocks.size());
         for (std::size_t block = 0; block < blocks.size(); ++block) {
-          const field_type& live = block_state(block, level);
-          const field_type* state = &live;
+          const field_type* state = &block_state(block, level);
           if (static_cast<int>(level) == active_level && !stage_overrides.empty() &&
-              stage_overrides[block] != nullptr)
-            state = stage_overrides[block];
-
-          if (plan.use_prepared_level_rhs) {
-            prepared_hierarchy->block_levels[block][level].add_poisson_rhs(*state, rhs);
-            has_rhs = true;
-          }
-          if (!plan.rhs_by_block.empty()) {
-            for (const PreparedFieldRhs& provider : plan.rhs_by_block[block]) {
-              field_type& scratch = *contribution;
-              scratch.set_val(Real(0));
-              provider.evaluate(*state, scratch);
-              saxpy(rhs, provider.coefficient, scratch);
+              stage_overrides[block]) state = stage_overrides[block];
+          if (active_field_rhs_request &&
+              (active_field_rhs_request->has_source(static_cast<int>(block), static_cast<int>(level)) ||
+               active_field_rhs_request->has_legacy_source(static_cast<int>(block), static_cast<int>(level))))
+            state = &active_field_rhs_request->selected_state(static_cast<int>(block), static_cast<int>(level));
+          selected_states[level][block] = state;
+          if (!same_field_contract(*state, block_state(block, level)))
+            throw std::invalid_argument("AMR Field RHS selected source differs from its exact frame");
+          if (!plan.rhs_by_block.empty())
+            for (const auto& provider : plan.rhs_by_block[block]) {
+              if (provider.evaluate_v2) {
+                if (!active_field_rhs_request)
+                  throw std::logic_error("AMR Field RHS V2 lacks its native source request");
+                active_field_rhs_request->source(static_cast<int>(block), static_cast<int>(level)).validate();
+              }
               has_rhs = true;
             }
-          }
+          has_rhs = has_rhs || plan.use_prepared_level_rhs;
         }
-        detached_rhs.push_back(std::move(rhs_storage));
-        detached_candidates.push_back(std::move(candidate_storage));
       }
-      if (!has_rhs)
-        throw std::runtime_error("AMR exact field has no prepared RHS provider");
-      apply_composite_mean_neutralizing(plan, detached_rhs);
-      Kokkos::fence();
-    } catch (...) {
-      preparation_error = std::current_exception();
+      if (!has_rhs) throw std::runtime_error("AMR exact field has no prepared RHS provider");
+      field_rhs_recovery->retain(assembly_allocations);
+    } catch (...) { preparation_error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        preparation_error, &lane, "AMR Field RHS allocation/source preflight failed collectively");
+    const auto assembly_phase = [&](const auto& operation, const char* message) {
+      std::exception_ptr error;
+      try { field_rhs_recovery->retain(assembly_allocations); }
+      catch (...) { error = std::current_exception(); }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          error, &lane, "AMR Field RHS allocation retention failed collectively");
+      try { operation(); Kokkos::fence(); }
+      catch (...) {
+        error = std::current_exception();
+        try { Kokkos::fence(); } catch (...) { error = std::current_exception(); }
+      }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(error, &lane, message);
+    };
+    for (std::size_t level = 0; level < level_count; ++level) {
+      auto& rhs = *detached_rhs[level];
+      auto& scratch = *detached_contributions[level];
+      assembly_phase([&] {
+        rhs.set_val(Real(0));
+        copy_full_field_in_place(*plan.accepted_potential[level], *detached_candidates[level]);
+      }, "AMR Field RHS initialization failed collectively");
+      for (std::size_t block = 0; block < blocks.size(); ++block) {
+        const field_type& state = *selected_states[level][block];
+        if (plan.use_prepared_level_rhs)
+          assembly_phase([&] { prepared_hierarchy->block_levels[block][level].add_poisson_rhs(state, rhs); },
+                         "AMR prepared Field RHS failed collectively");
+        if (!plan.rhs_by_block.empty())
+          for (const auto& provider : plan.rhs_by_block[block]) {
+            assembly_phase([&] { scratch.set_val(Real(0)); },
+                           "AMR Field RHS contribution initialization failed collectively");
+            assembly_phase([&] {
+              if (provider.evaluate_v2)
+                facade->invoke_field_rhs_v2_(slot, static_cast<int>(block), static_cast<int>(level),
+                    state, scratch, provider.declared_input_identity, provider.consumer_qid,
+                    provider.provider_count, provider.evaluate_v2);
+              else provider.evaluate(state, scratch);
+            }, "AMR Field RHS contribution failed collectively");
+            assembly_phase([&] { saxpy(rhs, provider.coefficient, scratch); },
+                           "AMR Field RHS contribution assembly failed collectively");
+          }
+      }
     }
-    if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && preparation_error)
-        std::rethrow_exception(preparation_error);
-      throw std::runtime_error(
-          "AMR exact field RHS and boundary preparation failed collectively before solve");
-    }
+    assembly_phase([&] { apply_composite_mean_neutralizing(plan, detached_rhs); },
+                   "AMR exact field mean preparation failed collectively before solve");
+    assembly_phase([&] { field_rhs_recovery->drain(); },
+                   "AMR Field RHS completion drain failed collectively");
 
     std::exception_ptr remap_error;
     try {
@@ -7369,7 +7421,8 @@ struct AmrSystem<Dim>::Impl {
       throw std::runtime_error(
           "generated AMR hierarchy owner preparation failed collectively on its parent lane");
     }
-    candidate->lane.emplace(ExecutionLane::duplicate_collectively(parent_lane, lane_identity));
+    candidate->lane = std::make_shared<ExecutionLane>(
+        ExecutionLane::duplicate_collectively(parent_lane, lane_identity));
     std::string boundary_component_contract;
     std::exception_ptr boundary_component_contract_error;
     try {
@@ -10010,7 +10063,8 @@ struct AmrSystem<Dim>::Impl {
           std::set<std::string> direct_inputs;
           for (const auto& rhs_block : plan.rhs_by_block)
             for (const auto& rhs : rhs_block) {
-              if (rhs.read_contract_version != 1 || rhs.read_authority.empty())
+              if ((rhs.read_contract_version != 1 && rhs.read_contract_version != 2) ||
+                  (rhs.read_contract_version == 2 && !rhs.evaluate_v2) || rhs.read_authority.empty())
                 throw std::invalid_argument("accepted halo Field RHS has unknown StateReadExtent");
               if (std::any_of(rhs.state_read_cells.begin(), rhs.state_read_cells.end(),
                               [](unsigned cells) { return cells != 0; }))
@@ -12347,9 +12401,10 @@ void AmrSystem<Dim>::prepare_single_level_program_auxiliary_consumer(
   runtime::system::AuxiliaryEvaluationPoint auxiliary_point;
   std::exception_ptr preflight_error;
   try {
-    if (p_->engine->hierarchy().num_levels() != 1 || point.level != 0)
-      throw std::invalid_argument("AMR flat auxiliary read requires exactly one live level");
-    if (point.clock.empty() || point.tick != p_->macro_step || point.substep < 0 ||
+    if (point.level < 0 || static_cast<std::size_t>(point.level) >=
+                              p_->engine->hierarchy().num_levels())
+      throw std::invalid_argument("AMR auxiliary read requires an actual live hierarchy level");
+    if (point.clock.empty() || point.tick < 0 || point.substep < 0 ||
         point.stage < 0 || point.stage_fraction.denominator <= 0 ||
         point.stage_fraction.numerator < 0 ||
         point.stage_fraction.numerator > point.stage_fraction.denominator ||
@@ -12358,13 +12413,13 @@ void AmrSystem<Dim>::prepare_single_level_program_auxiliary_consumer(
       throw std::invalid_argument("AMR Program auxiliary read requires its complete current point");
     if (block < 0 || static_cast<std::size_t>(block) >= p_->blocks.size())
       throw std::out_of_range("AMR Program auxiliary read block is outside the hierarchy");
-    const auto& accepted = p_->block_state(static_cast<std::size_t>(block), 0);
+    const auto& accepted = p_->block_state(static_cast<std::size_t>(block), static_cast<std::size_t>(point.level));
     if (stage_state.layout() != accepted.layout() ||
         stage_state.distribution() != accepted.distribution() ||
         stage_state.local_rank() != accepted.local_rank() ||
         stage_state.ncomp() != accepted.ncomp())
       throw std::invalid_argument("AMR Program auxiliary read SSA state differs from its block");
-    (void)p_->prepared_hierarchy->auxiliary_registries.at(0).consumer_plan(consumer_qid);
+    (void)p_->prepared_hierarchy->auxiliary_registries.at(point.level).consumer_plan(consumer_qid);
     auxiliary_point.clock = point.clock;
     auxiliary_point.accepted_step = static_cast<std::uint64_t>(point.tick);
     auxiliary_point.layout_generation = p_->engine->materialization_generation();
@@ -12409,7 +12464,7 @@ void AmrSystem<Dim>::prepare_single_level_program_auxiliary_consumer(
 template <int Dim>
 void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
     const runtime::system::AuxiliaryEvaluationPoint& point,
-    const std::vector<std::string>& consumer_qids) {
+    const std::vector<std::string>& consumer_qids, int consumer_source_block) {
   const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR auxiliary refresh");
   std::exception_ptr hierarchy_error;
   try {
@@ -12418,8 +12473,9 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
     if (!p_->prepared_hierarchy || p_->prepared_hierarchy->auxiliary_registries.size() !=
                                        p_->prepared_hierarchy->provider_storage.size())
       throw std::logic_error("AMR auxiliary hierarchy lost its per-level registries");
-    if (!consumer_qids.empty() && p_->prepared_hierarchy->provider_storage.size() != 1)
-      throw std::invalid_argument("AMR consumer publication requires one exact root level");
+    if (!consumer_qids.empty() && (point.level < 0 ||
+        static_cast<std::size_t>(point.level) >= p_->prepared_hierarchy->provider_storage.size()))
+      throw std::invalid_argument("AMR consumer publication requires its exact live level");
     if (!p_->prepared_hierarchy->lane ||
         p_->prepared_hierarchy->provider_candidate_storage.size() !=
             p_->prepared_hierarchy->provider_storage.size() ||
@@ -12443,7 +12499,7 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
     std::string selection_contract;
     std::exception_ptr selection_error;
     try {
-      auto& registry = hierarchy.auxiliary_registries.at(0);
+      auto& registry = hierarchy.auxiliary_registries.at(point.level);
       std::vector<std::string> required;
       const auto require_provider = [&](const auto& self, const auto& provider) -> void {
         if (std::find(required.begin(), required.end(), provider.identity()) != required.end())
@@ -12475,8 +12531,8 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
       const auto identity = [](ExactContractBuilder& item, const std::string& value) {
         item.text(value);
       };
-      exact.text("pops.amr.single-level-auxiliary-selection")
-          .scalar(std::uint32_t{1})
+      exact.text("pops.amr.exact-level-auxiliary-selection")
+          .scalar(std::uint32_t{2}).scalar(point.level)
           .scalar(registry.accepted_generation())
           .scalar(has_due_provider)
           .sequence(consumer_qids, identity)
@@ -12563,6 +12619,7 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
   std::exception_ptr preparation_error;
   try {
     for (std::size_t level = 0; level < level_count; ++level) {
+      if (!consumer_qids.empty() && static_cast<int>(level) > point.level) continue;
       runtime::system::ExactAuxiliaryRegistry<Dim>* registry = nullptr;
       runtime::system::AuxiliaryStorageGroups<Dim>* candidate = nullptr;
       runtime::system::AuxiliaryEvaluationPoint level_point;
@@ -12574,6 +12631,25 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
           throw std::logic_error("AMR auxiliary candidate carrier is empty");
         level_point = point;
         level_point.level = static_cast<int>(level);
+        // Ancestor images are transport prerequisites for this consumer's fine ghosts.
+        // Their transactions are discarded after sampling; only the requested level publishes.
+        if (level_point.physical_evaluation &&
+            level_point.physical_evaluation->native_accepted_initial()) {
+          if (!p_->active_field_rhs_request)
+            throw std::logic_error("initial auxiliary ancestor sample lacks native source request");
+          if (consumer_source_block < 0 || static_cast<std::size_t>(consumer_source_block) >= p_->blocks.size())
+            throw std::invalid_argument("initial auxiliary sample lacks its exact consuming block");
+          const auto& source = p_->active_field_rhs_request->source(consumer_source_block,
+                                                                  static_cast<int>(level));
+          const auto* proof = std::get_if<runtime::system::NativeAcceptedFieldSource<Dim>>(&source.proof);
+          if (!proof) throw std::invalid_argument("initial auxiliary ancestor has no native accepted source");
+          proof->validate();
+          runtime::system::AuxiliaryPhysicalEvaluation physical(
+              proof->birth_point().stage_fraction, proof->birth_point().dt,
+              proof->birth_point().physical_time);
+          physical.qualify_native_accepted_initial(proof->birth_point());
+          level_point.physical_evaluation = std::move(physical);
+        }
         transactions[level].emplace(
             registry->begin_publication(level_point, forced, consumer_qids));
         if (!consumer_qids.empty()) {
@@ -12587,9 +12663,10 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
             if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) ==
                 remaining_dirty.end())
               remaining_dirty.push_back(identity);
-          std::erase_if(remaining_dirty, [&](const auto& identity) {
-            return transactions[level]->requires_staging(identity);
-          });
+          if (level_count == 1)
+            std::erase_if(remaining_dirty, [&](const auto& identity) {
+              return transactions[level]->requires_staging(identity);
+            });
         }
       } catch (...) {
         candidate_error = std::current_exception();
@@ -12722,7 +12799,7 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
                                                        "AMR auxiliary publication");
     }
     for (const auto& transaction : transactions)
-      transaction->validate_complete();
+      if (transaction) transaction->validate_complete();
   } catch (...) {
     preparation_error = std::current_exception();
   }
@@ -12736,8 +12813,10 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
   std::exception_ptr storage_commit_error;
   try {
     for (std::size_t level = 0; level < level_count; ++level)
-      copy_auxiliary_groups_in_place(*hierarchy.provider_candidate_storage[level],
-                                     *hierarchy.provider_storage[level]);
+      if (transactions[level] &&
+          (consumer_qids.empty() || static_cast<int>(level) == point.level))
+        copy_auxiliary_groups_in_place(*hierarchy.provider_candidate_storage[level],
+                                       *hierarchy.provider_storage[level]);
   } catch (...) {
     storage_commit_error = std::current_exception();
   }
@@ -12751,8 +12830,12 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
 
   std::exception_ptr metadata_commit_error;
   try {
-    for (auto& transaction : transactions)
-      transaction->accept();
+    for (std::size_t level = 0; level < transactions.size(); ++level)
+      if (transactions[level]) {
+        if (consumer_qids.empty() || static_cast<int>(level) == point.level)
+          transactions[level]->accept();
+        else transactions[level]->reject();
+      }
   } catch (...) {
     metadata_commit_error = std::current_exception();
   }
@@ -13440,14 +13523,23 @@ void AmrSystem<Dim>::install_prepared_native_amr_package(PreparedNativePackage p
     prepared.slot = slot;
     const bool default_slot = slot == p_->default_field_slot;
     const bool has_output = !attachment.output_keys.empty();
-    const bool has_rhs = static_cast<bool>(attachment.rhs);
-    if (attachment.rhs_read_contract_version > 1 ||
+    const bool has_rhs = static_cast<bool>(attachment.rhs) || static_cast<bool>(attachment.rhs_v2);
+    if ((attachment.rhs && attachment.rhs_v2) ||
+        (attachment.rhs_v2 && (attachment.rhs_input_contract_version != 2 ||
+                              attachment.rhs_consumer_qid.empty())) ||
+        (!attachment.rhs_v2 && (attachment.rhs_input_contract_version != 0 ||
+                               attachment.rhs_provider_count != 0 ||
+                               !attachment.rhs_consumer_qid.empty())))
+      throw std::invalid_argument("native AMR Field RHS V2 input contract is malformed");
+    if (attachment.rhs_read_contract_version > 2 ||
         (attachment.rhs_read_contract_version == 0 &&
          (!attachment.rhs_read_authority.empty() || std::any_of(
              attachment.rhs_state_read_cells.begin(), attachment.rhs_state_read_cells.end(),
              [](unsigned cells) { return cells != 0; }))) ||
-        (attachment.rhs_read_contract_version == 1 &&
-         (!has_rhs || attachment.rhs_read_authority.empty())))
+        (attachment.rhs_read_contract_version != 0 &&
+         (!has_rhs || attachment.rhs_read_authority.empty())) ||
+        (attachment.rhs_v2 && attachment.rhs_read_contract_version != 2) ||
+        (!attachment.rhs_v2 && attachment.rhs_read_contract_version > 1))
       throw std::invalid_argument("native AMR PreparedFieldRhs StateReadExtent contract is malformed");
     if (default_slot) {
       if (!attachment.block_identity.empty() || !attachment.binding_identity.empty() ||
@@ -13564,7 +13656,8 @@ void AmrSystem<Dim>::install_prepared_native_amr_package(PreparedNativePackage p
           .push_back({attachment.rhs_provider_identity, block_name, slot, std::move(attachment.rhs),
                       prepared.coefficient, attachment.rhs_read_contract_version,
                       attachment.rhs_state_read_cells, attachment.rhs_read_authority,
-                      attachment.binding_identity});
+                      attachment.binding_identity, std::move(attachment.rhs_v2),
+                      attachment.rhs_consumer_qid, attachment.rhs_provider_count});
     }
     touched_slots.insert(slot);
     package_contract.text(slot)
@@ -13576,6 +13669,9 @@ void AmrSystem<Dim>::install_prepared_native_amr_package(PreparedNativePackage p
         .scalar(attachment.coefficient)
         .scalar(std::int32_t{attachment.gradient_sign})
         .presence(prepared.has_rhs)
+        .scalar(attachment.rhs_input_contract_version)
+        .text(attachment.rhs_consumer_qid)
+        .scalar(static_cast<std::uint64_t>(attachment.rhs_provider_count))
         .scalar(static_cast<std::uint64_t>(attachment.output_keys.size()));
     for (const auto& key : attachment.output_keys)
       key.serialize_exact(package_contract);
@@ -17084,6 +17180,42 @@ void AmrSystem<Dim>::set_block_elliptic_field(
 }
 
 template <int Dim>
+void AmrSystem<Dim>::set_block_elliptic_field_v2(
+    const std::string& block_name, const std::string& field,
+    const std::string& rhs_provider_identity, const std::string& binding_identity,
+    const std::string& consumer_qid, std::size_t provider_count,
+    runtime::system::FieldRhsCallbackV2<Dim> rhs) {
+  require_amr_assembling(p_->lifecycle, "set_block_elliptic_field_v2");
+  if (!rhs || binding_identity.empty() || consumer_qid.empty() || rhs_provider_identity.empty())
+    throw std::invalid_argument("AMR Field RHS V2 lacks its exact binding/consumer");
+  const auto block = p_->block_index(block_name);
+  const auto slot = p_->resolve_field_slot(field);
+  auto& plan = p_->field_plans.at(slot);
+  if (plan.prepared_solver)
+    throw std::logic_error("AMR Field RHS V2 cannot replace a materialized solver");
+  Real coefficient = Real(0);
+  bool matched = false;
+  for (const auto& binding : plan.providers)
+    if (binding.block == block_name && binding.identity == binding_identity) {
+      coefficient += static_cast<Real>(binding.coefficient);
+      matched = true;
+    }
+  if (!matched)
+    throw std::invalid_argument("AMR Field RHS V2 differs from its native provider binding");
+  plan.rhs_by_block.resize(p_->blocks.size());
+  typename Impl::PreparedFieldRhs provider;
+  provider.provider_identity = rhs_provider_identity;
+  provider.block_identity = block_name;
+  provider.field_identity = slot;
+  provider.coefficient = coefficient;
+  provider.declared_input_identity = binding_identity;
+  provider.evaluate_v2 = std::move(rhs);
+  provider.consumer_qid = consumer_qid;
+  provider.provider_count = provider_count;
+  plan.rhs_by_block.at(block).push_back(std::move(provider));
+}
+
+template <int Dim>
 SolveOutcome AmrSystem<Dim>::solve_program_field_at(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
     int active_level, const MultiFab<Dim>* stage_override) {
@@ -17127,6 +17259,160 @@ void AmrSystem<Dim>::with_program_field_candidate_at(
 }
 
 template <int Dim>
+SolveOutcome AmrSystem<Dim>::solve_fields_from_request_at_in_place_(
+    const runtime::system::FieldSolveRequest<Dim>& request) {
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR FieldSolveRequest@2");
+  std::vector<const MultiFab<Dim>*> states;
+  std::exception_ptr error;
+  try {
+    if (p_->active_field_rhs_request)
+      throw std::logic_error("AMR FieldSolveRequest cannot nest RHS invocations");
+    p_->field_rhs_recovery->drain();
+    states.resize(p_->blocks.size(), nullptr);
+    for (std::size_t level = 0; level < p_->engine->hierarchy().num_levels(); ++level)
+      for (std::size_t block = 0; block < states.size(); ++block) {
+        if (!request.has_source(static_cast<int>(block), static_cast<int>(level)) &&
+            !request.has_legacy_source(static_cast<int>(block), static_cast<int>(level))) continue;
+        const auto& selected = request.selected_state(static_cast<int>(block), static_cast<int>(level));
+        if (!same_field_contract(selected, p_->block_state(block, level)))
+          throw std::invalid_argument("AMR FieldSolveRequest source differs from its actual frame");
+        if (static_cast<int>(level) == request.point().level) {
+          // Accepted sources preserve the legacy null override route; they retain their own
+          // native proof in the request and are never relabelled as a stage SSA.
+          bool accepted = false;
+          if (request.has_source(static_cast<int>(block), static_cast<int>(level)))
+            accepted = std::holds_alternative<
+                typename runtime::system::FieldSolveRequest<Dim>::authority_type::AcceptedValue>(
+                    request.source(static_cast<int>(block), static_cast<int>(level)).proof);
+          if (!accepted) states[block] = &selected;
+        }
+      }
+  } catch (...) { error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "AMR FieldSolveRequest source/frame preparation failed collectively");
+  p_->active_field_rhs_request = &request;
+  try {
+    auto outcome = solve_program_field_from_blocks_on_prepared_lane(
+        request.point(), request.field(), request.point().level, states);
+    p_->active_field_rhs_request = nullptr;
+    return outcome;
+  } catch (...) {
+    p_->active_field_rhs_request = nullptr;
+    throw;
+  }
+}
+
+template <int Dim>
+void AmrSystem<Dim>::invoke_field_rhs_v2_(const std::string& field, int block, int level,
+    const MultiFab<Dim>& state, MultiFab<Dim>& rhs, const std::string& binding,
+    const std::string& consumer, std::size_t count,
+    const runtime::system::FieldRhsCallbackV2<Dim>& callback) {
+  using Inputs = runtime::system::PreparedFieldRhsInputs<Dim>;
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR Field RHS V2");
+  std::optional<Inputs> inputs;
+  std::shared_ptr<typename Inputs::InvocationLease> lease;
+  runtime::multiblock::BoundaryEvaluationPoint point;
+  std::exception_ptr error;
+  std::optional<typename runtime::system::FieldSolveRequest<Dim>::Source> source_storage;
+  try {
+    p_->field_rhs_recovery->drain();
+    const auto* request = p_->active_field_rhs_request;
+    if (!request || p_->resolve_field_slot(request->field()) != field)
+      throw std::logic_error("AMR Field RHS V2 requires its actual native FieldSolveRequest@2");
+    source_storage = request->source(block, level);
+    if (&source_storage->state() != &state)
+      throw std::invalid_argument("AMR Field RHS V2 received a foreign source image");
+    source_storage->validate();
+    point = request->point();
+    point.level = level; // The composite Field consumes this exact level at its evaluation time.
+    if (count != 0 &&
+        p_->prepared_hierarchy->auxiliary_registries.at(level).consumer_plan(consumer).value_count() != count)
+      throw std::invalid_argument("AMR Field RHS V2 consumer arity differs from its binding");
+  } catch (...) { error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "AMR Field RHS V2 issuer preflight failed collectively");
+  const auto source = *source_storage;
+  if (count != 0) {
+    runtime::system::AuxiliaryEvaluationPoint auxiliary;
+    try {
+      auxiliary.clock = point.clock;
+      auxiliary.accepted_step = static_cast<std::uint64_t>(point.tick);
+      auxiliary.layout_generation = p_->engine->materialization_generation();
+      auxiliary.level = level;
+      auxiliary.substep = point.substep;
+      auxiliary.stage = point.stage;
+      auxiliary.nonlinear_iteration = point.stage;
+      auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+      if (point.dt > 0) auxiliary.qualify_physical_evaluation(point);
+      else {
+        const auto* proof = std::get_if<runtime::system::NativeAcceptedFieldSource<Dim>>(&source.proof);
+        if (!proof) throw std::invalid_argument("zero-interval auxiliary lacks native accepted source");
+        proof->validate();
+        const auto& initial = proof->birth_point();
+        if (initial.physical_time != point.physical_time || initial.dt != point.dt)
+          throw std::invalid_argument("native initial auxiliary differs from consuming Field time");
+        auxiliary.clock = initial.clock;
+        auxiliary.accepted_step = static_cast<std::uint64_t>(initial.tick);
+        auxiliary.stage = initial.stage;
+        auxiliary.substep = initial.substep;
+        auxiliary.nonlinear_iteration = 0;
+        auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::initialization;
+        runtime::system::AuxiliaryPhysicalEvaluation physical(
+            initial.stage_fraction, initial.dt, initial.physical_time);
+        physical.qualify_native_accepted_initial(initial);
+        auxiliary.physical_evaluation = std::move(physical);
+      }
+    } catch (...) { error = std::current_exception(); }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        error, &lane, "AMR Field RHS V2 auxiliary point failed collectively");
+    refresh_auxiliary_on_prepared_lane(auxiliary, {consumer}, block);
+  }
+  try {
+    const auto topology = p_->engine->topology_epoch();
+    const auto generation = p_->engine->materialization_generation();
+    const auto auxiliary_generation =
+        p_->prepared_hierarchy->auxiliary_registries.at(level).accepted_generation();
+    auto groups = count == 0 ? nullptr :
+        std::make_shared<const runtime::system::AuxiliaryStorageGroups<Dim>>(
+            *p_->prepared_hierarchy->provider_storage.at(level));
+    auto plan = count == 0 ? nullptr :
+        std::make_shared<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>>(
+            p_->prepared_hierarchy->auxiliary_registries.at(level).consumer_plan(consumer));
+    auto owner = std::make_shared<const MultiFab<Dim>>(source.state());
+    auto output_owner = std::make_shared<std::vector<typename Fab<Dim>::storage_type>>();
+    output_owner->reserve(rhs.local_size());
+    for (std::size_t local = 0; local < rhs.local_size(); ++local)
+      output_owner->push_back(rhs.fab(local).storage());
+    lease = std::make_shared<typename Inputs::InvocationLease>();
+    inputs.emplace(Inputs(owner, groups, plan, prepared_amr_level_geometry(level),
+        runtime::system::field_rhs_logical_point(point), point, binding,
+        source.source_identity(), consumer, count, topology, generation,
+        Kokkos::DefaultExecutionSpace{}, p_->prepared_hierarchy->lane, lease,
+        [this, source, topology, generation, auxiliary_generation, level] {
+          source.validate();
+          if (p_->engine->topology_epoch() != topology ||
+              p_->engine->materialization_generation() != generation ||
+              p_->prepared_hierarchy->auxiliary_registries.at(level).accepted_generation() !=
+                  auxiliary_generation)
+            throw std::logic_error("AMR Field RHS V2 storage generation changed during invocation");
+        }, p_->field_rhs_recovery));
+    p_->field_rhs_recovery->retain(
+        std::make_shared<decltype(std::tuple(owner, output_owner, groups, plan, lease, source))>(
+            owner, output_owner, groups, plan, lease, source),
+        [lease] { lease->active.store(false, std::memory_order_release); });
+  } catch (...) { error = std::current_exception(); }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "AMR Field RHS V2 retained-input preparation failed collectively");
+  try { callback(*inputs, rhs); }
+  catch (...) { error = std::current_exception(); }
+  try { p_->field_rhs_recovery->drain(); }
+  catch (...) { error = std::current_exception(); }
+  if (error) lease->revoked.store(true, std::memory_order_release);
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "AMR Field RHS V2 execution failed collectively");
+}
+
+template <int Dim>
 SolveOutcome AmrSystem<Dim>::solve_program_field_from_blocks_at(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
     int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides) {
@@ -17144,6 +17430,7 @@ SolveOutcome AmrSystem<Dim>::solve_program_field_from_blocks_on_prepared_lane(
 
   std::string slot;
   std::string request_contract;
+  std::optional<runtime::system::FieldSolveRequest<Dim>> accepted_request;
   std::exception_ptr local_error;
   try {
     const auto& topology_point = p_->active_topology_rematerialization_point;
@@ -17169,6 +17456,61 @@ SolveOutcome AmrSystem<Dim>::solve_program_field_from_blocks_on_prepared_lane(
           "AMR exact simultaneous field solve must cover the runtime block registry");
 
     slot = p_->resolve_field_slot(provider_slot);
+    const auto& native_plan = p_->field_plans.at(slot);
+    const bool needs_v2 = std::any_of(native_plan.rhs_by_block.begin(), native_plan.rhs_by_block.end(),
+        [](const auto& providers) { return std::any_of(providers.begin(), providers.end(),
+            [](const auto& provider) { return static_cast<bool>(provider.evaluate_v2); }); });
+    if (needs_v2 && !p_->active_field_rhs_request) {
+      if (std::any_of(stage_overrides.begin(), stage_overrides.end(), [](const auto* state) { return state != nullptr; }))
+        throw std::invalid_argument("AMR raw stage overrides cannot mint a native Field source");
+      Kokkos::fence();
+      const auto topology = p_->engine->topology_epoch();
+      const auto generation = p_->engine->materialization_generation();
+      const auto accepted_step = p_->macro_step;
+      const auto accepted_time = p_->accepted_time;
+      const auto depth = step_transaction_depth();
+      const auto native_contract = Impl::exact_field_plan_contract(slot, native_plan);
+      std::weak_ptr<void> session = p_->field_rhs_session;
+      auto* owner = p_.get();
+      std::vector<typename runtime::system::FieldSolveRequest<Dim>::Source> sources;
+      sources.reserve(p_->blocks.size() * p_->engine->hierarchy().num_levels());
+      for (std::size_t level = 0; level < p_->engine->hierarchy().num_levels(); ++level)
+        for (std::size_t block = 0; block < p_->blocks.size(); ++block) {
+          const auto* actual = &p_->block_state(block, level);
+          auto allocations = std::make_shared<std::vector<typename Fab<Dim>::storage_type>>();
+          for (std::size_t local = 0; local < actual->local_size(); ++local)
+            allocations->push_back(actual->fab(local).storage());
+          auto accepted_point = point;
+          accepted_point.tick = accepted_step;
+          accepted_point.level = static_cast<int>(level);
+          accepted_point.stage = 0;
+          accepted_point.substep = 0;
+          accepted_point.stage_fraction = {0, 1};
+          accepted_point.physical_time = accepted_time;
+          if (!p_->program.checkpoint_metadata_.primary_clock_identity.empty())
+            accepted_point.clock = p_->program.checkpoint_metadata_.primary_clock_identity;
+          auto validate = [owner, session, actual, allocations, block, level, slot,
+                           topology, generation, accepted_step, accepted_time, depth, native_contract] {
+            if (session.expired()) throw std::logic_error("native accepted Field source session expired");
+            if (owner->engine->topology_epoch() != topology ||
+                owner->engine->materialization_generation() != generation ||
+                owner->macro_step != accepted_step || owner->accepted_time != accepted_time ||
+                owner->facade->step_transaction_depth() != depth ||
+                &owner->block_state(block, level) != actual ||
+                Impl::exact_field_plan_contract(slot, owner->field_plans.at(slot)) != native_contract ||
+                actual->local_size() != allocations->size())
+              throw std::logic_error("native accepted Field source lost owner/frame/point/binding authority");
+            for (std::size_t local = 0; local < actual->local_size(); ++local)
+              if (actual->fab(local).storage().data() != (*allocations)[local].data())
+                throw std::logic_error("native accepted Field source carrier incarnation changed");
+          };
+          auto image = std::make_shared<const MultiFab<Dim>>(*actual);
+          runtime::system::NativeAcceptedFieldSource<Dim> proof(image, accepted_point,
+                                                               static_cast<int>(block), validate);
+          sources.push_back({std::move(proof), std::move(validate)});
+        }
+      accepted_request.emplace(runtime::system::FieldSolveRequest<Dim>(provider_slot, point, std::move(sources)));
+    }
     std::vector<const MultiFab<Dim>*> unique_stages;
     unique_stages.reserve(stage_overrides.size());
     ExactContractBuilder request;
@@ -17234,11 +17576,11 @@ SolveOutcome AmrSystem<Dim>::solve_program_field_from_blocks_on_prepared_lane(
     throw std::invalid_argument("AMR exact field solve request differs between MPI ranks");
 
   SolveReport report;
+  if (accepted_request) p_->active_field_rhs_request = &*accepted_request;
   try {
     report = p_->solve_field_candidate(slot, active_level, stage_overrides, &point);
-  } catch (...) {
-    local_error = std::current_exception();
-  }
+  } catch (...) { local_error = std::current_exception(); }
+  if (accepted_request) p_->active_field_rhs_request = nullptr;
   if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
     std::exception_ptr rollback_error;
     try {
@@ -24115,6 +24457,11 @@ template void AmrSystem<kNativeDimension>::set_field_boundary_dependencies(
     const std::vector<std::string>&, const std::vector<std::string>&, const std::vector<int>&);
 template void AmrSystem<kNativeDimension>::set_field_boundary_kernel(
     const std::string&, const CompiledFieldBoundaryKernel<kNativeDimension>&);
+template void AmrSystem<kNativeDimension>::set_block_elliptic_field_v2(
+    const std::string&, const std::string&, const std::string&, const std::string&,
+    const std::string&, std::size_t, runtime::system::FieldRhsCallbackV2<kNativeDimension>);
+template SolveOutcome AmrSystem<kNativeDimension>::solve_fields_from_request_at_in_place_(
+    const runtime::system::FieldSolveRequest<kNativeDimension>&);
 template void AmrSystem<kNativeDimension>::set_field_logical_timepoint(
     const std::string&, const FieldLogicalTimePoint&);
 template void AmrSystem<kNativeDimension>::set_field_boundary_parameters(

@@ -318,6 +318,9 @@ def _emit_contiguous_rhs_group(
         requests.append("{%d, &%s, &%s, %d, %d%s%s%s}" % (
             index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
             family, capture, trace))
+    from .program_value_authority import begin_value_write_cpp, complete_value_cpp
+    for value in values:
+        lines.extend(begin_value_write_cpp(value, var))
     lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
     from pops.codegen.program_models import model_for_node
     from pops.codegen.program_partition_stability import emit_transport_frequency
@@ -325,6 +328,8 @@ def _emit_contiguous_rhs_group(
         for value in values:
             emit_transport_frequency(value, var, lines, model=model_for_node(model, value),
                                      block_index=block_idx[value.block], target=target)
+    for value in values:
+        lines.extend(complete_value_cpp(value, var))
 
 
 def _emit_commit_group(commits: Any, bases: Any, var: Any, *, phase: int) -> list[str]:
@@ -364,7 +369,7 @@ def _emit_commit_group(commits: Any, bases: Any, var: Any, *, phase: int) -> lis
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None, balance_due_contract: Any = None,
                has_shared_interface_implicit_jacvec: bool = False,
-               provider_plans: Any = None) -> tuple:
+               provider_plans: Any = None, value_authority: Any = None) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns
@@ -390,6 +395,10 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # IR value id -> C++ token: a MultiFab variable name (states / RHS scratches), a scalar variable
     # name (reductions, ``s{id}``) or a parenthesized boolean expression (compares).
     var = {}
+    from .program_value_authority import prepare_program_value_authority
+    if value_authority is None:
+        value_authority = prepare_program_value_authority(program, model, field_plans or {})
+    var[("program_value_authority",)] = value_authority
     from .program_emit_moving import deferred_moving_rates
     var[("moving_deferred_rates",)] = deferred_moving_rates(program)
     from pops.codegen.program_partition_stability import explicit_update_consumers
@@ -588,6 +597,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         post_sync_lines.extend(["if (ctx.level() == 0) {"])
         post_sync_lines.extend(integral_transfers)
         post_sync_lines.append("}")
+    prelude.extend(value_authority.cpp_install())
     prelude_src = "\n".join("  " + ln for ln in prelude)
     # Host diagnostic effects outlive the current frame when a map suspends it.
     # Allocate their invocation-owned payloads collectively before any callbacks.
@@ -630,6 +640,8 @@ def _emit_post_synchronization_phase(
             "pops::MultiFab<pops::kNativeDimension>& %s = ctx.state(%d);"
             % (token, index)
         )
+        from .program_value_authority import complete_value_cpp
+        lines.extend(complete_value_cpp(base, var))
     committed_ids = frozenset()
     for value in node.attrs.get("body_block") or ():
         _emit_op(

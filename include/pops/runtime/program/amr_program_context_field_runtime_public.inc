@@ -1,14 +1,11 @@
-/// Root-only AMR execution does not pass through topology rematerialization. Publish its
-/// exact prerequisites before a generated Fab traversal, including the first field solve.
-/// Refined execution retains the hierarchy publication authority; no parent stage is inferred.
+/// Publish the exact consumer closure on the active hierarchy level before Fab traversal.
+/// The actual evaluation point and owning stage state remain separate authorities.
 void prepare_provider_values(std::string_view consumer_qid, int program_block,
                              const field_type& stage_state, int evaluation_id) const {
-  if (nlev() != 1)
-    return;
   const int runtime_block = sys_block(program_block);
   prepare_spatial_collectively([&] {
     if (resource_epoch_ != runtime_->topology_epoch() ||
-        resource_generation_ != runtime_->materialization_generation() || active_level_ != 0)
+        resource_generation_ != runtime_->materialization_generation() || active_level_ < 0 || active_level_ >= nlev())
       throw std::logic_error("AMR Program auxiliary preparation has a stale resource traversal");
     if (scratch_prototype_owner_(stage_state) != runtime_block)
       throw std::invalid_argument("AMR Program auxiliary preparation has a foreign SSA owner");

@@ -385,7 +385,7 @@ def resolve_component_provider_packs(module: Any) -> ComponentProviderPacks:
     # Producers may be registered after Program clock authoring. Do not rewrite an operator's
     # sealed signature at that point: refuse a hidden solved-field dependency instead.
     for operator in module.operator_registry():
-        if operator.kind != "local_linear_operator":
+        if operator.kind not in {"local_linear_operator", "field_operator"}:
             continue
         declared_fields = {name for _, name in _field_input_spaces_after_binding(
             module, [("field", space.name) for space in operator.signature.inputs
@@ -397,6 +397,11 @@ def resolve_component_provider_packs(module: Any) -> ComponentProviderPacks:
             if key in seen:
                 continue
             seen.add(key)
+            if operator.kind == "field_operator" and key.space_kind == "field":
+                raise ValueError(
+                    "field RHS operator %r requires a FieldContext input for solved "
+                    "FieldSpace dependency %r; its State+Aux contract cannot hide that read"
+                    % (operator.name, key.space_name))
             if key.space_kind == "field" and key.space_name not in declared_fields:
                 raise ValueError(
                     "local-linear operator %r hides solved FieldSpace dependency %r; "

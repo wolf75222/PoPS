@@ -239,27 +239,36 @@ class ExactNamedField final {
     active_ = true;
     candidate_ready_ = false;
 
-    std::exception_ptr rhs_error;
-    try {
-      solver_->rhs().set_val(Real(0));
+    const auto rhs_phase = [&](const auto& operation, const char* message) {
+      std::exception_ptr error;
+      try { operation(); Kokkos::fence(); }
+      catch (...) {
+        error = std::current_exception();
+        try { Kokkos::fence(); } catch (...) { error = std::current_exception(); }
+      }
+      if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+        clear_candidate_();
+        collectively_rethrow_exception(error, lane, message);
+      }
+    };
+    // A V2 callback enters its own preflight votes. No rank may reach it while a peer has
+    // already failed a contribution allocation or initialization outside that vote.
+    rhs_phase([&] {
       if (!contribution_scratch_)
         contribution_scratch_.emplace(solver_->rhs().layout(), solver_->rhs().distribution(),
                                       solver_->rhs().local_rank(), 1, Extent<Dim>{});
-      for (std::size_t block = 0; block < states.size(); ++block)
-        for (const PreparedRhs& provider : rhs_by_block_[block]) {
-          contribution_scratch_->set_val(Real(0));
-          provider.evaluate(*states[block], *contribution_scratch_);
-          saxpy(solver_->rhs(), provider.coefficient, *contribution_scratch_);
-        }
-      Kokkos::fence();
-    } catch (...) {
-      rhs_error = std::current_exception();
-    }
-    if (all_reduce_max(rhs_error ? 1L : 0L, lane) != 0) {
-      clear_candidate_();
-      collectively_rethrow_exception(rhs_error, lane,
-                                     "named-field RHS assembly failed collectively");
-    }
+    }, "named-field RHS allocation failed collectively");
+    rhs_phase([&] { solver_->rhs().set_val(Real(0)); },
+              "named-field RHS initialization failed collectively");
+    for (std::size_t block = 0; block < states.size(); ++block)
+      for (const PreparedRhs& provider : rhs_by_block_[block]) {
+        rhs_phase([&] { contribution_scratch_->set_val(Real(0)); },
+                  "named-field contribution initialization failed collectively");
+        rhs_phase([&] { provider.evaluate(*states[block], *contribution_scratch_); },
+                  "named-field contribution failed collectively");
+        rhs_phase([&] { saxpy(solver_->rhs(), provider.coefficient, *contribution_scratch_); },
+                  "named-field contribution assembly failed collectively");
+      }
 
     try {
       SolveReport report = solver_->solve(accepted_, lane);

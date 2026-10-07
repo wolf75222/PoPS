@@ -114,6 +114,7 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
     multiblock_subcycling_has_accepted_step_ = true;
   } catch (...) {
     retain_subcycling_attempt_authority_();
+    program_values_.revoke_();
     rhs_input_traces_.clear();
     if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
       interface_flux_ledger_->rollback();
@@ -563,6 +564,7 @@ void stage_prepared_publication_candidates_(std::size_t level, std::span<field_t
 }
 
 void clear_active_multiblock_group_() const noexcept {
+  program_values_.revoke_();
   active_attempt_states_.clear();
   active_staged_parents_.clear();
   active_incoming_flux_.clear();

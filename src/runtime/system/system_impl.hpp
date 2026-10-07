@@ -131,6 +131,11 @@ struct System<Dim>::Impl {
   Index<Dim>& local_rank = domain_.local_rank;
   std::array<bool, Dim>& periodicity = domain_.periodicity;
 
+  const runtime::multiblock::BoundaryEvaluationPoint* active_field_rhs_point_ = nullptr;
+  std::shared_ptr<void> field_rhs_session_ = std::make_shared<int>(0);
+  const runtime::system::FieldSolveRequest<Dim>* active_field_rhs_request_ = nullptr;
+  std::shared_ptr<runtime::system::FieldRhsExecutionRecovery> field_rhs_recovery_ =
+      std::make_shared<runtime::system::FieldRhsExecutionRecovery>();
   using auxiliary_registry_type = runtime::system::ExactAuxiliaryRegistry<Dim>;
   using auxiliary_publication_type = typename auxiliary_registry_type::PublicationTransaction;
   using auxiliary_key_type = runtime::system::AuxiliaryComponentKey;

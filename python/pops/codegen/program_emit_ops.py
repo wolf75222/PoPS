@@ -527,20 +527,30 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if field_ref is None:
             raise ValueError("solve_fields node has no exact field identity")
         field, _ = resolved_field_route(field_ref, field_plans)
+        from pops.time._evaluation_point import evaluation_stage_fraction
+
+        stage = evaluation_stage_fraction(v)
+        lines.append("{")
+        lines.append("auto field_stage_scope_%d = ctx.stage_evaluation_scope(%d, %d);"
+                     % (v.id, stage.numerator, stage.denominator))
         lines += field_point_cpp(program, v, field)
         boundary_point = "field_boundary_point_%d" % v.id
-        lines.append(
-            "const auto %s = ctx.boundary_evaluation_point(%d);"
-            % (boundary_point, v.id)
-        )
         report = "field_report_%d" % v.id
-        solve_stmt = (
-            "pops::SolveOutcome %s = "
-            "ctx.solve_fields_from_state_at(%s, %s, %d, %s);"
-            % (report, boundary_point, json.dumps(field), bidx, var[state_in.id])
-        )
+        from .program_value_authority import field_uses_value_authority, field_value_overrides_cpp
+        if field_uses_value_authority(v, var):
+            solve_stmt = ("pops::SolveOutcome %s = "
+                          "ctx.solve_fields_from_program_values_at(%s, %d, %s, {%s});" % (
+                              report, boundary_point, v.id, json.dumps(field),
+                              field_value_overrides_cpp(v, var, block_idx)))
+        else:
+            solve_stmt = (
+                "pops::SolveOutcome %s = "
+                "ctx.solve_fields_from_state_at(%s, %s, %d, %s);"
+                % (report, boundary_point, json.dumps(field), bidx, var[state_in.id])
+            )
         lines.append(solve_stmt)
         _append_solve_report_guard(program, v, report, lines, label="field_solve")
+        lines.append("}")
         var[v.id] = var[state_in.id]
     elif v.op == "solve_fields_from_blocks":
         # Coupled multi-block field solve (ADC-457): a SIMULTANEOUS solve, EVERY listed block at
@@ -562,24 +572,30 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if field_ref is None:
             raise ValueError("solve_fields_from_blocks node has no exact field identity")
         field, _ = resolved_field_route(field_ref, field_plans)
+        from pops.time._evaluation_point import evaluation_stage_fraction
+
+        stage = evaluation_stage_fraction(v)
+        lines.append("{")
+        lines.append("auto field_stage_scope_%d = ctx.stage_evaluation_scope(%d, %d);"
+                     % (v.id, stage.numerator, stage.denominator))
         lines += field_point_cpp(program, v, field)
         boundary_point = "field_boundary_point_%d" % v.id
-        lines.append(
-            "const auto %s = ctx.boundary_evaluation_point(%d);"
-            % (boundary_point, v.id)
-        )
         report = "field_report_%d" % v.id
+        from .program_value_authority import field_uses_value_authority, field_value_overrides_cpp
+        checked_values = field_uses_value_authority(v, var)
         lines.append(
-            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks_at(%s, %d, %s, {%s});"
+            "pops::SolveOutcome %s = ctx.%s(%s, %d, %s, {%s});"
             % (
                 report,
+                "solve_fields_from_program_values_at" if checked_values else "solve_fields_from_blocks_at",
                 boundary_point,
                 int(v.id),
                 json.dumps(field),
-                ", ".join(overrides),
+                field_value_overrides_cpp(v, var, block_idx) if checked_values else ", ".join(overrides),
             )
         )
         _append_solve_report_guard(program, v, report, lines, label="field_solve")
+        lines.append("}")
         # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
         # listed state so a downstream rhs(state, fields) reads the refreshed shared aux like any
         # solve_fields result (the FieldContext carries no readable buffer of its own).
@@ -1674,6 +1690,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # block as the node's cost). An always() schedule (or no schedule) leaves the lines untouched.
     evaluation_start = output_setup_end if output_setup_end is not None else _profile_start
     lines[evaluation_start:evaluation_start] = evaluation_prelude
+    from .program_value_authority import instrument_value_cpp
+    instrument_value_cpp(v, var, lines, evaluation_start + len(evaluation_prelude))
     _emit_schedule_wrap(program, v, var, lines, _profile_start,
                         output_setup_end=output_setup_end)
     # PER-NODE PROFILING (ADC-459): if this op emitted at least one statement, bracket those

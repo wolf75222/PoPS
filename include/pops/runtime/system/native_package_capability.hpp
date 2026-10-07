@@ -6,6 +6,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/exact_aux_registry.hpp>
+#include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 
@@ -22,7 +23,7 @@
 
 namespace pops::runtime::system {
 
-inline constexpr int kNativeSystemPackageAbiVersion = 7;
+inline constexpr int kNativeSystemPackageAbiVersion = 8;
 inline constexpr const char* kNativeSystemPackageAbiVersionSymbol =
     "pops_native_system_package_abi_version";
 
@@ -38,14 +39,25 @@ struct PreparedNativeEllipticAttachment {
   NativeEllipticAttachmentRole role = NativeEllipticAttachmentRole::output_and_rhs;
   std::string field_slot;
   std::string binding_identity;
+  FieldRhsCallbackV2<Dim> rhs_v2;
+  std::string rhs_consumer_qid;
+  std::size_t rhs_provider_count = 0;
+  unsigned rhs_input_contract_version = 0;
 };
 
 template <int Dim>
 inline void validate_native_elliptic_attachment_contract(
     const PreparedNativeEllipticAttachment<Dim>& attachment) {
-  if (attachment.field.empty() || attachment.rhs_identity.empty() || !attachment.rhs ||
+  if (attachment.field.empty() || attachment.rhs_identity.empty() ||
+      (static_cast<bool>(attachment.rhs) == static_cast<bool>(attachment.rhs_v2)) ||
       (attachment.gradient_sign != -1 && attachment.gradient_sign != 1))
     throw std::invalid_argument("native package committed an incomplete elliptic attachment");
+  if ((attachment.rhs_v2 && (attachment.rhs_input_contract_version != 2 ||
+                            attachment.rhs_consumer_qid.empty())) ||
+      (!attachment.rhs_v2 && (attachment.rhs_input_contract_version != 0 ||
+                             attachment.rhs_provider_count != 0 ||
+                             !attachment.rhs_consumer_qid.empty())))
+    throw std::invalid_argument("native Field RHS attachment has an invalid input contract");
   if (attachment.role == NativeEllipticAttachmentRole::rhs_only) {
     if (attachment.field_slot.empty() || attachment.binding_identity.empty() ||
         !attachment.outputs.empty() || attachment.gradient_sign != 1)
@@ -186,7 +198,11 @@ inline std::string exact_native_system_package_contract(
                             .text(key.space_name)
                             .text(key.component);
                       })
-            .presence(static_cast<bool>(attachment.rhs));
+            .presence(static_cast<bool>(attachment.rhs))
+            .presence(static_cast<bool>(attachment.rhs_v2))
+            .scalar(attachment.rhs_input_contract_version)
+            .text(attachment.rhs_consumer_qid)
+            .scalar(static_cast<std::uint64_t>(attachment.rhs_provider_count));
       });
   return std::move(contract).release();
 }

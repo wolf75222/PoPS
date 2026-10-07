@@ -297,6 +297,8 @@ def _emit_cpp_program_impl(
     from .provider_instances import graph_instance_contracts
     provider_plans = ProgramProviderPlans(target=target, provider_halos=provider_halos,
                                          instance_contracts=graph_instance_contracts(authority))
+    from pops.codegen.program_value_authority import prepare_program_value_authority
+    value_authority = prepare_program_value_authority(program, authority, field_plans or {})
     prelude, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,
@@ -305,6 +307,7 @@ def _emit_cpp_program_impl(
         balance_due_contract=balance_due_contract,
         has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
         provider_plans=provider_plans,
+        value_authority=value_authority,
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime
@@ -336,7 +339,7 @@ def _emit_cpp_program_impl(
         field_boundaries=field_boundaries,
         model_helpers=(_emit_program_model_helpers(program, authority)
                        + provider_plans.source_kernel_helpers.cpp()),
-        block_names=_emit_block_names(program),
+        block_names=_emit_block_names(program, value_authority.block_names),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         system_install=_emit_system_install(
             target, prelude, body, provider_plans.cpp_install(target)),
@@ -498,7 +501,7 @@ def _emit_operator_authorities(authorities: tuple[tuple[int, ...], ...]) -> str:
     )
 
 
-def _emit_block_names(program: Any) -> str:
+def _emit_block_names(program: Any, installed_names: tuple[str, ...] | None = None) -> str:
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):
     ``pops_program_block_count()`` and ``pops_program_block_name(int)`` -- the Program's block names in
     ``_block_indices`` order (T.state declaration order, the order the step body's ``ctx.state(idx)``
@@ -508,10 +511,13 @@ def _emit_block_names(program: Any) -> str:
     whose name has no System block fails loud. The block names are also part of the IR identity (the
     block_order field of _serialize feeds the IR hash), so reordering T.state changes the hash."""
     order = program._block_indices()  # name -> index, declaration order
-    names = sorted(order, key=order.get)
+    declared = tuple(block_name(block) for block in sorted(order, key=order.get))
+    names = declared if installed_names is None else installed_names
+    if names[:len(declared)] != declared or len(set(names)) != len(names):
+        raise ValueError("installed Program owner table changes the declared native block indices")
     cases = "".join(
-        "    case %d: return %s;\n" % (order[block], cpp_string_literal(block_name(block)))
-        for block in names
+        "    case %d: return %s;\n" % (index, cpp_string_literal(name))
+        for index, name in enumerate(names)
     )
     return (
         "// NAME-based block binding (Spec 3 criterion 23, ADC-457): the Program's block names in\n"

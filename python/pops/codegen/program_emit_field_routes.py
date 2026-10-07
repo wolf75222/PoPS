@@ -85,8 +85,16 @@ def field_point_cpp(program: Any, value: Any, slot: str) -> list[str]:
     point = value.point
     partition_slot = 0
     if type(point) is StagePoint:
-        candidates = [(name, item) for name, item in point.partitions.items()
-                      if item.clock == value.clock]
+        partition = value.attrs.get("evaluation_partition")
+        if partition is not None:
+            if partition not in point.partitions:
+                raise ValueError("field evaluation partition is not declared by its StagePoint")
+            candidates = [(partition, point.time_for(partition))]
+            if candidates[0][1].clock != value.clock:
+                raise ValueError("field evaluation partition changes its exact logical clock")
+        else:
+            candidates = [(name, item) for name, item in point.partitions.items()
+                          if item.clock == value.clock]
         if len(candidates) != 1:
             try:
                 point = point.time
@@ -102,17 +110,21 @@ def field_point_cpp(program: Any, value: Any, slot: str) -> list[str]:
         raise TypeError("field solve requires an exact TimePoint or StagePoint")
     clocks = sorted({item.clock.qualified_id for item in program._values})
     clock_slot = clocks.index(point.clock.qualified_id)
-    coordinate = "(%d + %s)" % (point.step, point.offset.to_cpp())
     token = "field_point_%d" % value.id
+    boundary = "field_boundary_point_%d" % value.id
     return [
+        "const auto %s = ctx.boundary_evaluation_point(%d);" % (boundary, value.id),
         "pops::FieldLogicalTimePoint %s;" % token,
-        "%s.time = ctx.physical_time() + (%s) * dt;" % (token, coordinate),
-        "%s.dt = dt;" % token,
+        "%s.time = %s.physical_time;" % (token, boundary),
+        "%s.dt = %s.dt;" % (token, boundary),
         "%s.clock_slot = %d;" % (token, clock_slot),
         "%s.partition_slot = %d;" % (token, partition_slot),
-        "%s.stage_slot = %d;" % (token, value.id),
-        "%s.step = ctx.macro_step() + %d;" % (token, point.step),
-        "%s.substep = 0;" % token,
+        "%s.stage_slot = %s.stage;" % (token, boundary),
+        "%s.level = %s.level;" % (token, boundary),
+        "%s.step = %s.tick;" % (token, boundary),
+        "%s.substep = %s.substep;" % (token, boundary),
+        "%s.stage_fraction_numerator = %s.stage_fraction.numerator;" % (token, boundary),
+        "%s.stage_fraction_denominator = %s.stage_fraction.denominator;" % (token, boundary),
         "%s.iteration = 0;" % token,
         "ctx.set_field_logical_timepoint(%s, %s);" % (json.dumps(slot), token),
     ]

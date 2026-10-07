@@ -19,7 +19,7 @@ _BACKEND_CAPS = {
 
 # Must match pops::runtime::system::kNativeSystemPackageAbiVersion.  Host
 # add_native_block looks up NATIVE_SYSTEM_PACKAGE_ABI_EXPORT on every package.
-NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 7
+NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 8
 NATIVE_SYSTEM_PACKAGE_ABI_EXPORT = "pops_native_system_package_abi_version"
 
 
@@ -916,6 +916,7 @@ def emit_cpp_native_loader(
         _emit_bricks,
         _emit_metadata,
         _elliptic_field_registrations,
+        _elliptic_provider_locals,
     )
 
     m = model
@@ -1022,10 +1023,34 @@ def emit_cpp_native_loader(
     system_elliptic_prepare_lines = ""
     system_elliptic_package_lines = ""
     system_registrations = [(*registration, None) for registration in ell_field_regs]
+    default_rhs_width = (0 if m._elliptic is None else
+                         _elliptic_provider_locals(m, "fields_from_state", m._elliptic)[0])
+    default_rhs_brick = ("pops_generated::%sEll_DefaultRhs" % nm
+                         if m._elliptic is not None else None)
+
+    def rhs_width(key):
+        if key == "fields_from_state" and m._elliptic is not None:
+            return default_rhs_width
+        return _elliptic_provider_locals(m, key, m._elliptic_fields[key]["rhs"])[0]
+
+    def rhs_consumer(key):
+        return _consumer_owner_qid(m, consumer_owner_qid) + "/operator/" + key
+
+    def rhs_assignment(variable, key, *, v2=True):
+        if not v2:
+            return "    attachment.rhs = std::move(%s);\n" % variable
+        return ("    attachment.rhs_v2 = std::move(%s);\n"
+                "    attachment.rhs_consumer_qid = %s;\n"
+                "    attachment.rhs_provider_count = %d;\n"
+                "    attachment.rhs_input_contract_version = 2;\n"
+                % (variable, cpp_string_expression(rhs_consumer(key)), rhs_width(key)))
+
     if target == "system" and native_field_roles is not None:
         # A Case owns one complete field output. Model packages contribute only their resolved
         # RHS laws; the available output FieldSpace does not confer output or gradient ownership.
         local_fields = {field: brick for field, brick, _ in ell_field_regs}
+        if default_rhs_brick is not None:
+            local_fields["fields_from_state"] = default_rhs_brick
         system_registrations = []
         system_bindings = {}
         for role in amr_field_roles:
@@ -1064,8 +1089,9 @@ def emit_cpp_native_loader(
                 "  pops::compiled_model::apply_runtime_params(\n"
                 "      named_elliptic_model_%d,\n"
                 "      pops::compiled_model::declaration_runtime_params(model));\n"
-                "  auto named_elliptic_rhs_%d = pops::make_poisson_rhs(named_elliptic_model_%d);\n"
-                % (index, brick, index, index, index)
+                "  auto named_elliptic_rhs_%d = pops::%s(named_elliptic_model_%d);\n"
+                % (index, brick, index, index,
+                   "make_poisson_rhs_v2" if rhs_width(fld) else "make_poisson_rhs", index)
             )
         key_values = ", ".join(
             "pops::runtime::system::AuxiliaryComponentKey{%s, %s, %s, %s}"
@@ -1082,11 +1108,17 @@ def emit_cpp_native_loader(
         )
         if rhs_role is None:
             system_elliptic_package_lines += (
-                '  package.elliptic_attachments.push_back({%s, %s, '
-                "std::vector<pops::runtime::system::AuxiliaryComponentKey>{%s}, %d, "
-                "std::move(named_elliptic_rhs_%d)});\n"
-                % (cpp_string_expression(fld), cpp_string_expression("%s/%s" % (model_identity, fld)), key_values, gradient_sign, index)
-            )
+                "  {\n"
+                "    pops::runtime::system::PreparedNativeEllipticAttachment<pops::kNativeDimension> attachment;\n"
+                "    attachment.field = %s;\n"
+                "    attachment.rhs_identity = %s;\n"
+                "    attachment.outputs = {%s};\n"
+                "    attachment.gradient_sign = %d;\n"
+                % (cpp_string_expression(fld), cpp_string_expression("%s/%s" % (model_identity, fld)),
+                   key_values, gradient_sign))
+            system_elliptic_package_lines += rhs_assignment(
+                "named_elliptic_rhs_%d" % index, fld, v2=bool(rhs_width(fld)))
+            system_elliptic_package_lines += "    package.elliptic_attachments.push_back(std::move(attachment));\n  }\n"
         else:
             system_elliptic_package_lines += (
                 "  {\n"
@@ -1096,24 +1128,40 @@ def emit_cpp_native_loader(
                 "    attachment.role = pops::runtime::system::NativeEllipticAttachmentRole::rhs_only;\n"
                 "    attachment.field_slot = %s;\n"
                 "    attachment.binding_identity = %s;\n"
-                "    attachment.rhs = std::move(named_elliptic_rhs_%d);\n"
-                "    package.elliptic_attachments.push_back(std::move(attachment));\n"
-                "  }\n"
                 % (cpp_string_expression(fld), cpp_string_expression("%s/%s" % (model_identity, fld)),
-                   cpp_string_expression(rhs_role["field"]), cpp_string_expression(rhs_role["binding_identity"]), index)
+                   cpp_string_expression(rhs_role["field"]), cpp_string_expression(rhs_role["binding_identity"])))
+            system_elliptic_package_lines += rhs_assignment(
+                "named_elliptic_rhs_%d" % index, fld, v2=bool(rhs_width(fld)))
+            system_elliptic_package_lines += (
+                "    package.elliptic_attachments.push_back(std::move(attachment));\n  }\n"
             )
     if m._elliptic is not None and (target != "system" or native_field_roles is None):
-        system_elliptic_prepare_lines += (
-            "  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n"
-        )
-        system_elliptic_package_lines += (
-            '  package.elliptic_attachments.push_back({"fields_from_state", '
-            '"%s/fields_from_state", {}, 1, std::move(fields_from_state_rhs)});\n' % model_identity
-        )
+        if default_rhs_width:
+            system_elliptic_prepare_lines += (
+                "  auto fields_from_state_model = %s{};\n"
+                "  pops::compiled_model::apply_runtime_params(fields_from_state_model,\n"
+                "      pops::compiled_model::declaration_runtime_params(model));\n"
+                "  auto fields_from_state_rhs = pops::make_poisson_rhs_v2(fields_from_state_model);\n"
+                % default_rhs_brick)
+            system_elliptic_package_lines += (
+                "  {\n"
+                "    pops::runtime::system::PreparedNativeEllipticAttachment<pops::kNativeDimension> attachment;\n"
+                '    attachment.field = "fields_from_state";\n'
+                "    attachment.rhs_identity = %s;\n"
+                % cpp_string_expression("%s/fields_from_state" % model_identity))
+            system_elliptic_package_lines += rhs_assignment("fields_from_state_rhs", "fields_from_state")
+            system_elliptic_package_lines += "    package.elliptic_attachments.push_back(std::move(attachment));\n  }\n"
+        else:
+            system_elliptic_prepare_lines += "  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n"
+            system_elliptic_package_lines += (
+                '  package.elliptic_attachments.push_back({"fields_from_state", '
+                '"%s/fields_from_state", {}, 1, std::move(fields_from_state_rhs)});\n' % model_identity)
 
     amr_elliptic_prepare_lines = ""
     amr_elliptic_package_lines = ""
     local_fields = {field: brick for field, brick, _ in ell_field_regs}
+    if default_rhs_brick is not None:
+        local_fields["fields_from_state"] = default_rhs_brick
     rhs_index = 0
     for role in (amr_field_roles if target == "amr_system" else ()):
         if role["kind"] == "output":
@@ -1155,8 +1203,9 @@ def emit_cpp_native_loader(
             "  pops::compiled_model::apply_runtime_params(\n"
             "      named_elliptic_model_%d,\n"
             "      pops::compiled_model::declaration_runtime_params(model));\n"
-            "  auto named_elliptic_rhs_%d = pops::make_poisson_rhs(named_elliptic_model_%d);\n"
-            % (rhs_index, brick, rhs_index, rhs_index, rhs_index)
+            "  auto named_elliptic_rhs_%d = pops::%s(named_elliptic_model_%d);\n"
+            % (rhs_index, brick, rhs_index, rhs_index,
+               "make_poisson_rhs_v2" if rhs_width(provider_key) else "make_poisson_rhs", rhs_index)
         )
         amr_elliptic_package_lines += (
             "  {\n"
@@ -1168,14 +1217,11 @@ def emit_cpp_native_loader(
             "    attachment.rhs_provider_key = %s;\n"
             "    attachment.binding_ordinal = %d;\n"
             "    attachment.coefficient = %s;\n"
-            "    if constexpr (pops::poisson_rhs_read_contract_version<decltype(named_elliptic_model_%d)>() == 1) {\n"
+            "    if constexpr (pops::poisson_rhs_read_contract_version<decltype(named_elliptic_model_%d)>() == %d) {\n"
             "      attachment.rhs_read_contract_version = pops::poisson_rhs_read_contract_version<decltype(named_elliptic_model_%d)>();\n"
             "      attachment.rhs_state_read_cells.fill(pops::poisson_rhs_state_read_cells<decltype(named_elliptic_model_%d)>());\n"
-            "      attachment.rhs_read_authority = \"compiler.cell-state-ast@1\";\n"
+            "      attachment.rhs_read_authority = %s;\n"
             "    }\n"
-            "    attachment.rhs = std::move(named_elliptic_rhs_%d);\n"
-            "    package.elliptic_attachments.push_back(std::move(attachment));\n"
-            "  }\n"
             % (
                 cpp_string_expression(role["field"]),
                 cpp_string_expression(role["block"]),
@@ -1184,24 +1230,38 @@ def emit_cpp_native_loader(
                 cpp_string_expression(provider_key),
                 role["binding_ordinal"],
                 scalar_cpp(role["coefficient"]),
-                rhs_index, rhs_index, rhs_index, rhs_index,
+                rhs_index, 2 if rhs_width(provider_key) else 1, rhs_index, rhs_index,
+                cpp_string_expression("compiler.pointwise-state-aux-ast@2" if rhs_width(provider_key)
+                                      else "compiler.cell-state-ast@1"),
             )
         )
+        amr_elliptic_package_lines += rhs_assignment(
+            "named_elliptic_rhs_%d" % rhs_index, provider_key, v2=bool(rhs_width(provider_key)))
+        amr_elliptic_package_lines += "    package.elliptic_attachments.push_back(std::move(attachment));\n  }\n"
         rhs_index += 1
-    if m._elliptic is not None:
-        amr_elliptic_prepare_lines += (
-            "  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n"
-        )
+    if m._elliptic is not None and not any(
+            role["kind"] == "rhs" and role["provider_key"] == "fields_from_state"
+            for role in amr_field_roles):
+        if default_rhs_width:
+            amr_elliptic_prepare_lines += (
+                "  auto fields_from_state_model = %s{};\n"
+                "  pops::compiled_model::apply_runtime_params(fields_from_state_model,\n"
+                "      pops::compiled_model::declaration_runtime_params(model));\n"
+                "  auto fields_from_state_rhs = pops::make_poisson_rhs_v2(fields_from_state_model);\n"
+                % default_rhs_brick)
+        else:
+            amr_elliptic_prepare_lines += "  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n"
         amr_elliptic_package_lines += (
             "  {\n"
             "    pops::PreparedNativeAmrEllipticAttachment<pops::kNativeDimension> attachment;\n"
             '    attachment.field = "fields_from_state";\n'
             '    attachment.rhs_provider_identity = "%s/fields_from_state";\n'
             "    attachment.coefficient = 1.0;\n"
-            "    attachment.rhs = std::move(fields_from_state_rhs);\n"
-            "    package.elliptic_attachments.push_back(std::move(attachment));\n"
-            "  }\n" % model_identity
+            % model_identity
         )
+        amr_elliptic_package_lines += rhs_assignment(
+            "fields_from_state_rhs", "fields_from_state", v2=bool(default_rhs_width))
+        amr_elliptic_package_lines += "    package.elliptic_attachments.push_back(std::move(attachment));\n  }\n"
     if target == "system":
         install = (
             "POPS_LOADER_API void pops_install_native(void* sys, const char* name, const char* limiter,\n"

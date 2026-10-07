@@ -2155,6 +2155,36 @@
       "documentation": "prepared_amr_checkpoint_capture_v1.md",
       "PDE_MPI2_GPU_3D_CI_convergence_costs_received": false,
       "nonautonomous_Field_time_CP_own_Retry_whole94_received": false
+    },
+    "nonautonomous_Field_component_compile_negative_d5b0": {
+      "source": "d5b0cfbacc6a2bfe5778ceba95d6fe3bbc7cce5d",
+      "native_sha256": "76af57236d6a65630febc1e974452a0010abef1c3e9c269ab32c5c15655daac3",
+      "header_signature": "773b8630b18aa821b0e8394c460dfd62ec990f6d3866807bf7581b358f8420e8",
+      "native_abi": 12,
+      "build": "PASS seven bindings recompiled, module relinked, wheel/install/doctor",
+      "observed_numbered_ninja_steps": 27,
+      "announced_ninja_denominator": 28,
+      "field_component_compile": "FAIL undeclared auxiliary in Field RHS, before bind/PDE",
+      "pytest": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0,
+        "seconds": 5.95
+      },
+      "full_temporary_cpp_received": false,
+      "actual_compiler_command_and_stderr_received": true,
+      "accepted_data_received": false,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-nonautonomous-field-compilation-negative-d5b0-20261007.json",
+      "root_receipt_sha256": "0cb650c4925c70834f34cfeec972b4cc14514a63ddf4d5ea7635418717c59b0b",
+      "independent_pins_sha256": "38557b51a01f27af52428ddfd228a68a7d340f977b09baab87bb0407ab8e3427",
+      "next": "Integrate common Native State+Aux RHS inputs with exact Field point/source/frame/level and versioned ABI; rebuild, run mandatory witness then independent numerical reception",
+      "limits": [
+        "no bind or PDE",
+        "no numerical State/Field/Y",
+        "no checkpoint/restart/own Retry run",
+        "no MPI2/GPU/3D/convergence/cost/CI/all94 receipt"
+      ]
     }
   },
   "scoped_receptions_20261006": {

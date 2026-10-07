@@ -1,4 +1,5 @@
 #pragma once
+#include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
 
 #include <pops/runtime/program/accepted_exchange.hpp>
 #include <pops/runtime/accepted_halo_test_failure.hpp>
@@ -1026,6 +1027,11 @@ class AmrSystem {
       const std::string& block_name, const std::string& field,
       const std::string& rhs_provider_identity,
       std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);
+  POPS_EXPORT void set_block_elliptic_field_v2(
+      const std::string& block_name, const std::string& field,
+      const std::string& rhs_provider_identity, const std::string& binding_identity,
+      const std::string& consumer_qid, std::size_t provider_count,
+      runtime::system::FieldRhsCallbackV2<Dim> rhs);
   /// Solved potential of named @p field on the coarse level, flattened in native index order. Solves the
   /// hierarchy fields if needed (so it is current even before any step), then reads the field's phi
   /// component. AMR counterpart of System::aux_field_component for a named elliptic field. @throws if the
@@ -1651,9 +1657,15 @@ class AmrSystem {
   POPS_EXPORT SolveOutcome solve_program_field_from_blocks_on_prepared_lane(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides);
+  POPS_EXPORT SolveOutcome solve_fields_from_request_at_in_place_(
+      const runtime::system::FieldSolveRequest<Dim>& request);
+  void invoke_field_rhs_v2_(const std::string& field, int block, int level,
+      const MultiFab<Dim>& state, MultiFab<Dim>& rhs, const std::string& binding,
+      const std::string& consumer, std::size_t count,
+      const runtime::system::FieldRhsCallbackV2<Dim>& callback);
   POPS_EXPORT void refresh_auxiliary_on_prepared_lane(
       const runtime::system::AuxiliaryEvaluationPoint& point,
-      const std::vector<std::string>& consumer_qids = {});
+      const std::vector<std::string>& consumer_qids = {}, int consumer_source_block = -1);
   void install_prepared_amr_block_candidate_(PreparedBlock block, bool native_package_candidate);
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_on_prepared_lane(
       const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state,

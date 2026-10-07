@@ -1021,6 +1021,10 @@ struct PreparedNativeAmrEllipticAttachment {
   std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
   int gradient_sign = 1;
   std::function<void(const MultiFab<Dim, MemorySpace>&, MultiFab<Dim, MemorySpace>&)> rhs;
+  runtime::system::FieldRhsCallbackV2<Dim> rhs_v2;
+  std::string rhs_consumer_qid;
+  std::size_t rhs_provider_count = 0;
+  unsigned rhs_input_contract_version = 0;
 };
 
 /// Complete inert candidate produced by one native AMR installer callback.

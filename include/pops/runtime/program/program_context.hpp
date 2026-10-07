@@ -19,6 +19,7 @@
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/prepared_resource_cache.hpp>
 #include <pops/runtime/program/prepared_integral_capture.hpp>
+#include <pops/runtime/program/program_value_authority.hpp>
 #include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/spatial_interaction_history_source.hpp>
@@ -40,6 +41,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -67,6 +69,8 @@ class ProgramContext {
   using provider_values_view_type = ProviderStorageView<Dim, Count>;
   using runtime_state_type = ProgramRuntimeState<Dim>;
   using scalar_boundary_session_type = PreparedScalarBoundarySession<Dim>;
+
+#include <pops/runtime/program/program_context_value_authority.inc>
 
   /// Immutable authentication token for one generated block-boundary invocation.  It retains no
   /// closure, state field, or mutable boundary image: System remains the sole owner of the exact
@@ -209,7 +213,7 @@ class ProgramContext {
   explicit ProgramContext(runtime_type* system) : system_(require_system_(system)) {}
 
   void install(std::function<void(double)> step) const {
-    auto lifetime = prepared_resources_.lifetime_callback();
+    auto lifetime = program_resource_lifetime_();
     system_->install_program_step(std::move(step));
     runtime_state().install_resource_lifetime(std::move(lifetime));
   }
@@ -231,7 +235,9 @@ class ProgramContext {
     (void)prepared_execution_lane();
     if (!std::isfinite(dt) || dt <= 0.0)
       throw std::invalid_argument("ProgramContext step requires a finite positive dt");
+    program_values_.revoke_();
     (void)prepared_resources_.begin_attempt(prepared_execution_lane());
+    drain_program_value_writes_();
     current_dt_ = dt;
     stage_time_ = ::pops::amr::Rational(0, 1);
     logical_phase_begin_ = ::pops::amr::Rational(0, 1);
@@ -256,6 +262,31 @@ class ProgramContext {
       throw std::invalid_argument("ProgramContext stage time is outside [0, 1]");
     stage_time_ = ::pops::amr::Rational(numerator, denominator);
     active_operator_snapshot_.reset();
+  }
+
+  class StageEvaluationScope {
+   public:
+    StageEvaluationScope(const ProgramContext& owner, std::int64_t numerator,
+                         std::int64_t denominator) : owner_(&owner), prior_(owner.stage_time_) {
+      owner.set_stage_time(numerator, denominator);
+    }
+    StageEvaluationScope(const StageEvaluationScope&) = delete;
+    StageEvaluationScope& operator=(const StageEvaluationScope&) = delete;
+    StageEvaluationScope(StageEvaluationScope&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)), prior_(other.prior_) {}
+    ~StageEvaluationScope() {
+      if (owner_) {
+        owner_->stage_time_ = prior_;
+        owner_->active_operator_snapshot_.reset();
+      }
+    }
+   private:
+    const ProgramContext* owner_;
+    ::pops::amr::Rational prior_;
+  };
+  [[nodiscard]] StageEvaluationScope stage_evaluation_scope(
+      std::int64_t numerator, std::int64_t denominator) const {
+    return StageEvaluationScope(*this, numerator, denominator);
   }
 
   runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage) const {
@@ -490,7 +521,7 @@ class ProgramContext {
       require_rate_identity_(rate_id);
       point = boundary_evaluation_point(rate_id);
       const double authored_courant = numerical_face_courant();
-      const auto destination = scratch_.find(ScratchKey{ScratchKind::Rhs, rate_id, 0});
+      const auto destination = scratch_.find(ScratchKey{ScratchKind::Rhs, runtime_block, rate_id, 0});
       if (rate_id < 0 || temporal_family.empty() || &input == &output ||
           input.shares_storage_with(output) ||
           destination == scratch_.end() || &destination->second != &output ||
@@ -1594,6 +1625,7 @@ class ProgramContext {
     }
     // Preserve the direct legacy route when this context has no active generated-step interval:
     // System supplies its accepted last-dt provenance (or its zero-dt pre-step default).
+    revoke_program_history_values_();
     system_->store_history(name, value);
   }
   void store_history(const std::string& name, const field_type& value, double dt) const {
@@ -1601,8 +1633,14 @@ class ProgramContext {
       throw std::invalid_argument("ProgramContext history dt must be finite and positive");
     store_history_(name, value, dt);
   }
-  void rotate_histories() const { runtime_state().hist_.rotate(); }
-  void rotate_histories(const std::string& clock) const { runtime_state().hist_.rotate(clock); }
+  void rotate_histories() const {
+    revoke_program_history_values_();
+    runtime_state().hist_.rotate();
+  }
+  void rotate_histories(const std::string& clock) const {
+    revoke_program_history_values_();
+    runtime_state().hist_.rotate(clock);
+  }
 
   /// Reconstruct one retained value at an exact target-clock coordinate.  The native history
   /// ledger owns every bracketing interval; no current-state alias or fixed-dt inference is used.
@@ -1870,6 +1908,60 @@ class ProgramContext {
 
   [[nodiscard]] SolveOutcome solve_fields() const { return system_->solve_fields(); }
 
+  [[nodiscard]] SolveOutcome solve_fields_from_program_values_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t field_node,
+      std::string_view field, std::initializer_list<ProgramFieldValueOverride> overrides) const {
+    using Request = runtime::system::FieldSolveRequest<Dim>;
+    const auto& lane = prepared_execution_lane();
+    std::optional<Request> request;
+    std::exception_ptr error;
+    try {
+      require_boundary_point_(point,"Program SSA Field solve");
+      require_program_value_identity_();
+      if (point.level != 0 || field_node < 0 || field.empty())
+        throw std::invalid_argument("Program SSA Field solve has an invalid point or identity");
+      if (point != boundary_evaluation_point(point.stage))
+        throw std::invalid_argument("Program SSA Field solve lost its context-owned consumer point");
+      std::vector<typename Request::Source> sources;
+      std::vector<typename Request::LegacySource> legacy;
+      std::set<int> seen;
+      for (const auto& item : overrides) {
+        if (!item.state || !seen.insert(item.program_block).second)
+          throw std::invalid_argument("Program SSA Field solve has a null or duplicate stage");
+        const int owner = sys_block(item.program_block);
+        require_program_stage_(item.program_block,owner,*item.state);
+        if (item.source_ssa >= 0) {
+          auto value = program_value(item.source_ssa,item.program_block,*item.state);
+          auto validate = require_program_field_value(value,field_node,item.program_block,*item.state);
+          sources.push_back({std::move(value),std::move(validate)});
+        } else {
+          if (program_values_.state_->edges.contains({field_node,item.program_block}))
+            throw std::invalid_argument("V2 Field source cannot enter the legacy source route");
+          legacy.push_back({owner,0,std::make_shared<field_type>(*item.state)});
+        }
+      }
+      for (const auto& edge : program_values_.state_->plan.fields) {
+        if (edge.field_node != field_node || seen.contains(edge.program_block)) continue;
+        if (!edge.accepted_only)
+          throw std::invalid_argument("Program SSA Field solve lacks its declared stage override");
+        const int owner = sys_block(edge.program_block);
+        const auto& accepted = system_->block_state(owner);
+        auto value = program_values_.accepted_(field_node,edge.program_block,
+            typename ProgramValueAuthority<Dim>::Slot{ProgramValueStorage::State,0,owner,-1,0,{},0},
+            accepted,resource_attempt(),point);
+        auto validate = program_values_.require_accepted_field_(value,field_node,
+            edge.program_block,0,accepted,resource_attempt());
+        sources.push_back({std::move(value),std::move(validate)});
+      }
+      request = Request(std::string(field),point,std::move(sources),std::move(legacy));
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error,lane,"Program SSA Field request failed collectively");
+    system_->prepare_named_field_publication_storage_(request->field());
+    return system_->run_field_publication_outcome_([this,&request] {
+      return system_->solve_fields_from_request_in_place_(*request);
+    });
+  }
+
   [[nodiscard]] SolveOutcome solve_fields_from_state(int program_block, field_type& stage) const {
     const int runtime_block = sys_block(program_block);
     require_program_stage_(program_block, runtime_block, stage);
@@ -1975,7 +2067,9 @@ class ProgramContext {
 
  private:
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
-  using ScratchKey = std::tuple<ScratchKind, std::int64_t, int>;
+  using ScratchKey = std::tuple<ScratchKind, int, std::int64_t, int>;
+
+#include <pops/runtime/program/program_context_value_authority_private.inc>
 
   struct GeneratedFieldRoute {
     std::string field;
@@ -2250,9 +2344,29 @@ class ProgramContext {
                                   const Extent<Dim>& ghosts) const {
     if (value_id < 0 || subslot < 0)
       throw std::invalid_argument("ProgramContext scratch identity must be non-negative");
-    const ScratchKey key{kind, value_id, subslot};
+    int runtime_owner = -1;
+    try {
+      runtime_owner = scratch_prototype_owner_(prototype);
+    } catch (const std::invalid_argument&) {
+      if (program_values_.state_->installed) throw;
+      // Preserve the direct legacy scratch API's detached-prototype rebinding. This branch does
+      // not issue SSA authority. A V2 plan always requires an actual prototype runtime owner.
+      bool found_owner = false;
+      for (const auto& [existing_key, existing_field] : scratch_) {
+        (void)existing_field;
+        if (std::get<0>(existing_key) != kind || std::get<2>(existing_key) != value_id ||
+            std::get<3>(existing_key) != subslot) continue;
+        if (found_owner && runtime_owner != std::get<1>(existing_key))
+          throw std::invalid_argument("legacy scratch rebind has ambiguous runtime owners");
+        runtime_owner = std::get<1>(existing_key);
+        found_owner = true;
+      }
+    }
+    const ScratchKey key{kind, runtime_owner, value_id, subslot};
+    drain_program_value_writes_();
     auto [entry, inserted] = scratch_.try_emplace(key);
     field_type& result = entry->second;
+    program_values_.revoke_buffer_(result);
     if (inserted || result.layout() != prototype.layout() ||
         result.distribution() != prototype.distribution() ||
         result.local_rank() != prototype.local_rank() || result.ncomp() != ncomp ||
@@ -2312,6 +2426,7 @@ class ProgramContext {
       throw std::invalid_argument("Program history publication identity differs between ranks");
     static_assert(std::is_nothrow_swappable_v<field_type>);
     auto& ring = manager.histories.at(name);
+    for (const auto& slot : ring) program_values_.revoke_buffer_(slot);
     for (std::size_t slot = 0; slot < prepared_fields.size(); ++slot)
       std::swap(ring[slot], prepared_fields[slot]);
     manager.slot_dt.at(name).swap(prepared_dts);
@@ -2346,6 +2461,7 @@ class ProgramContext {
   mutable ClockScheduleState clock_schedule_;
   mutable std::map<ScratchKey, field_type> scratch_;
   mutable PreparedResourceCache prepared_resources_;
+  mutable ProgramValueAuthority<Dim> program_values_;
   mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;
 };
 

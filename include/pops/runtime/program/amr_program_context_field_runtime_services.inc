@@ -152,8 +152,10 @@ void require_hierarchy_tensor_binding_(int program_block, int components) const 
 void synchronize_resource_generation_() const {
   if (resource_epoch_ != runtime_->topology_epoch() ||
       resource_generation_ != runtime_->materialization_generation()) {
+    program_values_.revoke_();
     prepared_resources_.clear();
     prepared_resources_.drain();
+    drain_program_value_writes_();
   }
   if (interface_flux_ledger_ &&
       interface_flux_ledger_->topology_epoch() != runtime_->topology_epoch())
@@ -298,6 +300,7 @@ void refresh_resources_() const {
                                    "AMR Program accepted history remap failed collectively");
     history_flux_expressions_.swap(provisional_flux);
   }
+  program_values_.revoke_();
   scratches_.clear();
   rhs_input_traces_.clear();
   std::exception_ptr synchronization_error;
@@ -456,6 +459,8 @@ field_type& persistent_scratch_(ScratchKind kind, std::int64_t value_id, int sub
       result.ghosts() != ghosts)
     throw std::runtime_error("AMR Program scratch identity changed its exact field contract");
   if (reset) {
+    drain_program_value_writes_();
+    program_values_.revoke_buffer_(result);
     result.set_val(Real(0));
     clear_active_flux_expression_(result);
   }
