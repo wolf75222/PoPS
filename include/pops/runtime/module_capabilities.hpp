@@ -36,9 +36,10 @@ namespace pops {
 /// changes, so an older per-artifact manifest can be distinguished from the rebuilt module.
 /// ABI11 includes the auxiliary accepted-state DTO and physical evaluation point layout changes.
 /// ABI12 adds the opaque, transaction-owned prepared AMR checkpoint capture interface.
+/// ABI13 adds Field RHS prepared State/Aux inputs and invocation-scoped value authorities.
 /// The complete textual abi_key() also authenticates compiler, standard and header bytes; the
 /// release capability vocabulary has its own independent version.
-inline constexpr int kAbiVersion = 12;
+inline constexpr int kAbiVersion = 13;
 static_assert(kAbiVersion == release_contract::kReleaseNativeAbiVersion,
               "native ABI and generated release contract drifted");
 
