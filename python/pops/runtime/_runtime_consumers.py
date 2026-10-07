@@ -52,7 +52,7 @@ from pops.output.observers import (
     ObserverWorkerCollectiveLost,
     authenticate_observer_session,
 )
-from pops.output._consumer_contracts import ConsumerKind, ParallelMode
+from pops.output._consumer_contracts import ConsumerKind, ParallelMode, Retry
 from pops.output._writers.common import (
     _OutputRecoveryRequired,
     _StagedOutputFile,
@@ -747,6 +747,22 @@ class _PreparedCheckpoint(PreparedPublication):
                                                   prepared_capture=candidate))
         operation.validate_snapshot(self._snapshot)
         self._published = self._discarded = False
+        self._replay = None
+        retain = getattr(self._snapshot, "retain_sealed_replay", None)
+        retry_contract = operation.consumer_data().get("publication_retry_contract")
+        self._publisher_id = ("pops.restart-checkpoint.v6" if retry_contract ==
+                              "pops.checkpoint.sealed-replay@1" else "pops.restart-checkpoint.v5")
+        if retry_contract is not None and retry_contract != "pops.checkpoint.sealed-replay@1":
+            self._snapshot.discard()
+            raise ValueError("unsupported checkpoint publication retry contract")
+        if type(effect.failure_action) is Retry and retry_contract is not None:
+            try:
+                if not callable(retain):
+                    raise TypeError("checkpoint provider lacks its declared sealed replay authority")
+                self._replay = retain()
+            except BaseException:
+                self._snapshot.discard()
+                raise
 
     @property
     def effect_identity(self) -> Identity:
@@ -774,27 +790,75 @@ class _PreparedCheckpoint(PreparedPublication):
         return PublicationReceipt(
             self.effect_identity,
             self.payload_identity,
-            "pops.restart-checkpoint.v5",
+            self._publisher_id,
             artifact.token,
             self._effect.target.parallel_mode,
         )
 
+    def retry_publication(self, error: Exception) -> PreparedPublication | None:
+        if self._replay is None:
+            return None
+        from pops.output._restart_provider import _CheckpointTransportFailure
+
+        if isinstance(error, _CheckpointTransportFailure):
+            self._replay.transport_lost = True
+            raise error
+        # Compensation deletes only this attempt; the readonly retained seal survives.
+        self._snapshot.rollback()
+        snapshot = self._replay.stage(self._snapshot)
+        result = object.__new__(_PreparedCheckpoint)
+        result._effect, result._target, result._operation = self._effect, self._target, self._operation
+        result._snapshot = snapshot
+        result._publisher_id = self._publisher_id
+        result._replay, self._replay = self._replay, None
+        result._published = result._discarded = False
+        self._discarded = True
+        return result
+
+    def _release_replay(self) -> None:
+        if self._replay is not None:
+            self._replay.close()
+            self._replay = None
+
+    def _finish_snapshot(self, method: str) -> None:
+        primary = None
+        try:
+            action = getattr(self._snapshot, method, None)
+            if callable(action):
+                action()
+        except BaseException as error:
+            primary = error
+            from pops.output._restart_provider import _CheckpointTransportFailure
+            if isinstance(error, _CheckpointTransportFailure) and self._replay is not None:
+                self._replay.transport_lost = True
+        try:
+            self._release_replay()
+        except BaseException as error:
+            if primary is None:
+                raise
+            add_note = getattr(primary, "add_note", None)
+            if callable(add_note):
+                add_note("sealed checkpoint replay release also failed: %s" % error)
+        if primary is not None:
+            raise primary
+
     def discard(self) -> None:
         if not self._published and not self._discarded:
-            self._snapshot.discard()
+            self._finish_snapshot("discard")
             self._discarded = True
+        else:
+            self._release_replay()
 
     def rollback(self) -> None:
-        if self._discarded:
-            return
-        self._snapshot.rollback()
-        self._published = False
-        self._discarded = True
+        if not self._discarded:
+            self._finish_snapshot("rollback")
+            self._published = False
+            self._discarded = True
+        else:
+            self._release_replay()
 
     def finalize(self) -> None:
-        finalize = getattr(self._snapshot, "finalize", None)
-        if callable(finalize):
-            finalize()
+        self._finish_snapshot("finalize")
 
 
 def _writer_snapshot_data(snapshot: OutputSnapshot, request: OutputRequest) -> dict[str, Any]:

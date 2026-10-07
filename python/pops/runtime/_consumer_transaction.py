@@ -244,6 +244,10 @@ class PreparedPublication(ABC):
         """Release rollback-only resources after the enclosing transaction commits."""
         return None
 
+    def retry_publication(self, error: Exception) -> PreparedPublication | None:
+        """Optional sealed replay, before destructive rollback; None keeps legacy retry."""
+        return None
+
     @property
     def recoveries(self) -> tuple[Any, ...]:
         """Typed quarantine authorities retained by a failed cleanup operation."""
@@ -395,7 +399,41 @@ class ConsumerTransaction:
                 return self._validate_prepared(effect, self._publisher.prepare(effect)), attempts, None
             except Exception as exc:  # writer failures are classified by the typed action
                 last_error = exc
+                if getattr(exc, "publication_retryable", None) is False:
+                    break
         return None, attempts, last_error
+
+    def _replay_one(
+        self, effect: AcceptedSideEffect, prepared: PreparedPublication,
+        attempts: int, error: Exception,
+    ) -> tuple[PreparedPublication | None, int, Exception | None, bool]:
+        initial = attempts
+        while attempts < self._attempt_limit(effect):
+            try:
+                replacement = prepared.retry_publication(error)
+            except Exception as exc:
+                attempts += 1
+                error = exc
+                if getattr(exc, "publication_retryable", None) is False:
+                    return None, attempts, error, True
+            else:
+                if replacement is None:
+                    return None, initial, None, False
+                attempts += 1
+                try:
+                    validated = self._validate_prepared(effect, replacement)
+                except Exception as exc:
+                    if isinstance(replacement, PreparedPublication):
+                        cleanup = self._rollback(replacement)
+                        if cleanup is not None:
+                            add_note = getattr(exc, "add_note", None)
+                            if callable(add_note):
+                                add_note("refused replay compensation also failed: %s" % cleanup)
+                    # The hook may already have transferred exclusive ownership. Never fall
+                    # back to a fresh capture after refusing its replacement contract.
+                    return None, attempts, exc, True
+                return validated, attempts, None, True
+        return None, attempts, error, True
 
     @staticmethod
     def _reason(error: Exception | None) -> str:
@@ -548,10 +586,21 @@ class ConsumerTransaction:
                         "PublicationReceipt parallel mode differs from its accepted target")
             except Exception as exc:
                 error = exc
+                replay_handled = False
+                if type(effect.failure_action) is Retry and attempts < self._attempt_limit(effect):
+                    replacement, attempts, replay_error, replay_handled = self._replay_one(
+                        effect, prepared, attempts, error)
+                    if replacement is not None:
+                        pending.insert(0, (effect, replacement, attempts))
+                        continue
+                    if replay_error is not None:
+                        error = replay_error
                 cleanup = self._rollback(prepared)
                 rolled_back = (effect.identity.token,) if cleanup is None else ()
                 if cleanup is None and type(effect.failure_action) is Retry \
-                        and attempts < self._attempt_limit(effect):
+                        and attempts < self._attempt_limit(effect) \
+                        and not replay_handled \
+                        and getattr(error, "publication_retryable", None) is not False:
                     replacement, attempts, prepare_error = self._prepare_one(effect, attempts)
                     if replacement is not None:
                         pending.insert(0, (effect, replacement, attempts))
