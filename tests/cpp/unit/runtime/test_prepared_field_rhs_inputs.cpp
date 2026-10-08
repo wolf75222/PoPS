@@ -914,7 +914,9 @@ runtime::program::AmrProgramContext<D>& incidence_context(AmrSystem<D>& system) 
   return *context;
 }
 
-TEST(PreparedFieldRhsInputs, ActualFieldPublicationReopensCoarseAuxWhileFineRemainsDirty) {
+enum class IncidenceRestoreWitness { original, repeated_publication, rank_local_refusal };
+
+void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   ready();
   AmrSystemConfig<D> config;
   config.level_count = 2; config.regrid_every = 0; config.explicit_bootstrap = true;
@@ -1115,6 +1117,31 @@ TEST(PreparedFieldRhsInputs, ActualFieldPublicationReopensCoarseAuxWhileFineRema
   EXPECT_EQ(observed.fine_Q_fault_point->stage, observed.snapshots.front().actual_point.stage);
   EXPECT_FALSE(incidence_invalidated(observed.snapshots.front().metadata[0], kIncidenceQProvider));
   EXPECT_TRUE(incidence_invalidated(observed.snapshots.front().metadata[1], kIncidenceQProvider));
+  if (extra == IncidenceRestoreWitness::rank_local_refusal) {
+    const auto accepted_state_coarse = system.block_level_state_global("material", 0);
+    const auto accepted_state_fine = system.block_level_state_global("material", 1);
+    const auto accepted_dirty = system.dirty_auxiliary_provider_identities();
+    const auto accepted_topology = system.checkpoint_topology_epoch();
+    const auto accepted_step = system.macro_step();
+    const auto launches_before_refusal = observed.Q_launches;
+    auto refused_image = partial;
+    ASSERT_FALSE(refused_image[1].groups.empty());
+    // A real incompatible public checkpoint request on exactly one prepared rank.
+    // Its halo differs from the actual carrier; the restore's admission collective
+    // must reject before any candidate or accepted publication, on every rank.
+    const auto& lane = context.prepared_execution_lane();
+    if (lane.rank() == 0) ++refused_image[1].groups.front().shape.halo[0];
+    EXPECT_THROW(system.restore_auxiliary_checkpoint_accepted_state(refused_image),
+                 std::invalid_argument);
+    EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), partial);
+    EXPECT_EQ(system.block_level_state_global("material", 0), accepted_state_coarse);
+    EXPECT_EQ(system.block_level_state_global("material", 1), accepted_state_fine);
+    EXPECT_EQ(system.dirty_auxiliary_provider_identities(), accepted_dirty);
+    EXPECT_EQ(system.checkpoint_topology_epoch(), accepted_topology);
+    EXPECT_EQ(system.macro_step(), accepted_step);
+    EXPECT_EQ(system.step_transaction_depth(), 0U);
+    EXPECT_EQ(observed.Q_launches, launches_before_refusal);
+  }
   // Public POPSAUX3 capture/restore keeps distinct level memberships; no Input or
   // never-published marker and no live physical payload is manufactured here.
   system.restore_auxiliary_checkpoint_accepted_state(partial);
@@ -1122,6 +1149,33 @@ TEST(PreparedFieldRhsInputs, ActualFieldPublicationReopensCoarseAuxWhileFineRema
   const auto dirty_union = system.dirty_auxiliary_provider_identities();
   EXPECT_TRUE(std::find(dirty_union.begin(), dirty_union.end(), kIncidenceQProvider) != dirty_union.end());
 
+  if (extra == IncidenceRestoreWitness::repeated_publication) {
+    // Reuse the same topology and checkpoint twice. Every publication reacquires
+    // the current real carriers; no borrowed storage pointer crosses a restore.
+    const auto restored_topology = system.checkpoint_topology_epoch();
+    const auto restored_step = system.macro_step();
+    for (int repetition = 0; repetition < 2; ++repetition) {
+      system.restore_auxiliary_checkpoint_accepted_state(partial);
+      EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), partial);
+      EXPECT_EQ(system.checkpoint_topology_epoch(), restored_topology);
+      EXPECT_EQ(system.macro_step(), restored_step);
+      {
+        const auto current_publication = collect_current_phi();
+        system.publish_program_field_components(
+          "test.amr-aux.phi-republication-after-repeated-restore", current_publication);
+      }
+      const auto republished = system.capture_auxiliary_checkpoint_accepted_state();
+      ASSERT_EQ(republished.size(), 2U);
+      EXPECT_TRUE(incidence_invalidated(republished[0], kIncidenceQProvider));
+      EXPECT_TRUE(incidence_invalidated(republished[1], kIncidenceQProvider));
+      // Field publication dirties Q but cannot itself advance Q's accepted point.
+      for (int level = 0; level < 2; ++level)
+        EXPECT_EQ(incidence_provenance(republished[level], kIncidenceQProvider),
+                  incidence_provenance(partial[level], kIncidenceQProvider));
+    }
+    system.restore_auxiliary_checkpoint_accepted_state(partial);
+    EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), partial);
+  }
   {
     // Restore replaced the provider allocations. Reacquire every actual group/value
     // and reconstruct observations; only the genuinely issued point values are reused.
@@ -1173,5 +1227,17 @@ TEST(PreparedFieldRhsInputs, ActualFieldPublicationReopensCoarseAuxWhileFineRema
     else
       EXPECT_EQ(dependency_error, Real(0));
   }
+}
+
+TEST(PreparedFieldRhsInputs, ActualFieldPublicationReopensCoarseAuxWhileFineRemainsDirty) {
+  actual_field_incidence_lifecycle(IncidenceRestoreWitness::original);
+}
+
+TEST(PreparedFieldRhsInputs, RepeatedActualAuxiliaryRestoreRebindsEveryNewFieldPublication) {
+  actual_field_incidence_lifecycle(IncidenceRestoreWitness::repeated_publication);
+}
+
+TEST(PreparedFieldRhsInputs, OneRankAuxiliaryRestoreRefusalLeavesAcceptedIncidenceExact) {
+  actual_field_incidence_lifecycle(IncidenceRestoreWitness::rank_local_refusal);
 }
 } // namespace
