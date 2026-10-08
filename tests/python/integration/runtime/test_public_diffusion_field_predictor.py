@@ -87,7 +87,7 @@ def test_public_diffusion_predictor_is_field_rhs(method,composition,variant,kapp
         assert report.accepted_steps==1 and runtime.macro_step()==1 and runtime.time()==float(DT)
     for name,array in [('initial',initial),('predictor',predictor),('accepted',actual),('phi_stage',phi)]:
         collective_call(world,lambda name=name,array=array:np.save(directory/(name+'.npy'),array,allow_pickle=False))
-    checkpoint=collective_call(world,lambda:runtime.checkpoint(directory/'accepted'))
+    checkpoint=collective_call(world,lambda:runtime.checkpoint(shared_directory/'accepted'))
     # Retain actual original compiler outputs as text and pins, never regenerate a model.
     for i,block in enumerate(artifact.blocks):
         collective_call(world,lambda i=i,block=block:block.model.dump_cpp(directory/('model%d.cpp'%i)))
