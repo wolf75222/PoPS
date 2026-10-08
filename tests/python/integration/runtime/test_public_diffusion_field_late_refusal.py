@@ -89,7 +89,7 @@ def context():
         Native=native_sha,
         SDK=module_header_signature(),
         package=str(package),
-        native_origin=origin,
+        native_origin=str(origin),
         rank=int(world.rank) if world else 0,
         ranks=int(world.size) if world else 1,
     )
