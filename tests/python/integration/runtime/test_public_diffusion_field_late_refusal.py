@@ -25,6 +25,7 @@ from tests.python.support.public_diffusion_field_late_refusal_case import (
 from tests.python.support.diffusion_field_oracle import check_saved
 from tests.python.support.diffusion_field_late_refusal_oracle import (
     check_adaptive_saved,
+    check_two_fixed_intervals_saved,
 )
 from tests.python.support.collective_checks import (
     collective_call,
@@ -95,12 +96,13 @@ def context():
     )
 
 
-def build(world, method, retry=False):
+def build(world, method, retry=False, populated_refusal=False):
     authored = collective_call(
         world,
         lambda: author_case(
             method,
             automatic_retry=retry,
+            populated_refusal=populated_refusal,
             layout_factory=one_level_amr_layout,
             field_solver=GeometricMG(
                 tolerance=Relative(1e-13, floor=AbsoluteFloor(1e-14)), max_cycles=100
@@ -235,7 +237,15 @@ def save_artifact(world, artifact, directory):
         )
 
 
-def save_positive(world, runtime, authored, directory, identity, adaptive=False):
+def save_positive(
+    world,
+    runtime,
+    authored,
+    directory,
+    identity,
+    adaptive=False,
+    two_fixed_intervals=False,
+):
     inputs = dict(
         identity,
         method=authored.method,
@@ -254,6 +264,10 @@ def save_positive(world, runtime, authored, directory, identity, adaptive=False)
             layout="AMR", levels=1, rank=identity["rank"], ranks=identity["ranks"]
         ),
     )
+    if two_fixed_intervals:
+        inputs.update(
+            accepted_intervals=2, final_time=2 * float(DT), history_sample_slot=1
+        )
     collective_call(
         world,
         lambda: (directory / "inputs.json").write_text(
@@ -307,7 +321,13 @@ def save_positive(world, runtime, authored, directory, identity, adaptive=False)
             ),
         )
     with collective_check(world):
-        oracle = check_adaptive_saved(directory) if adaptive else check_saved(directory)
+        oracle = (
+            check_two_fixed_intervals_saved(directory)
+            if two_fixed_intervals
+            else check_adaptive_saved(directory)
+            if adaptive
+            else check_saved(directory)
+        )
         assert oracle["status"] == "PASS"
 
 
@@ -451,3 +471,122 @@ def test_public_late_refusal_automatic_retry(
         ),
     )
     record_property("late_refusal_adaptive_evidence", str(directory))
+
+
+def test_public_late_refusal_populated_history(
+    tmp_path, isolated_native_cache, native_cxx, kokkos_root, record_property
+):
+    """Accept once then refuse a continuation using public time-dependent math."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    world, identity = context()
+    authored, artifact = build(world, "euler", populated_refusal=True)
+    shared = collective_directory(world, tmp_path / "late-refusal-populated-euler")
+    directory = shared / ("rank%d" % identity["rank"])
+    collective_call(world, lambda: directory.mkdir(exist_ok=False))
+    declared = dict(
+        identity,
+        artifact=artifact.artifact_identity.token,
+        guard="norm2(Y)<=max(limit + 0*Y - 2560*tau)",
+        bound_failure_limit=40.0,
+        bound_control_limit=80.0,
+        threshold_failure_at_DT=30.0,
+        threshold_failure_at_2DT=20.0,
+        threshold_control_at_DT=70.0,
+        threshold_control_at_2DT=60.0,
+        first_target=float(DT),
+        second_target=2 * float(DT),
+        physical_history_slots=2,
+        accepted_fill_before_refusal=1,
+        same_instance_continuation=True,
+        parameter_update=False,
+        snapshot_scope="existing private Native journals plus public consumer cursors",
+    )
+    collective_call(
+        world,
+        lambda: (directory / "declared-inputs.json").write_text(
+            json.dumps(declared, indent=2, sort_keys=True) + "\n"
+        ),
+    )
+    save_artifact(world, artifact, directory)
+    failed = bind(world, authored, artifact, 40.0)
+    first = collective_call(
+        world, lambda: pops.run(failed, t_end=float(DT), max_steps=1, console=False)
+    )
+    with collective_check(world):
+        assert first.accepted_steps == 1 and failed.time() == float(DT)
+        for name in failed.history_names():
+            assert failed.history_depth(name) == 2
+            assert failed._executor._s.history_initialized(name, 0)
+            assert failed._executor._s.history_fill_count(name, 0) == 1
+    first_directory = directory / "first-accepted"
+    collective_call(world, lambda: first_directory.mkdir())
+    save_positive(world, failed, authored, first_directory, identity)
+    before = snapshot(world, failed)
+    before["consumer_cursors"] = failed.consumer_cursors.to_data()
+    save_snapshot(world, directory, "before-populated-refusal", before)
+    _, failures = collective_attempt(
+        world, lambda: pops.run(failed, t_end=2 * float(DT), max_steps=1, console=False)
+    )
+    collective_call(
+        world,
+        lambda: (directory / "refusal-diagnostics.json").write_text(
+            json.dumps(failures, indent=2) + "\n"
+        ),
+    )
+    after = snapshot(world, failed)
+    after["consumer_cursors"] = failed.consumer_cursors.to_data()
+    save_snapshot(world, directory, "after-populated-refusal", after)
+    with collective_check(world):
+        assert len(failures) == identity["ranks"]
+        assert all(
+            row is not None and row[2] and "late_field_norm_refusal" in row[1]
+            for row in failures
+        )
+        assert before == after
+        assert len(before["histories"]) == 2
+        assert all(
+            row[2] and row[3] == 1 and len(row[4]) == 2 for row in before["histories"]
+        )
+    control = bind(world, authored, artifact, 80.0)
+    control_first = collective_call(
+        world, lambda: pops.run(control, t_end=float(DT), max_steps=1, console=False)
+    )
+    control_second = collective_call(
+        world,
+        lambda: pops.run(control, t_end=2 * float(DT), max_steps=1, console=False),
+    )
+    with collective_check(world):
+        assert control_first.accepted_steps == control_second.accepted_steps == 1
+        assert control.time() == 2 * float(DT) and control.macro_step() == 2
+        for name in control.history_names():
+            assert control.history_depth(name) == 2
+            assert control._executor._s.history_fill_count(name, 0) == 2
+    control_snapshot = snapshot(world, control)
+    control_snapshot["consumer_cursors"] = control.consumer_cursors.to_data()
+    save_snapshot(world, directory, "control-two-accepted", control_snapshot)
+    save_positive(
+        world, control, authored, directory, identity, two_fixed_intervals=True
+    )
+    result = dict(
+        declared,
+        status="PASS",
+        failure_records=failures,
+        populated_accepted_envelope_exact=True,
+        first_accepted_steps=first.accepted_steps,
+        control_accepted_invocations=[
+            control_first.accepted_steps,
+            control_second.accepted_steps,
+        ],
+        control_final_time=control.time(),
+        control_macro_step=control.macro_step(),
+        ticket_validator_proof=False,
+        rank0_only=False,
+        public_snapshot_api_qualified=False,
+    )
+    collective_call(
+        world,
+        lambda: (directory / "actual-receipt.json").write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n"
+        ),
+    )
+    record_property("late_refusal_populated_evidence", str(directory))

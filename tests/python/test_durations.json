@@ -4745,7 +4745,7 @@
       "files": [
         "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py"
       ],
-      "basis": "Conservative 600-second scheduling estimate for the new public late-refusal failure/control/adaptive module, matching the existing same-physics public predictor module estimate; not a measured Native or CI duration."
+      "basis": "Conservative 600-second scheduling estimate for public late-refusal Euler/SSPRK2 failure-control, automatic retry, and previously-populated-ring continuation failure-control in this existing module. Retains the original 600-second allocation; not a measured Native or CI duration."
     }
   },
   "tests/python/integration/amr/test_accepted_halo_extent_binding.py": 600,

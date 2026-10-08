@@ -61,6 +61,7 @@ def author_case(
     labels=None,
     kappa=KAPPA,
     automatic_retry=False,
+    populated_refusal=False,
 ):
     if method not in ("euler", "ssprk2"):
         raise ValueError(method)
@@ -74,13 +75,16 @@ def author_case(
     )
     model = pops.Model(label("model", "public_diffusion_field"), frame=frame)
     U = model.state("U", components=("u",))
+    tau = model.auxiliary("stage_tau", frame=frame.canonical_id, unit="1")
     refusal_limit = model.param(RuntimeParam("late_refusal_norm_limit", default=0.0))
+    limit_expression = model.value(refusal_limit) + 0.0 * U[0]
+    if populated_refusal:
+        limit_expression = limit_expression - 2560.0 * tau
     model.source(
         "late_refusal_limit_observation",
         on=U,
-        value=(model.value(refusal_limit) + 0.0 * U[0],),
+        value=(limit_expression,),
     )
-    tau = model.auxiliary("stage_tau", frame=frame.canonical_id, unit="1")
     phi_read = model.aux("screened_phi")
     flux = model.diffusive_flux(
         "conduction", state=U, value=math.CoeffGradient(U[0], float(kappa))
