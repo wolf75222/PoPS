@@ -2617,6 +2617,14 @@ struct AmrSystem<Dim>::Impl {
   using auxiliary_groups_type = runtime::system::AuxiliaryStorageGroups<Dim>;
   using auxiliary_publication_type = typename auxiliary_registry_type::PublicationTransaction;
 
+  // Keep the captured State descriptor a named private template member. A local
+  // class in this member template trips GCC 13 while instantiating vector traits.
+  struct AcceptedAuxiliaryStateCarrier {
+    std::size_t block, level;
+    const MultiFab<Dim>* state;
+    std::vector<typename Fab<Dim>::storage_type> allocations;
+  };
+
   struct BlockSpec {
     std::string name;
     int ncomp = 0;
@@ -18586,11 +18594,7 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::rematerialize_fields_after
         bindings.emplace_back(slot, Impl::exact_field_plan_contract(slot, plan, false));
       std::weak_ptr<void> session = p_->field_rhs_session;
       auto* owner = p_.get();
-      struct Carrier {
-        std::size_t block, level;
-        const MultiFab<Dim>* state;
-        std::vector<typename Fab<Dim>::storage_type> allocations;
-      };
+      using Carrier = typename Impl::AcceptedAuxiliaryStateCarrier;
       auto carriers = std::make_shared<std::vector<Carrier>>();
       for (std::size_t level = 0; level < p_->engine->hierarchy().num_levels(); ++level)
         for (std::size_t block = 0; block < p_->blocks.size(); ++block) {
