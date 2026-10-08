@@ -246,6 +246,8 @@ def save_positive(world, runtime, authored, directory, identity, adaptive=False)
         amplitude=0.5,
         rhs_offset=3.0,
         field_stage_fraction=1,
+        accepted_history_observed_physical_slot=1,
+        accepted_history_slot_semantics="store front then accepted rotation: newest stored sample in slot 1",
         solver_rtol=1e-13,
         solver_atol=1e-14,
         actual_context_scope=dict(
@@ -271,11 +273,32 @@ def save_positive(world, runtime, authored, directory, identity, adaptive=False)
         rows[key] = collective_call(
             world,
             lambda name=name: (
-                np.asarray(runtime.history_global(name, 0, 0))
+                np.asarray(runtime.history_global(name, 0, 1))
                 .reshape(authored.initial.shape)
                 .copy()
             ),
         )
+    # Retain both physical slots after the two accepted adaptive intervals.
+    # The oracle inputs select slot 1 explicitly; slot 0 is preserved as evidence.
+    if adaptive:
+        for history, key in [("predictor_Y", "predictor"), ("phi_stage", "phi_stage")]:
+            for slot in range(runtime.history_depth(history)):
+                physical = collective_call(
+                    world,
+                    lambda history=history, slot=slot: (
+                        np.asarray(runtime.history_global(history, 0, slot))
+                        .reshape(authored.initial.shape)
+                        .copy()
+                    ),
+                )
+                collective_call(
+                    world,
+                    lambda key=key, slot=slot, physical=physical: np.save(
+                        directory / (key + "_physical_slot%d.npy" % slot),
+                        physical,
+                        allow_pickle=False,
+                    ),
+                )
     for name, array in rows.items():
         collective_call(
             world,
@@ -382,6 +405,7 @@ def test_public_late_refusal_automatic_retry(
         max_steps=2,
         max_rejections=1,
         norm_bounds_before_run={"initial": [0.14, 0.16], "retry": [0.07, 0.08]},
+        accepted_history_observed_physical_slot=1,
         history_max_readable_lag=1,
         history_physical_slots_expected=2,
         history_fill_count_expected_after_accepts=2,
