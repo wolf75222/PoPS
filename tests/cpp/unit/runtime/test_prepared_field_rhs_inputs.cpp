@@ -872,8 +872,32 @@ struct IncidenceStateSourceErrorKernel {
   FieldView<Real, D> error;
   int Q_component;
   POPS_HD void operator()(const Index<D>& cell) const {
-    error(cell, 0) = Kokkos::max(Kokkos::abs(source(cell, 0) - Q(cell, Q_component)),
-                                Kokkos::abs(source(cell, 1)));
+    const Real u_source = source(cell, 0), tag_source = source(cell, 1);
+    const Real current = Q(cell, Q_component);
+    // NaN cannot be left to max reductions, which may ignore it.
+    if (!Kokkos::isfinite(u_source) || !Kokkos::isfinite(tag_source) ||
+        !Kokkos::isfinite(current)) {
+      error(cell, 0) = std::numeric_limits<Real>::infinity();
+      return;
+    }
+    error(cell, 0) = Kokkos::max(Kokkos::abs(u_source - current), Kokkos::abs(tag_source));
+  }
+};
+// Independent numerical reference copied from the accepted high-Q publication.
+struct IncidenceOwnedSourceReferenceErrorKernel {
+  FieldView<const Real, D> source, current_Q, reference_Q;
+  FieldView<Real, D> error;
+  int Q_component;
+  POPS_HD void operator()(const Index<D>& cell) const {
+    const Real u_source = source(cell, 0), tag_source = source(cell, 1);
+    const Real current = current_Q(cell, Q_component), reference = reference_Q(cell, Q_component);
+    if (!Kokkos::isfinite(u_source) || !Kokkos::isfinite(tag_source) ||
+        !Kokkos::isfinite(current) || !Kokkos::isfinite(reference)) {
+      error(cell, 0) = std::numeric_limits<Real>::infinity();
+      return;
+    }
+    error(cell, 0) = Kokkos::max(Kokkos::abs(u_source - reference),
+                                Kokkos::abs(current - reference));
   }
 };
 using IncidenceCheckpoint = AuxiliaryCheckpointAcceptedState<D>;
@@ -1276,8 +1300,11 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   }
   if (extra == IncidenceRestoreWitness::accepted_state_consumer) {
     // The source operator belongs to the accepted generated block, not the Field RHS adapter.
-    const auto check_accepted_state_source = [&](Real expected) {
+    const auto reference_address = system.auxiliary_address(Q);
+    std::array<std::unique_ptr<const Field>, 2> high_Q_reference;
+    const auto check_accepted_state_source = [&](const char* phase, std::optional<Real> expected) {
       for (int level = 0; level < 2; ++level) {
+        SCOPED_TRACE(::testing::Message() << phase << "/level=" << level);
         ASSERT_TRUE(observed.phi_points[level].has_value());
         const auto& accepted = system.prepared_amr_block_state(0, level);
         Field accepted_input(accepted);
@@ -1303,26 +1330,58 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
           EXPECT_EQ(dependency_error, -std::numeric_limits<Real>::infinity());
         else
           EXPECT_EQ(dependency_error, Real(0));
-        for (int component = 0; component < 2; ++component) {
-          const Real reference = component == 0 ? expected : Real(0);
-          for (std::size_t local = 0; local < source.local_size(); ++local)
-            for_each_cell(source.box(local), IncidenceConstantErrorKernel{
-              std::as_const(source).fab(local).view(), error.fab(local).view(), component, reference});
-          Kokkos::fence();
-          const Real actual_error = reduce_max_local(error);
+        if (expected) {
+          for (int component = 0; component < 2; ++component) {
+            const Real reference = component == 0 ? *expected : Real(0);
+            for (std::size_t local = 0; local < source.local_size(); ++local)
+              for_each_cell(source.box(local), IncidenceConstantErrorKernel{
+                std::as_const(source).fab(local).view(), error.fab(local).view(), component, reference});
+            Kokkos::fence();
+            const Real actual_error = reduce_max_local(error);
+            if (local_valid_cell_count(source) == 0)
+              EXPECT_EQ(actual_error, -std::numeric_limits<Real>::infinity());
+            else
+              EXPECT_LE(actual_error, field_bound);
+          }
+          const Real Q_error = incidence_local_constant_error(system, Q, level, *expected);
           if (local_valid_cell_count(source) == 0)
-            EXPECT_EQ(actual_error, -std::numeric_limits<Real>::infinity());
+            EXPECT_EQ(Q_error, -std::numeric_limits<Real>::infinity());
           else
-            EXPECT_LE(actual_error, field_bound);
+            EXPECT_LE(Q_error, field_bound);
+        } else {
+          // Both accepted Q and the source result must equal the owned pre-restore
+          // numerical reference exactly; no source result creates the reference.
+          ASSERT_NE(high_Q_reference[level], nullptr);
+          EXPECT_EQ(Q_address.group, reference_address.group);
+          EXPECT_EQ(Q_address.component, reference_address.component);
+          const auto& reference_Q = *high_Q_reference[level];
+          ASSERT_EQ(reference_Q.local_size(), source.local_size());
+          for (std::size_t local = 0; local < source.local_size(); ++local)
+            for_each_cell(source.box(local), IncidenceOwnedSourceReferenceErrorKernel{
+              std::as_const(source).fab(local).view(), current_Q->fab(local).view(),
+              reference_Q.fab(local).view(), error.fab(local).view(),
+              kernel_component(reference_address.component)});
+          Kokkos::fence();
+          const Real reference_error = reduce_max_local(error);
+          if (local_valid_cell_count(source) == 0)
+            EXPECT_EQ(reference_error, -std::numeric_limits<Real>::infinity());
+          else
+            EXPECT_EQ(reference_error, Real(0));
+          const Real high_dependency_error = incidence_local_dependency_error(system, phi, Q, level);
+          if (local_valid_cell_count(source) == 0)
+            EXPECT_EQ(high_dependency_error, -std::numeric_limits<Real>::infinity());
+          else
+            EXPECT_EQ(high_dependency_error, Real(0));
+          // This collective proves a changed forcing exists on each global level;
+          // it is not an ownership census or an empty-rank qualification.
+          const Real high_difference = all_reduce_max(
+            incidence_local_constant_error(system, Q, level, Real(6)),
+            context.prepared_execution_lane());
+          EXPECT_GT(high_difference, field_bound);
         }
-        const Real Q_error = incidence_local_constant_error(system, Q, level, expected);
-        if (local_valid_cell_count(source) == 0)
-          EXPECT_EQ(Q_error, -std::numeric_limits<Real>::infinity());
-        else
-          EXPECT_LE(Q_error, field_bound);
       }
     };
-    check_accepted_state_source(Real(6));
+    check_accepted_state_source("original-accepted", Real(6));
     const auto accepted_state_coarse = system.block_level_state_global("material", 0);
     const auto accepted_state_fine = system.block_level_state_global("material", 1);
     const auto original_image = system.capture_auxiliary_checkpoint_accepted_state();
@@ -1338,14 +1397,25 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
       13, "test.amr-aux.psi-slot", {{0, &doubled_stage, 1}});
     ASSERT_TRUE(doubled_psi.report().solved_value_available()) << doubled_psi.report().reason;
     (void)doubled_psi.consume(SolveConsumption::kAccept);
+    // The override scales only the active level. Other levels use actual accepted
+    // STATE; the composite high forcing is not claimed to be constant Q=12.
+    // MultiFab copies vector<Fab>; each Fab copy allocates and deep-copies its data.
+    for (int level = 0; level < 2; ++level) {
+      const auto* groups = system.prepared_amr_provider_storage_groups(level);
+      ASSERT_NE(groups, nullptr);
+      const auto* accepted_Q = groups->find(reference_address.group);
+      ASSERT_NE(accepted_Q, nullptr);
+      high_Q_reference[level] = std::make_unique<const Field>(*accepted_Q);
+    }
+    Kokkos::fence(); // Complete independent copies before restore or source traversal.
     const auto doubled_image = system.capture_auxiliary_checkpoint_accepted_state();
     ASSERT_FALSE(observed.Q_launches.empty());
     const auto actual_refresh_point = observed.Q_launches.back();
-    check_accepted_state_source(Real(12));
+    check_accepted_state_source("high-accepted-reference", std::nullopt);
 
     system.restore_auxiliary_checkpoint_accepted_state(original_image);
     EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), original_image);
-    check_accepted_state_source(Real(6)); // Rejects a stale pre-restore Q=12 binding.
+    check_accepted_state_source("original-restored", Real(6)); // Refuses a stale high-Q binding.
 
     // Public all-level refresh at a genuinely issued point. The real fine launcher
     // throws after coarse candidate preparation, before accepted publication;
@@ -1357,13 +1427,13 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
     EXPECT_EQ(observed.fine_Q_fault_point->level, 1);
     EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), original_image);
     observed.fail_fine_Q = false;
-    check_accepted_state_source(Real(6)); // Accepted provider plan must survive registry rollback.
+    check_accepted_state_source("after-registry-rollback", Real(6)); // The accepted plan must survive the swap.
     system.refresh_auxiliary(actual_refresh_point);
-    check_accepted_state_source(Real(6));
+    check_accepted_state_source("after-successful-refresh", Real(6));
 
     system.restore_auxiliary_checkpoint_accepted_state(doubled_image);
     EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), doubled_image);
-    check_accepted_state_source(Real(12));
+    check_accepted_state_source("high-restored-reference", std::nullopt);
     EXPECT_EQ(system.block_level_state_global("material", 0), accepted_state_coarse);
     EXPECT_EQ(system.block_level_state_global("material", 1), accepted_state_fine);
   }
