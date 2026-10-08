@@ -68,3 +68,15 @@ The actual public one-level AMR example resolves and emits both equivalent two-s
 spellings with `b=(1/2,1/2)`. These are Source proofs; installed Native execution,
 saved-state numerical reception, MPI/GPU coverage and scientific qualification
 remain distinct work.
+
+
+The production compiler proves constitutive read closure using the exact owner-qualified
+`ProgramModelGraph` source Module already supplied to Program emission. It authenticates
+the block's model owner and physical State target, then resolves the actual operator bodies
+and primitive recipes from that Module. Canonical compiled Program detachment intentionally
+removes live authoring registries; their absence neither implies empty reads nor selects a
+representative model. A missing or foreign source authority leaves the acceptance obligation
+unproved with an explicit diagnostic. The low-level authoring-only proof route may use its
+still-issued registry; installed artifact publication always carries the model graph authority.
+This boundary changes proof inputs only: the mathematical expressions, owner/stage contracts,
+coefficient arithmetic and emitted numerical operations remain unchanged.

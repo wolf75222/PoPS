@@ -283,3 +283,60 @@ def test_terminal_guard_cannot_authenticate_an_arbitrary_action_or_nonboolean_co
     object.__setattr__(guarded,'attrs',{**guarded.attrs,'action':object()})
     certificate,reason=prove_accepted_update_ssp(p)
     assert certificate is None and reason
+
+
+@pytest.mark.parametrize('composition',['weighted_rates','weighted_predictor'])
+def test_detached_resolved_public_compositions_retain_closed_source_read_authority(composition,tmp_path):
+    import pops
+    from tests.python.support.public_diffusion_field_case import author_case,one_level_amr_layout
+    from pops.fields import CompositeHierarchySolve
+    from pops.solvers.elliptic import GeometricMG
+    from pops.solvers.tolerances import Relative,AbsoluteFloor
+    from pops.codegen._orchestration_compile import build_program_model_graph
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_accepted_ssp import prove_accepted_update_ssp
+    from pops.time._program.detach import detach_compiled_program
+    authored=author_case('ssprk2',rk2_composition=composition,layout_factory=one_level_amr_layout,
+        field_solver=GeometricMG(tolerance=Relative(1e-13,floor=AbsoluteFloor(1e-14)),max_cycles=100),hierarchy_policy=CompositeHierarchySolve())
+    resolved=pops.resolve(pops.validate(authored.case),layout=authored.layout)
+    authority=build_program_model_graph(resolved)
+    detached=detach_compiled_program(resolved.time)
+    assert detached._ir_hash()==resolved.time._ir_hash()
+    assert detached._compiled_detached and not detached._operator_registries
+    assert all(v.block._instance_registry is None for v in detached._values if v.block is not None)
+    original=emit_cpp_program(resolved.time,model_graph=authority,field_plans=resolved.field_plans,target='amr_system')
+    rebuilt=emit_cpp_program(detached,model_graph=authority,field_plans=resolved.field_plans,target='amr_system')
+    certificate,reason=prove_accepted_update_ssp(detached,model_authority=authority)
+    assert certificate is not None,reason
+    assert certificate.b==(Fraction(1,2),Fraction(1,2))
+    assert [w for _,w in accepted_diffusive_quadrature(detached,model_authority=authority)]==[{1:Fraction(1,2)},{1:Fraction(1,2)}]
+    # Authored handle presentation and compiled canonical provenance differ.
+    # Retain complete original outputs and compare the actual step lambda body.
+    (tmp_path/'authored.cpp').write_text(original)
+    (tmp_path/'detached.cpp').write_text(rebuilt)
+    start='      [=](double dt) {'
+    end='\n      }\n    };'
+    def step_body(source):
+        assert source.count(start)==1
+        return source.split(start,1)[1].split(end,1)[0]
+    assert step_body(rebuilt)==step_body(original)
+    no_certificate,reason=prove_accepted_update_ssp(detached)
+    assert no_certificate is None and 'ProgramModelGraph source authority' in reason
+
+
+def test_detached_constitutive_module_cannot_be_borrowed_from_a_different_owner():
+    import pops
+    from tests.python.support.public_diffusion_field_case import author_case,one_level_amr_layout
+    from pops.fields import CompositeHierarchySolve
+    from pops.solvers.elliptic import GeometricMG
+    from pops.solvers.tolerances import Relative,AbsoluteFloor
+    from pops.codegen._orchestration_compile import build_program_model_graph
+    from pops.codegen.program_accepted_ssp import prove_accepted_update_ssp
+    from pops.time._program.detach import detach_compiled_program
+    plans=[]
+    for labels in (None,{'model':'different-constitutive-owner'}):
+        case=author_case('ssprk2',labels=labels,layout_factory=one_level_amr_layout,
+            field_solver=GeometricMG(tolerance=Relative(1e-13,floor=AbsoluteFloor(1e-14)),max_cycles=100),hierarchy_policy=CompositeHierarchySolve())
+        plans.append(pops.resolve(pops.validate(case.case),layout=case.layout))
+    certificate,reason=prove_accepted_update_ssp(detach_compiled_program(plans[0].time),model_authority=build_program_model_graph(plans[1]))
+    assert certificate is None and ('route' in reason or 'owner' in reason)

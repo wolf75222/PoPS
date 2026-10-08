@@ -111,7 +111,7 @@ def _independent_effect(program, value):
     return False
 
 
-def prove_accepted_update_ssp(program: Any) -> tuple[AcceptedUpdateSSP | AcceptedSSPPlan | None, str]:
+def prove_accepted_update_ssp(program: Any, *, model_authority: Any = None) -> tuple[AcceptedUpdateSSP | AcceptedSSPPlan | None, str]:
     """Prove each independently owned diffusive accepted State.
 
     Operators may have different authored expressions. Only exact typed
@@ -233,9 +233,22 @@ def prove_accepted_update_ssp(program: Any) -> tuple[AcceptedUpdateSSP | Accepte
                     from pops._ir.quantity import QuantityRef
                     from pops._ir.visitors import _children
                     from pops._ir.primitive_expansion import expand_primitive_recipes
+                    from pops.time.references import canonical_handle
                     view=value.attrs['physical_balance']
-                    model=value.block._instance_registry.spec(value.block.local_id)['model']
-                    module=getattr(model,'module',model)
+                    from .program_models import ProgramModelGraph
+                    if type(model_authority) is ProgramModelGraph:
+                        source_owner=model_authority.owner_for_block(value.block)
+                        module=model_authority.source_module_for_owner(source_owner)
+                        if module.owner_path.canonical()!=value.block.model_owner_path.canonical():
+                            raise ValueError("constitutive read contract has a different source Module owner")
+                    else:
+                        registry=getattr(value.block,'_instance_registry',None)
+                        if registry is None:
+                            raise ValueError("detached accepted proof requires its ProgramModelGraph source authority")
+                        model=registry.spec(value.block.local_id)['model']
+                        module=getattr(model,'module',model)
+                    if module.owner_path.canonical()!=view.target.owner_path.canonical():
+                        raise ValueError("constitutive read contract differs from the physical State owner")
                     roots=[]
                     for occurrence in view.occurrences:
                         if hasattr(occurrence.payload,'law'):
@@ -256,7 +269,7 @@ def prove_accepted_update_ssp(program: Any) -> tuple[AcceptedUpdateSSP | Accepte
                             constitutive_reads.add(expr.component)
                         if isinstance(expr,Var) and expr.kind in {'aux','field','prim'}:
                             constitutive_reads.add(expr.name)
-                        if isinstance(expr,QuantityRef) and expr.handle.kind=='state' and expr.handle!=view.target:
+                        if isinstance(expr,QuantityRef) and expr.handle.kind=='state' and canonical_handle(expr.handle)!=canonical_handle(view.target):
                             raise ValueError("forward-Euler premise reads a different constitutive State")
                         pending.extend(_children(expr))
                     if constitutive_reads and len(value.inputs)==1:

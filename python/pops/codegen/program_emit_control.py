@@ -560,7 +560,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     require_deferred_partition_bounds(var)
     from pops.codegen.program_diffusion_exchanges import emit_accepted_diffusive_exchanges
     lines.extend(emit_accepted_diffusive_exchanges(
-        program, target=target, block_indices=block_idx,
+        program, target=target, block_indices=block_idx, model_authority=model,
         partition_stability_checked=var.get(("partition_stability_checked",), ())))
     from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
     lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model, target=target))

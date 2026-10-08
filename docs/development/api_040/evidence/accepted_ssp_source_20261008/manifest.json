@@ -25,6 +25,21 @@
       "sha256": "670ced083a87ba562d5e08e9797800ddf8309b3583c617df8838adea8e8e66de",
       "bytes": 2704,
       "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/source-review-receipt.json"
+    },
+    "detached-author.json": {
+      "sha256": "0879aae8d8c6c4e113953b05ade60476ed657bb0aee81685273624da2eda9359",
+      "bytes": 5433,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/source-review-receipt.json"
+    },
+    "integrated-source64.json": {
+      "sha256": "485f48aa949679877f3d966d759d1093f6d63d0679de6a24ddd9c945e0f748a9",
+      "bytes": 311,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-accepted-ssp-v3-source-cohort-20261008/receipt.json"
+    },
+    "safe-guard-independent.json": {
+      "sha256": "880a77be1be3829c8ab0d8ca7b1c229dc42b65a6d3830186069f5bd5f0155d92",
+      "bytes": 5804,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-ssp-V2-safe-guard-source-review-20261008/reception.json"
     }
   }
 }

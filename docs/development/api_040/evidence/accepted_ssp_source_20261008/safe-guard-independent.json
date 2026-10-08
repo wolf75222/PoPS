@@ -1,0 +1,96 @@
+{
+  "schema": "pops.independent-accepted-SSP-V2-safe-terminal-guard-source-admission@1",
+  "decision": "ADMIT_EXACT_V1_TO_V2_DELTA_WITH_PRIOR_RATIONAL_REVIEW",
+  "delta_sha256": "caa5585d18cc80e903894b264bc62323524e1d8463805449fa74bb7c9ba73c6d",
+  "prior_V1_admission_sha256": "5b975217134325d5a10e61092b43fda2b48f49dd39685a4f6d7fd733dd40e5a2",
+  "author_receipt_sha256": "670ced083a87ba562d5e08e9797800ddf8309b3583c617df8838adea8e8e66de",
+  "findings": [
+    "successful_guard_input accepts only a two-input acceptance_guard with exact attrs guard/action, nominal exact FailRun or RejectAttempt action, and a Bool condition.",
+    "Successful path returns its original value only when vtype, block, clock, point, space, state reference and field context equal that value; this is type/right consistency, not expression or method-name recognition.",
+    "Every graph input including guard condition is authenticated against the issued object/ID map. Existing global executed-effect nonmutation audit is retained.",
+    "Accepted closure and exact rational coefficient expansion traverse the successful value alias; exchange-weight walk does likewise without removing the guard node or condition/action.",
+    "No C++ acceptance_guard emitter, exception/rejection branch, numeric expression, model math, spatial guard or tolerance changed. The runtime still evaluates the actual condition and executes terminal failure/rollback before commit.",
+    "Prior exact rational I+K proof remains unchanged. The delta restores valid late-refusal expressions omitted by V1; V1-only admission is not promoted without this delta."
+  ],
+  "actual_Source_tests": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/test-runs/20261008T185310407628Z/pytest.xml",
+      "sha256": "513b0094feccaf79713f46d6544b7426968f8587d1e011ed479b67975bfd31bf",
+      "bytes": 8285,
+      "tests": 61,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-accepted-ssp-v2-source-cohort-20261008/results.xml",
+      "sha256": "3942e046d28aff26c799e5c140e986dae800729ad15e66558582ace9e18e349a",
+      "bytes": 11397,
+      "tests": 61,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "coherent_scope": "Author and Root both61PASS include oldhook28 and33other; no Native loaded recorded, no reviewer rerun.",
+  "reviewer_actions": {
+    "Native_import": false,
+    "compiler": false,
+    "build": false,
+    "install": false,
+    "runtime": false,
+    "Main_edit": false,
+    "remote": false
+  },
+  "requirements": [
+    "Root integrate and commit exact V1+V2 code; admit actual installed Python payload/Native origin.",
+    "Freeze and record new complete core manifest before scientific SSPRK2; old fd27 evidence remains tied to its old source.",
+    "Execute both public SSPRK2 compositions and required fixed-core finite cases with real saved-array/CP/math reception; no Native acceptance inherited from Source tests."
+  ],
+  "limits": [
+    "Source admission only; finite61-test cohort is not universal genericity or scientific/MPI/GPU/CI qualification.",
+    "Earlier V1 integrated58-case late-guard failure remains a preserved negative, resolved here at the source-test scope only."
+  ],
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/python/pops/codegen/program_accepted_ssp.py": {
+      "sha256": "caef9f3ce018b47d1ee389a4e54814a641e44e4e299f7d1f0219064cbd08f1a6",
+      "bytes": 19174
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/python/pops/codegen/program_diffusion_exchanges.py": {
+      "sha256": "7e3882214ac0189f4b6ac5828c6e436f0463772bf2970d5388d913062cead577",
+      "bytes": 5682
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": {
+      "sha256": "6f6c7feac80c89706d3dfd5d6a8aef6255d893fa477e3ce9c6dcafb8f15038c6",
+      "bytes": 15347
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/test-runs/20261008T185310407628Z/pytest.xml": {
+      "sha256": "513b0094feccaf79713f46d6544b7426968f8587d1e011ed479b67975bfd31bf",
+      "bytes": 8285
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-accepted-ssp-v2-source-cohort-20261008/results.xml": {
+      "sha256": "3942e046d28aff26c799e5c140e986dae800729ad15e66558582ace9e18e349a",
+      "bytes": 11397
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/test-runs/20261008T185310407628Z/receipt.json": {
+      "sha256": "234ab90711de51f21f474cc41401a8d76cc8952b690c84fb12404a7671189fae",
+      "bytes": 1176
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-accepted-ssp-v2-source-cohort-20261008/receipt.json": {
+      "sha256": "eed20de1e93f613cdcd654136538a05cd6fdcb3021410327a98b7c5293ee2a05",
+      "bytes": 303
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/source-review-receipt.json": {
+      "sha256": "670ced083a87ba562d5e08e9797800ddf8309b3583c617df8838adea8e8e66de",
+      "bytes": 2704
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/safe-terminal-guard-v1-to-v2.patch": {
+      "sha256": "caa5585d18cc80e903894b264bc62323524e1d8463805449fa74bb7c9ba73c6d",
+      "bytes": 6223
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-update-ssp-source-review-20261008/reception.json": {
+      "sha256": "5b975217134325d5a10e61092b43fda2b48f49dd39685a4f6d7fd733dd40e5a2",
+      "bytes": 7645
+    }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "Source_baseline": "77434a938bdb4281eae9ce0bd0deaed1cdf14ba3",
+  "baseline_counterexamples": [
+    {
+      "counts": {
+        "fail": 2,
+        "pass": 0
+      },
+      "diagnostic": "'NoneType' object has no attribute 'spec'",
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T191710698898Z/receipt.json",
+      "receipt_sha256": "e6a646190dcf665fc7c277f3a3bac281c5ce355985af12ed4f01c1802f7c21d4",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T191710698898Z/pytest.xml",
+      "xml_sha256": "2e005f8c9354873d8c2e71fb98a4c5b56b7831f7301aad13ed8e11ff6bd6211c"
+    }
+  ],
+  "cause": "actual detach_compiled_program canonically removes live BlockHandle registry; proof must consume source Module from existing exact ProgramModelGraph",
+  "changes": [
+    "thread already-owned model graph through emission and exchange proof",
+    "authenticate source Module vs block model owner and physical State owner",
+    "compare constitutive State using canonical_handle across authoring/compiled boundary"
+  ],
+  "coherent_source_test": {
+    "Native_loaded": [],
+    "counts": {
+      "fail": 0,
+      "pass": 64,
+      "skip": 0
+    },
+    "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/receipt.json",
+    "receipt_sha256": "085152b00f60165f015be86dab725f0bd24d1d74eccd654fa00ee95cfab48bb5",
+    "xml": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/pytest.xml",
+    "xml_sha256": "7fa471fb5c98d48a072e228c48fc8fb2bb2916f53653d9cca412665f3aee2990"
+  },
+  "files": {
+    "docs/development/api_040/accepted_update_ssp_v1.md": {
+      "baseline_sha256": "ba9ba604452d14dcb8144a23add37a440ca137993d8f235689c250392f9b65e9",
+      "candidate_sha256": "795e17a58233dbbdd991e39b1efc3bf80dc31fc0440c9ea9f8a5c76dff290fb5"
+    },
+    "python/pops/codegen/program_accepted_ssp.py": {
+      "baseline_sha256": "caef9f3ce018b47d1ee389a4e54814a641e44e4e299f7d1f0219064cbd08f1a6",
+      "candidate_sha256": "4fc97755ecf482e9e683694e568987595420c2ba25a7bf0f04fe11eb816241ad"
+    },
+    "python/pops/codegen/program_diffusion_exchanges.py": {
+      "baseline_sha256": "7e3882214ac0189f4b6ac5828c6e436f0463772bf2970d5388d913062cead577",
+      "candidate_sha256": "3cf2ee71bd82cf1877105af87811acc8e9e01dab409fe4d6ccb0c6dd5edb5f6d"
+    },
+    "python/pops/codegen/program_emit_control.py": {
+      "baseline_sha256": "02790c1c5215cb1bc4a7c828ab03c7f406deddeaa69481860a92a75ed80aeb64",
+      "candidate_sha256": "6c363812ef90e0b4efaf3e907645961747c06ae5b3dc929914220fc7f8b9254d"
+    },
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": {
+      "baseline_sha256": "6f6c7feac80c89706d3dfd5d6a8aef6255d893fa477e3ce9c6dcafb8f15038c6",
+      "candidate_sha256": "b9253d57506dc552ff759b370a9c76d6285381ca2f4f0e51fe0eb60be3f0a0b7"
+    }
+  },
+  "invariant": "No algebra, numerical emission, loop, FP, guard, coefficient or owner/read-right relaxation; missing and foreign source authorities remain unproved obligations",
+  "patch": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/detached-model-authority-v2-to-v3.patch",
+  "patch_sha256": "2193788f2259a18e9b121b29dfb1218287c8f69ed2b4c41e11d96c306a95d960",
+  "public_resolved_detached_cpp_pairs": [
+    {
+      "authored": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/tmp/test_detached_resolved_public_0/authored.cpp",
+      "authored_sha256": "9f0a467005cac14f2744552eed9241474d4e7bb76501f37ebd98ac2eca41e152",
+      "complete_step_body_sha256": "791df91ff8801e9d811ef2a7d99269e97dd9d9d8b4fdf67aebcafac34d82255e",
+      "detached": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/tmp/test_detached_resolved_public_0/detached.cpp",
+      "detached_sha256": "e316357f4a1fc1828e78181b77b2b2e350e6d6038727032fb0a4c70d571d121f",
+      "step_body_equal": true,
+      "whole_cpp_equal": false
+    },
+    {
+      "authored": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/tmp/test_detached_resolved_public_1/authored.cpp",
+      "authored_sha256": "7fd9a7b4a8f8f1d444c958a3cbbb86b09e80d919943ed9dc8f8bba1aba4d952b",
+      "complete_step_body_sha256": "e1049d03907eea579791ea546959dbad6d33263d37d81fc7214e8707b878786e",
+      "detached": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/tmp/test_detached_resolved_public_1/detached.cpp",
+      "detached_sha256": "1427d9d5251b7393032cad5ad89072c6218718bc1f2bc61cca2456e757d0dbe1",
+      "step_body_equal": true,
+      "whole_cpp_equal": false
+    }
+  ],
+  "scope_limits": [
+    "No Native compile/install/runtime by author",
+    "Raw whole CPP differs in intentional compiled canonical provenance; only actual full step body is byte-identical",
+    "Root sole Main integrator and installed-runtime qualifier"
+  ],
+  "status": "SOURCE_ONLY_ADMISSION_CANDIDATE"
+}
