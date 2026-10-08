@@ -34,6 +34,29 @@ sans reconnaissance de noms/tableaux. Le
 le critère utilisateur : cœur figé, expressions traduites exactement, et
 variations de noms/coefficients reçues séparément sur ce même cœur.
 
+La réception suivante est désormais réelle : le cas public nonconstant Euler
+compile, bind et exécute le vrai paquet installé C4/Nativeed2. Les192 valeurs
+de chaque tableau sont reçues indépendamment, avec les72 charges du checkpoint.
+Erreurs état/prédicteur6,661e−16 sous2,274e−12 ; potentiel5,863e−12 sous1,465e−10.
+Sur le même cœur `fd27f604adde381bad38e6f04986805ed05f33b549a8dc8c36b622770a9b6aa5`,
+les résultats du modèle/méthode/SSA renommés sont bit à bit identiques au cas
+initial. κ0,1→0,125 change réellement le coefficient C++ et les tableaux selon
+l’oracle : gain0,9847759065→0,9809698831, différence maximale de l’état0,0018544761
+et du potentiel0,0001393585. Les [reçus du cœur figé](evidence/fixed_core_diffusion_20261008/manifest.json)
+conservent ces faits ; ils ne prouvent pas la généricité de tout le langage.
+
+Le même cas a aussi terminé avec deux vrais rangs MPI : un PASS par rang, zéro
+failure/error/skip. Le lanceur utilise l’identité et pytest dans le même processus
+pour conserver les descripteurs PMI ; le checkpoint a un chemin partagé et les
+tableaux sont propres à chaque rang. Deux erreurs antérieures de lanceur et de
+chemin du fixture sont conservées. La réception mathématique MPI2 indépendante
+est encore en cours. Ces corrections ne modifient aucun fichier du cœur.
+
+La méthode SSPRK2 émet maintenant du C++ dans une candidate de preuve algébrique
+externe ; des cas de dépendances Field/frozen-driver restent à corriger avant
+intégration et exécution. Les candidates CUDA/Moving/Aux n’ont pas été promues
+au cœur courant. La CI et les86 obligations+8 principes restent ouvertes.
+
 La réception historique détaillée ci-dessous concerne
 `6d898599a3f66fa9aa3c049ba0f3114f1960b6dc`.
 Cette PR ajoute ensuite les correctifs privés de portabilité NVCC et GCC13,

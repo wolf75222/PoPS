@@ -1,0 +1,15 @@
+{
+  "schema": "pops.Root.source-only-diffusive-wheel-install-reception@1",
+  "date_utc": "2026-10-08T17:56:47.077072+00:00",
+  "Source": "c4d2b7bbe38c0a867a7d6c997899b46ea55dc508",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "wheel": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-field-installed-build-c4d2b7bb-20261008/wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+  "wheel_sha256": "5a16bf04bdae68768bceccea35da2bd11f58847269c37e6a34695404d7b00669",
+  "wheel_payload_exact_installed": 1167,
+  "Source_before_after_hashes_equal": 5682,
+  "new_Ninja_CXX_or_link_actions": 0,
+  "new_Ninja_glob_validation_rows": 1,
+  "actual_driver_identity": "/Users/romaindespoulain/dev/tmp/PoPS-first-installed-diffusive-Field-Euler-c4d2b7bb-ed2-20261008/identity.json",
+  "first_negative": "/Users/romaindespoulain/dev/tmp/PoPS-first-installed-diffusive-Field-Euler-c4d2b7bb-ed2-20261008/result.json",
+  "first_negative_scope": "Compile/bind/run reached accepted step; fixture wrong history getter signature before saved-array oracle. No positive scientific reception."
+}

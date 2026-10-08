@@ -1,0 +1,255 @@
+{
+  "schema": "pops.independent-public-diffusion-Euler-da4-ed2@1",
+  "status": "PASS",
+  "Source": "da4ec543f8beeb57c1ad1f122184005b82fb3f64",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source_package_revision": "c4d2b7bbe38c0a867a7d6c997899b46ea55dc508",
+  "fixed_core": {
+    "fingerprint": "fd27f604adde381bad38e6f04986805ed05f33b549a8dc8c36b622770a9b6aa5",
+    "files": 1197,
+    "C4_equals_da4_equals_live": true,
+    "scope": "Prefix superset of all tracked python/pops including libraries, include and src, including any internal documentation; top-level examples/tests/docs excluded. Original Root manifest unchanged."
+  },
+  "actual_XML_counts": {
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "actual_wall_seconds": 32.91524995800137,
+  "math": {
+    "initial_cell_average": "independent cell integral cos-face difference",
+    "lambda_h": 38.973679354221176,
+    "z": 0.015224093497742647,
+    "Euler_gain": 0.9847759065022573,
+    "field_stage_time": 0.00390625,
+    "field_coefficient": 3.00390625,
+    "oracle_errors": {
+      "initial": {
+        "error": 6.661338147750939e-16,
+        "bound": 2.2737367544323206e-12
+      },
+      "predictor": {
+        "error": 6.661338147750939e-16,
+        "bound": 2.2737367544323206e-12
+      },
+      "accepted": {
+        "error": 6.661338147750939e-16,
+        "bound": 2.2737367544323206e-12
+      },
+      "phi_stage": {
+        "error": 5.862865748440527e-12,
+        "bound": 1.4647123675443233e-10
+      }
+    },
+    "guard_bounds_unchanged": true,
+    "wrong_live_field_max_abs_separation": 0.000557434028012338,
+    "wrong_time_field_max_abs_separation": 0.007859389224472046
+  },
+  "checkpoint": {
+    "array_payloads": 72,
+    "restart_identity": "83b948d04d94e595d54fc8280ad1c5202afe8428dd5af00162d359f54ef37aa4",
+    "history_names": [
+      "phi_stage",
+      "predictor_Y"
+    ],
+    "history_fill_counts": {
+      "phi_stage": 1,
+      "predictor_Y": 1
+    },
+    "state_history_phi_rawbytes_equal_saved": true,
+    "levels": 1,
+    "macro_step": 1,
+    "time": 0.00390625
+  },
+  "actual_CPP": {
+    "model_source_provenance_hash_equal": true,
+    "nonempty_RHS_provider": true,
+    "analytic_aux_time": true,
+    "screened_load": "(3+stage_tau)*u",
+    "diffusion_coefficient": 0.1,
+    "issued_RHS_completion_precedes_FieldY": true,
+    "model_cpp": {
+      "sha256": "fbb6e00b121f707593b5e904c95e04457ea856693996cad7f5059b3fc76bdaf9",
+      "bytes": 25948
+    },
+    "program_cpp": {
+      "sha256": "abd23adb3e876028ffdeb16910edbaba7c78e1fb5ac0c2af0eb60f2601aa8a0d",
+      "bytes": 31042
+    }
+  },
+  "official_package": {
+    "wheel_sha256": "5a16bf04bdae68768bceccea35da2bd11f58847269c37e6a34695404d7b00669",
+    "wheel_popspayloads_exact_installed": 1167,
+    "Native_authenticated_reuse_no_new_CXX_or_link": true,
+    "one_new_glob_validation_row_not_CXX": true,
+    "producer_doctor_all_true": true
+  },
+  "actual_context": {
+    "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+    "allocator_mode": "kokkos_shared_space_managed_arena",
+    "amr_refinement_ratio": null,
+    "amr_refinement_ratio_rank": 2,
+    "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+    "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+    "communicator": "MPI_COMM_WORLD",
+    "dimension": 2,
+    "field_memory_space": "host",
+    "has_kokkos": true,
+    "kokkos_atexit_finalize_registered": true,
+    "kokkos_backend": "OpenMP",
+    "kokkos_concurrency": 2,
+    "kokkos_device": "cpu",
+    "kokkos_finalized": false,
+    "kokkos_initialized": true,
+    "kokkos_initialized_by_pops": true,
+    "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+    "kokkos_ownership": "pops-owned-lazy",
+    "kokkos_shared_space": "Host",
+    "kokkos_stream": "Kokkos::OpenMP::synchronous",
+    "kokkos_stream_synchronous": true,
+    "mpi_active": true,
+    "mpi_atexit_finalize_registered": true,
+    "mpi_compiled": true,
+    "mpi_initialized_by_pops": true,
+    "mpi_ownership": "pops-owned",
+    "mpi_rank": 0,
+    "mpi_ranks": 1,
+    "mpi_thread_level": 3,
+    "precision": "double",
+    "real_bytes": 8,
+    "supports_custom_communicator": false,
+    "supports_mixed_precision": false,
+    "supports_single_precision": false
+  },
+  "reviewer_actions": {
+    "Native_import": false,
+    "run": false,
+    "build": false,
+    "install": false,
+    "Main_edit": false,
+    "remote": false
+  },
+  "limits": [
+    "Positive original nonconstant public Euler diffusion\u2192FieldY, AMR1 world1/OpenMP2 only.",
+    "FirstC4 fixture extraction failure remains negative and preserved; its accepted-step progress was not a positive oracle.",
+    "SSPRK2, renamed/coefficient runtime variants, MPI2/GPU/3D/late rollback and Full94 remain separately unfinished.",
+    "Finite witness plus exact core pin is not universal genericity proof.",
+    "Compiler actual-compile source retained; temporary path persistence/internal compiler cache attribution not inferred."
+  ],
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest.log": {
+      "sha256": "7ff1b37093c2666956b7827af154f979128d5818032add5f439e544743552ff1",
+      "bytes": 1245
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/result.json": {
+      "sha256": "6fd3729bef9a8143742f64b5bff2ce4c5522cc06494277cf7c7a897dfc2b0f73",
+      "bytes": 1601
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/identity.json": {
+      "sha256": "5c8064b7f4c624d49ffcac0aa175237f46cf6b1a417e1a5c0015b020f3b07d69",
+      "bytes": 2850
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/source-files.json": {
+      "sha256": "ed8b75a8e66e56adf12c6d43e5410d24a7978ee89f46d4da1d892de6367b9cdf",
+      "bytes": 136438
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest.xml": {
+      "sha256": "6372f18b0788521425b2c119c6e828e885ddd3c660dd4e591e6b6b65d45d946c",
+      "bytes": 682
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/60d76085e7d5a31a3ad919d3b8f732fbe43e8770eb62438d1f49a9d1e3b45641.so.pops-model.cpp": {
+      "sha256": "fbb6e00b121f707593b5e904c95e04457ea856693996cad7f5059b3fc76bdaf9",
+      "bytes": 25948
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/60d76085e7d5a31a3ad919d3b8f732fbe43e8770eb62438d1f49a9d1e3b45641.so.pops-model-compile.json": {
+      "sha256": "6be0180796d1e3d10628e4d6cac756eb8cda7b23b01e3da399eaaa837d106ddc",
+      "bytes": 2310
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/60d76085e7d5a31a3ad919d3b8f732fbe43e8770eb62438d1f49a9d1e3b45641.so.pops-artifact.json": {
+      "sha256": "24e66ad6c005396c625e559ee182de613aa2d41d418dd8888ec0993d3ca3d0f2",
+      "bytes": 591
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/60d76085e7d5a31a3ad919d3b8f732fbe43e8770eb62438d1f49a9d1e3b45641.so": {
+      "sha256": "76fb94e9b622e76e7bf33306bc88973f3c902e63c235de82a4b0fe212aa8e958",
+      "bytes": 555496
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/1c8d9714a03a3e98ea624c0ad9039a5a21dbcd635f2c89a4629b8723cfc6d72e.so.pops-artifact.json": {
+      "sha256": "f3b0c7dc7e0a81652ac49a3e592cbe8593179a7d0026635105ea0711e0e911d9",
+      "bytes": 490
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/1c8d9714a03a3e98ea624c0ad9039a5a21dbcd635f2c89a4629b8723cfc6d72e.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/1c8d9714a03a3e98ea624c0ad9039a5a21dbcd635f2c89a4629b8723cfc6d72e.so": {
+      "sha256": "ea02ed875813507492bc31f84fc37b10a390d2666c3d4a7b26b09e3b5a158a9b",
+      "bytes": 1943472
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/60d76085e7d5a31a3ad919d3b8f732fbe43e8770eb62438d1f49a9d1e3b45641.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/.60d76085e7d5a31a3ad919d3b8f732fbe43e8770eb62438d1f49a9d1e3b45641.pops-stage-bfm2u4hn.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/accepted.npy": {
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/program0.cpp": {
+      "sha256": "abd23adb3e876028ffdeb16910edbaba7c78e1fb5ac0c2af0eb60f2601aa8a0d",
+      "bytes": 31042
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/inputs.json": {
+      "sha256": "0ef19ce53004e512a5dab9c936f0e14127eb235e9cc6b58f495b33e0d5be0d12",
+      "bytes": 1182
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/actual-receipt.json": {
+      "sha256": "a47d502ef2c48e7fad2c5e50f151fc8258a1bac99c452b9cfbde7a894ce7b7c0",
+      "bytes": 78134
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/model0.cpp": {
+      "sha256": "fbb6e00b121f707593b5e904c95e04457ea856693996cad7f5059b3fc76bdaf9",
+      "bytes": 25948
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/phi_stage.npy": {
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/accepted.npz": {
+      "sha256": "19d9a76a4ad8fc702d9ccba72638e21df01dfbd47c262d241a72b0a5358b67d0",
+      "bytes": 40288
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/initial.npy": {
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-diffusive-Field-Euler-slot0-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/predictor.npy": {
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-diffusive-tranche-20261008/core-manifest.json": {
+      "sha256": "ace8d56aa0d9b4aae91c9d559e8b60aca6365e50756f003bb71b8d0c9edaf701",
+      "bytes": 197575
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-field-installed-build-c4d2b7bb-20261008/root-source-wheel-admission.json": {
+      "sha256": "28928a4227d36b54b5571918bf6f92d7b3a102853150bc6f48e205022eb1b7dc",
+      "bytes": 1105
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-field-installed-build-c4d2b7bb-20261008/dispatch.json": {
+      "sha256": "feaa503c4fad7e4329e9496b78f2ef29041ddbd9922c39efef0027b8ca4164f1",
+      "bytes": 422
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-field-installed-build-c4d2b7bb-20261008/build-python.log": {
+      "sha256": "d14595955c458d95e3cfd12e442ee76978d9812f67886d48ada911011c6cd854",
+      "bytes": 65926
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-field-installed-build-c4d2b7bb-20261008/wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl": {
+      "sha256": "5a16bf04bdae68768bceccea35da2bd11f58847269c37e6a34695404d7b00669",
+      "bytes": 9338809
+    }
+  }
+}

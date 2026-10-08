@@ -1,0 +1,27 @@
+{
+  "rank": 1,
+  "ranks": 2,
+  "argv": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-Euler-MPI2-sharedcp-16b4-ed2-20261008/rank1/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-Euler-MPI2-sharedcp-16b4-ed2-20261008/rank1/pytest-tmp",
+    "tests/python/integration/runtime/test_public_diffusion_field_predictor.py::test_public_diffusion_predictor_is_field_rhs[euler]"
+  ],
+  "exit": 0,
+  "counts": {
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "wall_seconds": 35.47798216699812,
+  "inprocess_identity_then_pytest": true,
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "status": "passed"
+}

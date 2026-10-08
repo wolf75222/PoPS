@@ -1,0 +1,380 @@
+{
+  "schema": "pops.independent-fixed-core-Euler-metamorphic-variants@1",
+  "status": "PASS",
+  "Source": "da4ec543f8beeb57c1ad1f122184005b82fb3f64",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "fixed_core_fingerprint": "fd27f604adde381bad38e6f04986805ed05f33b549a8dc8c36b622770a9b6aa5",
+  "core_files": 1197,
+  "actual_counts": {
+    "tests": 2,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "actual_wall_seconds": 66.72578370799965,
+  "variants": {
+    "renamed": {
+      "kappa": 0.1,
+      "lambda_h": 38.973679354221176,
+      "Euler_gain": 0.9847759065022573,
+      "independent_errors": {
+        "initial": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "predictor": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "accepted": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "phi_stage": {
+          "error": 5.862865748440527e-12,
+          "bound": 1.4647123675443233e-10
+        }
+      },
+      "rawbytes_equal_base": {
+        "initial": true,
+        "predictor": true,
+        "accepted": true,
+        "phi_stage": true
+      },
+      "max_abs_delta_from_base": {
+        "initial": 0.0,
+        "predictor": 0.0,
+        "accepted": 0.0,
+        "phi_stage": 0.0
+      },
+      "CPpayloads": 72,
+      "restart_identity": "b3b76db2ef58109e0a5e1c6d3c92a5b6beea9ad588cf2231fb842a7c16555073",
+      "CP_state_Y_phi_history_rawbytes_match": true,
+      "labels": {
+        "D": "renamed_first_slope",
+        "D1": "renamed_second_slope",
+        "Y": "renamed_predictor",
+        "accepted": "renamed_endpoint",
+        "method": "renamed_integrator",
+        "model": "renamed_heat_model",
+        "rate": "renamed_balance"
+      },
+      "model_cpp": {
+        "sha256": "c7e13225ada94b0a6fc6b1e274247ba9222a90bef9200efd33a24a5dcaf63443",
+        "bytes": 25792
+      },
+      "program_cpp": {
+        "sha256": "cb44218f232b7b5abd18e9844e7fda1a21ed9565b02fde519b56d299308e2766",
+        "bytes": 31036
+      },
+      "numeric_diffusion_expression_actual": "result.values = {u, 0.1, 0.1, pops::Real(1)};",
+      "model_CPP_contains_screened_aux_RHS": true,
+      "context": {
+        "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+        "allocator_mode": "kokkos_shared_space_managed_arena",
+        "amr_refinement_ratio": null,
+        "amr_refinement_ratio_rank": 2,
+        "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+        "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+        "communicator": "MPI_COMM_WORLD",
+        "dimension": 2,
+        "field_memory_space": "host",
+        "has_kokkos": true,
+        "kokkos_atexit_finalize_registered": true,
+        "kokkos_backend": "OpenMP",
+        "kokkos_concurrency": 2,
+        "kokkos_device": "cpu",
+        "kokkos_finalized": false,
+        "kokkos_initialized": true,
+        "kokkos_initialized_by_pops": true,
+        "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+        "kokkos_ownership": "pops-owned-lazy",
+        "kokkos_shared_space": "Host",
+        "kokkos_stream": "Kokkos::OpenMP::synchronous",
+        "kokkos_stream_synchronous": true,
+        "mpi_active": true,
+        "mpi_atexit_finalize_registered": true,
+        "mpi_compiled": true,
+        "mpi_initialized_by_pops": true,
+        "mpi_ownership": "pops-owned",
+        "mpi_rank": 0,
+        "mpi_ranks": 1,
+        "mpi_thread_level": 3,
+        "precision": "double",
+        "real_bytes": 8,
+        "supports_custom_communicator": false,
+        "supports_mixed_precision": false,
+        "supports_single_precision": false
+      }
+    },
+    "coefficient_perturbation": {
+      "kappa": 0.125,
+      "lambda_h": 38.973679354221176,
+      "Euler_gain": 0.9809698831278217,
+      "independent_errors": {
+        "initial": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "predictor": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "accepted": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "phi_stage": {
+          "error": 5.862865748440527e-12,
+          "bound": 1.4647123675443233e-10
+        }
+      },
+      "rawbytes_equal_base": {
+        "initial": true,
+        "predictor": false,
+        "accepted": false,
+        "phi_stage": false
+      },
+      "max_abs_delta_from_base": {
+        "initial": 0.0,
+        "predictor": 0.001854476056183163,
+        "accepted": 0.001854476056183163,
+        "phi_stage": 0.00013935850553892237
+      },
+      "CPpayloads": 72,
+      "restart_identity": "57c99cc282d290c544f8440b8be9bce710b552e80e88f02bc54640e68a811455",
+      "CP_state_Y_phi_history_rawbytes_match": true,
+      "labels": null,
+      "model_cpp": {
+        "sha256": "936c810c3b39af3e896ac2abca609b2378f5bfb5511b0fc0c70a864e86c349ff",
+        "bytes": 25948
+      },
+      "program_cpp": {
+        "sha256": "a1c0d2606c51d379eb57bdd5cf27a5a0d05b7ef4555a64e3fcbc4efb4d0ca0ad",
+        "bytes": 31046
+      },
+      "numeric_diffusion_expression_actual": "result.values = {u, 0.125, 0.125, pops::Real(1)};",
+      "model_CPP_contains_screened_aux_RHS": true,
+      "context": {
+        "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+        "allocator_mode": "kokkos_shared_space_managed_arena",
+        "amr_refinement_ratio": null,
+        "amr_refinement_ratio_rank": 2,
+        "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+        "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+        "communicator": "MPI_COMM_WORLD",
+        "dimension": 2,
+        "field_memory_space": "host",
+        "has_kokkos": true,
+        "kokkos_atexit_finalize_registered": true,
+        "kokkos_backend": "OpenMP",
+        "kokkos_concurrency": 2,
+        "kokkos_device": "cpu",
+        "kokkos_finalized": false,
+        "kokkos_initialized": true,
+        "kokkos_initialized_by_pops": true,
+        "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+        "kokkos_ownership": "pops-owned-lazy",
+        "kokkos_shared_space": "Host",
+        "kokkos_stream": "Kokkos::OpenMP::synchronous",
+        "kokkos_stream_synchronous": true,
+        "mpi_active": true,
+        "mpi_atexit_finalize_registered": true,
+        "mpi_compiled": true,
+        "mpi_initialized_by_pops": true,
+        "mpi_ownership": "pops-owned",
+        "mpi_rank": 0,
+        "mpi_ranks": 1,
+        "mpi_thread_level": 3,
+        "precision": "double",
+        "real_bytes": 8,
+        "supports_custom_communicator": false,
+        "supports_mixed_precision": false,
+        "supports_single_precision": false
+      }
+    }
+  },
+  "read_only_reviewer_noNative_run_build_Main_remote": true,
+  "limits": [
+    "Finite two-case metamorphic witness, not universal language genericity.",
+    "Core source table1197 unchanged/live; exactsame hostedNativeed2.",
+    "Rename changes authored metadata and generated identifiers, all fourphysicalarrays rawbitwiseequal.",
+    "\u03ba perturbation alters actual Program constitutive coefficient and physicalsolution; sharedCore neverrewritten. ModelCPP carries corresponding physics fingerprint/RHS, diffusionnumericlaw is emitted in ProgramCPP.",
+    "World1 AMR1 only; SSPRK2/MPI2/GPU/3D/late rollback/Full94 separatelypending."
+  ],
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/model0.cpp": {
+      "sha256": "c7e13225ada94b0a6fc6b1e274247ba9222a90bef9200efd33a24a5dcaf63443",
+      "bytes": 25792
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/program0.cpp": {
+      "sha256": "cb44218f232b7b5abd18e9844e7fda1a21ed9565b02fde519b56d299308e2766",
+      "bytes": 31036
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/model0.cpp": {
+      "sha256": "936c810c3b39af3e896ac2abca609b2378f5bfb5511b0fc0c70a864e86c349ff",
+      "bytes": 25948
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/program0.cpp": {
+      "sha256": "a1c0d2606c51d379eb57bdd5cf27a5a0d05b7ef4555a64e3fcbc4efb4d0ca0ad",
+      "bytes": 31046
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest.log": {
+      "sha256": "f8bd53eecce634d4e7fa9e81bc312312dddc474e134ea30bd07ca6ea9a252786",
+      "bytes": 1552
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/result.json": {
+      "sha256": "603abab83026b3e038be4c64cf2bc5d4cd7e4910e0f9dff113bd7afae2b5b028",
+      "bytes": 1757
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/identity.json": {
+      "sha256": "5c8064b7f4c624d49ffcac0aa175237f46cf6b1a417e1a5c0015b020f3b07d69",
+      "bytes": 2850
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/source-files.json": {
+      "sha256": "ed8b75a8e66e56adf12c6d43e5410d24a7978ee89f46d4da1d892de6367b9cdf",
+      "bytes": 136438
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest.xml": {
+      "sha256": "24614f03a6331f4ec2a27478222280c1bb98c6367b17726612b35a51832dd9f2",
+      "bytes": 1134
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/a00bbe1a249fb0b4facca4e07ec6fe57a0b1775e8bfec9b16dd7eaa0629fbd16.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/.a00bbe1a249fb0b4facca4e07ec6fe57a0b1775e8bfec9b16dd7eaa0629fbd16.pops-stage-v1v80v54.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/a00bbe1a249fb0b4facca4e07ec6fe57a0b1775e8bfec9b16dd7eaa0629fbd16.so.pops-artifact.json": {
+      "sha256": "084a30ca1840b4755dc415bd1c7fc2895bc5d8c4cd577692c35e1ba92de1507d",
+      "bytes": 591
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/a00bbe1a249fb0b4facca4e07ec6fe57a0b1775e8bfec9b16dd7eaa0629fbd16.so.pops-model.cpp": {
+      "sha256": "c7e13225ada94b0a6fc6b1e274247ba9222a90bef9200efd33a24a5dcaf63443",
+      "bytes": 25792
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/9c8ea35a90e54cd2e6bed53a696bacfbdf6e594f75d814696cf83d8b7075f17d.so.pops-artifact.json": {
+      "sha256": "3758b2540e6ab4e461b3dbf2b97637cda040bc452837c57fbe66e07ccf31038a",
+      "bytes": 490
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/9c8ea35a90e54cd2e6bed53a696bacfbdf6e594f75d814696cf83d8b7075f17d.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/a00bbe1a249fb0b4facca4e07ec6fe57a0b1775e8bfec9b16dd7eaa0629fbd16.so": {
+      "sha256": "84e3937ef9e92a37b8c8ea4577b093af7e67c66e5e85c5c6de8a394ed08d36c7",
+      "bytes": 553560
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/9c8ea35a90e54cd2e6bed53a696bacfbdf6e594f75d814696cf83d8b7075f17d.so": {
+      "sha256": "754ccb39c6495e7076e672ce899d36b0f8ffa81e7b389208130b4e9c0055e5c0",
+      "bytes": 1943472
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/a00bbe1a249fb0b4facca4e07ec6fe57a0b1775e8bfec9b16dd7eaa0629fbd16.so.pops-model-compile.json": {
+      "sha256": "16ac5a7ec20472e0570cd26e8f6458f5a07c5c15f2339bf98d2b31d4072a6735",
+      "bytes": 2314
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/accepted.npy": {
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/inputs.json": {
+      "sha256": "9abf200a6a8cf4ca61eac81828c9f614bba245cbd432cf1aa7498e3b27f3e199",
+      "bytes": 1415
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/actual-receipt.json": {
+      "sha256": "c667a7dbb0ed3ef5ddb4bbfbdc96109959321a4ce1cb8c99c24ab0e8d30146b4",
+      "bytes": 78128
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/phi_stage.npy": {
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/accepted.npz": {
+      "sha256": "fa00b005b6c6317c4a7975dd1fa84889ece0969f4859d9be4fe7a7dba4c22599",
+      "bytes": 40256
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/initial.npy": {
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-euler/rank0/predictor.npy": {
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/286f108439ed18e9ffa1911e4e6f3af7546876d2090ee49404488d9406616f40.so.pops-model-compile.json": {
+      "sha256": "d9ce275e29ab9f41fed51bf2006aec0c0bbc50eba86f070027ce72d032b0ee54",
+      "bytes": 2314
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/286f108439ed18e9ffa1911e4e6f3af7546876d2090ee49404488d9406616f40.so.pops-artifact.json": {
+      "sha256": "66f5748f3c6993b0a99db6ba95fa68ddcbd1fa9128c17cb7cee6310fcac09e4b",
+      "bytes": 591
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/286f108439ed18e9ffa1911e4e6f3af7546876d2090ee49404488d9406616f40.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/ff0adc99d49e363ddeaf46fccb2e4d216ba59c7faeb38f6d530d888c75898173.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/ff0adc99d49e363ddeaf46fccb2e4d216ba59c7faeb38f6d530d888c75898173.so.pops-artifact.json": {
+      "sha256": "ca4a7da11e471059df05741b07c500de9fa49dbe989cfe85c2326f567849fb62",
+      "bytes": 490
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/286f108439ed18e9ffa1911e4e6f3af7546876d2090ee49404488d9406616f40.so.pops-model.cpp": {
+      "sha256": "936c810c3b39af3e896ac2abca609b2378f5bfb5511b0fc0c70a864e86c349ff",
+      "bytes": 25948
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/ff0adc99d49e363ddeaf46fccb2e4d216ba59c7faeb38f6d530d888c75898173.so": {
+      "sha256": "9496cb03d78c72f4de8703ac71fba831885d90165ed0ced723bba573455ca5ca",
+      "bytes": 1943472
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/286f108439ed18e9ffa1911e4e6f3af7546876d2090ee49404488d9406616f40.so": {
+      "sha256": "d77ab9833913d462772d721f5fbae39e959050aa7355c1bd9d0df0dea5256cab",
+      "bytes": 555496
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/.286f108439ed18e9ffa1911e4e6f3af7546876d2090ee49404488d9406616f40.pops-stage-ojbrz69t.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/accepted.npy": {
+      "sha256": "a233526724479d6817be35b0a2b55f62a2ea3c70ac36037b7d791442be6a1260",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/inputs.json": {
+      "sha256": "0c7f6343720ffc88b37e56e0a780396ccb2dfe3bfb98e9d03d3a458d75370348",
+      "bytes": 1200
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/actual-receipt.json": {
+      "sha256": "4b820fd2975d96d16e87e2063bc93000a373eae78fd37db74373a23b11c309b0",
+      "bytes": 78140
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/phi_stage.npy": {
+      "sha256": "b54401b2bc4e2dfb81bb743708a7801265c5624fc56d00e841d0523e05cf440f",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/accepted.npz": {
+      "sha256": "1ac8cb37f9617a4f3653570c5f27e68373194dbfb21cb4d67cfd7e10f10f9bd2",
+      "bytes": 40309
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/initial.npy": {
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-Euler-variants-da4-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/predictor.npy": {
+      "sha256": "a233526724479d6817be35b0a2b55f62a2ea3c70ac36037b7d791442be6a1260",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-diffusive-tranche-20261008/core-manifest.json": {
+      "sha256": "ace8d56aa0d9b4aae91c9d559e8b60aca6365e50756f003bb71b8d0c9edaf701",
+      "bytes": 197575
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-independent-public-diffusion-Euler-da4-ed2-reception-20261008/reception.json": {
+      "sha256": "acbe22eed1189b7ea7a9d05923e1f311f058162a42e760478e558e5374dda534",
+      "bytes": 13480
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "date_utc": "2026-10-08T18:17:13.384673+00:00",
+  "scope": "Exact receipts of fixed-core finite witnesses. MPI2 results are producer results pending separate independent mathematical reception. No universal language/SSP/GPU/full94 claim.",
+  "files": {
+    "core-manifest.json": {
+      "bytes": 197575,
+      "sha256": "ace8d56aa0d9b4aae91c9d559e8b60aca6365e50756f003bb71b8d0c9edaf701",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-diffusive-tranche-20261008/core-manifest.json"
+    },
+    "core-scope-interpretation.json": {
+      "bytes": 634,
+      "sha256": "48391ac69bd147f040841b2c4cf8a8ebe6ddd8e0ca927c88d4424f5c4c32a7b0",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-diffusive-tranche-20261008/core-scope-interpretation.json"
+    },
+    "euler-independent.json": {
+      "bytes": 13480,
+      "sha256": "acbe22eed1189b7ea7a9d05923e1f311f058162a42e760478e558e5374dda534",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-public-diffusion-Euler-da4-ed2-reception-20261008/reception.json"
+    },
+    "variants-independent.json": {
+      "bytes": 21412,
+      "sha256": "e49cadb605a5c602ed1915c32d8addad38462a60d6a897625d7da59542604d4b",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-fixed-core-Euler-variants-da4-ed2-reception-20261008/reception.json"
+    },
+    "variants-root.json": {
+      "bytes": 760,
+      "sha256": "b2af60945d1142a6c1d67ce485913a9d18d5fab2e7e4de5b8062a2ffd1df5bb3",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-diffusive-tranche-20261008/root-fixed-core-variants-positive-reception.json"
+    },
+    "wheel-source-admission.json": {
+      "bytes": 1105,
+      "sha256": "28928a4227d36b54b5571918bf6f92d7b3a102853150bc6f48e205022eb1b7dc",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-field-installed-build-c4d2b7bb-20261008/root-source-wheel-admission.json"
+    },
+    "mpi2-rank0-result.json": {
+      "bytes": 831,
+      "sha256": "bf90ca194b7c361869473d4553aa4e01d548f1c42f49190758c6e2bece89554b",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-Euler-MPI2-sharedcp-16b4-ed2-20261008/rank0/result.json"
+    },
+    "mpi2-rank1-result.json": {
+      "bytes": 831,
+      "sha256": "0b833d57cdf1ead98f9b4c2fc317a1ae1702fa2f431622c0d336b5c3d8b0f3a3",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-Euler-MPI2-sharedcp-16b4-ed2-20261008/rank1/result.json"
+    }
+  }
+}
