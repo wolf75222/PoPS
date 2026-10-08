@@ -1,0 +1,652 @@
+{
+  "schema": "pops.independent-fixed-core-public-method-cohort@1",
+  "status": "PASS",
+  "Source": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "core_hash": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "core_files": 1198,
+  "actual_counts": {
+    "tests": 4,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "actual_wall_seconds": 136.23641924999902,
+  "cases": {
+    "ssprk2_predictor": {
+      "method": "ssprk2",
+      "composition": "weighted_predictor",
+      "variant": "baseline",
+      "kappa": 0.1,
+      "lambda_h": 38.973679354221176,
+      "Euler_Y_gain": 0.9847759065022573,
+      "accepted_gain": 0.9848917930136714,
+      "errors": {
+        "initial": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "predictor": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "accepted": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "phi_stage": {
+          "error": 5.862865748440527e-12,
+          "bound": 1.4647123675443233e-10
+        }
+      },
+      "CP_payloads": 72,
+      "CP_restart_identity": "181a78296961f43ca1f5542ef41ca31984cedc43f02268771b6532ed16988348",
+      "CP_state_Y_phi_history_exact_NPY": true,
+      "actual_cpp_model_source_hash": "e6d3e84c7d91e68eb9a76663e3ba4a01ed1bf997a502d31f707df2643f894820",
+      "actual_cpp_program_hash": "1427d9d5251b7393032cad5ad89072c6218718bc1f2bc61cca2456e757d0dbe1",
+      "actual_diffusion_expression": "result.values = {u, 0.1, 0.1, pops::Real(1)};",
+      "actual_context": {
+        "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+        "allocator_mode": "kokkos_shared_space_managed_arena",
+        "amr_refinement_ratio": null,
+        "amr_refinement_ratio_rank": 2,
+        "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+        "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+        "communicator": "MPI_COMM_WORLD",
+        "dimension": 2,
+        "field_memory_space": "host",
+        "has_kokkos": true,
+        "kokkos_atexit_finalize_registered": true,
+        "kokkos_backend": "OpenMP",
+        "kokkos_concurrency": 2,
+        "kokkos_device": "cpu",
+        "kokkos_finalized": false,
+        "kokkos_initialized": true,
+        "kokkos_initialized_by_pops": true,
+        "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+        "kokkos_ownership": "pops-owned-lazy",
+        "kokkos_shared_space": "Host",
+        "kokkos_stream": "Kokkos::OpenMP::synchronous",
+        "kokkos_stream_synchronous": true,
+        "mpi_active": true,
+        "mpi_atexit_finalize_registered": true,
+        "mpi_compiled": true,
+        "mpi_initialized_by_pops": true,
+        "mpi_ownership": "pops-owned",
+        "mpi_rank": 0,
+        "mpi_ranks": 1,
+        "mpi_thread_level": 3,
+        "precision": "double",
+        "real_bytes": 8,
+        "supports_custom_communicator": false,
+        "supports_mixed_precision": false,
+        "supports_single_precision": false
+      }
+    },
+    "euler_baseline": {
+      "method": "euler",
+      "composition": "weighted_rates",
+      "variant": "baseline",
+      "kappa": 0.1,
+      "lambda_h": 38.973679354221176,
+      "Euler_Y_gain": 0.9847759065022573,
+      "accepted_gain": 0.9847759065022573,
+      "errors": {
+        "initial": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "predictor": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "accepted": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "phi_stage": {
+          "error": 5.862865748440527e-12,
+          "bound": 1.4647123675443233e-10
+        }
+      },
+      "CP_payloads": 72,
+      "CP_restart_identity": "1e522027586cc34eb7f954383201abf27bd55aa8f9bde51fbdbbaddca48965d4",
+      "CP_state_Y_phi_history_exact_NPY": true,
+      "actual_cpp_model_source_hash": "fbb6e00b121f707593b5e904c95e04457ea856693996cad7f5059b3fc76bdaf9",
+      "actual_cpp_program_hash": "abd23adb3e876028ffdeb16910edbaba7c78e1fb5ac0c2af0eb60f2601aa8a0d",
+      "actual_diffusion_expression": "result.values = {u, 0.1, 0.1, pops::Real(1)};",
+      "actual_context": {
+        "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+        "allocator_mode": "kokkos_shared_space_managed_arena",
+        "amr_refinement_ratio": null,
+        "amr_refinement_ratio_rank": 2,
+        "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+        "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+        "communicator": "MPI_COMM_WORLD",
+        "dimension": 2,
+        "field_memory_space": "host",
+        "has_kokkos": true,
+        "kokkos_atexit_finalize_registered": true,
+        "kokkos_backend": "OpenMP",
+        "kokkos_concurrency": 2,
+        "kokkos_device": "cpu",
+        "kokkos_finalized": false,
+        "kokkos_initialized": true,
+        "kokkos_initialized_by_pops": true,
+        "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+        "kokkos_ownership": "pops-owned-lazy",
+        "kokkos_shared_space": "Host",
+        "kokkos_stream": "Kokkos::OpenMP::synchronous",
+        "kokkos_stream_synchronous": true,
+        "mpi_active": true,
+        "mpi_atexit_finalize_registered": true,
+        "mpi_compiled": true,
+        "mpi_initialized_by_pops": true,
+        "mpi_ownership": "pops-owned",
+        "mpi_rank": 0,
+        "mpi_ranks": 1,
+        "mpi_thread_level": 3,
+        "precision": "double",
+        "real_bytes": 8,
+        "supports_custom_communicator": false,
+        "supports_mixed_precision": false,
+        "supports_single_precision": false
+      }
+    },
+    "euler_renamed": {
+      "method": "euler",
+      "composition": "weighted_rates",
+      "variant": "renamed",
+      "kappa": 0.1,
+      "lambda_h": 38.973679354221176,
+      "Euler_Y_gain": 0.9847759065022573,
+      "accepted_gain": 0.9847759065022573,
+      "errors": {
+        "initial": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "predictor": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "accepted": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "phi_stage": {
+          "error": 5.862865748440527e-12,
+          "bound": 1.4647123675443233e-10
+        }
+      },
+      "CP_payloads": 72,
+      "CP_restart_identity": "609bfbe6467497fbef3f10d05141959dd9120f8bb78bcce1341e2bac15bba777",
+      "CP_state_Y_phi_history_exact_NPY": true,
+      "actual_cpp_model_source_hash": "c7e13225ada94b0a6fc6b1e274247ba9222a90bef9200efd33a24a5dcaf63443",
+      "actual_cpp_program_hash": "cb44218f232b7b5abd18e9844e7fda1a21ed9565b02fde519b56d299308e2766",
+      "actual_diffusion_expression": "result.values = {u, 0.1, 0.1, pops::Real(1)};",
+      "actual_context": {
+        "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+        "allocator_mode": "kokkos_shared_space_managed_arena",
+        "amr_refinement_ratio": null,
+        "amr_refinement_ratio_rank": 2,
+        "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+        "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+        "communicator": "MPI_COMM_WORLD",
+        "dimension": 2,
+        "field_memory_space": "host",
+        "has_kokkos": true,
+        "kokkos_atexit_finalize_registered": true,
+        "kokkos_backend": "OpenMP",
+        "kokkos_concurrency": 2,
+        "kokkos_device": "cpu",
+        "kokkos_finalized": false,
+        "kokkos_initialized": true,
+        "kokkos_initialized_by_pops": true,
+        "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+        "kokkos_ownership": "pops-owned-lazy",
+        "kokkos_shared_space": "Host",
+        "kokkos_stream": "Kokkos::OpenMP::synchronous",
+        "kokkos_stream_synchronous": true,
+        "mpi_active": true,
+        "mpi_atexit_finalize_registered": true,
+        "mpi_compiled": true,
+        "mpi_initialized_by_pops": true,
+        "mpi_ownership": "pops-owned",
+        "mpi_rank": 0,
+        "mpi_ranks": 1,
+        "mpi_thread_level": 3,
+        "precision": "double",
+        "real_bytes": 8,
+        "supports_custom_communicator": false,
+        "supports_mixed_precision": false,
+        "supports_single_precision": false
+      }
+    },
+    "euler_coefficient_perturbation": {
+      "method": "euler",
+      "composition": "weighted_rates",
+      "variant": "coefficient_perturbation",
+      "kappa": 0.125,
+      "lambda_h": 38.973679354221176,
+      "Euler_Y_gain": 0.9809698831278217,
+      "accepted_gain": 0.9809698831278217,
+      "errors": {
+        "initial": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "predictor": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "accepted": {
+          "error": 6.661338147750939e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        "phi_stage": {
+          "error": 5.862865748440527e-12,
+          "bound": 1.4647123675443233e-10
+        }
+      },
+      "CP_payloads": 72,
+      "CP_restart_identity": "ec0bdd4e7c76ade855fa030929c345df97ef2595f1d6c7dfd205c76ef7031abb",
+      "CP_state_Y_phi_history_exact_NPY": true,
+      "actual_cpp_model_source_hash": "936c810c3b39af3e896ac2abca609b2378f5bfb5511b0fc0c70a864e86c349ff",
+      "actual_cpp_program_hash": "a1c0d2606c51d379eb57bdd5cf27a5a0d05b7ef4555a64e3fcbc4efb4d0ca0ad",
+      "actual_diffusion_expression": "result.values = {u, 0.125, 0.125, pops::Real(1)};",
+      "actual_context": {
+        "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+        "allocator_mode": "kokkos_shared_space_managed_arena",
+        "amr_refinement_ratio": null,
+        "amr_refinement_ratio_rank": 2,
+        "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+        "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+        "communicator": "MPI_COMM_WORLD",
+        "dimension": 2,
+        "field_memory_space": "host",
+        "has_kokkos": true,
+        "kokkos_atexit_finalize_registered": true,
+        "kokkos_backend": "OpenMP",
+        "kokkos_concurrency": 2,
+        "kokkos_device": "cpu",
+        "kokkos_finalized": false,
+        "kokkos_initialized": true,
+        "kokkos_initialized_by_pops": true,
+        "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+        "kokkos_ownership": "pops-owned-lazy",
+        "kokkos_shared_space": "Host",
+        "kokkos_stream": "Kokkos::OpenMP::synchronous",
+        "kokkos_stream_synchronous": true,
+        "mpi_active": true,
+        "mpi_atexit_finalize_registered": true,
+        "mpi_compiled": true,
+        "mpi_initialized_by_pops": true,
+        "mpi_ownership": "pops-owned",
+        "mpi_rank": 0,
+        "mpi_ranks": 1,
+        "mpi_thread_level": 3,
+        "precision": "double",
+        "real_bytes": 8,
+        "supports_custom_communicator": false,
+        "supports_mixed_precision": false,
+        "supports_single_precision": false
+      }
+    }
+  },
+  "actual_crosscase_comparisons": {
+    "initial": {
+      "rename_bitwise_equal": true,
+      "kappa_perturb_max_abs_delta": 0.0,
+      "SSP_rates_vs_predictor_max_abs_difference": 0.0,
+      "SSP_rates_vs_predictor_rawbytes_equal": true
+    },
+    "predictor": {
+      "rename_bitwise_equal": true,
+      "kappa_perturb_max_abs_delta": 0.001854476056183163,
+      "SSP_rates_vs_predictor_max_abs_difference": 0.0,
+      "SSP_rates_vs_predictor_rawbytes_equal": true
+    },
+    "accepted": {
+      "rename_bitwise_equal": true,
+      "kappa_perturb_max_abs_delta": 0.001854476056183163,
+      "SSP_rates_vs_predictor_max_abs_difference": 4.440892098500626e-16,
+      "SSP_rates_vs_predictor_rawbytes_equal": false
+    },
+    "phi_stage": {
+      "rename_bitwise_equal": true,
+      "kappa_perturb_max_abs_delta": 0.00013935850553892237,
+      "SSP_rates_vs_predictor_max_abs_difference": 0.0,
+      "SSP_rates_vs_predictor_rawbytes_equal": true
+    }
+  },
+  "CP_payload_total": 288,
+  "reviewer_actions": {
+    "Native_import": false,
+    "run": false,
+    "compiler": false,
+    "build": false,
+    "install": false,
+    "Main_edit": false,
+    "remote": false
+  },
+  "limits": [
+    "Newcorebd291 actualfirstRates+fourcohort: two publicSSPspellings/Eulerbase/renamed/\u03bavariation finiteworld1AMR1 only.",
+    "Different authored parentheses retain actual FP order; comparison records actualbitwise equality and normdifferences rather than assuming equality.",
+    "Oldfd27 scientificevidence notpromoted; newcoreMPI2/latefailure/GPU/3D/convergence/Full94 separatelyrequired."
+  ],
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest.log": {
+      "sha256": "789de54093ad426ca7c7a2ec94e6c0cd2f19c20c305e10c029e5f3b59abc2336",
+      "bytes": 2108
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/result.json": {
+      "sha256": "feb0993cb7c7e21215b0038c77c04923e92c175c3d43a6eba14e87f7838e645f",
+      "bytes": 2033
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/identity.json": {
+      "sha256": "dfc98f2af5abe1e63988a75c1fc53b4a20951d79458349e2b42ac0ea2e06e124",
+      "bytes": 2850
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/source-files.json": {
+      "sha256": "c3c4ebffbf50cf56cc7943b6af90b0e2ed5a8414889b930b35a88e94db7ba8b7",
+      "bytes": 136555
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest.xml": {
+      "sha256": "f128165e531a11b75e696aa79c1bd9a4818122a8bc2cb0ae054c9043a1fbc556",
+      "bytes": 2003
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/accepted.npz": {
+      "sha256": "9f8fc82460f269471cdc32dc5941dcff174770a3cd2ec943b69b788acb2c1ab2",
+      "bytes": 47509
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.so.pops-artifact.json": {
+      "sha256": "4ccd924c65981192f697198317642b5d9dc5f203aa901411603cb29c39fac9eb",
+      "bytes": 591
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.so": {
+      "sha256": "11b5c0d61b8d196c53369d94584e479beaca66c4caf060b17415fda795f10879",
+      "bytes": 555496
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/.85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.pops-stage-5ss7hii2.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/d642c72573dd06e8a9940bf2cf030a4cc6299bb9afa919ed4f3e9b40dd169826.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.so.pops-model.cpp": {
+      "sha256": "e6d3e84c7d91e68eb9a76663e3ba4a01ed1bf997a502d31f707df2643f894820",
+      "bytes": 25964
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/d642c72573dd06e8a9940bf2cf030a4cc6299bb9afa919ed4f3e9b40dd169826.so.pops-artifact.json": {
+      "sha256": "a9635261bba60e4c57c225dcf2b6d8361ab3a9790c145bffff5d849b284f4625",
+      "bytes": 490
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/d642c72573dd06e8a9940bf2cf030a4cc6299bb9afa919ed4f3e9b40dd169826.so": {
+      "sha256": "20c5ff109629f782090a79b68414088979b372723792351b97457561cff9a99a",
+      "bytes": 1985136
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.so.pops-model-compile.json": {
+      "sha256": "402e3ecc6d4fc1337300e316c365282244aa92adce56cc9bda563f101f17a56c",
+      "bytes": 2310
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/accepted.npy": {
+      "sha256": "84fee2f988c4aae604ae0075d64d22b747dc03aa6dbee1d57900a942ff1f45df",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/program0.cpp": {
+      "sha256": "1427d9d5251b7393032cad5ad89072c6218718bc1f2bc61cca2456e757d0dbe1",
+      "bytes": 35740
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/inputs.json": {
+      "sha256": "1e144ac446807f56ffbdaa9f738b631e865a46cc9c983e391790585243cd79d6",
+      "bytes": 1187
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/actual-receipt.json": {
+      "sha256": "378eff036cf4d19696a5db8e8f66fe1db366d4fa3201b413d8076a68580a12b9",
+      "bytes": 78136
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/model0.cpp": {
+      "sha256": "e6d3e84c7d91e68eb9a76663e3ba4a01ed1bf997a502d31f707df2643f894820",
+      "bytes": 25964
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/phi_stage.npy": {
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/initial.npy": {
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/predictor.npy": {
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/accepted.npz": {
+      "sha256": "16bce1f26a724b142466f9abc4010afb39c3d540842047443282fb735c5a306c",
+      "bytes": 40295
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/.e0970d01cb125c4deed2e970286f8c01a9ec077f162ba15b1ebb791a5c59cd9d.pops-stage-zzk75sb_.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/1c8d9714a03a3e98ea624c0ad9039a5a21dbcd635f2c89a4629b8723cfc6d72e.so.pops-artifact.json": {
+      "sha256": "f3b0c7dc7e0a81652ac49a3e592cbe8593179a7d0026635105ea0711e0e911d9",
+      "bytes": 490
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/e0970d01cb125c4deed2e970286f8c01a9ec077f162ba15b1ebb791a5c59cd9d.so.pops-artifact.json": {
+      "sha256": "64bbbcf8cd3691bd60d34c6d3b89bff32fac87adb11d23048e2f488e901464e1",
+      "bytes": 591
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/e0970d01cb125c4deed2e970286f8c01a9ec077f162ba15b1ebb791a5c59cd9d.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/1c8d9714a03a3e98ea624c0ad9039a5a21dbcd635f2c89a4629b8723cfc6d72e.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/e0970d01cb125c4deed2e970286f8c01a9ec077f162ba15b1ebb791a5c59cd9d.so": {
+      "sha256": "af3577da81667148790a7d1bf38d0d990833779de16d60fe5f11bdbfbc7b2df6",
+      "bytes": 555496
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/1c8d9714a03a3e98ea624c0ad9039a5a21dbcd635f2c89a4629b8723cfc6d72e.so": {
+      "sha256": "ea02ed875813507492bc31f84fc37b10a390d2666c3d4a7b26b09e3b5a158a9b",
+      "bytes": 1943472
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/e0970d01cb125c4deed2e970286f8c01a9ec077f162ba15b1ebb791a5c59cd9d.so.pops-model-compile.json": {
+      "sha256": "8280d877040b618509924d31bdfb1be1ed9ab66d64b92395f0c0e8495d28426e",
+      "bytes": 2310
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/pops-native-cache/e0970d01cb125c4deed2e970286f8c01a9ec077f162ba15b1ebb791a5c59cd9d.so.pops-model.cpp": {
+      "sha256": "fbb6e00b121f707593b5e904c95e04457ea856693996cad7f5059b3fc76bdaf9",
+      "bytes": 25948
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/accepted.npy": {
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/program0.cpp": {
+      "sha256": "abd23adb3e876028ffdeb16910edbaba7c78e1fb5ac0c2af0eb60f2601aa8a0d",
+      "bytes": 31042
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/inputs.json": {
+      "sha256": "85e8afa94f26bf1582f36183112420fc494ec0377b2647e74ff5564e55256335",
+      "bytes": 1182
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/actual-receipt.json": {
+      "sha256": "6268bd00b3fa9a391454705237258e9bb05fc9a68a95850c2e95a6bbc064f977",
+      "bytes": 78128
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/model0.cpp": {
+      "sha256": "fbb6e00b121f707593b5e904c95e04457ea856693996cad7f5059b3fc76bdaf9",
+      "bytes": 25948
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/phi_stage.npy": {
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/initial.npy": {
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto1/diffusion-field-euler/rank0/predictor.npy": {
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/diffusion-field-euler/accepted.npz": {
+      "sha256": "020150ba0212ee9d30f8cbbebbe59a5e68db485a50ea9e803bb5147b3dca7196",
+      "bytes": 40316
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/pops-native-cache/f0af9af60299178705c780531bd7de43bd523cf95ef6c63144c9fb48d9970e7f.so.pops-model-compile.json": {
+      "sha256": "64102a20986af5e51d7904193f908c1d265b52316d91ebd14de6964340fc8755",
+      "bytes": 2310
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/pops-native-cache/f0af9af60299178705c780531bd7de43bd523cf95ef6c63144c9fb48d9970e7f.so": {
+      "sha256": "b3065e83d0db1a9a2607261d09cf5b15d4a4df6d9fb500a709cc087511920863",
+      "bytes": 555496
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/pops-native-cache/f0af9af60299178705c780531bd7de43bd523cf95ef6c63144c9fb48d9970e7f.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/pops-native-cache/.f0af9af60299178705c780531bd7de43bd523cf95ef6c63144c9fb48d9970e7f.pops-stage-fpam5j4w.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/pops-native-cache/f0af9af60299178705c780531bd7de43bd523cf95ef6c63144c9fb48d9970e7f.so.pops-artifact.json": {
+      "sha256": "bb2d4656fa6d00604b5023cf06fc1586acba731038f5f9abe6065d552caa1099",
+      "bytes": 591
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/pops-native-cache/ff0adc99d49e363ddeaf46fccb2e4d216ba59c7faeb38f6d530d888c75898173.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/pops-native-cache/f0af9af60299178705c780531bd7de43bd523cf95ef6c63144c9fb48d9970e7f.so.pops-model.cpp": {
+      "sha256": "936c810c3b39af3e896ac2abca609b2378f5bfb5511b0fc0c70a864e86c349ff",
+      "bytes": 25948
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/pops-native-cache/ff0adc99d49e363ddeaf46fccb2e4d216ba59c7faeb38f6d530d888c75898173.so.pops-artifact.json": {
+      "sha256": "ca4a7da11e471059df05741b07c500de9fa49dbe989cfe85c2326f567849fb62",
+      "bytes": 490
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/pops-native-cache/ff0adc99d49e363ddeaf46fccb2e4d216ba59c7faeb38f6d530d888c75898173.so": {
+      "sha256": "9496cb03d78c72f4de8703ac71fba831885d90165ed0ced723bba573455ca5ca",
+      "bytes": 1943472
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/diffusion-field-euler/rank0/accepted.npy": {
+      "sha256": "a233526724479d6817be35b0a2b55f62a2ea3c70ac36037b7d791442be6a1260",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/diffusion-field-euler/rank0/program0.cpp": {
+      "sha256": "a1c0d2606c51d379eb57bdd5cf27a5a0d05b7ef4555a64e3fcbc4efb4d0ca0ad",
+      "bytes": 31046
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/diffusion-field-euler/rank0/inputs.json": {
+      "sha256": "848184842407c092ed1e38e4b19dafcfdf80d3d5265a5cb2d94686b6851dfe9e",
+      "bytes": 1200
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/diffusion-field-euler/rank0/actual-receipt.json": {
+      "sha256": "4315285b34cef789a1fc26e3a8758d006807550b23107f07d75b86eca29dbb1d",
+      "bytes": 78129
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/diffusion-field-euler/rank0/model0.cpp": {
+      "sha256": "936c810c3b39af3e896ac2abca609b2378f5bfb5511b0fc0c70a864e86c349ff",
+      "bytes": 25948
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/diffusion-field-euler/rank0/phi_stage.npy": {
+      "sha256": "b54401b2bc4e2dfb81bb743708a7801265c5624fc56d00e841d0523e05cf440f",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/diffusion-field-euler/rank0/initial.npy": {
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto3/diffusion-field-euler/rank0/predictor.npy": {
+      "sha256": "a233526724479d6817be35b0a2b55f62a2ea3c70ac36037b7d791442be6a1260",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/diffusion-field-euler/accepted.npz": {
+      "sha256": "54c0db1b722254e1824bea9c90a62a0cd74c62da402c9b5967edb6c07f69137d",
+      "bytes": 40252
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/pops-native-cache/ed5e4f64a1031e71111e1065d04ba4feffbac03941d18eb44c4e9468a0a6c9c4.so.pops-artifact.json": {
+      "sha256": "b83c78b24b13be9ceb944f3e054ebebf9a0e13414fe65be26b1d83585c30dd3c",
+      "bytes": 591
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/pops-native-cache/.ed5e4f64a1031e71111e1065d04ba4feffbac03941d18eb44c4e9468a0a6c9c4.pops-stage-euwy2bzs.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/pops-native-cache/ed5e4f64a1031e71111e1065d04ba4feffbac03941d18eb44c4e9468a0a6c9c4.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/pops-native-cache/9c8ea35a90e54cd2e6bed53a696bacfbdf6e594f75d814696cf83d8b7075f17d.so.pops-artifact.json": {
+      "sha256": "3758b2540e6ab4e461b3dbf2b97637cda040bc452837c57fbe66e07ccf31038a",
+      "bytes": 490
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/pops-native-cache/ed5e4f64a1031e71111e1065d04ba4feffbac03941d18eb44c4e9468a0a6c9c4.so": {
+      "sha256": "35083c2ab6caa8fee53ec493c6630aba232ae75b68b2bb9a7d4693ec271f7463",
+      "bytes": 553560
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/pops-native-cache/9c8ea35a90e54cd2e6bed53a696bacfbdf6e594f75d814696cf83d8b7075f17d.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/pops-native-cache/ed5e4f64a1031e71111e1065d04ba4feffbac03941d18eb44c4e9468a0a6c9c4.so.pops-model.cpp": {
+      "sha256": "c7e13225ada94b0a6fc6b1e274247ba9222a90bef9200efd33a24a5dcaf63443",
+      "bytes": 25792
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/pops-native-cache/ed5e4f64a1031e71111e1065d04ba4feffbac03941d18eb44c4e9468a0a6c9c4.so.pops-model-compile.json": {
+      "sha256": "ae2f37990c25e380ad8c87bae89ef9def0e6ec44c243a305c1d11027065307e4",
+      "bytes": 2310
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/pops-native-cache/9c8ea35a90e54cd2e6bed53a696bacfbdf6e594f75d814696cf83d8b7075f17d.so": {
+      "sha256": "754ccb39c6495e7076e672ce899d36b0f8ffa81e7b389208130b4e9c0055e5c0",
+      "bytes": 1943472
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/diffusion-field-euler/rank0/accepted.npy": {
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/diffusion-field-euler/rank0/program0.cpp": {
+      "sha256": "cb44218f232b7b5abd18e9844e7fda1a21ed9565b02fde519b56d299308e2766",
+      "bytes": 31036
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/diffusion-field-euler/rank0/inputs.json": {
+      "sha256": "ee6f17b7e1dea383557e156489d033b0363d7ed8ef26b97b6dd9abb692e3fc08",
+      "bytes": 1415
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/diffusion-field-euler/rank0/actual-receipt.json": {
+      "sha256": "3cc787d2446057eaf00c97a7451d8c09b7353fb7df1cb4b6aa659015b2fbb85e",
+      "bytes": 78117
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/diffusion-field-euler/rank0/model0.cpp": {
+      "sha256": "c7e13225ada94b0a6fc6b1e274247ba9222a90bef9200efd33a24a5dcaf63443",
+      "bytes": 25792
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/diffusion-field-euler/rank0/phi_stage.npy": {
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/diffusion-field-euler/rank0/initial.npy": {
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-fixed-core-public-diffusion-methods-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto2/diffusion-field-euler/rank0/predictor.npy": {
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/core-manifest.json": {
+      "sha256": "0c871f738710bd736e099b0e7f21d2fb35d6b47958860556a08dc61c697b7ac5",
+      "bytes": 197327
+    }
+  }
+}

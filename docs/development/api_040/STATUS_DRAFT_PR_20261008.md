@@ -1,6 +1,6 @@
 # PR brouillon - état réel de l’intégration PoPS 0.4.0
 
-Snapshot du 8 octobre 2026, actualisé à 16:30 UTC pour la
+Snapshot du 8 octobre 2026, actualisé à 19:52 UTC pour la
 [PR brouillon 681](https://github.com/wolf75222/PoPS/pull/681).
 **Mission encore ouverte ; cette PR est un brouillon.**
 Actualisation suivante du 8 octobre : le code `db206100` a été reconstruit et
@@ -24,12 +24,10 @@ scratch personnel. Les4298 fichiers réguliers empruntés sont inchangés ; l’
 ligne d’enregistrement Conda du nouvel environnement a été retirée après
 conservation des preuves, retrouvant exactement les deux lignes précédentes.
 
-Le raccordement Source diffusive_rhs→FieldV2 est désormais intégré. L’exemple
-Python public Euler nonconstant résout et émet du C++ avec cette candidate ;
-l’exécution du paquet reconstruit reste à faire. La deuxième méthode SSPRK2
-expose un refus supplémentaire de preuve sur le graphe global contenant un
-Field indépendant. Une preuve générique de la mise à jour acceptée est en cours,
-sans reconnaissance de noms/tableaux. Le
+Le raccordement diffusive_rhs→FieldV2 et la preuve algébrique de la mise à jour
+acceptée sont intégrés au commit `53fd6ec25fd67351aefe0a5d2ac1101be7041a78`.
+La preuve utilise les dépendances typées et coefficients rationnels des
+expressions ; aucun nom de méthode ou tableau connu ne sélectionne le calcul. Le
 [contrat de traduction](core_expression_translation_contract_v1.md) reprend
 le critère utilisateur : cœur figé, expressions traduites exactement, et
 variations de noms/coefficients reçues séparément sur ce même cœur.
@@ -56,10 +54,23 @@ checkpoint partagé et ses72 charges reçus. Le census local des cellules/owners
 n’a pas été capturé et n’est pas inféré. Il s’agit d’un cas distribué physique,
 pas de deux cas. Ces corrections ne modifient aucun fichier du cœur.
 
-La méthode SSPRK2 émet maintenant du C++ dans une candidate de preuve algébrique
-externe ; des cas de dépendances Field/frozen-driver restent à corriger avant
-intégration et exécution. Les candidates CUDA/Moving/Aux n’ont pas été promues
-au cœur courant. La CI et les86 obligations+8 principes restent ouvertes.
+Le nouveau cœur contient 1198 fichiers figés, d’empreinte
+`bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9`.
+La wheel `64174ea5855a9978c3ae7b61ed116be96217911a68b1a2fab434b059fca0bc90`
+installe 1168 charges Python identiques aux sources ; Native reste `ed2…` et
+SDK `af8…`. Les deux écritures publiques SSPRK2 et les trois constructions Euler
+passent et sont reçues indépendamment sur ce nouveau cœur : cinq cas série,
+zéro failure/error/skip, 360 charges de checkpoint vérifiées. Les écritures
+SSPRK2 diffèrent de `4,440892098500626e−16` sur l’état accepté ; les trois autres
+tableaux sont bit à bit égaux. L’ordre flottant des expressions est conservé.
+Les [reçus SSP et Euler actuels](evidence/fixed_core_methods_53fd_20261008/manifest.json)
+ne remplacent pas les reçus historiques du cœur `fd27…` et ne prouvent pas
+la généricité universelle. SSPRK2 a aussi terminé un PASS sur chacun de deux
+vrais rangs MPI. La réception indépendante vérifie l’oracle, les quatre
+tableaux globaux bit à bit égaux entre rangs et au cas série, ainsi que le
+checkpoint commun de72 charges. Le census local des cellules/owners reste
+absent. Les candidates CUDA/Moving/Aux restent externes et le rollback tardif
+doit encore être exécuté. La CI et les86 obligations+8 principes sont ouvertes.
 
 La réception historique détaillée ci-dessous concerne
 `6d898599a3f66fa9aa3c049ba0f3114f1960b6dc`.
@@ -79,9 +90,10 @@ de fonctionnalités reçues ou de tests exécutés. Les travaux antérieurs incl
 restent identifiables par leur historique ; aucune attribution globale d’auteur
 ni validation universelle n’en découle.
 
-Le dernier commit déjà poussé lors du relevé CI est
-`65861f43124ebd70987af66908afe97f3f5286f3` ; la présente mise à jour publie
-également les dix fichiers terminés du lot architecture/catalogue CI.
+Le dernier commit poussé lors du relevé courant est
+`53fd6ec25fd67351aefe0a5d2ac1101be7041a78`. La CI de ce SHA comporte
+des échecs d’architecture Python, MPI/C++ et de plusieurs shards Python ;
+son exécution n’est pas reçue comme verte.
 La branche contient tout le code suivi terminé à ce checkpoint. Le dossier
 de référence local `PoPS_Codex_handoff_0.4.0/` demeure non suivi ; les archives,
 environnements et sorties binaires volumineuses restent aux chemins des reçus.
@@ -219,18 +231,19 @@ ne découle ni des211 contrôles locaux ni des prewarms.
 | Travail | État réel | Prochaine étape |
 |---|---|---|
 | Code cumulé et correctifs récents | Publiés dans cette PR brouillon ; les anciens travaux sont conservés | Relire le diff et poursuivre la réception. |
-| CI de65861f43 | Échecs et un shard encore actif au relevé ; Docs et prewarms AMR PASS | Recevoir la CI du commit de ce checkpoint et diagnostiquer les échecs restants. |
-| Nouveau Native CPU après les deux changements C++ | Préparation terminée, aucune nouvelle compilation/installation/exécution | Figer le SHA, préserver le module a936, exécuter le build incrémental officiel puis la réception indépendante. |
-| Nouvelle science CPU | Pas encore relancée sur le nouveau Native | PDE original, réception mathématique, OwnRetry, puis Native8 avec sorties neuves. |
+| CI de53fd6ec2 | Échecs réels ; run37833215669 encore actif | Diagnostiquer les logs puis recevoir les contrôles requis au SHA final. |
+| Native CPU après les deux changements C++ | db206100 reconstruit/installé, Nativeed2 reçu ; wheel53fd installée | Recompiler après les prochains headers C++ ; ne pas hériter de la réception. |
+| Science CPU | PDE1/OwnRetry1/Native8 reçus surdb ; cinq nouveaux cas publics reçus sur53fd | Non-régression de la nouvelle preuve, échec tardif/contrôle et retry. |
 | Native CUDA complet et PDE GPU | Pas de campagne complète suivante soumise à ce checkpoint | Construire depuis le SHA figé dans le scratch personnel, puis qualifier les calculs réels. |
-| Extension publique diffusion→FieldV2 | Défaut concret identifié ; implémentation encore à faire | Raccorder la publication réelle de diffusive_rhs, puis un cas nonconstant écrit indépendamment. |
+| Extension publique diffusion→FieldV2 | Implémentation intégrée ; Euler et deux compositions SSPRK2 exécutées, MPI2SSP reçu | Exécuter l’injection d’échec, le rollback et le retry. |
 
 La préparation du prochain build CPU est conservée dans
 `/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/`.
 Son [plan](evidence/draft_status_20261008/next-native-preparation-plan.json)
-requiert deux objets runtime recompilés et un nouveau lien ; les sept bindings
-ne peuvent être réutilisés qu’après authentification de leurs sources,
-flags, dépendances et objets af8. Préparer cette procédure n’est pas l’exécuter.
+documente le build db réellement exécuté : deux objets runtime et un nouveau
+lien, sept bindings réutilisés après authentification de leurs sources,
+flags, dépendances et objets af8. Les futures modifications de headers exigent
+une nouvelle construction de tous leurs consommateurs.
 
 ## Ce qui reste
 
@@ -241,12 +254,11 @@ pas toutes fermées. Les limites détaillées du corpus restent la référence.
    reconstruire le vrai Native CUDA/sept bindings, puis exécuter les cas
    scientifiques GPU et leur non-régression. Tester les autres backends et
    dimensions à la révision correspondante ; ne rien hériter de builds anciens.
-2. Compléter les producteurs Field V2 encore refusés : diffusion, RHS de chemin,
+2. Compléter les autres producteurs Field V2 : RHS de chemin,
    solve spatial retenu, transport principal, résultats couplés multibloc et
-   boucles remappées. Le premier défaut concret est `diffusive_rhs` non admis et
-   sa frontière allocation/écriture non exposée au ticket SSA. Un simple ajout
-   d’allowlist serait incorrect. Les réalisations natives existent : il faut
-   raccorder leur publication réelle et collective.
+   boucles remappées. La publication diffusive réelle est désormais raccordée,
+   avec sa frontière allocation/écriture et son ticket SSA ; les autres
+   réalisations doivent recevoir leur propre raccordement réel et collectif.
 3. Compléter la lecture d’un Field résolu caché sous DerivedAux avec un vrai
    FieldContext, ses droits/versions/représentations/point, pas en supprimant le
    refus. Exercer les nouvelles physiques **et méthodes** via Python public,

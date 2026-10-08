@@ -1,0 +1,11 @@
+{
+  "date_utc": "2026-10-08T19:44:00.206850+00:00",
+  "Source": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "core": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "peer_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-independent-fixed-core-methods-53fd-ed2-reception-20261008/reception.json",
+  "peer_sha256": "f950dbded8cbc5c490000f7c4c3207b0e5a9fabc336d0880fafbbf840e776fc0",
+  "physical_pins_rehashed": 78,
+  "RootGO_MPI2_SSPRATES": true,
+  "scope": "Fiveworld1finitecases inclfirstRates; differentFPparenthesis preserved, no MPI/GPU/latefailure/full94."
+}

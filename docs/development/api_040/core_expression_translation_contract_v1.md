@@ -6,6 +6,10 @@ in the Python library. For a fixed core fingerprint, execution must follow the
 authored expressions and only those expressions. An operation's mathematical
 definition names no physical model.
 
+Adding the physics and method of a new article must require only Python
+equations and compositions. Those equations must become the executed C++.
+The fixed core must never need the identity of that article or model.
+
 Changing an expression must change its executed calculation accordingly.
 Renaming a model, method, variable or SSA reference must preserve the calculation
 when its typed mathematical meaning is unchanged. No expression identity, model
@@ -22,8 +26,8 @@ replace the method's expressions.
 
 The diffusion-to-Field tranche preserves the existing diffusive realization. Its
 issued-value envelope describes an actual native allocation and successful write;
-it adds no physical formula. The forthcoming accepted-update SSP certificate must
-derive its inequalities from typed dependence and rational coefficients, without
+it adds no physical formula. The accepted-update SSP certificate derives
+its inequalities from typed dependence and rational coefficients, without
 matching a method name or a known tableau. An independent Field effect must not
 change an unrelated update's calculation. Feedback remains part of the actual
 dependency closure and its requested acceptance proof.
@@ -34,3 +38,10 @@ checks: harmless renaming and reference reordering preserve results; parameter,
 coefficient or expression changes alter native results according to an independent
 oracle. A source match or successful compilation alone does not prove this contract.
 These obligations are not yet received for the entire PoPS language.
+
+The 8 October receipt on core `bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9`
+covers two authored SSPRK2 compositions and three Euler constructions, with
+independent numerical oracles and the actual installed Native package. It is a
+finite witness, not a proof that every operation and composition meets this
+contract. The two SSPRK2 expressions retain their distinct floating-point order;
+their accepted arrays differ by at most `4.440892098500626e-16`.

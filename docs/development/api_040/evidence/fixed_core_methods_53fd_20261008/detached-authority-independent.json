@@ -1,0 +1,150 @@
+{
+  "schema": "pops.independent-accepted-SSP-V3-detached-authority-source-admission@1",
+  "decision": "ADMIT_EXACT_V2_TO_V3_DELTA",
+  "patch_sha256": "2193788f2259a18e9b121b29dfb1218287c8f69ed2b4c41e11d96c306a95d960",
+  "author_receipt_sha256": "0879aae8d8c6c4e113953b05ade60476ed657bb0aee81685273624da2eda9359",
+  "findings": [
+    "Existing exact ProgramModelGraph is threaded through emit_control\u2192exchange extraction\u2192SSP proof; no reconstructed author registry or representative-model fallback.",
+    "owner_for_block validates exact BlockHandle route/owner; source_module_for_owner supplies its actual closed Module. Module owner equals block.model_owner_path and physical State target owner.",
+    "Actual constitutive bodies and primitive recipes retain read closure; missing/foreign detached authority produces an explicit proof refusal, never empty reads.",
+    "canonical_handle resolves original versus compiled State identity while preserving semantic owner/State rights; no expression/known-tableau/name matching.",
+    "Rational coefficients, numerical emission, spatial/terminal guards, FP options and exchange-weight arithmetic remain unchanged."
+  ],
+  "actual_Source_cohort": {
+    "tests": 64,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "Native_loaded_recorded": []
+  },
+  "actual_detachment_pairs": [
+    {
+      "authored": {
+        "sha256": "9f0a467005cac14f2744552eed9241474d4e7bb76501f37ebd98ac2eca41e152",
+        "bytes": 35783
+      },
+      "detached": {
+        "sha256": "e316357f4a1fc1828e78181b77b2b2e350e6d6038727032fb0a4c70d571d121f",
+        "bytes": 35727
+      },
+      "complete_step_body_exact_equal": true,
+      "step_body_sha256": "791df91ff8801e9d811ef2a7d99269e97dd9d9d8b4fdf67aebcafac34d82255e",
+      "whole_CPP_equal": false
+    },
+    {
+      "authored": {
+        "sha256": "7fd9a7b4a8f8f1d444c958a3cbbb86b09e80d919943ed9dc8f8bba1aba4d952b",
+        "bytes": 35796
+      },
+      "detached": {
+        "sha256": "1427d9d5251b7393032cad5ad89072c6218718bc1f2bc61cca2456e757d0dbe1",
+        "bytes": 35740
+      },
+      "complete_step_body_exact_equal": true,
+      "step_body_sha256": "e1049d03907eea579791ea546959dbad6d33263d37d81fc7214e8707b878786e",
+      "whole_CPP_equal": false
+    }
+  ],
+  "baseline_counterexample": {
+    "tests": 2,
+    "failures": 2,
+    "diagnostic": "'NoneType' object has no attribute 'spec'",
+    "promoted": false
+  },
+  "reviewer_actions": {
+    "Native_import": false,
+    "compiler": false,
+    "build": false,
+    "install": false,
+    "runtime": false,
+    "Main_edit": false,
+    "remote": false
+  },
+  "remaining": [
+    "Root installed-source/payload/origin admission for committed V3.",
+    "New core fingerprint plus actual public SSPRK2 rates/retained saved-array/CP/FV-oracle receipts; Nativeed2 reuse does not itself qualify expressions."
+  ],
+  "limits": [
+    "Source/compiled-detachment projection admission only; no Native/scientific/MPI/GPU/CI/full94 promotion.",
+    "Complete actual step body compared without stripping; complete CPP differs canonical provenance and those differences remain preserved.",
+    "Prior V2 actual publication failure remains negative and is not erased by its earlier61 source tests."
+  ],
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/docs/development/api_040/accepted_update_ssp_v1.md": {
+      "sha256": "795e17a58233dbbdd991e39b1efc3bf80dc31fc0440c9ea9f8a5c76dff290fb5",
+      "bytes": 5617
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/baseline/docs/development/api_040/accepted_update_ssp_v1.md": {
+      "sha256": "ba9ba604452d14dcb8144a23add37a440ca137993d8f235689c250392f9b65e9",
+      "bytes": 4714
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/python/pops/codegen/program_accepted_ssp.py": {
+      "sha256": "4fc97755ecf482e9e683694e568987595420c2ba25a7bf0f04fe11eb816241ad",
+      "bytes": 20279
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/baseline/python/pops/codegen/program_accepted_ssp.py": {
+      "sha256": "caef9f3ce018b47d1ee389a4e54814a641e44e4e299f7d1f0219064cbd08f1a6",
+      "bytes": 19174
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/python/pops/codegen/program_diffusion_exchanges.py": {
+      "sha256": "3cf2ee71bd82cf1877105af87811acc8e9e01dab409fe4d6ccb0c6dd5edb5f6d",
+      "bytes": 5792
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/baseline/python/pops/codegen/program_diffusion_exchanges.py": {
+      "sha256": "7e3882214ac0189f4b6ac5828c6e436f0463772bf2970d5388d913062cead577",
+      "bytes": 5682
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/python/pops/codegen/program_emit_control.py": {
+      "sha256": "6c363812ef90e0b4efaf3e907645961747c06ae5b3dc929914220fc7f8b9254d",
+      "bytes": 60202
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/baseline/python/pops/codegen/program_emit_control.py": {
+      "sha256": "02790c1c5215cb1bc4a7c828ab03c7f406deddeaa69481860a92a75ed80aeb64",
+      "bytes": 60179
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": {
+      "sha256": "b9253d57506dc552ff759b370a9c76d6285381ca2f4f0e51fe0eb60be3f0a0b7",
+      "bytes": 19140
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/baseline/tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": {
+      "sha256": "6f6c7feac80c89706d3dfd5d6a8aef6255d893fa477e3ce9c6dcafb8f15038c6",
+      "bytes": 15347
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/pytest.xml": {
+      "sha256": "7fa471fb5c98d48a072e228c48fc8fb2bb2916f53653d9cca412665f3aee2990",
+      "bytes": 8690
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/receipt.json": {
+      "sha256": "085152b00f60165f015be86dab725f0bd24d1d74eccd654fa00ee95cfab48bb5",
+      "bytes": 1726
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/tmp/test_detached_resolved_public_0/authored.cpp": {
+      "sha256": "9f0a467005cac14f2744552eed9241474d4e7bb76501f37ebd98ac2eca41e152",
+      "bytes": 35783
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/tmp/test_detached_resolved_public_0/detached.cpp": {
+      "sha256": "e316357f4a1fc1828e78181b77b2b2e350e6d6038727032fb0a4c70d571d121f",
+      "bytes": 35727
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/tmp/test_detached_resolved_public_1/authored.cpp": {
+      "sha256": "7fd9a7b4a8f8f1d444c958a3cbbb86b09e80d919943ed9dc8f8bba1aba4d952b",
+      "bytes": 35796
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T192152554100Z/tmp/test_detached_resolved_public_1/detached.cpp": {
+      "sha256": "1427d9d5251b7393032cad5ad89072c6218718bc1f2bc61cca2456e757d0dbe1",
+      "bytes": 35740
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/test-runs/20261008T191710698898Z/pytest.xml": {
+      "sha256": "2e005f8c9354873d8c2e71fb98a4c5b56b7831f7301aad13ed8e11ff6bd6211c",
+      "bytes": 12058
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/source-review-receipt.json": {
+      "sha256": "0879aae8d8c6c4e113953b05ade60476ed657bb0aee81685273624da2eda9359",
+      "bytes": 5433
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v3-detached-model-authority-20261008/detached-model-authority-v2-to-v3.patch": {
+      "sha256": "2193788f2259a18e9b121b29dfb1218287c8f69ed2b4c41e11d96c306a95d960",
+      "bytes": 10954
+    }
+  }
+}
