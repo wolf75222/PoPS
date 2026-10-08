@@ -582,7 +582,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 812,
+    "estimated_count": 813,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -1395,7 +1395,8 @@
       "tests/python/unit/time/test_time_std_rk.py",
       "tests/python/unit/time/test_time_where.py",
       "tests/python/unit/time/test_typed_provenance_guards.py",
-      "tests/python/unit/time/test_typed_schedule.py"
+      "tests/python/unit/time/test_typed_schedule.py",
+      "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py"
     ],
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact. Migration additions use explicit 5/120/300/600 s estimates recorded in migration_estimates. Local source/native qualification timings are not substituted for CI per-file measurements.",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
@@ -1495,7 +1496,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 877,
+    "total_files": 878,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -4739,6 +4740,12 @@
       "source_sha256": "0af1631e060c5eb1aaf02c31606cd7556c931023eb8e316d951065901f71264d",
       "reason": "Unmeasured analogous runtime estimate: five real public diffusion/Field compositions compile native models/Programs, bind AMR1, save numerical states and checkpoints. Original IMEX Field runtime module scheduling seed retained. Not a measured CI or local duration.",
       "refresh": "Replace with a complete per-file timing artifact; no downweighting or guard change."
+    },
+    "ci_20261008_late_refusal": {
+      "files": [
+        "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py"
+      ],
+      "basis": "Conservative 600-second scheduling estimate for the new public late-refusal failure/control/adaptive module, matching the existing same-physics public predictor module estimate; not a measured Native or CI duration."
     }
   },
   "tests/python/integration/amr/test_accepted_halo_extent_binding.py": 600,
@@ -5046,5 +5053,6 @@
   "tests/python/unit/time/test_sparse_nested_detach_independent.py": 5,
   "tests/python/unit/time/test_sparse_program_detach.py": 5,
   "tests/python/unit/time/test_split_subflow_input_coordinates.py": 5,
-  "tests/python/integration/runtime/test_public_diffusion_field_predictor.py": 600
+  "tests/python/integration/runtime/test_public_diffusion_field_predictor.py": 600,
+  "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": 600
 }
