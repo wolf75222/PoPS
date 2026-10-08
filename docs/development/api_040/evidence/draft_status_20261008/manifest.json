@@ -1,0 +1,66 @@
+{
+  "date_utc": "2026-10-08T15:10:49.968286+00:00",
+  "scope": "Small original receipts copied for review; raw bulk outputs remain at recorded locations; no full qualification inherited",
+  "files": {
+    "native-build-install.json": {
+      "sha256": "909d2d66165c5a2de34d08aa25a067b60390e1523b57edb4d2a11ffca73b30bc",
+      "bytes": 3182,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/root-Native-af8-build-install-positive-reception-6d898599-20261008.json"
+    },
+    "cpp-first-and-cohort.json": {
+      "sha256": "ea1c1605930db8276e7854fd1501ff8fb11c6ef1875601bf273cf8f8102d88f0",
+      "bytes": 2239,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/root-CPP-af8-first-and-cohort-positive-reception-6d898599-20261008.json"
+    },
+    "first-original-pde.json": {
+      "sha256": "07069a21f32c259fc911ac94672774ffa17ca9f9c666d7fd17da044cd66adcfa",
+      "bytes": 2237,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/root-first-original-PDE-af8-positive-reception-6d898599-20261008.json"
+    },
+    "own-retry-native8.json": {
+      "sha256": "ff8de6509861ccc688afea53c1fe4c022e1af26706f51eb36d86910b0663141f",
+      "bytes": 2936,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/root-own-retry-and-native8-af8-positive-reception-6d898599-20261008.json"
+    },
+    "own-retry-independent.json": {
+      "sha256": "b2c5b1485005749b9b551e136de64c440724564137a571a372859706d9a1c7fe",
+      "bytes": 25686,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-Python-science-af8-reception3-20261008/own-retry-reception.json"
+    },
+    "native8-independent.json": {
+      "sha256": "e6941bda9558fa3239eac1c4572e8b4ce9d94f281f85f622062ca1cfc6ebc7a2",
+      "bytes": 34987,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-Python-science-af8-reception3-20261008/native8-reception.json"
+    },
+    "cuda737206-negative-independent.json": {
+      "sha256": "e3af02ba2516f82cc1b0bb00236d5d34402b3255ebce975e2fcdafe25e789c5d",
+      "bytes": 2119,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-cuda-private-probe-preparation-20261008/negative-independent-receipt.json"
+    },
+    "cuda-array-source-review.json": {
+      "sha256": "09fdabe71703fbff02265fa5f0957b617582111eaec015c4d400b263c8e4d49c",
+      "bytes": 6086,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-amr-layout-transfer-cuda-braced-ranges-review2-20261008/review.json"
+    },
+    "cuda-private-probe-plan-v2.json": {
+      "sha256": "7772a7ada805494e500f542a489341877ae274c431842c147f2ecddaf78fb78b",
+      "bytes": 5278,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-cuda-private-probe-preparation-v2-20261008/plan.json"
+    },
+    "cuda-private-probe-review-v2.json": {
+      "sha256": "07f9307a8bc080c7a0135517f4f0959f546bdc797c97a30b275559f4b9590674",
+      "bytes": 3432,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-cuda-private-probe-plan-review-v2-20261008/review.json"
+    },
+    "cuda-private-probe-submission.json": {
+      "sha256": "439cb26f70b6136a0526c11536785f620f38aa1cc1228a11f3744839b9545128",
+      "bytes": 2496,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/root-private-cuda-probe-v2-dispatch-20261008/submission.json"
+    },
+    "cuda-private-probe-independent.json": {
+      "sha256": "61a4edb27ea4ec82df46f6fe3418844760e0e443839383080f952c5aa891b078",
+      "bytes": 8619,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-private-cuda-probe-737830-reception-20261008/independent-reception-receipt.json"
+    }
+  }
+}

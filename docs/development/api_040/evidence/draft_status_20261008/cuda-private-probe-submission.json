@@ -1,0 +1,26 @@
+{
+  "utc": "2026-10-08T15:03:26.589473+00:00",
+  "argv": [
+    "sbatch",
+    "--parsable",
+    "/gpfs/scratch/rmdraux/PoPS-api040-cuda-braced-probe-6d898599-20261008-v1/probe.sbatch"
+  ],
+  "exit": 0,
+  "stdout": "737830\n",
+  "stderr": "",
+  "account_jobs_before": "737748|naadompo|RUNNING|interactive|short|1|gres/gpu:1|1G\n737778|naadompo|RUNNING|interactive|short|32|gres/gpu:1|2G\n737788|vbernard|RUNNING|interactive|short|32|gres/gpu:1|2G\n737514|arenard|RUNNING|jupyter_jupyter_env|short|4|N/A|8G\n737773|wmayaux|RUNNING|interactive|short|188|gres/gpu:1|60G\n737806|wmayaux|RUNNING|interactive|short|188|gres/gpu:1|60G\n737799|wmayaux|RUNNING|interactive|short|188|gres/gpu:1|60G\n737797|wmayaux|RUNNING|interactive|short|188|gres/gpu:1|60G\n737756|apautre|RUNNING|jupyter_jupyter_env|short|4|N/A|8G\n737760|cvautard|RUNNING|interactive|short|72|N/A|4G\n737699|sgmrowe|RUNNING|interactive|short|180|gres/gpu:2|60G\n737771|corentinrik|RUNNING|interactive|short|188|gres/gpu:4|60G\n",
+  "partition": "PartitionName=short AllowGroups=ALL AllowAccounts=ALL AllowQos=ALL AllocNodes=ALL Default=NO QoS=Short DefaultTime=NONE DisableRootJobs=NO ExclusiveUser=NO GraceTime=0 Hidden=NO MaxNodes=UNLIMITED MaxTime=1-00:00:00 MinNodes=0 LLN=NO MaxCPUsPerNode=UNLIMITED MaxCPUsPerSocket=UNLIMITED Nodes=romeo-a[001-056],romeo-c[001-039,101-104] PriorityJobFactor=50 PriorityTier=50 RootOnly=NO ReqResv=NO OverSubscribe=NO OverTimeLimit=NONE PreemptMode=OFF State=UP TotalCPUs=24384 TotalNodes=99 SelectTypeParameters=NONE JobDefaults=(null) DefMemPerNode=UNLIMITED MaxMemPerNode=UNLIMITED TRES=cpu=24384,mem=97420247M,node=99,billing=24384,gres/gpu=224\n",
+  "RootGO": {
+    "RootGO": true,
+    "scope": "one-TU original/candidate actual NVCC comparison only, all new outputs personal scratch; no Native or science qualification",
+    "utc": "2026-10-08T15:00:22.917497+00:00",
+    "reviewed_plan_sha256": "7772a7ada805494e500f542a489341877ae274c431842c147f2ecddaf78fb78b",
+    "reviewed_probe_argvs_sha256": "68bced6f716c8d5371e8e671a575f0325a0c13bab79be56d10db016cf306f0c3",
+    "reviewed_probe_script_sha256": "25f1c4c615d417cab4af99461d35a66cb62795c83e58cb4f8afcc0dbfe7d3b47",
+    "independent_review_sha256": "07f9307a8bc080c7a0135517f4f0959f546bdc797c97a30b275559f4b9590674",
+    "Source": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+    "HeaderSignature": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1"
+  },
+  "new_files_personal_scratch_only": true,
+  "job_id": "737830"
+}

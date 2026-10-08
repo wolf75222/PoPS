@@ -1,0 +1,871 @@
+{
+  "DSO_count": 16,
+  "Native": "a9367a4af3c9989ea03ebcaf66b76b8e20f5dd5bcd5bdf16b6b1172e942b5ca2",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+  "actual_XML": {
+    "bytes": 1969,
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 8
+    },
+    "mode": 420,
+    "nodeids": [
+      "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_manual_state_field_restart",
+      "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_preset_parity_and_rejected_rollback",
+      "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py::test_original_imex_final_checkpoint_failure_restores_science_and_outputs",
+      "tests/python/unit/runtime/test_temporal_restart_state.py::test_system_direct_step_requires_the_installed_python_program_strategy",
+      "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible",
+      "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly",
+      "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart",
+      "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_restores_default_field_onto_fresh_unmaterialized_target"
+    ],
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest.xml",
+    "sha256": "04a2e47baf82c952d489d1cf04817564cc1fe4783d06b8b7dc9439c43442c239"
+  },
+  "all_DSO_literal_SDK_verified": true,
+  "all_manifest_DSO_count": 23,
+  "all_manifest_DSO_literal_SDK_verified": true,
+  "checkpoints": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/restart.npz": {
+      "arrays_checked": 52,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "file": {
+        "bytes": 178816,
+        "mode": 384,
+        "sha256": "69b5968a5e887cbc4c30b91ef270ea5997d53f14f849c8b0a6ce2bab2583b258"
+      },
+      "history_names_count": 0,
+      "history_storage": {},
+      "levels": 2,
+      "macro_step": 1,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": 2,
+      "restart_identity": "e8f3cab2890095d37d1c08a5cdea271b2028a0bb2f3e80d31a758a629bdbfaaa",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 0,
+      "time": 0.0001,
+      "topology_epoch": 2
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/restart.npz": {
+      "arrays_checked": 52,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "file": {
+        "bytes": 210193,
+        "mode": 384,
+        "sha256": "450e23fdbf06ead490e39ce7ef459da3a60710fbc4b4df91faf9baade3349607"
+      },
+      "history_names_count": 0,
+      "history_storage": {},
+      "levels": 2,
+      "macro_step": 2,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": 3,
+      "restart_identity": "73fe25ce26af0aab2ebc26217f22edfb1a4f9b205ecd884a60c80846bdcf9ef8",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 0,
+      "time": 0.0002,
+      "topology_epoch": 3
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/imex-original0/manual/manual_restart.npz": {
+      "arrays_checked": 52,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "file": {
+        "bytes": 178816,
+        "mode": 384,
+        "sha256": "69b5968a5e887cbc4c30b91ef270ea5997d53f14f849c8b0a6ce2bab2583b258"
+      },
+      "history_names_count": 0,
+      "history_storage": {},
+      "levels": 2,
+      "macro_step": 1,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": 2,
+      "restart_identity": "e8f3cab2890095d37d1c08a5cdea271b2028a0bb2f3e80d31a758a629bdbfaaa",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 0,
+      "time": 0.0001,
+      "topology_epoch": 2
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/restart.npz": {
+      "arrays_checked": 52,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "file": {
+        "bytes": 210190,
+        "mode": 384,
+        "sha256": "1661a175c1e35369a77bc9b1cd6514b5068372892c83f408048152365c5fd065"
+      },
+      "history_names_count": 0,
+      "history_storage": {},
+      "levels": 2,
+      "macro_step": 2,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": 3,
+      "restart_identity": "6adfd2db987f0550fc1162624f9595e7b05e250e684b3723ff91f9c99f1df4f7",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 0,
+      "time": 0.0002,
+      "topology_epoch": 3
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/imex-original0/preset/restart.npz": {
+      "arrays_checked": 52,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "file": {
+        "bytes": 178809,
+        "mode": 384,
+        "sha256": "74ed8a0e4c47019ea9021146d090f44f59b2608cbf0c6acac44fd78011716391"
+      },
+      "history_names_count": 0,
+      "history_storage": {},
+      "levels": 2,
+      "macro_step": 1,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": 2,
+      "restart_identity": "a0170709b1350ec9bfe24389024dac7b8d5a111f93f49206d580347529bd47d8",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 0,
+      "time": 0.0001,
+      "topology_epoch": 2
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-public.npz": {
+      "arrays_checked": 52,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "file": {
+        "bytes": 119866,
+        "mode": 384,
+        "sha256": "73a92476b8ee4facb2e27b95e81a9dfe5d14fad84045cf265befb1683feef6e9"
+      },
+      "history_names_count": 0,
+      "history_storage": {},
+      "levels": 2,
+      "macro_step": 0,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": 1,
+      "restart_identity": "82126931911320a457ed40eee1384422a859a86c760ae949053c2e41ea5d968d",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 0,
+      "time": 0.0,
+      "topology_epoch": 1
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-public.npz": {
+      "arrays_checked": 52,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "file": {
+        "bytes": 119852,
+        "mode": 384,
+        "sha256": "62714720a011800814800ba82f142dc4d4184d87f626205dc9b47470a9f1eb38"
+      },
+      "history_names_count": 0,
+      "history_storage": {},
+      "levels": 2,
+      "macro_step": 0,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": 1,
+      "restart_identity": "03c773ee265677a15b66c8fcf66c52841633cb87afd3f0b99e499e7bb9987a7a",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 0,
+      "time": 0.0,
+      "topology_epoch": 1
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/real-committed-checkpoint-before-fault.npz": {
+      "arrays_checked": 52,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "file": {
+        "bytes": 178824,
+        "mode": 420,
+        "sha256": "cf3d45606ee5e77679ea342f595d98458b457372699ab6a813927f05e412f4b5"
+      },
+      "history_names_count": 0,
+      "history_storage": {},
+      "levels": 2,
+      "macro_step": 1,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": 2,
+      "restart_identity": "4e54cffba82f66329f5c60267304d8c328703850973929160045f3e82255845d",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 0,
+      "time": 0.0001,
+      "topology_epoch": 2
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-current.npz": {
+      "arrays_checked": 50,
+      "cache_names_count": 1,
+      "cache_nodes_count": 1,
+      "file": {
+        "bytes": 20638,
+        "mode": 384,
+        "sha256": "166a270444030aeec52e7276b954ef7b66d04afdf5de4647dbdd27046d7f831d"
+      },
+      "history_names_count": 1,
+      "history_storage": {
+        "blk.held_state": {
+          "fill_count": 2,
+          "slot_dt": [
+            0.078125,
+            0.048828125
+          ],
+          "stored_slots": [
+            0,
+            1
+          ]
+        }
+      },
+      "levels": null,
+      "macro_step": 3,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": null,
+      "restart_identity": "1230e9d47e46ae6adaf451b1f867d0ecec50c80a4036cbae9f06ffb17303daa6",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "temporal_cache_cursors_count": 1,
+      "temporal_history_cursors_count": 1,
+      "time": 0.189453125,
+      "topology_epoch": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-reference.npz": {
+      "arrays_checked": 46,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "file": {
+        "bytes": 19963,
+        "mode": 384,
+        "sha256": "dee34a050d0a1b1837cc2faa4254eb5a5cd6244144c993749ed4e5315e39c35d"
+      },
+      "history_names_count": 1,
+      "history_storage": {
+        "blk.U": {
+          "fill_count": 3,
+          "slot_dt": [
+            0.05,
+            0.04999999999999999,
+            0.04999999999999999
+          ],
+          "stored_slots": [
+            0,
+            1,
+            2
+          ]
+        }
+      },
+      "levels": null,
+      "macro_step": 3,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": null,
+      "restart_identity": "f0c0b9f1938bad0d6a12abf22bf8be9f2d8525586cca2e31bdbd3a35d248b396",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 1,
+      "time": 0.3,
+      "topology_epoch": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-resumed.npz": {
+      "arrays_checked": 46,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "file": {
+        "bytes": 19957,
+        "mode": 384,
+        "sha256": "34fffda36c3fe501901d3e1b00d0079bd3cf4bd6719fa54cec2ad162c5c22a8b"
+      },
+      "history_names_count": 1,
+      "history_storage": {
+        "blk.U": {
+          "fill_count": 3,
+          "slot_dt": [
+            0.05,
+            0.04999999999999999,
+            0.04999999999999999
+          ],
+          "stored_slots": [
+            0,
+            1,
+            2
+          ]
+        }
+      },
+      "levels": null,
+      "macro_step": 3,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": null,
+      "restart_identity": "7c639912b18a7afb3ae8b64153ba17c7e74f5fe7eac4cab6ee154e75f4f4a7cf",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 1,
+      "time": 0.3,
+      "topology_epoch": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-split.npz": {
+      "arrays_checked": 46,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "file": {
+        "bytes": 19962,
+        "mode": 384,
+        "sha256": "5c6390cb539a2fe2671ec5ef03ea77d6d8445aa5b8a22aedee0232e985931c99"
+      },
+      "history_names_count": 1,
+      "history_storage": {
+        "blk.U": {
+          "fill_count": 3,
+          "slot_dt": [
+            0.05,
+            0.04999999999999999,
+            0.04999999999999999
+          ],
+          "stored_slots": [
+            0,
+            1,
+            2
+          ]
+        }
+      },
+      "levels": null,
+      "macro_step": 3,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": null,
+      "restart_identity": "6b41e33a191086b1b52c72ea8acb9d373a55cc3be229cadbcaeb6becbc529fac",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 1,
+      "time": 0.3,
+      "topology_epoch": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-history.npz": {
+      "arrays_checked": 46,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "file": {
+        "bytes": 20027,
+        "mode": 384,
+        "sha256": "7c95cc604cc25aaf78416f9b71d38c7b970dd357f527fa8e120c29cdd8dd2a64"
+      },
+      "history_names_count": 1,
+      "history_storage": {
+        "blk.U": {
+          "fill_count": 3,
+          "slot_dt": [
+            0.05,
+            0.05,
+            0.05
+          ],
+          "stored_slots": [
+            0,
+            1,
+            2
+          ]
+        }
+      },
+      "levels": null,
+      "macro_step": 2,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": null,
+      "restart_identity": "9bc9a4614eb9f080870dd80cd0746968fad29ac01c11cb9ad1549847ee86ff37",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 1,
+      "time": 0.2,
+      "topology_epoch": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-restored.npz": {
+      "arrays_checked": 46,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "file": {
+        "bytes": 20027,
+        "mode": 384,
+        "sha256": "7c95cc604cc25aaf78416f9b71d38c7b970dd357f527fa8e120c29cdd8dd2a64"
+      },
+      "history_names_count": 1,
+      "history_storage": {
+        "blk.U": {
+          "fill_count": 3,
+          "slot_dt": [
+            0.05,
+            0.05,
+            0.05
+          ],
+          "stored_slots": [
+            0,
+            1,
+            2
+          ]
+        }
+      },
+      "levels": null,
+      "macro_step": 2,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": null,
+      "restart_identity": "9bc9a4614eb9f080870dd80cd0746968fad29ac01c11cb9ad1549847ee86ff37",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 1,
+      "time": 0.2,
+      "topology_epoch": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_uniform_native_linear_his0/linear-history.npz": {
+      "arrays_checked": 46,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "file": {
+        "bytes": 19954,
+        "mode": 384,
+        "sha256": "5e5e3624df3de6a6cbddbebbbe8f538c106c79f30bfe68a5e809d57c9aa2f8c2"
+      },
+      "history_names_count": 1,
+      "history_storage": {
+        "blk.U": {
+          "fill_count": 2,
+          "slot_dt": [
+            0.1,
+            0.1,
+            0.1
+          ],
+          "stored_slots": [
+            0,
+            1,
+            2
+          ]
+        }
+      },
+      "levels": null,
+      "macro_step": 2,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": null,
+      "restart_identity": "19fe94c24e5a37b357ba1cafa67730e77c371f85212c91eda836df7a110622b1",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 1,
+      "time": 0.2,
+      "topology_epoch": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/default-field-source.npz": {
+      "arrays_checked": 34,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "file": {
+        "bytes": 14211,
+        "mode": 384,
+        "sha256": "d8d7799ce4e37a9c29d40b30926424cb4b4b4651460f328d1e3e9dccf88e8588"
+      },
+      "history_names_count": 0,
+      "history_storage": {},
+      "levels": null,
+      "macro_step": 0,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": null,
+      "restart_identity": "f00d82a254170a2e735db3dd0836c07f672f48b93b6dec745f440a4d74039ef0",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 0,
+      "time": 0.0,
+      "topology_epoch": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/field-free-source.npz": {
+      "arrays_checked": 33,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "file": {
+        "bytes": 13743,
+        "mode": 384,
+        "sha256": "cddd3b01ef908e95e648e85d4e058264c524247fa84af08b1bd3aa1294c0166d"
+      },
+      "history_names_count": 0,
+      "history_storage": {},
+      "levels": null,
+      "macro_step": 0,
+      "program_cache_count": null,
+      "program_history_count": null,
+      "program_transaction_JSON_present": false,
+      "regrid_count": null,
+      "restart_identity": "ca6079282d062c43a521cb067a09b6f8ceb43e28df14b3ebe4e3aaf963f8c2da",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "temporal_cache_cursors_count": 0,
+      "temporal_history_cursors_count": 0,
+      "time": 0.0,
+      "topology_epoch": null
+    }
+  },
+  "comparisons": {
+    "accepted__preset": {
+      "Program_bytes": 612399,
+      "Program_rawbytes_equal": true,
+      "Program_sha256": "414dcf5d5230a592c3c593a74538039e31bfcb3c144df68ba4909c2fd0277940",
+      "arrays": {
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/0": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "d3f0b45e9ef6a2426f81cd6567451817e666e068d2a23fae92085f9a2362a25f",
+          "shape": [
+            1024
+          ]
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/1": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "b2b19ed8f4746ee080e69441070ddbf9dd271ba5dac8b415f819ba1cf4e1275c",
+          "shape": [
+            4096
+          ]
+        },
+        "states/tracer/0": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "73b4a6b55954426e256f08bc7d7a60819569eba596cc798f692f461b2bd1e1e7",
+          "shape": [
+            1024
+          ]
+        },
+        "states/tracer/1": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "509f4339bd97d7c98d8c6f3ae972bf984d082b79e651393b8f1435648b8f5fca",
+          "shape": [
+            4096
+          ]
+        }
+      },
+      "full_JSON_equal": true
+    },
+    "accepted__restored": {
+      "Program_bytes": 612399,
+      "Program_rawbytes_equal": true,
+      "Program_sha256": "414dcf5d5230a592c3c593a74538039e31bfcb3c144df68ba4909c2fd0277940",
+      "arrays": {
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/0": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "d3f0b45e9ef6a2426f81cd6567451817e666e068d2a23fae92085f9a2362a25f",
+          "shape": [
+            1024
+          ]
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/1": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "b2b19ed8f4746ee080e69441070ddbf9dd271ba5dac8b415f819ba1cf4e1275c",
+          "shape": [
+            4096
+          ]
+        },
+        "states/tracer/0": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "73b4a6b55954426e256f08bc7d7a60819569eba596cc798f692f461b2bd1e1e7",
+          "shape": [
+            1024
+          ]
+        },
+        "states/tracer/1": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "509f4339bd97d7c98d8c6f3ae972bf984d082b79e651393b8f1435648b8f5fca",
+          "shape": [
+            4096
+          ]
+        }
+      },
+      "full_JSON_equal": true
+    },
+    "continuous__restarted": {
+      "Program_bytes": 606663,
+      "Program_rawbytes_equal": true,
+      "Program_sha256": "177e02203cf2275365cee6ffe2bed58bf1e992fa6df84ade8cdbdbd9e95d1be0",
+      "arrays": {
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/0": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "b9c24eb69be17e2983429ecaa78150de07dc81f7eec166a0669c15ff8624f592",
+          "shape": [
+            1024
+          ]
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/1": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "ddffd950fc0e7d2be283c232c75bc3222e96698b2bc725a3de91602df6eca9a2",
+          "shape": [
+            4096
+          ]
+        },
+        "states/tracer/0": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "921a311983df074b7e2cdef02ce3da72651ebddc21daf9b80703dfdcee2ac8f1",
+          "shape": [
+            1024
+          ]
+        },
+        "states/tracer/1": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "e9d26387ea84142d43e6f79b0804e5d642bdc6f7dd61fe5ca08549c05a1bd345",
+          "shape": [
+            4096
+          ]
+        }
+      },
+      "full_JSON_equal": true
+    },
+    "rejected-before__rejected-after": {
+      "Program_bytes": 7654,
+      "Program_rawbytes_equal": true,
+      "Program_sha256": "c552a985b477ba12a3ae67aeb7320a04a321a86dd6f3e69286091da757c8435c",
+      "arrays": {
+        "fields/pops.qualified-field-provider.v1:sha256:54dc6f66da088f1d40d530d49e478157c636a43fbb9c5d48f0890bbccd413599/0": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "3726feaaa0c21d6c4feb357b373c6a53367033a86fc500626a3c3cdba7c9199f",
+          "shape": [
+            1024
+          ]
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:54dc6f66da088f1d40d530d49e478157c636a43fbb9c5d48f0890bbccd413599/1": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "e621be1780fddcce4ad99dfafb55a6b11258dbc9a103ea3526d4ada54f098bd2",
+          "shape": [
+            4096
+          ]
+        },
+        "states/tracer/0": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "92d861339eb78fb3c9fc9c6e5f00fc85b6f0d27b8ec2f81a1d5c554dfc5ffa7d",
+          "shape": [
+            1024
+          ]
+        },
+        "states/tracer/1": {
+          "dtype": "<f8",
+          "rawbytes_equal": true,
+          "rawbytes_sha256": "f7f7131922a4806fb38f395862177582c657e682b9816ae9058defeac1036888",
+          "shape": [
+            4096
+          ]
+        }
+      },
+      "full_JSON_equal": true
+    }
+  },
+  "driver_wall_seconds": 482.66148841701215,
+  "inventories": {
+    "Source": {
+      "before_after_exact_equal": true,
+      "directories_excluded": true,
+      "entries": 5630,
+      "live_hash_bytes_modes_equal": true,
+      "mtime_checked": false,
+      "symlinks": 0
+    },
+    "package": {
+      "before_after_exact_equal": true,
+      "directories_excluded": true,
+      "entries": 2563,
+      "live_hash_bytes_modes_equal": true,
+      "mtime_checked": false,
+      "symlinks": 0
+    }
+  },
+  "limits": [
+    "File reception only; no fresh runtime execution, build, install or source edit.",
+    "No MPI2 science, GPU, 3D, convergence, Full94 or GitHub CI qualification inherited.",
+    "Array payload and restart identity rehash authenticates checkpoint container; native semantic decoder admission not rerun.",
+    "Inventory schemas source5630/package2563 exclude directories; unrelated native2793 inventory is not compared.",
+    "Source/program guards checked at existing Source revision; no clamp, clip or tolerance edits introduced.",
+    "Original cached/empty history and cache contents are recorded per checkpoint; no unobserved coverage inferred.",
+    "Recorded seal source inode equality authenticates observation; persistent/current seal inode not inferred."
+  ],
+  "method": "Independent physical file hashes, stdlib XML, NumPy NPY payload decode and manual canonical CBOR. No PoPS import or native run.",
+  "producer_declaration_deltas": [
+    {
+      "field": "original_failfast_x",
+      "interpretation": "Producer declaration is not supported by actual result/driver command or planned command. pyproject addopts contains -ra, --strict-markers, --strict-config. Effective unrecorded environment behavior is not inferred. 8/8 passing XML remains verified.",
+      "observed_command_contains_x": false,
+      "producer_value": true
+    }
+  ],
+  "producer_manifest": {
+    "all_physical_pins_verified": true,
+    "bytes": 90795,
+    "entries": 238,
+    "mode": 420,
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/native8-actual-reception/evidence-manifest.json",
+    "sha256": "3538309b29f9cb7550dc6f24c976f05d9a2385d7b808b898329d5281a5c9dea8"
+  },
+  "producer_receipt": {
+    "bytes": 20250,
+    "mode": 420,
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/native8-actual-reception/complete-receipt.json",
+    "sha256": "8465c37ffa97d3a06cdac74e124460ead5e3041cca7836cceb2e58bcc0b74a7c"
+  },
+  "recorded_runtime_context": {
+    "MPI_world_size": 1,
+    "OpenMP_concurrency": 2,
+    "dimension": 2,
+    "scope": "Original manual module fixture after record only; remaining selectors not assigned concurrency"
+  },
+  "schema": "pops.independent-python-science-file-reception@1",
+  "seal_or_negative_archive_scope": {
+    "deliberate_negative_archives_excluded": 9,
+    "failure_injection_record": {
+      "depth_zero_passed": [
+        "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-public.npz",
+        "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-public.npz"
+      ],
+      "events": [
+        "committed-capture-real-publication-then-fault"
+      ],
+      "failures": [
+        [
+          "ConsumerPublicationError",
+          "consumer pops.handle.v1::case:scalar_advection_imex_amr/consumer:graph::consumer::checkpoint-checkpoints-restart-e0e0f1df05fb2b36 failed under FailRun: RuntimeError: IMEX deterministic publication failure after committed final checkpoint",
+          true
+        ]
+      ]
+    },
+    "non_CP_scientific_NPZ": 13,
+    "total_NPZ": 39
+  },
+  "standalone_NPY_against_snapshot_NPZ": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-fields-23ce14acf846f650-level0.npy": {
+      "dtype": "<f8",
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "3726feaaa0c21d6c4feb357b373c6a53367033a86fc500626a3c3cdba7c9199f",
+      "shape": [
+        1024
+      ],
+      "snapshot_key": "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/0"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-fields-23ce14acf846f650-level1.npy": {
+      "dtype": "<f8",
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "e621be1780fddcce4ad99dfafb55a6b11258dbc9a103ea3526d4ada54f098bd2",
+      "shape": [
+        4096
+      ],
+      "snapshot_key": "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/1"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-states-1e6243a2b17026f8-level0.npy": {
+      "dtype": "<f8",
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "92d861339eb78fb3c9fc9c6e5f00fc85b6f0d27b8ec2f81a1d5c554dfc5ffa7d",
+      "shape": [
+        1024
+      ],
+      "snapshot_key": "states/tracer/0"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-states-1e6243a2b17026f8-level1.npy": {
+      "dtype": "<f8",
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "f7f7131922a4806fb38f395862177582c657e682b9816ae9058defeac1036888",
+      "shape": [
+        4096
+      ],
+      "snapshot_key": "states/tracer/1"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-fields-23ce14acf846f650-level0.npy": {
+      "dtype": "<f8",
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "3726feaaa0c21d6c4feb357b373c6a53367033a86fc500626a3c3cdba7c9199f",
+      "shape": [
+        1024
+      ],
+      "snapshot_key": "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/0"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-fields-23ce14acf846f650-level1.npy": {
+      "dtype": "<f8",
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "e621be1780fddcce4ad99dfafb55a6b11258dbc9a103ea3526d4ada54f098bd2",
+      "shape": [
+        4096
+      ],
+      "snapshot_key": "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/1"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-states-1e6243a2b17026f8-level0.npy": {
+      "dtype": "<f8",
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "92d861339eb78fb3c9fc9c6e5f00fc85b6f0d27b8ec2f81a1d5c554dfc5ffa7d",
+      "shape": [
+        1024
+      ],
+      "snapshot_key": "states/tracer/0"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/runs-af8-6d898599-a9367a4a-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-states-1e6243a2b17026f8-level1.npy": {
+      "dtype": "<f8",
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "f7f7131922a4806fb38f395862177582c657e682b9816ae9058defeac1036888",
+      "shape": [
+        4096
+      ],
+      "snapshot_key": "states/tracer/1"
+    }
+  },
+  "standalone_NPY_count": 8,
+  "status": "PASS"
+}

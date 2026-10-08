@@ -1,0 +1,13 @@
+{
+  "base_source_head": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+  "base_cpp_sha256": "32ffe0d0fb907e678a6238cec7e07ec11d2516695e65c85413458645bb8174d6",
+  "candidate_cpp_sha256": "c4f84bbac8c16fa55a502e8d9a849f2c20788c25ad1e8caef5c45b2a45a1e457",
+  "patch_sha256": "d1c8b69cb544331b05a93dbc0653f62449a485b6c8a3d907bf83350923ab2c3b",
+  "changed_path": "src/runtime/amr/amr_layout_transfer.cpp",
+  "Main_Source_Header_Native_or_remote_changed": false,
+  "CUDA_qualified": false,
+  "source_reason": "Explicit typed host std::array avoids the three actual rejected braced range-initializers; emitted host syntax cause remains unconfirmed without cudafe bytes.",
+  "hostsyntax_receipt_sha256": "4ed6d0b68c2cdb0ca01e7c1588007ee5faf845a81254b7107fe442098674dda0",
+  "source_equivalence_review_sha256": "67c366a05b28adba975069a8648f70c52ce1a95ffdb3682780ef7ba1b97a4b01",
+  "recorded_command_errors_sha256": "d8cb588a8b5ca37de10c359523ead38f57e1c47ab037e86fc7d50dd4eb691879"
+}

@@ -1,0 +1,83 @@
+{
+  "ABI": {
+    "native_system_package": 8,
+    "published": 13,
+    "read_input": 2
+  },
+  "RootGO_required_before_compiler_or_sbatch": true,
+  "Source": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+  "V1_preserved": true,
+  "actual_read_only_root": "/gpfs/projet/r250127/rmdraux/api040-composition15-mpich-20261002-v15/qualification-sdk49-namedrhs-6d898599-cuda-dim2-20261008",
+  "argv_instrumentation": "bash -x original borrowed wrapper; exact expanded NVCC invocation retained in xtrace and parsed JSON/NUL",
+  "binding_scope_receipt_sha256": "7d99b4ad6332a4bc12ddd81aa105015fb38c80e1cdcc38d6d21f2641adc33ca3",
+  "borrowed_dependency_environment_read_only": "/gpfs/projet/r250127/rmdraux/api040-composition15-mpich-20261002-v15/qualification-sdk49-namedrhs-6d898599-cuda-dim2-20261008/envs/pops_api040_sdk49_namedrhs_6d898599_dim2",
+  "borrowed_input_pins_sha256": "2fb180923d750467e5df71980a1b87a6b5be60945db5cfa57a8f738998de4805",
+  "current_jupyter737785": "explicit read CANCELLED by100267; never acted on by this preparation",
+  "evidence_gate_patch_sha256": "8fa031273d154484d24f6733be9865440deb6f55c4c29723174a6c272e8ea78b",
+  "evidence_gate_requirements": [
+    "both variants: nonempty regular kept .ii and exact .cudafe1.cpp files with filename/bytes/hash inventories",
+    "baseline: nonzero actual compile exit and matched known failures at 232/992/1361",
+    "candidate: actual compiler exit zero plus expected output path, nonempty regular ELF64 little-endian AArch64 ET_REL object with byte length and SHA256",
+    "facts and per-variant result published before gate refusal; failed/partial logs, argv and intermediates preserved",
+    "expanded inner argv derived from Bash xtrace, not kernel/syscall instrumentation",
+    "paired final success also requires unchanged borrowed files and headers"
+  ],
+  "header_signature": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "historical_literal_paths_currently_absent": true,
+  "live_resource_receipt_sha256": "4e461bff297f0050fff8616039caccba5301f792c74d754d3edb2a802fb0441d",
+  "negative_receipt_sha256": "e3af02ba2516f82cc1b0bb00236d5d34402b3255ebce975e2fcdafe25e789c5d",
+  "options_changed": [
+    "source/header relocation to private owned copies",
+    "object/dependency output paths to separate private output directories",
+    "--keep",
+    "--keep-dir",
+    "existing dependency include/wrapper dispatch path spelling updated to current observed /rmdraux parent; identity validation required"
+  ],
+  "original_effective_argv_sha256": "8a7d92c3242f6d417ea2242735a97b7f0a90a33fc467d9af6ae808e1b1d49bf7",
+  "owned_source_include": true,
+  "payload_manifest_sha256": "31b0a71c80bf44098cea9a4566245320e802b9f9f074b49c08f7054010bf9a53",
+  "preparation_version": 2,
+  "prior_plan_sha256": "7c470cf7b47d9e4a14b9bb4c91444d77e0a855da776c57d02aeebad9d0226153",
+  "prior_preparation_root": "/Users/romaindespoulain/dev/tmp/PoPS-api040-cuda-private-probe-preparation-20261008",
+  "prior_probe_script_sha256": "19fbdc99f85bd2a2bf876dd3025abf5d2087278b0928c850b846b7a5ca4a23da",
+  "probe_argvs_sha256": "68bced6f716c8d5371e8e671a575f0325a0c13bab79be56d10db016cf306f0c3",
+  "probe_script_sha256": "25f1c4c615d417cab4af99461d35a66cb62795c83e58cb4f8afcc0dbfe7d3b47",
+  "remote_root": "/gpfs/scratch/rmdraux/PoPS-api040-cuda-braced-probe-6d898599-20261008-v1",
+  "resource_plan_pending_live_review": false,
+  "resources": {
+    "account": "r250127",
+    "constraint": "armgpu",
+    "cpu_gpu_basis": "same valid ARM/GPU allocation shape as actual failed737206; one TU pair only",
+    "cpus_per_task": 8,
+    "gres": "gpu:h100:1",
+    "memory": "96G",
+    "nodes": 1,
+    "ntasks": 1,
+    "partition": "short",
+    "qos": "normal",
+    "time": "1-00:00:00",
+    "time_basis": "actual short partition MaxTime=24h; no personal duration cap"
+  },
+  "schema": "sol61.cuda-private-targeted-probe-plan@1",
+  "scope": "one runtime translation unit compilation; no Native GPU7 build, scientific test, CPP or PDE run",
+  "slurm_script_sha256": "2f4f6098aa3a083acdef936ecb16c541b630d8e9c551873cc34f61602050e0d5",
+  "source_header_files": 394,
+  "source_header_pins_sha256": "d88e983b86bde7a3363f31e70d600b4e335b4b3062491b688e15fce75f648f2f",
+  "source_pins": {
+    "CUDA_qualified": false,
+    "Main_Source_Header_Native_or_remote_changed": false,
+    "base_cpp_sha256": "32ffe0d0fb907e678a6238cec7e07ec11d2516695e65c85413458645bb8174d6",
+    "base_source_head": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+    "candidate_cpp_sha256": "c4f84bbac8c16fa55a502e8d9a849f2c20788c25ad1e8caef5c45b2a45a1e457",
+    "changed_path": "src/runtime/amr/amr_layout_transfer.cpp",
+    "hostsyntax_receipt_sha256": "4ed6d0b68c2cdb0ca01e7c1588007ee5faf845a81254b7107fe442098674dda0",
+    "patch_sha256": "d1c8b69cb544331b05a93dbc0653f62449a485b6c8a3d907bf83350923ab2c3b",
+    "recorded_command_errors_sha256": "d8cb588a8b5ca37de10c359523ead38f57e1c47ab037e86fc7d50dd4eb691879",
+    "source_equivalence_review_sha256": "67c366a05b28adba975069a8648f70c52ce1a95ffdb3682780ef7ba1b97a4b01",
+    "source_reason": "Explicit typed host std::array avoids the three actual rejected braced range-initializers; emitted host syntax cause remains unconfirmed without cudafe bytes."
+  },
+  "variants": [
+    "baseline",
+    "candidate"
+  ]
+}

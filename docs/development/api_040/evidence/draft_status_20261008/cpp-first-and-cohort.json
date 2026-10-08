@@ -1,0 +1,39 @@
+{
+  "schema": "pops.root.CPP-reception@1",
+  "utc": "2026-10-08T08:06:50.188640+00:00",
+  "Source": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "independent": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-CPP-af8-first-and-cohort-reception2-20261008/reception.json",
+    "sha256": "520085b29718e3a9b076513e21e26ce82dc576f8b0bd8edbef1810c8be6b33b4"
+  },
+  "receipts": [
+    {
+      "producer": "/Users/romaindespoulain/dev/tmp/PoPS-CPP-af8-first-witness3-6d898599-20261008/complete-receipt.json",
+      "producer_sha256": "a08e05f1dc1366f47c72aced7dfb16c7a55c811dc743d30be85ad0ea3d0c4ce4",
+      "manifest": "/Users/romaindespoulain/dev/tmp/PoPS-CPP-af8-first-witness3-6d898599-20261008/evidence-manifest.json",
+      "manifest_sha256": "5bb033c6d798aab73dafea7f749d1ca86f5841b291fc58f54093840ba8bce9a6",
+      "physical_entries_root_rehashed_bytes_modes": 74,
+      "rank_test_executions": 1
+    },
+    {
+      "producer": "/Users/romaindespoulain/dev/tmp/PoPS-CPP-af8-suite17-Registry21-6d898599-20261008/complete-receipt.json",
+      "producer_sha256": "6ce0d6070a63d1e16c2a27a3a13a422215f6d3779f9642878d4c4e8e30c3a411",
+      "manifest": "/Users/romaindespoulain/dev/tmp/PoPS-CPP-af8-suite17-Registry21-6d898599-20261008/evidence-manifest.json",
+      "manifest_sha256": "d68d845f452e288a90f94489a9bef4ed595e782487c7707a93883275eee1e2df",
+      "physical_entries_root_rehashed_bytes_modes": 40,
+      "rank_test_executions": 72
+    }
+  ],
+  "first_representative_separate_cases": 1,
+  "cohort_total": 72,
+  "cohort_Field17_world1plusworld2_rank_executions": 51,
+  "cohort_Registry_world1_cases": 21,
+  "no_root_new_run_build_or_native_import": true,
+  "limits": [
+    "Actual DSOs admitted by realhost install ABI guards; standalone ctypes reader negative remains separate and is not new native failure",
+    "Census only three legacycases; no new AMR emptyrank ownership qualification",
+    "No baked Registry moduleHeaderSignature or internal compilerexecution claim; actualflags/source/dependency provenance received",
+    "No Native1/3, SSA/cadence, high-PDE convergence, enclosingSnapshot, CUDA/GPU or whole94/CI qualification"
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "schema": "pops.root.science-reception@1",
+  "utc": "2026-10-08T07:51:25.697445+00:00",
+  "source_head": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "native_sha256": "a9367a4af3c9989ea03ebcaf66b76b8e20f5dd5bcd5bdf16b6b1172e942b5ca2",
+  "producer": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/first-actual-reception/complete-receipt.json",
+    "sha256": "a75195c893b06c35ce0233a25b8818bec79c4b2f1cb6f46a1296770e7ddf35db"
+  },
+  "independent": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-first-original-science-af8-reception2-20261008/reception.json",
+    "sha256": "2f0a61971c9f66fd995e982edafb6a2f1cfe3809b30d812ff8238378bc56e7eb"
+  },
+  "physical_manifest": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/first-actual-reception/evidence-manifest.json",
+    "sha256": "9442479735b7ac7dadf1b211d98fa2c5690f102316d9579e5fad3679b4d81990",
+    "entries_root_rehashed_bytes_modes": 50
+  },
+  "result": {
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "wall_seconds": 35.53894158298499
+  },
+  "independent_expected": {
+    "U": "84/25",
+    "F": "144/25",
+    "Y_reference_only": "48/25",
+    "wrong_U": "87/25"
+  },
+  "observed": {
+    "U": 3.359999999999518,
+    "F": 5.759999999998074,
+    "U_max_abs_error": 4.818367926873179e-13,
+    "F_max_abs_error": 1.9255708139098715e-12,
+    "U_original_bound": 1.2103610429875554e-11,
+    "F_original_bound": 4.113848410531879e-11,
+    "finite_cell_values_each": 64
+  },
+  "scope": "Original discrete nonautonomous IMEX endpoint and actual rebuilt installed-package path accepted on local CPU world1",
+  "no_root_new_import_build_run": true,
+  "limits": [
+    "Y is an independent rational reference, not measured stage output",
+    "Discrete method endpoint differs from continuous3exp(.25); no spatial/temporal convergence inferred",
+    "No OwnRetry/Native8/MPI2/GPU/Dim3/actualOMPconcurrency or whole94/CI qualification",
+    "Checkpoint46arraypayloads and CBOR/body byte joins received, opaque carriers not wholedecoded; mtime not qualified"
+  ]
+}

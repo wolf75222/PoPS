@@ -1,0 +1,80 @@
+{
+  "schema": "pops.independent-private-portability-source-review@1",
+  "private_contract": "pops.private.amr-layout-transfer.typed-range-portability@1",
+  "scope": "Independent non-author Source/read-only retained-receipt critique; no compiler, install, NVCC, remote probe or Main edit",
+  "baseline_Source": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+  "changed_path": "src/runtime/amr/amr_layout_transfer.cpp",
+  "baseline_cpp_sha256": "32ffe0d0fb907e678a6238cec7e07ec11d2516695e65c85413458645bb8174d6",
+  "candidate_cpp_sha256": "c4f84bbac8c16fa55a502e8d9a849f2c20788c25ad1e8caef5c45b2a45a1e457",
+  "patch": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-amr-layout-transfer-cuda-braced-ranges-candidate-v1-6d898599-20261008/typed-range-arrays.patch",
+    "sha256": "d1c8b69cb544331b05a93dbc0653f62449a485b6c8a3d907bf83350923ab2c3b"
+  },
+  "verdict": "Source admission granted for the exact one-private-CPP portability candidate. Four reversals (the include plus three range substitutions) restore byte-identical baseline Source. Actual CUDA acceptance and causal attribution remain unproven until a real otherwise-identical toolchain comparison.",
+  "source_blockers": [],
+  "independent_equivalence": {
+    "baseline_read_from_actual_git_blob": true,
+    "current_Main_cpp_matches_baseline_blob": true,
+    "reverse_include_and_three_range_headers_restores_all_original_bytes": true,
+    "all_other_lines_and_loop_bodies_unchanged": true,
+    "pointer_pointee_constness_preserved": true,
+    "automatic_aggregate_storage_no_new_dynamic_allocation": true,
+    "range_cardinality_and_iteration_orders": {
+      "measure_fields": {"type": "std::array<const MultiFab<Dim>*, 3>", "order": ["view.coverage", "view.activity", "view.relative_measure"]},
+      "budget_values": {"type": "std::array<std::size_t, 5>", "order": ["destination_cells", "intersection_probes", "canonical_jobs", "transported_elements", "prepared_bytes"]},
+      "capacity_fields": {"type": "std::array<const MultiFab<Dim>*, 4>", "order": ["level.state", "level.coverage", "level.activity", "level.relative_measure"]}
+    },
+    "public_member_types_rechecked": "AmrTransferLevelView has const MultiFab<Dim>* for all four fields; all five AmrLayoutTransferBudget members are std::size_t",
+    "serialization": "Same five std::size_t copies passed to the unchanged integer(result,value) in the same order; preceding wire identities/version strings and surrounding serialization are byte-identical",
+    "capacity_math": "Same null-skip checks, per-axis ghost maxima, multiply/add overflow guards, limits and charge formulas; only the local iteration range construction changes",
+    "endpoint_math": "Same exact component/layout/distribution/local-rank checks and measure-model authentication",
+    "precision_FP_context_model_or_rollback_changes": false,
+    "header_files_changed": false,
+    "signed_header_count": 383,
+    "HeaderSignature_recomputed": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+    "native_ABI": 13,
+    "native_system_package_ABI": 8,
+    "read_input_contract": 2
+  },
+  "recorded_host_validation": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-amr-layout-transfer-cuda-braced-ranges-candidate-v1-6d898599-20261008/host-syntax.json",
+    "sha256": "4ed6d0b68c2cdb0ca01e7c1588007ee5faf845a81254b7107fe442098674dda0",
+    "candidate_source_hash_matches": true,
+    "original_CPP_compile_row_and_normalized_host_flags_retained": true,
+    "recorded_exit_code": 0,
+    "recorded_wall_seconds": 2.862,
+    "host_compiler": "/usr/bin/clang++",
+    "syntax_only": true,
+    "reexecuted_by_reviewer": false,
+    "CUDA_proof": false
+  },
+  "actual_GPU_baseline_failure": {
+    "job": "737206",
+    "Source": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+    "log": "/Users/romaindespoulain/dev/tmp/sol61-sdk49-cuda-737206-monitor-20261008/live-node-build-python.log",
+    "bytes": 526738,
+    "sha256": "5eb1166d6769e135a9484033823467c2c3f7fa44a18da6ec022df35c0419442e",
+    "failure_file": "src/runtime/amr/amr_layout_transfer.cpp",
+    "reported_original_lines": [232, 992, 1361],
+    "reported_diagnostic": "expected ';' before '}' token at three braced range-initializers; follow-on begin(pointer) diagnostic at capacity range",
+    "primary_inner_NVCC_argv_observed": false,
+    "actual_outer_wrapper_argc_instrumented": false,
+    "logged_outer_command_token_count_42_is_reconstructed_not_instrumented_argc": true,
+    "actual_cudafe_or_preprocessed_host_emission_observed": false,
+    "lowering_or_missing_include_cause_proven": false
+  },
+  "required_actual_comparison": {
+    "authorization": "Root explicit GO only, after whole original failure preservation, in an admitted available allocation; no new campaign replay",
+    "control": "Compile only the frozen original CPP and exact candidate CPP through the real recorded strict wrapper/NVCC/host toolchain with otherwise exact flags and physical dependencies",
+    "allowed_probe_variations": "Copied candidate source path and unique -o/-MF/keep output paths; --keep/--keep-dir or readonly dryrun capture with the exact numerical/profile/std/dimension/MPI/SDK/architecture flags retained",
+    "required_retained_evidence": ["exact Source byte hashes and immutable original failure", "actual outer and inner argv where instrumented", "strict --fmad=false, std20, O3, sm80, Dim2, MPI and SDKaf8", "raw stdout/stderr and exits for baseline and candidate", "actual .cudafe1.cpp/.ii or other emitted host bytes at the three ranges", "physical compiler/header/dependency identities", "object output evidence if compilation completes"],
+    "acceptance": "Recorded original failure versus candidate success on the real toolchain, with the unchanged Source contract; host syntax or simulated NVCC is insufficient",
+    "full_build_install_runtime_GPU_science_qualified_by_one_TU_probe": false
+  },
+  "reviewer_compiler_runs": 0,
+  "reviewer_NVCC_runs": 0,
+  "reviewer_remote_probes_or_changes": 0,
+  "reviewer_Main_changes": 0,
+  "reviewer_package_import_or_install": 0,
+  "CUDA_candidate_qualified": false
+}

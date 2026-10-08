@@ -1,0 +1,52 @@
+{
+  "GPU_native_build_identity_available": false,
+  "GPU_qualified": false,
+  "compiler_executed_by_this_agent": false,
+  "job_submitted_by_this_agent": false,
+  "locations_sha256": "045882971623129127bb8797d0fdb855e61e799fd85383c359d41dbddd988be9",
+  "members": 104,
+  "original_raw_not_duplicated": true,
+  "preservation": {
+    "deps": {
+      "after_sha256": "0bb4134683eeca0a7e5f8558aa173fbc896ccd00d92f512f2f07750e2b7d256e",
+      "before_sha256": "0bb4134683eeca0a7e5f8558aa173fbc896ccd00d92f512f2f07750e2b7d256e",
+      "equal": true
+    },
+    "driver": {
+      "after_sha256": "b4a5df34f27ee65fd7e3cace9c5dc0df5c387e2a1779e9af98c70e4497916715",
+      "before_sha256": "b4a5df34f27ee65fd7e3cace9c5dc0df5c387e2a1779e9af98c70e4497916715",
+      "equal": true
+    },
+    "old50": {
+      "after_sha256": "3bae45887076816c8f71dde47f1a06775f38cf22b9f93c054d8f7e7ddb12a2be",
+      "before_sha256": "3bae45887076816c8f71dde47f1a06775f38cf22b9f93c054d8f7e7ddb12a2be",
+      "equal": true
+    },
+    "old92": {
+      "after_sha256": "c9e69456eb666cb1239adf88ea529f5b059c31b353c655381ec34006acf49989",
+      "before_sha256": "c9e69456eb666cb1239adf88ea529f5b059c31b353c655381ec34006acf49989",
+      "equal": true
+    },
+    "registration": {
+      "after_sha256": "1763ae6bd6ce2d7573529d6de7b7abc39e24cd3cba748964c341bba2d928f011",
+      "before_sha256": "1763ae6bd6ce2d7573529d6de7b7abc39e24cd3cba748964c341bba2d928f011",
+      "equal": true
+    }
+  },
+  "regular_bytes": 469901230,
+  "result": {
+    "Root_admitted": false,
+    "final_exit": 1,
+    "first_late_exit": 0,
+    "last_phase": "build-python",
+    "original_exit": 1,
+    "schema": "sol61.sdk49-cuda-native-campaign-result@1",
+    "scientific_acceptance": false,
+    "scope": "actual command outcomes only; Root receives whole original physical evidence",
+    "source_revision": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc"
+  },
+  "schema": "sol61.private-cuda-negative-independent-reception@1",
+  "source_final_sha256": "5db84a3e75cc53b21dcdd822b9600bfb73cd7eb6f19c41becd3ace244601979c",
+  "source_paths": 1225,
+  "utc": "2026-10-08T14:36:20.268182+00:00"
+}
