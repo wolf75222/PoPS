@@ -1,4 +1,71 @@
 {
+  "fixed_core_public_methods_scoped_summary_20261008": {
+    "date_utc": "2026-10-08T19:57:46.473054+00:00",
+    "observed_source_commit": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+    "core_files": 1198,
+    "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+    "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+    "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+    "scope": "Finite public diffusion/Field/method reception on actual installed package; does not close the full86 obligations and8 principles.",
+    "obligations": {
+      "T": "partial: diffusion value publication and algebraic accepted SSP proof integrated; other programmable Field producers and guarantees remain open",
+      "C": "partial: exact issuer/owner/stage and detached Source authority received for this route; full40 contracts not requalified",
+      "M": "five finite constructions of one public diffusion/screenedField problem, not five corpus models; 28 model obligations retained",
+      "W": "renaming and coefficient changes and world1/world2 raw equality received for this route; late-refusal and remaining12 witness obligations open",
+      "principles": "finite evidence for equations and methods written in Python, native translation and frozen1198-filecore; universal genericity and comparable full-cost performance remain open"
+    },
+    "world1": {
+      "physical_cases": 5,
+      "pytest_tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "checkpoint_payloads": 360,
+      "methods": [
+        "Euler",
+        "SSPRK2 weighted rates",
+        "SSPRK2 weighted predictor"
+      ],
+      "rename_raw_equal": true,
+      "coefficient_change_changes_native_results": true,
+      "SSPRK2_accepted_composition_max_difference": 4.440892098500626e-16,
+      "SSPRK2_other_arrays_raw_equal": true
+    },
+    "world2": {
+      "physical_cases": 1,
+      "rankset": [
+        0,
+        1
+      ],
+      "pytest_tests_per_rank": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "global_arrays_equal_between_ranks_and_world1": true,
+      "shared_checkpoint_payloads": 72,
+      "local_owner_cell_census_captured": false
+    },
+    "evidence_manifest": "evidence/fixed_core_methods_53fd_20261008/manifest.json",
+    "CI": {
+      "run": "37833215669",
+      "architecture_counts": {
+        "failed": 17,
+        "passed": 824,
+        "skipped": 1
+      },
+      "architecture_job": "113504095703",
+      "status": "failed jobs and pending jobs; no aggregate success claimed"
+    },
+    "remaining": [
+      "late-refusal byte rollback/control and public adaptive retry",
+      "affected original PDE/OwnRetry/Native8 on new proof core",
+      "unintegrated CompositeCUDA/Moving/Aux repairs and newNative/SDK",
+      "Uniform Aux capacity ownership and screenedField realization coverage",
+      "remaining Field producer families and independent new physics/method compositions",
+      "full backend/dimension scientific convergence and comparable-cost reception",
+      "exact final GitHub required aggregate gate"
+    ]
+  },
   "current_scoped_summary_20261008": {
     "date": "2026-10-08",
     "observed_source_commit": "637c3220da44102ff7dbe3468c99086d141f6981",

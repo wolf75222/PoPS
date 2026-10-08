@@ -56,6 +56,11 @@
       "bytes": 809,
       "sha256": "771a3049e317801762d57bfa6f9b256e3bec4d8f12fcd73966c720a2a75a9808",
       "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-SSPRK2-MPI2-53fd6ec2-ed2-20261008/rank1/result.json"
+    },
+    "current-ci-failures.json": {
+      "bytes": 12199,
+      "sha256": "2799deea83e29d41510ba1286a065297e06789b90834cd8f3c88ccfb51387d96",
+      "original_local_path": "same repository file; raw external log paths recorded within"
     }
   }
 }

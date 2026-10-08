@@ -1,0 +1,68 @@
+{
+  "Source": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "run": "37833215669",
+  "scope": "Read-only exact failed job logs during still-running run; not complete aggregate reception.",
+  "logs": {
+    "job-113504095703.log": {
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-ci-current-53fd-failed-job-excerpts-20261008/job-113504095703.log",
+      "bytes": 231211,
+      "sha256": "54c3c7a09bec1869e2247ab52690ac80b9e6f94ae04322ea06b78a085d80fe34",
+      "failure_excerpts": [
+        "2026-10-08T19:43:10.7719542Z >       assert not violations, \"layering violations:\\n  \" + \"\\n  \".join(sorted(violations))",
+        "2026-10-08T19:43:10.7719664Z E       AssertionError: layering violations:",
+        "2026-10-08T19:43:10.7730344Z >       assert not violations, \"canonical phases must fail closed:\\n  \" + \"\\n  \".join(violations)",
+        "2026-10-08T19:43:10.7730494Z E       AssertionError: canonical phases must fail closed:",
+        "2026-10-08T19:43:10.7782139Z >       assert not violations, \"forbidden temporal consumer imports:\\n  \" + \"\\n  \".join(violations)",
+        "2026-10-08T19:43:10.7782298Z E       AssertionError: forbidden temporal consumer imports:",
+        "2026-10-08T19:43:10.7788528Z >       assert not violations, \"forbidden temporal layer edges:\\n  \" + \"\\n  \".join(violations)",
+        "2026-10-08T19:43:10.7788687Z E       AssertionError: forbidden temporal layer edges:",
+        "2026-10-08T19:43:10.7790548Z FAILED tests/python/architecture/test_final_nd_system_runtime.py::test_system_step_driver_is_the_exact_ranked_facade_not_a_parallel_authority - assert 'if constexpr' not in '// Core exa...t8_t>);\\n}\\n'",
+        "2026-10-08T19:43:10.7923934Z FAILED tests/python/architecture/test_final_nd_system_runtime.py::test_layout_transfer_is_generic_with_exact_physical_support_contracts - assert 'physical maps require host memory' in '#include \"system_impl.hpp\"\\n\\n#include <pops/core/foundation/native_dimension.hpp>\\n#include <pops/mesh/layout/refine...n  p_->applied = false;\\n}\\n\\ntemplate class PreparedSystemLayoutTransfer<kNativeDimension>;\\n\\n}  // namespace pops\\n'",
+        "2026-10-08T19:43:10.7924626Z FAILED tests/python/architecture/test_final_public_api.py::test_runtime_instance_has_only_the_explicit_read_and_restart_surface - AssertionError: assert {'amr', 'bind...napshot', ...} == {'amr', 'bind...napshot', ...}",
+        "2026-10-08T19:43:10.7931470Z FAILED tests/python/architecture/test_import_graph.py::test_layering_respected - AssertionError: layering violations:",
+        "2026-10-08T19:43:10.7933923Z FAILED tests/python/architecture/test_import_graph.py::test_graph_is_acyclic - AssertionError: import cycle through edge(s): numerics -> moments",
+        "2026-10-08T19:43:10.7934608Z FAILED tests/python/architecture/test_m1_semantic_core_gate.py::test_public_phase_functions_do_not_probe_or_swallow_unknown_shapes - AssertionError: canonical phases must fail closed:",
+        "2026-10-08T19:43:10.7936377Z FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_manifest_references_only_real_mandatory_proofs - AssertionError: M2 gate matrix is incomplete:",
+        "2026-10-08T19:43:10.7938511Z FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_final_gate_has_no_deferred_requirement - assert not [\"check[30] target 'test_program_runtime' contains a skip marker\", \"check[31] target 'test_program_runtime' contains a skip marker\", \"check[32] target 'test_program_runtime' contains a skip marker\"]",
+        "2026-10-08T19:43:10.7939578Z FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_fallible_solver_evaluations_use_exact_native_proofs - assert not [\"check[30] target 'test_program_runtime' contains a skip marker\", \"check[31] target 'test_program_runtime' contains a skip marker\", \"check[32] target 'test_program_runtime' contains a skip marker\"]",
+        "2026-10-08T19:43:10.7940613Z FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_pytest_nodeids_are_individually_collectible - assert not [\"check[30] target 'test_program_runtime' contains a skip marker\", \"check[31] target 'test_program_runtime' contains a skip marker\", \"check[32] target 'test_program_runtime' contains a skip marker\"]",
+        "2026-10-08T19:43:10.7941669Z FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_adc667_history_and_migration_routes_use_exact_proofs - assert not [\"check[30] target 'test_program_runtime' contains a skip marker\", \"check[31] target 'test_program_runtime' contains a skip marker\", \"check[32] target 'test_program_runtime' contains a skip marker\"]",
+        "2026-10-08T19:43:10.7942767Z FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs - assert not [\"check[30] target 'test_program_runtime' contains a skip marker\", \"check[31] target 'test_program_runtime' contains a skip marker\", \"check[32] target 'test_program_runtime' contains a skip marker\"]",
+        "2026-10-08T19:43:10.7943936Z FAILED tests/python/architecture/test_manifest_suite_coverage.py::test_every_python_test_file_is_covered_by_a_suite_path - AssertionError: these test files are under no [[python.suite]] path in tests/test_manifest.toml, so scripts/ci_select_tests.py never runs them -- add a [[python.suite]] entry (and a ci_select_tests.py route + area alias) for their directory:",
+        "2026-10-08T19:43:10.7945222Z FAILED tests/python/architecture/test_no_runtime_imports.py::test_output_has_no_runtime_dependency_at_any_scope - AssertionError: pops.output must own consumer declarations without any runtime dependency:",
+        "2026-10-08T19:43:10.7946548Z FAILED tests/python/architecture/test_time_package_layout.py::test_public_time_facade_is_exact_and_identity_preserving - AssertionError: assert ('Program', '...olution', ...) == ('Program', '...itEuler', ...)",
+        "2026-10-08T19:43:10.8002083Z FAILED tests/python/architecture/test_time_package_layout.py::test_time_sources_never_import_compiler_runtime_or_native_layers - AssertionError: forbidden temporal consumer imports:",
+        "2026-10-08T19:43:10.8005362Z FAILED tests/python/architecture/test_time_package_layout.py::test_time_module_graph_is_acyclic_and_respects_private_layering - AssertionError: forbidden temporal layer edges:",
+        "2026-10-08T19:43:10.8006193Z 17 failed, 824 passed, 1 skipped in 313.08s (0:05:13)",
+        "2026-10-08T19:43:10.9107142Z ##[error]Process completed with exit code 1."
+      ]
+    },
+    "job-113504722508.log": {
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-ci-current-53fd-failed-job-excerpts-20261008/job-113504722508.log",
+      "bytes": 105205,
+      "sha256": "aa0a2485696ec5801b35944d2c8271542274e581b1950773ab3ee8c3a75a31a0",
+      "failure_excerpts": [
+        "2026-10-08T19:40:03.7890738Z tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu FAILED [  2%]",
+        "2026-10-08T19:40:03.8061855Z tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_one_iteration_gmres_collectively_refuses_without_accepted_publication FAILED [  5%]",
+        "2026-10-08T19:40:03.8435680Z tests/python/integration/runtime/test_m19_amr_consumed_runtime.py::test_installed_amr_consumed_field_regrid_and_nonfinite_rollback[False] FAILED [  7%]",
+        "2026-10-08T19:40:03.8687348Z tests/python/integration/runtime/test_m19_amr_consumed_runtime.py::test_installed_amr_consumed_field_regrid_and_nonfinite_rollback[True] FAILED [ 10%]",
+        "2026-10-08T19:48:10.4030889Z         except Exception as error:",
+        "2026-10-08T19:48:10.4100099Z         except Exception as error:",
+        "2026-10-08T19:48:10.4121376Z FAILED tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu - RuntimeError: this process already selected PoPS Dim=2 and cannot switch to Dim=1; use a separate process",
+        "2026-10-08T19:48:10.4123210Z FAILED tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_one_iteration_gmres_collectively_refuses_without_accepted_publication - RuntimeError: this process already selected PoPS Dim=2 and cannot switch to Dim=1; use a separate process",
+        "2026-10-08T19:48:10.4128828Z FAILED tests/python/integration/runtime/test_m19_amr_consumed_runtime.py::test_installed_amr_consumed_field_regrid_and_nonfinite_rollback[False] - AssertionError: (('AssertionError', \"assert False\\n +  where False = is_relative_to(PosixPath('/opt/hostedtoolcache/Python/3.12.15/x64'))\\n +    where is_relative_to = PosixPath('/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py').is_relative_to\\n +      where PosixPath('/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py') = resolve()\\n +        where resolve = PosixPath('/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py').resolve\\n +          where PosixPath('/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py') = Path('/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py')\\n +            where '/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py' = pops.__file__\\n +    and   PosixPath('/opt/hostedtoolcache/Python/3.12.15/x64') = resolve()\\n +      where resolve = PosixPath('/opt/hostedtoolcache/Python/3.12.15/x64').resolve\\n +        where PosixPath('/opt/hostedtoolcache/Python/3.12.15/x64') = Path('/opt/hostedtoolcache/Python/3.12.15/x64')\\n +          where '/opt/hostedtoolcache/Python/3.12.15/x64' = <module 'sys' (built-in)>.prefix\\n +            where <module 'sys' (built-in)> = __import__('sys')\", False),)",
+        "2026-10-08T19:48:10.4137806Z FAILED tests/python/integration/runtime/test_m19_amr_consumed_runtime.py::test_installed_amr_consumed_field_regrid_and_nonfinite_rollback[True] - AssertionError: (('AssertionError', \"assert False\\n +  where False = is_relative_to(PosixPath('/opt/hostedtoolcache/Python/3.12.15/x64'))\\n +    where is_relative_to = PosixPath('/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py').is_relative_to\\n +      where PosixPath('/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py') = resolve()\\n +        where resolve = PosixPath('/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py').resolve\\n +          where PosixPath('/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py') = Path('/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py')\\n +            where '/home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2/pops/__init__.py' = pops.__file__\\n +    and   PosixPath('/opt/hostedtoolcache/Python/3.12.15/x64') = resolve()\\n +      where resolve = PosixPath('/opt/hostedtoolcache/Python/3.12.15/x64').resolve\\n +        where PosixPath('/opt/hostedtoolcache/Python/3.12.15/x64') = Path('/opt/hostedtoolcache/Python/3.12.15/x64')\\n +          where '/opt/hostedtoolcache/Python/3.12.15/x64' = <module 'sys' (built-in)>.prefix\\n +            where <module 'sys' (built-in)> = __import__('sys')\", False),)",
+        "2026-10-08T19:48:10.6236075Z ##[error]Process completed with exit code 1."
+      ]
+    },
+    "job-113505468653.log": {
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-ci-current-53fd-failed-job-excerpts-20261008/job-113505468653.log",
+      "bytes": 140608,
+      "sha256": "6f749c429ecf76b8bb37e68cd6c54d5515acda9376c06fe03f8381ef45204d67",
+      "failure_excerpts": [
+        "2026-10-08T19:51:54.3821999Z ../include/pops/runtime/program/program_context_moving_interval.inc:97:26: error: no match for \u2018operator=\u2019 (operand types are \u2018pops::runtime::program::MovingIntervalInputs<2>\u2019 and \u2018void\u2019)",
+        "2026-10-08T19:51:54.3836317Z ##[error]Process completed with exit code 1."
+      ]
+    }
+  }
+}
