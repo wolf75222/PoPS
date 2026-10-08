@@ -81,8 +81,8 @@ def test_public_diffusion_predictor_is_field_rhs(method,composition,variant,kapp
     initial=collective_call(world,lambda:np.asarray(runtime.block_level_state_global('material',0)).reshape(authored.initial.shape).copy())
     report=collective_call(world,lambda:pops.run(runtime,t_end=float(DT),max_steps=1,console=False))
     actual=collective_call(world,lambda:np.asarray(runtime.block_level_state_global('material',0)).reshape(authored.initial.shape).copy())
-    predictor=collective_call(world,lambda:np.asarray(runtime.history_global('predictor_Y',0)).reshape(authored.initial.shape).copy())
-    phi=collective_call(world,lambda:np.asarray(runtime.history_global('phi_stage',0)).reshape(authored.initial.shape).copy())
+    predictor=collective_call(world,lambda:np.asarray(runtime.history_global('predictor_Y',0,0)).reshape(authored.initial.shape).copy())
+    phi=collective_call(world,lambda:np.asarray(runtime.history_global('phi_stage',0,0)).reshape(authored.initial.shape).copy())
     with collective_check(world):
         assert report.accepted_steps==1 and runtime.macro_step()==1 and runtime.time()==float(DT)
     for name,array in [('initial',initial),('predictor',predictor),('accepted',actual),('phi_stage',phi)]:
