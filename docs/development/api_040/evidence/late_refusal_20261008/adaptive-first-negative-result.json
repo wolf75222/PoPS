@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/pytest-tmp",
+    "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py::test_public_late_refusal_automatic_retry"
+  ],
+  "returncode": 1,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 45.86534033299904,
+  "counts": {
+    "tests": 1,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "failed",
+  "identity_sha256": "246ec3589de9b03ba517a8a00d40bb4801bc4d772b52775fa421f09a1d6cdef6",
+  "log_sha256": "246686f7fe44d3555a73c63e1cfca81eae39c680f97bff50590734e5e6151052"
+}

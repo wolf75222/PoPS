@@ -1,0 +1,14 @@
+{
+  "date_utc": "2026-10-08T20:04:42.915758+00:00",
+  "Source": "4fbd42ec55c6f2eb9948a410d7633f2594ec2ca3",
+  "core": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "actual_stage": "Actual model and Program compiled/published; fixture declared-inputs JSON write before bind raises PosixPath TypeError",
+  "actual_run": "PDE fail/control, rollback and retry not reached; no runtime qualification",
+  "log": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest.log",
+    "bytes": 2211,
+    "sha256": "e5637946e78c8f91b0ec4becf6a15c92f8738ce78cef2adb8dbf46e714e02883"
+  },
+  "next_action": "Explicit str(origin) fixture serialization then fresh representative rerun; no core or equation change"
+}

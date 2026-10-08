@@ -1,0 +1,78 @@
+{
+  "Root_doc_only_head": "68933de1 (parent-reported; core unchanged)",
+  "Source_base": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "automatic_retry": {
+    "accepted_intervals": 2,
+    "bound_basis": "sqrt(16*12/2)*.5*sinc(1/16)*(4*16^2*sin(pi/16)^2)*.1*dt",
+    "dt_accepted_expected": 0.00390625,
+    "dt_initial": 0.0078125,
+    "guard": "norm2(Y-U_n)<=0.1",
+    "max_accepted_steps": 2,
+    "max_rejections": 1,
+    "method": "Euler expression plus ErrorControlledDt",
+    "oracle_effective_dt": 0.00390625,
+    "predeclared_norm_increment_bounds": {
+      "dt_1_over_128": [
+        0.14,
+        0.16
+      ],
+      "dt_1_over_256": [
+        0.07,
+        0.08
+      ]
+    },
+    "reference": "accepted and final Y = mean + amplitude*(1-z)^2*mode; final phi=(3+2dt)*(mean+amplitude*(1-z)^2*mode/(1+lambda_h)); history depth1 retains only final accepted interval",
+    "run_t_end": 0.0078125,
+    "shrink": 0.5
+  },
+  "equations": {
+    "field": "-laplacian(phi)+phi=(3+tau)*Y",
+    "state": "ddt(U)=div(CoeffGradient(U[0],1/10))"
+  },
+  "evidence_limits": [
+    "No public RuntimeInstance parameter-update API: same-instance parameter retry remains open",
+    "No public authored rank identity: rank0-only failure remains open",
+    "Python snapshot checks do not expose a retained issued ticket validator; revocation claim requires separate existing C++ protocol witness",
+    "Temporal unsuccessful-attempt statistics and diagnostics may advance; compare accepted physical envelope separately",
+    "Root must integrate fixture paths before execution; external AST-only candidate has no Native reception"
+  ],
+  "fixed_dt": {
+    "bind_control_limit": 40.0,
+    "bind_refusal_limit": 0.0,
+    "guard": "norm2(Y)<=max(limit + 0*Y)",
+    "methods": [
+      "euler",
+      "ssprk2 weighted_rates",
+      "ssprk2 weighted_predictor"
+    ],
+    "same_compiled_artifact": true,
+    "same_instance_retry": false
+  },
+  "physical_inputs": {
+    "amplitude": 0.5,
+    "cells": [
+      16,
+      12
+    ],
+    "dt": 0.00390625,
+    "kappa": 0.1,
+    "mean": 2.0,
+    "rhs_offset": 3.0,
+    "solver_atol": 1e-14,
+    "solver_rtol": 1e-13
+  },
+  "required_snapshot_fields": [
+    "accepted State cells",
+    "accepted auxiliary image bytes per level",
+    "potential cells per provider and level",
+    "accepted Program bytes",
+    "history initialization/fill counts and initialized cells",
+    "clock and macro-step"
+  ],
+  "runtime_executed": false,
+  "snapshot_scope": "instrumented Native journal; not public API snapshot qualification",
+  "source_core_changed": false,
+  "source_helper": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/support/public_diffusion_field_case.py",
+  "source_helper_sha256": "f6ed03a5f0239ae0eed5bb5ee1bc13ff9c249835b436480614728b4f863b3b9a",
+  "status": "PREPARATION_ONLY"
+}

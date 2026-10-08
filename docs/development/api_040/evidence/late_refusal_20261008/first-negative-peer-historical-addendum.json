@@ -1,0 +1,13 @@
+{
+  "bytes_equal_to_git_blob": true,
+  "frozen_reproducible_equivalent": {
+    "bytes": 14922,
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py",
+    "sha256": "94f3642d53d5f5e0dc677c76bb9fae81fa9581b8ba77e568486d5322cd957537"
+  },
+  "git_blob_basis": "4fbd42ec55c6f2eb9948a410d7633f2594ec2ca3:tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py",
+  "immutable_receipt_sha256": "408fece7d3cfd30c1199d3dae81a36c357393ca0866e103d44f777c774b88d12",
+  "original_Main_pin_scope": "Actual fixture bytes read and pinned before correction integration; historical after29e9143c, not a current revalidation assertion",
+  "original_receipt_rewritten": false,
+  "status": "HISTORICAL_PIN_LOCATION_ADDENDUM"
+}

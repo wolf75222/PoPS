@@ -1,0 +1,126 @@
+{
+  "date_utc": "2026-10-08T20:03:40.528792+00:00",
+  "scope": "Source preparation and preserved negative, independently received Euler and SSPRK2 initial-envelope late refusal/control; adaptive andworld2pending",
+  "files": {
+    "source-author.json": {
+      "bytes": 4382,
+      "sha256": "809d9adf9969c8918114cf44006267326503b36f12e05ff0a7ab7f0cca41e6c3",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/source-preparation-receipt.json"
+    },
+    "declared-inputs-and-plan.json": {
+      "bytes": 2846,
+      "sha256": "8ecd67a71eaa122268b1230ba44c4d2f337c7b0ab755d13f13a7bf994c72f512",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/declared-inputs-and-plan.json"
+    },
+    "source-independent.json": {
+      "bytes": 10933,
+      "sha256": "788d5a32c6e1cc5b03f73f019b32c49fd383b2d6c0e83a0362b2c84b36ffe525",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-fixture-source-review-20261008/reception.json"
+    },
+    "source-root.json": {
+      "bytes": 751,
+      "sha256": "e183dc1557a98f9e740bee1b204d5aefc05d51b5df227adf4f1890047ca7ad19",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-current-late-refusal-native-preparation-20261008/root-source-admission.json"
+    },
+    "dispatch-plan.json": {
+      "bytes": 1565,
+      "sha256": "0d6d691f5f47cdb3bbfb0fabc238e8e0808d07a2cac50af6b036387e23cac241",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-current-late-refusal-native-preparation-20261008/first-dispatch.json"
+    },
+    "first-negative-result.json": {
+      "bytes": 1585,
+      "sha256": "f867d712cf1ab63fe82b6c6556218643b33095d9f4bef0aeae171a614dddd667",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/result.json"
+    },
+    "first-negative-identity.json": {
+      "bytes": 2850,
+      "sha256": "11640017bcd17eb035314c2bc8d8ccb5c878cb671ab1c9b80579f7485e91c8d4",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/identity.json"
+    },
+    "first-negative-interpretation.json": {
+      "bytes": 850,
+      "sha256": "ff2e3aea58a9ee094a55ba2df96759a7effb5e88b87a87d8b9ea92c1c943035b",
+      "original_local_path": "Root interpretation in repository; original negative logs unchanged"
+    },
+    "first-negative-independent.json": {
+      "bytes": 5411,
+      "sha256": "408fece7d3cfd30c1199d3dae81a36c357393ca0866e103d44f777c774b88d12",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-Euler-first-negative-reception-20261008/reception.json"
+    },
+    "origin-string-author.json": {
+      "bytes": 1170,
+      "sha256": "22beafcc873ee197800b3b214bb299e7008df1e1bc48c7a9cf3d556d4acf3bfe",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v3-origin-string-20261008/source-preparation-receipt.json"
+    },
+    "first-negative-root-pin-drift.json": {
+      "bytes": 852,
+      "sha256": "13f90e55c8c08393d1bc27a9fefcf0ccf4d361e53f504b416506bb107ec8c6fc",
+      "original_local_path": "Root historical preimage interpretation in repository"
+    },
+    "origin-string-independent.json": {
+      "bytes": 1502,
+      "sha256": "3a5fb3781311fd717a653e4c20684d3ca4bfc9cf5aeebc3ada900e276ab5a711",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-Euler-first-negative-reception-20261008/origin-string-correction-admission.json"
+    },
+    "first-negative-peer-historical-addendum.json": {
+      "bytes": 865,
+      "sha256": "5abff89c544bfdea588fa45593e139e3478b88a764e4a93fccd3f3e12652fa43",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-Euler-first-negative-reception-20261008/historical-fixture-pin-addendum.json"
+    },
+    "euler-independent.json": {
+      "bytes": 23398,
+      "sha256": "761cbdc5ab5bb9754c781501bbd1fc3a7966797f2365bd443ea375b714bd4372",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-Euler-positive-29e-ed2-reception-20261008/reception.json"
+    },
+    "euler-root.json": {
+      "bytes": 805,
+      "sha256": "1bb376a3b197ceb69ddeac9ab32ccafc78377d3ba76f29701f26a45b94bb2f46",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-current-late-refusal-native-preparation-20261008/root-Euler-positive-admission.json"
+    },
+    "euler-result.json": {
+      "bytes": 1582,
+      "sha256": "9855cfc83a65e93e6df3d5f4aa5e7c881876e2a825ec42345713c36a6181cdb7",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-second-origin-ed2-20261008/result.json"
+    },
+    "euler-history-scope-addendum.json": {
+      "bytes": 847,
+      "sha256": "3fe8f08a1f8d5a50ee4a9652f5967da181ac0612438323fa46027433445ce3a6",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-Euler-positive-29e-ed2-reception-20261008/history-scope-addendum.json"
+    },
+    "ssprk2-independent.json": {
+      "bytes": 23342,
+      "sha256": "639e81d51e4b3eb1f99613e190f50beb953fc50d927f04306ac547425f67357c",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-SSPRK2-positive-29e-ed2-reception-20261008/reception.json"
+    },
+    "ssprk2-root.json": {
+      "bytes": 577,
+      "sha256": "e72d720e93f0d717765bfbb176ae966a5fd3065e6a6741c64f941c7db018079c",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-current-late-refusal-native-preparation-20261008/root-SSPRK2-positive-admission.json"
+    },
+    "ssprk2-result.json": {
+      "bytes": 1566,
+      "sha256": "290abedd7aad25c4d82ea2c83f8a98ae5839b5472884c73285b90b404bd391b3",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/result.json"
+    },
+    "history-slot-author.json": {
+      "bytes": 2042,
+      "sha256": "e9bedd0586a624eb5b68d9d5f7fd8c432cb24001246f9dbf4e246121bff9f763",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v4-physical-history-slots-20261008/source-preparation-receipt.json"
+    },
+    "adaptive-first-negative-result.json": {
+      "bytes": 1577,
+      "sha256": "5fc6e6c801e3dd8a95a4ccd6951b03d3c0d7f10d396c55ee5877afb7a47f6865",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/result.json"
+    },
+    "adaptive-first-negative-identity.json": {
+      "bytes": 2850,
+      "sha256": "246ec3589de9b03ba517a8a00d40bb4801bc4d772b52775fa421f09a1d6cdef6",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/identity.json"
+    },
+    "adaptive-first-negative-interpretation.json": {
+      "bytes": 1166,
+      "sha256": "515d5a3dd32977e85fa5850da11e002cd983028a4e62d376472e7f8d2a175750",
+      "original_local_path": "Root interpretation; raw negative inputs/arrays/log remain external and unchanged"
+    }
+  }
+}

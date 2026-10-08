@@ -1,0 +1,9 @@
+{
+  "date_utc": "2026-10-08T20:16:20.318816+00:00",
+  "peer": "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-SSPRK2-positive-29e-ed2-reception-20261008/reception.json",
+  "peer_sha256": "639e81d51e4b3eb1f99613e190f50beb953fc50d927f04306ac547425f67357c",
+  "physical_preimages_rehashed": 28,
+  "historical_live_pin_overrides": {},
+  "scope": "Initial accepted-envelope late SSPRK2 failure/controlAMR1 only; no previously-populated ring rollback, sameinstanceparams, retainedticket, GPU or universal language",
+  "GO": "world2 bounded SSPRK2 late fail/control"
+}

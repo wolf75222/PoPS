@@ -1,0 +1,11 @@
+{
+  "date_utc": "2026-10-08T20:03:27.065938+00:00",
+  "peer": "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-fixture-source-review-20261008/reception.json",
+  "peer_sha256": "788d5a32c6e1cc5b03f73f019b32c49fd383b2d6c0e83a0362b2c84b36ffe525",
+  "pins_rehashed": 26,
+  "fixture_patch": "a64d79a171b949405f528c39edab2c38e63372bcdf92ac9aff9a40099152a988",
+  "Source_test_only": "4fbd42ec55c6f2eb9948a410d7633f2594ec2ca3",
+  "core": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "GO": "Source integration and bounded native first fail/control only; no scientific qualification yet",
+  "root_observation": "Earlier validator used wrong receipt key pins instead of physical_pins; no failed producer receipt changed"
+}

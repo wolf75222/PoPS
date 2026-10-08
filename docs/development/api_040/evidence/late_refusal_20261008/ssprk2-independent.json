@@ -1,0 +1,424 @@
+{
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source": "29e9143c2d7234811030da3c10b897649978ec34",
+  "Source_generated_order": "Field solve, both history stores, norm2 predicate, named refusal throw, commit; actual named RuntimeError observed. No per-phase execution counters captured.",
+  "artifact": "pops.artifact.v1:sha256:a1dcff6bd64dccc7c52bf13e5c822cde5de14ea8073aa480fcfa279e157f80cc",
+  "core_files_rehashed": 1198,
+  "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "journal": {
+    "accepted_potential_192_zero_values": true,
+    "all_seven_keys_equal": true,
+    "auxiliary_full_wire_metadata": [
+      {
+        "accepted_generation": 0,
+        "components": [
+          {
+            "component": 0,
+            "group": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\tauxiliaryt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001",
+            "key": [
+              "model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26",
+              "aux",
+              "stage_tau",
+              "stage_tau"
+            ],
+            "kind": 1,
+            "provider": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/stage_tau/stage_tau"
+          },
+          {
+            "component": 0,
+            "group": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0005fieldt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000",
+            "key": [
+              "model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26",
+              "field",
+              "phi",
+              "screened_phi"
+            ],
+            "kind": 2,
+            "provider": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/phi/screened_phi"
+          }
+        ],
+        "dimension": 2,
+        "full_wire_consumed": true,
+        "groups": [
+          {
+            "components": 1,
+            "contract": [
+              "field",
+              "cell",
+              null,
+              "cell",
+              null
+            ],
+            "identity": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0005fieldt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000",
+            "nonzero_payload_values": 0,
+            "payload_sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca",
+            "payload_values": 192,
+            "shape": [
+              2,
+              1,
+              0,
+              0
+            ]
+          },
+          {
+            "components": 1,
+            "contract": [
+              "auxiliary",
+              "cell",
+              "1",
+              "cell",
+              "cell_scalar"
+            ],
+            "identity": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\tauxiliaryt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001",
+            "nonzero_payload_values": 0,
+            "payload_sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca",
+            "payload_values": 192,
+            "shape": [
+              2,
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "accepted_point": null,
+            "identity": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/stage_tau/stage_tau",
+            "kind": 1
+          },
+          {
+            "accepted_point": null,
+            "identity": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/phi/screened_phi",
+            "kind": 2
+          }
+        ],
+        "registry_bytes": 7611,
+        "registry_sha256": "af900836e95ea57d3c4f88ec5b152b4d061ba25c5bd5257d87452ea97fa66dc7",
+        "wire_string_representation": "latin1 lossless byte mapping; sealed registry/contract strings may contain binary"
+      }
+    ],
+    "base64_blocks_rehashed": [
+      {
+        "bytes": 13508,
+        "path": "/auxiliary/0",
+        "sha256": "1a9c391e0ecf079219b65e7633eeabdce61b7113bc098c90f5c2cb560ed60bcf"
+      },
+      {
+        "bytes": 1536,
+        "path": "/potentials/0/4",
+        "sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca"
+      },
+      {
+        "bytes": 3307,
+        "path": "/program",
+        "sha256": "ffa85687a1bbd4002c56cf915805c5b8e829d2974a15a6ec98a4f28fcab34624"
+      },
+      {
+        "bytes": 1536,
+        "path": "/state/2",
+        "sha256": "87d137cc9846e8f24d79c6e1185e2cf42086bc9c68a41f57324ceb5bff33dad6"
+      },
+      {
+        "bytes": 13508,
+        "path": "/after/auxiliary/0",
+        "sha256": "1a9c391e0ecf079219b65e7633eeabdce61b7113bc098c90f5c2cb560ed60bcf"
+      },
+      {
+        "bytes": 1536,
+        "path": "/after/potentials/0/4",
+        "sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca"
+      },
+      {
+        "bytes": 3307,
+        "path": "/after/program",
+        "sha256": "ffa85687a1bbd4002c56cf915805c5b8e829d2974a15a6ec98a4f28fcab34624"
+      },
+      {
+        "bytes": 1536,
+        "path": "/after/state/2",
+        "sha256": "87d137cc9846e8f24d79c6e1185e2cf42086bc9c68a41f57324ceb5bff33dad6"
+      }
+    ],
+    "before_after_raw_equal": true,
+    "history_flags": "Both authored lag-depth1 histories have physical native ring depth2, initially uninitialized/fill0; all four serialized slots audited. No raw numerical ring values in failure snapshots.",
+    "program_wire_metadata": {
+      "accepted_attempt": 0,
+      "decoded_prefix_bytes": 2765,
+      "dimension": 2,
+      "histories": [
+        {
+          "clock": "pops.clock.v1::sha256:2a37b205466815eb786c943669fb51e60ca887e76640ed6b3a29e441b74c28bf",
+          "components": 1,
+          "depth": 2,
+          "interpolation": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+          "name": "phi_stage",
+          "owner": 0,
+          "space": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+          "state": "pops.handle.v1::case:diffusion_predictor_field_ssprk2/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::state::U"
+        },
+        {
+          "clock": "pops.clock.v1::sha256:2a37b205466815eb786c943669fb51e60ca887e76640ed6b3a29e441b74c28bf",
+          "components": 1,
+          "depth": 2,
+          "interpolation": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+          "name": "predictor_Y",
+          "owner": 0,
+          "space": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+          "state": "pops.handle.v1::case:diffusion_predictor_field_ssprk2/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::state::U"
+        }
+      ],
+      "level_clocks": [
+        {
+          "level": 0,
+          "macro_step": 0,
+          "phase_denominator": 1,
+          "phase_numerator": 0,
+          "physical_time": 0.0
+        }
+      ],
+      "logical_clock_ticks": [
+        [
+          "pops.clock.v1::sha256:2a37b205466815eb786c943669fb51e60ca887e76640ed6b3a29e441b74c28bf",
+          0
+        ]
+      ],
+      "materialization_generation": 0,
+      "slots": [
+        {
+          "fill_count": 0,
+          "initialized": 0,
+          "interval_bits": 0,
+          "level": 0,
+          "name": "phi_stage",
+          "ordinal": 0,
+          "outgoing_dt": 0.0,
+          "sample_kind": 1,
+          "slot": 0,
+          "start_bits": 0
+        },
+        {
+          "fill_count": 0,
+          "initialized": 0,
+          "interval_bits": 0,
+          "level": 0,
+          "name": "phi_stage",
+          "ordinal": 0,
+          "outgoing_dt": 0.0,
+          "sample_kind": 1,
+          "slot": 1,
+          "start_bits": 0
+        },
+        {
+          "fill_count": 0,
+          "initialized": 0,
+          "interval_bits": 0,
+          "level": 0,
+          "name": "predictor_Y",
+          "ordinal": 0,
+          "outgoing_dt": 0.0,
+          "sample_kind": 1,
+          "slot": 0,
+          "start_bits": 0
+        },
+        {
+          "fill_count": 0,
+          "initialized": 0,
+          "interval_bits": 0,
+          "level": 0,
+          "name": "predictor_Y",
+          "ordinal": 0,
+          "outgoing_dt": 0.0,
+          "sample_kind": 1,
+          "slot": 1,
+          "start_bits": 0
+        }
+      ],
+      "spatial_contract_sha256": "8bdff5067d02ac8c20d804f1b16136a433a5c298e81277bb67b790647dd70b5c",
+      "tail_bytes": 542,
+      "tail_scope": "remaining flux/temporal/tagging accepted-state bytes checked exact before/after, not semantically decoded here",
+      "topology_epoch": 0
+    },
+    "raw_JSON_bytes": 27578,
+    "state_initial_bytes_equal": true
+  },
+  "limits": [
+    "Private auxiliary/history journal instrumentation; public snapshot API not qualified.",
+    "Same compiled artifact, two runtime bindings; not same-instance parameter mutation/retry.",
+    "No retained-ticket validator/revocation proof or rank0-only refusal.",
+    "SSPRK2 actual Field atY differs from field atfinalaccepted; wrong-final separation independently checked.",
+    "Program accepted-state prefix decoded through history slots; remainder compared as exact bytes only.",
+    "No local ownership census, MPI2, AMR2,3D,GPU or full94 implication.",
+    "Original prebind metadata negative preserved separately."
+  ],
+  "next_adaptive_fixture_blocker": "history_fill_count==1 after two accepts is erroneous: logical max lag1 allocates physical ring depth2; expected fill_count2. Previously mistaken Source admission depth interpretation superseded by actual serialized descriptor.",
+  "package_Source": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "physical_pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/core-manifest.json": {
+      "bytes": 197327,
+      "sha256": "0c871f738710bd736e099b0e7f21d2fb35d6b47958860556a08dc61c697b7ac5"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/runtime/program/amr_program_checkpoint.hpp": {
+      "bytes": 75767,
+      "sha256": "b5f4a7810e08850342a203be82d485c4ca63380ee954a3e364f200e4d121e9af"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/runtime/system/auxiliary_checkpoint.hpp": {
+      "bytes": 27982,
+      "sha256": "c6daf626e8f75373debda778dc5494097b6fbba4aebd057275d671bb2b3af214"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/identity.json": {
+      "bytes": 2850,
+      "sha256": "5922af3c1ff99c9c2e2a7f5a2b8380f14078d16bcb3d6a30ee139087ff362f86"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/accepted.npy": {
+      "bytes": 1664,
+      "sha256": "c33033709cba59a30a0e606eaf39cb427d6e1dd7bc0c5a86f80185110c44c1cb"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/actual-receipt.json": {
+      "bytes": 9409,
+      "sha256": "1bfe692681600325c042b0d171cd1e73ecacb2b8472dd1e3b5f9485a3c3fe641"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/after-refusal.json": {
+      "bytes": 27578,
+      "sha256": "abffa55172e9213ffb2b01a0d1039eb88a8aec373995e8d566808b4ac881c931"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/before-refusal.json": {
+      "bytes": 27578,
+      "sha256": "abffa55172e9213ffb2b01a0d1039eb88a8aec373995e8d566808b4ac881c931"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/declared-inputs.json": {
+      "bytes": 827,
+      "sha256": "d2d2b70f4dcc46ecce5b74839dc0aa7d6c8041db68e0f2f2690a929d47513e99"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/initial.npy": {
+      "bytes": 1664,
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/inputs.json": {
+      "bytes": 805,
+      "sha256": "7b214c15bdde700d4ca1c9e978e8b8962faacecfbc699fcf5444933a84cc65c8"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/model0.cpp": {
+      "bytes": 27192,
+      "sha256": "26040fe3c5f714d43f826b7b0de58764071623ca8b6fd8b84b7b665f1c432686"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/phi_stage.npy": {
+      "bytes": 1664,
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/predictor.npy": {
+      "bytes": 1664,
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/program0.cpp": {
+      "bytes": 38675,
+      "sha256": "9e8ae1266db7ebb86b4070828b5e75c35210acfb78de0aa635727e1902770ebe"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/refusal-diagnostics.json": {
+      "bytes": 98,
+      "sha256": "41ca29d25186a41056cd550937adf9fca69f9e8b01743172b36eee683652e85e"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/6744227dbcf4c220669406275eb981faed5e5810274d1c55d19cf0a561d19230.so": {
+      "bytes": 2066592,
+      "sha256": "b77172833ee0ed41ecb29a8d7428d4ee04b2e594df4634bfc3de92424c2f976a"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/6744227dbcf4c220669406275eb981faed5e5810274d1c55d19cf0a561d19230.so.pops-artifact.json": {
+      "bytes": 490,
+      "sha256": "bce199617b9e80b84ed7065f9f60a1336258a390615dce0b0e360d59725306f6"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8dfac5d602e3a214e4305764ea0eb3be5fa93ac04d2038bf4255a25b75bb5c4d.so": {
+      "bytes": 556200,
+      "sha256": "0f73c9db8fe8c13d5527743dc2759078bf9f1ea7d60d811e2498286b0d581c64"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8dfac5d602e3a214e4305764ea0eb3be5fa93ac04d2038bf4255a25b75bb5c4d.so.pops-artifact.json": {
+      "bytes": 591,
+      "sha256": "68355f899ac4b3ae15f649e8f521f909365efecb6fd00d86c0f1d3ded7ce2d8b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8dfac5d602e3a214e4305764ea0eb3be5fa93ac04d2038bf4255a25b75bb5c4d.so.pops-model-compile.json": {
+      "bytes": 2268,
+      "sha256": "68087167a9e21935422b0b4fd90edd2e10de6b6a12a19d734cb5f491f350aa2c"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8dfac5d602e3a214e4305764ea0eb3be5fa93ac04d2038bf4255a25b75bb5c4d.so.pops-model.cpp": {
+      "bytes": 27192,
+      "sha256": "26040fe3c5f714d43f826b7b0de58764071623ca8b6fd8b84b7b665f1c432686"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest.log": {
+      "bytes": 1234,
+      "sha256": "820127dddc18d649a380f3106ba8f00655777ce4026fc03373305fa17aea0943"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest.xml": {
+      "bytes": 652,
+      "sha256": "5780440098887ba7deefa2b281105f45762da7524139ee41c782aa466d0940bb"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/result.json": {
+      "bytes": 1566,
+      "sha256": "290abedd7aad25c4d82ea2c83f8a98ae5839b5472884c73285b90b404bd391b3"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/source-files.json": {
+      "bytes": 136555,
+      "sha256": "c3c4ebffbf50cf56cc7943b6af90b0e2ed5a8414889b930b35a88e94db7ba8b7"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v3-origin-string-20261008/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "bytes": 14927,
+      "sha256": "4c56564ec0d3ddcd7a3ce475c4bd9d509dacfe8b950e75752d5234f3ffd5d0fa"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so": {
+      "bytes": 14446456,
+      "sha256": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b"
+    }
+  },
+  "positive_control": {
+    "accepted_steps": 1,
+    "final_time": 0.00390625,
+    "gain_accepted_RK2": 0.9848917930136714,
+    "gain_predictor": 0.9847759065022573,
+    "history_observations": "Successful public history_global(name,0,0) captured predictor and phi NPY. No separate control fill-count/Program/aux snapshot or CP was saved.",
+    "lambda_h": 38.973679354221176,
+    "math_comparisons": {
+      "accepted": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 6.661338147750939e-16,
+        "values": 192
+      },
+      "initial": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 6.661338147750939e-16,
+        "values": 192
+      },
+      "phi_stage": {
+        "bound": 1.4647123675443233e-10,
+        "max_abs_error": 5.862865748440527e-12,
+        "values": 192
+      },
+      "predictor": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 6.661338147750939e-16,
+        "values": 192
+      }
+    },
+    "wrong_final_field_gap": 4.2432196982744586e-06,
+    "wrong_live_field_gap": 0.000557434028012338,
+    "wrong_time_field_gap": 0.007859389224472046
+  },
+  "producer_counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 1
+  },
+  "producer_seconds": 48.497474207997584,
+  "rank_scope": {
+    "AMR_levels": 1,
+    "rank": 0,
+    "ranks": 1
+  },
+  "real_refusal": [
+    [
+      "RuntimeError",
+      "acceptance guard 'late_field_norm_refusal' failed",
+      true
+    ]
+  ],
+  "status": "PASS_BOUNDED_SAME_ARTIFACT_TWO_BINDINGS_LATE_REFUSAL_AND_CONTROL"
+}

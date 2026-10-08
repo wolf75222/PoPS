@@ -69,8 +69,30 @@ la généricité universelle. SSPRK2 a aussi terminé un PASS sur chacun de deux
 vrais rangs MPI. La réception indépendante vérifie l’oracle, les quatre
 tableaux globaux bit à bit égaux entre rangs et au cas série, ainsi que le
 checkpoint commun de72 charges. Le census local des cellules/owners reste
-absent. Les candidates CUDA/Moving/Aux restent externes et le rollback tardif
-doit encore être exécuté. La CI et les86 obligations+8 principes sont ouvertes.
+absent. Les candidates CUDA/Moving/Aux restent externes. La CI et les86
+obligations+8 principes sont ouvertes.
+
+L’injection publique d’échec tardif est intégrée dans les tests au commit
+`4fbd42ec`, suivie de la correction de provenance `29e9143c`. Le premier
+essai a compilé le modèle et le programme, puis échoué avant bind sur une
+sérialisation de chemin ; cet échec est conservé séparément. Le second essai
+Euler termine PASS1, zéro failure/error/skip : garde réellement refusée,
+images avant/après de l’état accepté bit à bit identiques et contrôle accepté
+avec le même artefact, sur deux bindings distincts. La contre-revue indépendante
+a reçu ces images et l’oracle des192 cellules. Les historiques du binding
+refusé étaient initialement non initialisés, fill0 ; ce résultat ne ferme pas
+le rollback d’anneaux déjà peuplés. SSPRK2 refus/contrôle est également reçu.
+`store_history(depth=1)` déclare le lag maximal et produit deux slots physiques ;
+l’assertion adaptative a été corrigée à fill2 avant son premier run. Ce run
+effectue un rejet puis deux acceptations et vérifie l’état final, mais échoue
+dans l’oracle du prédicteur : le fixture extrait le slot0 recyclé après rotation,
+au lieu du slot1 du dernier intervalle accepté. La correction d’observation
+reste à rejouer avec les mêmes équations et bornes. Les snapshots Aux/historiques utilisent
+des accesseurs privés du journal Native ; ils ne qualifient pas une API publique
+de snapshot, un changement de paramètres sur la même instance ou la révocation
+d’un ticket retenu. Le retry adaptatif corrigé et la réception MPI2 restent à
+terminer. Les [preuves d’échec tardif](evidence/late_refusal_20261008/manifest.json)
+conservent les déclarations antérieures au run et les négatifs.
 
 La réception historique détaillée ci-dessous concerne
 `6d898599a3f66fa9aa3c049ba0f3114f1960b6dc`.
@@ -235,7 +257,7 @@ ne découle ni des211 contrôles locaux ni des prewarms.
 | Native CPU après les deux changements C++ | db206100 reconstruit/installé, Nativeed2 reçu ; wheel53fd installée | Recompiler après les prochains headers C++ ; ne pas hériter de la réception. |
 | Science CPU | PDE1/OwnRetry1/Native8 reçus surdb ; cinq nouveaux cas publics reçus sur53fd | Non-régression de la nouvelle preuve, échec tardif/contrôle et retry. |
 | Native CUDA complet et PDE GPU | Pas de campagne complète suivante soumise à ce checkpoint | Construire depuis le SHA figé dans le scratch personnel, puis qualifier les calculs réels. |
-| Extension publique diffusion→FieldV2 | Implémentation intégrée ; Euler et deux compositions SSPRK2 exécutées, MPI2SSP reçu | Exécuter l’injection d’échec, le rollback et le retry. |
+| Extension publique diffusion→FieldV2 | Euler/deux SSPRK2 et MPI2SSP reçus ; rollback initial Euler/SSPRK2 reçus | Retry adaptatif et refus MPI2 ; rollback d’anneaux peuplés à compléter. |
 
 La préparation du prochain build CPU est conservée dans
 `/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/`.

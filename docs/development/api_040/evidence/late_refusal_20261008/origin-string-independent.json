@@ -1,0 +1,30 @@
+{
+  "AST_inverse_entire_module_equal": true,
+  "Source_baseline": "4fbd42ec55c6f2eb9948a410d7633f2594ec2ca3",
+  "changes": "native_origin=origin -> native_origin=str(origin) only",
+  "independent_expression_evaluation": {
+    "baseline": "Object of type PosixPath is not JSON serializable",
+    "candidate": "JSON roundtrip exact string; no default encoder"
+  },
+  "limits": [
+    "No Native/compiler/bind/run by reviewer",
+    "No core/physics/method/guard/snapshot/cost change",
+    "Original prebind failure retained; rollback and control still require actual retry"
+  ],
+  "physical_pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v3-origin-string-20261008/origin-string-v2-to-v3.patch": {
+      "bytes": 452,
+      "sha256": "36660e3426155e2b3ff7ad4839d73ed9c9637711fe14ebbf2a375e9af88d96f5"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v3-origin-string-20261008/source-preparation-receipt.json": {
+      "bytes": 1170,
+      "sha256": "22beafcc873ee197800b3b214bb299e7008df1e1bc48c7a9cf3d556d4acf3bfe"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v3-origin-string-20261008/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "bytes": 14927,
+      "sha256": "4c56564ec0d3ddcd7a3ce475c4bd9d509dacfe8b950e75752d5234f3ffd5d0fa"
+    }
+  },
+  "single_text_replacement": true,
+  "status": "GO_METADATA_ONLY_FOR_ROOT_RETRY"
+}

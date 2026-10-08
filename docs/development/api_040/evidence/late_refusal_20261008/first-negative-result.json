@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest-tmp",
+    "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py::test_public_late_refusal_same_artifact_control[euler]"
+  ],
+  "returncode": 1,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 41.911033833002875,
+  "counts": {
+    "tests": 1,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "failed",
+  "identity_sha256": "11640017bcd17eb035314c2bc8d8ccb5c878cb671ab1c9b80579f7485e91c8d4",
+  "log_sha256": "e5637946e78c8f91b0ec4becf6a15c92f8738ce78cef2adb8dbf46e714e02883"
+}

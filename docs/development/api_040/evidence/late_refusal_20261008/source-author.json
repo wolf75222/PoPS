@@ -1,0 +1,96 @@
+{
+  "Core_parent_report": "bd291; no core file changed in this candidate",
+  "Main_changed_by_author": false,
+  "Source_base": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "V1_preserved": {
+    "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": "d430c056b5a96f7e8c5b3271ee23c212f684f877387dc864b225c7faaea59223",
+    "tests/python/support/diffusion_field_late_refusal_oracle.py": "9367fddcc202ada58b01f0db2a0ba5d2beb85ca29e8079f0353044a047076a04",
+    "tests/python/support/public_diffusion_field_late_refusal_case.py": "6e4009b5aaa810230b57dd308facf8627e5efceec552817b22cf2fd0c771141d"
+  },
+  "ci_panel": {
+    "PASS": 25,
+    "candidate_catalog": 878,
+    "max_ordinary_modeled_seconds": 2088.0,
+    "old_caps_and_exclusions_preserved": true,
+    "old_costs_preserved": true,
+    "ordinary_cap_seconds": 2100,
+    "original_catalog": 877,
+    "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/ci-source-runs/20261008T195920928838Z/receipt.json",
+    "receipt_sha256": "81a53a05cce1b4bdebfadd25243ce9d01db17773fb0f36b9e3a713eecddcf377",
+    "reserved_long_shards": [
+      [
+        0,
+        5400.0,
+        1
+      ],
+      [
+        1,
+        3600.0,
+        1
+      ],
+      [
+        2,
+        3600.0,
+        1
+      ],
+      [
+        3,
+        3600.0,
+        1
+      ],
+      [
+        4,
+        2400.0,
+        1
+      ]
+    ],
+    "routing": "existing support broad prefix and runtime manifest suite; no routing edits needed",
+    "shards": 70,
+    "xml": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/ci-source-runs/20261008T195920928838Z/pytest.xml",
+    "xml_sha256": "f8b812459e82b0016ff9b548979dcdfe35888761e6b354ad62e3f39d63f0bb62"
+  },
+  "declared_plan": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/declared-inputs-and-plan.json",
+    "sha256": "8ecd67a71eaa122268b1230ba44c4d2f337c7b0ab755d13f13a7bf994c72f512"
+  },
+  "fixture_and_oracle_AST_equal_to_V1": true,
+  "limitations": [
+    "No Native/CI runtime by author; not scientific qualification",
+    "Same-artifact failure/control does not prove same-instance parameter update",
+    "No rank0-only authored refusal or issued ticket-validator proof",
+    "Snapshot Aux/history inspection uses existing private Native journal accessors; authoring/bind/run remain public"
+  ],
+  "manifest": {
+    "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "baseline_sha256": null,
+      "bytes": 14922,
+      "candidate_sha256": "94f3642d53d5f5e0dc677c76bb9fae81fa9581b8ba77e568486d5322cd957537"
+    },
+    "tests/python/support/diffusion_field_late_refusal_oracle.py": {
+      "baseline_sha256": null,
+      "bytes": 2460,
+      "candidate_sha256": "fe4922ae73c2ef2048194768db0c8a9ef50fab5a93ba0a10e42e2cf110d7ab20"
+    },
+    "tests/python/support/public_diffusion_field_late_refusal_case.py": {
+      "baseline_sha256": null,
+      "bytes": 9313,
+      "candidate_sha256": "b3aad8c9e9808ba12e8a70d35167677482be1dc4c83f35bc661bb46b793f539f"
+    },
+    "tests/python/test_durations.json": {
+      "baseline_sha256": "c5660e6166952e3358d9a8efb1c1eb12c0fafb62ebbcb6673672175bfaaa37ba",
+      "bytes": 327533,
+      "candidate_sha256": "88aa1c818fa4adc1b0fd7d1dffc4859b50e427fb7956ade733477c9b7df6cfc3"
+    }
+  },
+  "patch": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/late-refusal-v2-integration.patch",
+  "patch_sha256": "a64d79a171b949405f528c39edab2c38e63372bcdf92ac9aff9a40099152a988",
+  "source_panel": {
+    "PASS": 4,
+    "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/source-runs/20261008T195839819765Z/receipt.json",
+    "receipt_sha256": "1f7574c9b8cd79dd2290af4995a122d70058c0683b29500571f4f8b6a7f23f2e",
+    "scope": "real public author validate resolve detach emit; no Native; Euler/two RK2 spellings/adaptive",
+    "xml": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/source-runs/20261008T195839819765Z/pytest.xml",
+    "xml_sha256": "345a57a8894e46205443b6eee184786f492f50365d9819172fe62cb3aa428856"
+  },
+  "status": "SOURCE_PREPARED_FOR_ROOT_NATIVE_RUN"
+}
