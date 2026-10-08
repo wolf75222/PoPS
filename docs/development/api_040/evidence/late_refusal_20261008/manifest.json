@@ -191,6 +191,11 @@
       "bytes": 1579,
       "sha256": "74992817f46fa2c9e671ce5f702b48ca66feeffa516cced02b5a83bd98dd6dd3",
       "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/result.json"
+    },
+    "populated-independent-admission.json": {
+      "bytes": 6626,
+      "sha256": "66bebc4656bd434a786344c2176749f5cfd0d790de03860feedcaa0f2b8180d3",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-independent-reception-20261008/admission.json"
     }
   }
 }
