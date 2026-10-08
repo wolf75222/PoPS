@@ -201,6 +201,15 @@ struct MaterializePoissonRhsV2 {
   }
 };
 
+template <int Dim>
+struct PublishPoissonRhsV2 {
+  FieldView<Real, Dim> target{};
+  FieldView<const Real, Dim> candidate{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    target(index) += candidate(index);
+  }
+};
+
 template <int Axis, int Dim, class Model>
 POPS_HD Real maximum_axis_speed(const Model& model, const typename Model::State& state,
                                 const BoundFluxProviders<Model>& providers) {
@@ -1492,18 +1501,28 @@ auto make_poisson_rhs(Model model) {
   };
 }
 
+/// Provider-aware RHS callable portability contract@1. The named host call
+/// operator has an explicit return type so CUDA extended lambdas in its body
+/// never depend on return-type deduction of a containing factory or closure.
+inline constexpr unsigned kPoissonRhsV2CallableContractVersion = 1;
+
 /// Provider-aware Field density on separately authenticated State and readonly Aux images.
 /// Every allocation/view is prepared and voted before the first rank launches a kernel.
 template <class Model>
-auto make_poisson_rhs_v2(Model model) {
-  constexpr int Dim = kNativeDimension;
-  constexpr int Count = [] {
+class PoissonRhsV2Callable final {
+  static constexpr int Dim = kNativeDimension;
+  static constexpr int Count = [] {
     if constexpr (requires { Model::n_providers; }) return Model::n_providers;
     else return 0;
   }();
   static_assert(Count >= 0);
-  return [model = std::move(model)](
-      const runtime::system::PreparedFieldRhsInputs<Dim>& inputs, MultiFab<Dim>& rhs) {
+  Model model;
+
+ public:
+  explicit PoissonRhsV2Callable(Model&& value) : model(std::move(value)) {}
+
+  void operator()(const runtime::system::PreparedFieldRhsInputs<Dim>& inputs,
+                  MultiFab<Dim>& rhs) const {
     const ExecutionLane& lane = inputs.consensus_lane();
     struct Workspace {
       Kokkos::DefaultExecutionSpace execution;
@@ -1557,7 +1576,7 @@ auto make_poisson_rhs_v2(Model model) {
         const auto target = workspace->outputs[local].first;
         const auto candidate = workspace->outputs[local].second;
         for_each_cell(workspace->execution, workspace->candidate->box(local),
-            [=] POPS_HD(const Index<Dim>& index) { target(index) += candidate(index); });
+            generated_system_detail::PublishPoissonRhsV2<Dim>{target, candidate});
       }
       workspace->execution.fence();
     } catch (...) {
@@ -1567,7 +1586,12 @@ auto make_poisson_rhs_v2(Model model) {
     }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         error, &lane, "Field RHS V2 publication failed collectively");
-  };
+  }
+};
+
+template <class Model>
+PoissonRhsV2Callable<Model> make_poisson_rhs_v2(Model model) {
+  return PoissonRhsV2Callable<Model>(std::move(model));
 }
 
 /// Build the single exact numerical specialization requested by a generated package.
