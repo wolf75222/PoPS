@@ -1,0 +1,11 @@
+{
+  "date_utc": "2026-10-08T20:31:31.736267+00:00",
+  "peer": "/Users/romaindespoulain/dev/tmp/PoPS-independent-MPI2-late-refusal-SSPRK2-248-ed2-reception-20261008/reception.json",
+  "peer_sha256": "2ebb5ef3fb556e1cac8b9b9283c24330682b3943b8aa007c9273eabfcd7c7b2d",
+  "physical_pins_rehashed": 50,
+  "Source": "2487866c9be76f0482f8f485c5d903f64a21bc80",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "core": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "scope": "One actualworld2 SSPRK2 collective lateFail/control initialenvelope, twoactualranks; noCP/localcensus/rank0-only/ticketrevocation/populatedring/universal-language claim",
+  "GO": "Continue populatedring and originalnative nonregression"
+}

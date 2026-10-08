@@ -1,6 +1,6 @@
 {
   "date_utc": "2026-10-08T20:03:40.528792+00:00",
-  "scope": "Independently received Euler/SSPRK2 initial-envelope late refusal/control and publicadaptive2accepted1rejected; previouslypopulatedenvelope and distributed peer stillpending",
+  "scope": "Independentlyreceived initialEuler+SSPRK2 lateFail/control world1 and SSPworld2, publicadaptive2accepted1rejected; populatedringSourceonlyawaitNative",
   "files": {
     "source-author.json": {
       "bytes": 4382,
@@ -156,6 +156,26 @@
       "bytes": 1575,
       "sha256": "729e48df0c0bbbbb8da7f2d7e16195180b6c89d5bb7f422d3ab7058bff224283",
       "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/result.json"
+    },
+    "mpi2-independent.json": {
+      "bytes": 45396,
+      "sha256": "2ebb5ef3fb556e1cac8b9b9283c24330682b3943b8aa007c9273eabfcd7c7b2d",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-MPI2-late-refusal-SSPRK2-248-ed2-reception-20261008/reception.json"
+    },
+    "mpi2-root.json": {
+      "bytes": 763,
+      "sha256": "a084dc7acd8a6b7e8feeab0f551591a85a2701690e6b5ddd22cb82a880e09d5d",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-current-late-refusal-native-preparation-20261008/root-MPI2-SSPRK2-late-refusal-positive.json"
+    },
+    "mpi2-rank0-result.json": {
+      "bytes": 805,
+      "sha256": "90d7a8c06b7a6229e497096b471296dc368a045fc42abaae9de6e5df9fce7298",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/result.json"
+    },
+    "mpi2-rank1-result.json": {
+      "bytes": 806,
+      "sha256": "1724a253454d5e014c2a44e3509616572003c21100b3f1259d3c9ba7587ec7ce",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank1/result.json"
     }
   }
 }

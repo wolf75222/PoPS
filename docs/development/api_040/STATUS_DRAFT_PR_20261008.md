@@ -99,8 +99,10 @@ run Native reste à faire. Il demande un refus via la composition publique
 deux pas. Les snapshots Aux/historiques utilisent
 des accesseurs privés du journal Native ; ils ne qualifient pas une API publique
 de snapshot, un changement de paramètres sur la même instance ou la révocation
-d’un ticket retenu. Le retry adaptatif corrigé et la réception MPI2 restent à
-terminer. Les [preuves d’échec tardif](evidence/late_refusal_20261008/manifest.json)
+d’un ticket retenu. Le refus SSPRK2 est également reçu sur deux vrais rangs MPI :
+images exactes sur chaque rang, deux diagnostics de refus collectif, tableaux
+du contrôle bit à bit égaux entre rangs et au cas série. Le rollback d’anneaux
+déjà peuplés reste à exécuter. Les [preuves d’échec tardif](evidence/late_refusal_20261008/manifest.json)
 conservent les déclarations antérieures au run et les négatifs.
 
 La réception historique détaillée ci-dessous concerne
@@ -266,7 +268,7 @@ ne découle ni des211 contrôles locaux ni des prewarms.
 | Native CPU après les deux changements C++ | db206100 reconstruit/installé, Nativeed2 reçu ; wheel53fd installée | Recompiler après les prochains headers C++ ; ne pas hériter de la réception. |
 | Science CPU | PDE1/OwnRetry1/Native8 reçus surdb ; cinq nouveaux cas publics reçus sur53fd | Non-régression de la nouvelle preuve, échec tardif/contrôle et retry. |
 | Native CUDA complet et PDE GPU | Pas de campagne complète suivante soumise à ce checkpoint | Construire depuis le SHA figé dans le scratch personnel, puis qualifier les calculs réels. |
-| Extension publique diffusion→FieldV2 | Euler/deux SSPRK2 et MPI2SSP reçus ; rollback initial Euler/SSPRK2 reçus | Retry adaptatif et refus MPI2 ; rollback d’anneaux peuplés à compléter. |
+| Extension publique diffusion→FieldV2 | Euler/deux SSPRK2 et MPI2SSP reçus ; refus initial série/MPI et retry adaptatif reçus | Exécuter le rollback d’anneaux déjà peuplés et finir la non-régression. |
 
 La préparation du prochain build CPU est conservée dans
 `/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/`.
