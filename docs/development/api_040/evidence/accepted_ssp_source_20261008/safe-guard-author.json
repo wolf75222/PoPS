@@ -1,0 +1,49 @@
+{
+  "Core_Math_operators_guard_CPP_or_Native_modified_by_child": false,
+  "Main_edits": false,
+  "Native_compile_install_runtime_remote": false,
+  "arbitrary_action_and_projection_mutation_not_admitted": true,
+  "condition_dependencies_audited": "all actual issued graph input references authenticated by object/ID, every executed operation remains in nonmutation effect audit",
+  "files": {
+    "python/pops/codegen/program_accepted_ssp.py": "caef9f3ce018b47d1ee389a4e54814a641e44e4e299f7d1f0219064cbd08f1a6",
+    "python/pops/codegen/program_diffusion_exchanges.py": "7e3882214ac0189f4b6ac5828c6e436f0463772bf2970d5388d913062cead577",
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": "6f6c7feac80c89706d3dfd5d6a8aef6255d893fa477e3ce9c6dcafb8f15038c6"
+  },
+  "patch_kind": "delta V1a41e\u2192V2; Root already has V1 uncommitted",
+  "patch_sha256": "caa5585d18cc80e903894b264bc62323524e1d8463805449fa74bb7c9ba73c6d",
+  "prior_candidate_modified": false,
+  "prior_patch_sha256": "a41e19d58012ac44f53e3ef9d9501b922c78672993084ebd712deed27db80732",
+  "safe_action_contract": "exact FailRun/RejectAttempt terminal actions, actual Bool condition, same type/space/state/context/owner/clock/point; exact attrs guard/action",
+  "schema": "sol61.accepted-update-ssp-safe-terminal-guard-v2@1",
+  "source_runs": [
+    {
+      "Native_loaded": [],
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 61
+      },
+      "exit": 0,
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/test-runs/20261008T184736990934Z/receipt.json",
+      "receipt_sha256": "4627b003368a8af16627f35ae7a5962bdca14b5cf762d64923fffd718bb515d0",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/test-runs/20261008T184736990934Z/pytest.xml",
+      "xml_sha256": "9ff5aa6e9443c2069ae21f58cdb9e520e4b05c126f5f3850376b9af02bb3cbfb"
+    },
+    {
+      "Native_loaded": [],
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 61
+      },
+      "exit": 0,
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/test-runs/20261008T185310407628Z/receipt.json",
+      "receipt_sha256": "234ab90711de51f21f474cc41401a8d76cc8952b690c84fb12404a7671189fae",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/test-runs/20261008T185310407628Z/pytest.xml",
+      "xml_sha256": "513b0094feccaf79713f46d6544b7426968f8587d1e011ed479b67975bfd31bf"
+    }
+  ],
+  "success_only_alias_algebra_and_exchange_weight_trace": true
+}

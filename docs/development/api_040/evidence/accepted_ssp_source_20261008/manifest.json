@@ -1,0 +1,30 @@
+{
+  "scope": "Source-only accepted-update SSP proof; no Native or scientific result inherited",
+  "files": {
+    "author.json": {
+      "sha256": "807b0f71ea6e96e35ff3f813ceddf3d4aa638a02c27f496b2188f72acfe014a7",
+      "bytes": 8322,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/source-review-receipt.json"
+    },
+    "independent.json": {
+      "sha256": "5b975217134325d5a10e61092b43fda2b48f49dd39685a4f6d7fd733dd40e5a2",
+      "bytes": 7645,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-update-ssp-source-review-20261008/reception.json"
+    },
+    "public-expanded.json": {
+      "sha256": "ae2725e436bc3d228bcee65442daf8563d1406ca5b717e10c065bc41a9f530b8",
+      "bytes": 561,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/public-ssprk2-expanded-receipt.json"
+    },
+    "public-retained.json": {
+      "sha256": "fa1cbb5e10c69b1b9643f05aa842c7bf8b50514876028c16a0c13482a9b02ca9",
+      "bytes": 561,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/public-ssprk2-retained-receipt.json"
+    },
+    "safe-guard-author.json": {
+      "sha256": "670ced083a87ba562d5e08e9797800ddf8309b3583c617df8838adea8e8e66de",
+      "bytes": 2704,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v2-safe-guard-20261008/source-review-receipt.json"
+    }
+  }
+}

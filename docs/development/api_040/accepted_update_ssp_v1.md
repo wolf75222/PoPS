@@ -1,0 +1,70 @@
+# Exact accepted-update convex proof
+
+`accepted-update-ssp@1` proves a temporal coefficient-one convex decomposition
+from the actual typed affine expression and its contributing rate/state inputs.
+It does not recognize a method, model, operator name, fingerprint, or SSA spelling.
+It neither replaces an expression nor changes its emitted floating-point arithmetic.
+
+For each independently owned accepted State, the proof reconstructs exact rational
+stage rows `A`, accepted weights `b`, and evaluation coordinates `c`. Every stage
+must preserve its own initial State, refer only to earlier contributing rates,
+and have its actual coordinate equal the row sum. State weights are constant and
+rate weights carry exactly one power of dt. The accepted window spans one step
+and the rate weights sum to one. Boolean coefficient metadata is not real scalar
+arithmetic. Other State commits may evolve under independent per-owner proofs or
+retain their exact initial algebraic image.
+
+Let `K` append `b` to the strictly lower-triangular explicit stage matrix. At
+coefficient one, the algorithm computes the exact inverse of `I+K` and checks
+nonnegativity of `v=(I+K)^-1 1` and `alpha=I-(I+K)^-1`. These identities give
+`q = v U0 + alpha (q + dt F(q))`: each row is a convex combination of the initial
+State and forward-Euler images. This is a constructive coefficient-one certificate,
+not an optimal SSP coefficient, global method order, or constitutive-law theorem.
+
+The certificate is conditional on the actual forward-Euler spatial premise.
+Existing constitutive, transport, positivity/stability, conservation and source
+guards remain unchanged. Different authored rate expressions are allowed; their
+mathematical definitions and each actual evaluation remain in the generated code.
+Accepted diffusive exchange weights are still derived from the authored expression.
+
+An independent Field solve, diagnostic or history operation remains executed.
+Its presence alone does not make the accepted affine expression an unknown method.
+Its typed effects must not mutate live accepted-State inputs. Field feedback and
+extra evaluation reads are not silently removed: absent a proved frozen read
+closure, they leave the forward-Euler acceptance premise unproved. The operation
+itself still has its ordinary lowering; the acceptance diagnostic identifies the
+missing obligation, without selecting a recipe from an identity.
+
+Field publication distinguishes numerical output observations from consumer-State
+binding/shape authority. The exact constitutive read union must be supplied by
+authenticated publication components before shape-only links can be excluded from
+that mathematical dependency trace. Other prerequisite reads are not ignored.
+Matrix-free Field reads retain their actual input/output binders and free captures.
+Issued object identity, integer SSA identifiers, role-qualified cache keys and cycle
+checks prevent detached references from supplying a frozen-input certificate.
+Owned primitive recipes are expanded for read analysis; a State-only derived
+expression is not treated as a Field read merely because it is a primitive.
+
+Global `UnknownOrder` remains descriptive for a mixed executed Program. This local
+certificate does not change that result. Failure to prove an acceptance obligation
+is reported separately from the translated mathematical operation.
+
+A typed terminal acceptance guard keeps its actual Bool condition and its
+existing FailRun or RejectAttempt action. On the successful path its result is
+an alias of the exact same type, owner, clock, point, space and storage/context
+value. It is not an accepted-State write. The proof and exchange trace may follow
+that primary value only after authenticating the terminal action and all issued
+input references; the generated condition still executes before commit. Arbitrary
+actions, non-Bool conditions, detached inputs and projection mutations cannot
+supply this contract. A failed condition withdraws the attempt through the
+existing runtime failure path.
+
+Source tests cover both expanded and retained-stage public two-stage expressions,
+exact exchange weights, legacy frozen-driver Euler, independent owners, different
+rate expressions, renamed models/operators/stages, reordered independent observations
+and their reference IDs, rational coefficient/stage perturbations, Field feedback,
+detached/cyclic references and binders, Boolean metadata, and live input mutation.
+The actual public one-level AMR example resolves and emits both equivalent two-stage
+spellings with `b=(1/2,1/2)`. These are Source proofs; installed Native execution,
+saved-state numerical reception, MPI/GPU coverage and scientific qualification
+remain distinct work.

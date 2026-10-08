@@ -1,0 +1,152 @@
+{
+  "schema": "pops.independent-accepted-update-SSP-source-admission@1",
+  "decision": "ADMIT_EXACT_SOURCE_PATCH",
+  "patch_sha256": "a41e19d58012ac44f53e3ef9d9501b922c78672993084ebd712deed27db80732",
+  "author_source_review_sha256": "807b0f71ea6e96e35ff3f813ceddf3d4aa638a02c27f496b2188f72acfe014a7",
+  "Source_review_context": "78d06da1eb30cef8e8141e5ea93df91eff742b69; external candidate based on original db context",
+  "Native_reference": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "mathematical_review": [
+    "A is strictly lower triangular from previous-rate dependency closure; b and c come from exact declared dt-polynomial arithmetic and actual StagePoint coordinates.",
+    "With K=[A,0;b,0], the rational recurrence computes (I+K)^-1 exactly; v=(I+K)^-1*1 and alpha=I-(I+K)^-1. Nonnegative v/alpha and unit row sums express coefficient-one convex combinations of existing forward-Euler images.",
+    "Independent extracted helper checks validated Euler/Heun/SSP3 matrix inverse and convexity, and rejected changed nonconvex(.25,.75) weights. These are review checks, not method selectors inside production code.",
+    "The proof is conditional on each original spatial FE guard; it adds no global order claim and does not change actual operator expressions, arithmetic, exchange weights or thresholds."
+  ],
+  "dependency_and_rights_review": [
+    "Graph hash authenticates immutable bookkeeping and does not choose a formula. No name/fingerprint/tableau catalogue match selects A/b/c.",
+    "Each accepted State owner receives its own certificate; exact state, clock, coefficient powers and stage-row sums are checked. Existing frozen-driver FE and independently owned updates remain valid.",
+    "Primitive recipes expand to actual typed expressions before auxiliary/field dependency analysis; closed state-only EOS primitives are not blanket-rejected.",
+    "Field publications are authenticated against actual typed published-component read unions. Consumer-State bindings carry shape/owner authority rather than being silently treated as Phi reads.",
+    "Matrix-free input/output binders require exact objects and actual body membership; free captures remain in read closure.",
+    "Issued-object map rejects noninteger IDs and detached duplicate definitions; role-qualified cached reads and separate visiting set refuse cycles instead of admitting seen IDs.",
+    "Boolean coefficient metadata is rejected. Unproved feedback/Field dependencies yield a distinct acceptance diagnostic rather than formula replacement."
+  ],
+  "Source_tests": {
+    "counts": {
+      "tests": 30,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "XML_path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T183231822642Z/pytest.xml",
+    "Native_imports_recorded": []
+  },
+  "public_actual_resolved_AMR1_both_compositions": {
+    "expanded": {
+      "receipt": {
+        "sha256": "ae2725e436bc3d228bcee65442daf8563d1406ca5b717e10c065bc41a9f530b8",
+        "bytes": 561
+      },
+      "local_certificate": {
+        "A": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "b": [
+          "1/2",
+          "1/2"
+        ],
+        "c": [
+          "0",
+          "1"
+        ],
+        "coefficient": "1"
+      },
+      "emitted_sha256": "42621fbddb4b16dc1d1e2a6e00e29741d7eca68fa30761da244cab5c573f8968"
+    },
+    "retained": {
+      "receipt": {
+        "sha256": "fa1cbb5e10c69b1b9643f05aa842c7bf8b50514876028c16a0c13482a9b02ca9",
+        "bytes": 561
+      },
+      "local_certificate": {
+        "A": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "b": [
+          "1/2",
+          "1/2"
+        ],
+        "c": [
+          "0",
+          "1"
+        ],
+        "coefficient": "1"
+      },
+      "emitted_sha256": "f6dbee18dea9f0adaa64ca30f35970404e8b8e025c85a004417f650fc82dad52"
+    }
+  },
+  "reviewer_actions": {
+    "Native_import": false,
+    "compiler_launch": false,
+    "build": false,
+    "install": false,
+    "runtime": false,
+    "Main_edit": false,
+    "remote": false
+  },
+  "required_next": [
+    "Root exact integration and installed Python-source/payload admission.",
+    "New canonical core fingerprint: added/changed codegen files change1197-prefix core hash, despite unchanged CPP/header and Nativeed2.",
+    "Actual public SSPRK2 expanded/retained saved-array/CP/math qualification on new installed source, plus requalification of required finite Euler/metamorphic/distributed witnesses on any new frozen-core set."
+  ],
+  "limits": [
+    "Source/math admission only; Native/runtime/MPI/GPU/scientific/full94 qualification not inherited from30 source tests.",
+    "Conditional coefficient-one SSP certificate does not claim all methods are SSP or prove universal language genericity.",
+    "Original prior source failures remain retained; only final frozen30-test cohort and pinned public receipts are admitted."
+  ],
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/docs/development/api_040/accepted_update_ssp_v1.md": {
+      "sha256": "1a0f8e1290a3b7ba4ce10145ef92ec16c10e50cdd90b995a114a4d7251c9784d",
+      "bytes": 4052
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/python/pops/codegen/program_accepted_ssp.py": {
+      "sha256": "7ca6c39125ce893feb874a36aef902b6f50d1d89ffaeb1c6b7751f33c1c6c115",
+      "bytes": 17450
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/python/pops/codegen/program_diffusion_exchanges.py": {
+      "sha256": "6d305eda6a3989a785d3bb89d83051243207f207986a42cef10da536e9a972a2",
+      "bytes": 5498
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": {
+      "sha256": "93eee2c5312510185fac632d2ec280498834bc0a78f5d015cc719596d5a622f8",
+      "bytes": 13825
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/public-ssprk2-expanded-receipt.json": {
+      "sha256": "ae2725e436bc3d228bcee65442daf8563d1406ca5b717e10c065bc41a9f530b8",
+      "bytes": 561
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/public-ssprk2-retained-receipt.json": {
+      "sha256": "fa1cbb5e10c69b1b9643f05aa842c7bf8b50514876028c16a0c13482a9b02ca9",
+      "bytes": 561
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/accepted-update-ssp-v1.patch": {
+      "sha256": "a41e19d58012ac44f53e3ef9d9501b922c78672993084ebd712deed27db80732",
+      "bytes": 35663
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/source-review-receipt.json": {
+      "sha256": "807b0f71ea6e96e35ff3f813ceddf3d4aa638a02c27f496b2188f72acfe014a7",
+      "bytes": 8322
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T183231822642Z/pytest.xml": {
+      "sha256": "55df80ad0c3260879ccd3453b674ffbd546784cceeb99067288771fca76f7b74",
+      "bytes": 4454
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T183231822642Z/receipt.json": {
+      "sha256": "08cfb127c32f50d1c900e89b6447a84c58c8f0b991b22c16f546b54ad275dec6",
+      "bytes": 1005
+    }
+  }
+}

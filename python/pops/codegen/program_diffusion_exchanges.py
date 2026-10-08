@@ -66,6 +66,10 @@ def accepted_diffusive_quadrature(program, *, partition_stability_checked=()):
         return any(hides_diffusion(child) for child in value.inputs)
 
     def walk(value, weight):
+        if value.op=='acceptance_guard':
+            from .program_accepted_ssp import successful_guard_input
+            walk(successful_guard_input(value),weight)
+            return
         if value.op == "diffusive_rhs":
             entry = selected.setdefault(value.id, (value, {}))[1]
             for power, coefficient in weight.items():
@@ -87,12 +91,10 @@ def accepted_diffusive_quadrature(program, *, partition_stability_checked=()):
     rows = tuple((value, {power: coefficient for power,coefficient in weight.items() if coefficient})
                  for value,weight in selected.values())
     if rows:
-        from pops.time import certify_program_graph
-        certificate = certify_program_graph(program.to_graph())
-        if (certificate.properties.ssp is None or certificate.properties.ssp.coefficient != 1) \
-                and not _single_forward_euler_with_frozen_inputs(program, rows) \
-                and not all(rate.id in partition_stability_checked for rate, _ in rows):
-            raise ValueError("explicit diffusive exchange currently requires a certified SSP coefficient-one affine step")
+        from .program_accepted_ssp import prove_accepted_update_ssp
+        certificate, reason = prove_accepted_update_ssp(program)
+        if certificate is None and not all(rate.id in partition_stability_checked for rate, _ in rows):
+            raise ValueError("explicit diffusive acceptance needs an SSP coefficient-one convex proof: " + reason)
         if any(set(weight) != {1} or weight[1] < 0 for _,weight in rows):
             raise ValueError("diffusive accepted quadrature must retain nonnegative exact dt weights")
     return rows

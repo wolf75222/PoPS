@@ -1,0 +1,32 @@
+{
+  "Native_loaded": [],
+  "author": "PASS",
+  "composition": "ssprk2-expanded",
+  "emit": "PASS",
+  "emitted_sha256": "42621fbddb4b16dc1d1e2a6e00e29741d7eca68fa30761da244cab5c573f8968",
+  "local_certificate": {
+    "A": [
+      [
+        "0",
+        "0"
+      ],
+      [
+        "1",
+        "0"
+      ]
+    ],
+    "b": [
+      "1/2",
+      "1/2"
+    ],
+    "c": [
+      "0",
+      "1"
+    ],
+    "coefficient": "1"
+  },
+  "method": "ssprk2",
+  "reason": "",
+  "resolve": "PASS",
+  "scope": "same public physical helper author+AMR1 resolve+emit, no Native"
+}
