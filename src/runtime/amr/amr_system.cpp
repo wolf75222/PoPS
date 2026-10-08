@@ -3428,6 +3428,14 @@ struct AmrSystem<Dim>::Impl {
     std::vector<std::shared_ptr<const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>>>
         embedded_boundary;
     std::vector<std::shared_ptr<const field_type>> active_coverage;
+    struct BlockLevelPreparation {
+      // A resolved plan is immutable logical addressing, not a borrowed registry view.
+      // Registry rollback may replace its owner while the prepared block remains live.
+      std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan;
+      GeneratedAmrLevelContext<Dim> context;
+    };
+    // Owners precede blocks so every captured plan/route is released after its closures.
+    std::vector<std::vector<BlockLevelPreparation>> block_level_contexts;
     std::vector<std::vector<level_block_type>> block_levels;
     std::vector<std::vector<std::function<void(
         const runtime::multiblock::BoundaryEvaluationPoint&)>>> accepted_halo_boundary_preflight;
@@ -3464,6 +3472,7 @@ struct AmrSystem<Dim>::Impl {
             topology_epoch != live.topology_epoch() ||
             materialization_generation != live.materialization_generation() ||
             block_levels.size() != live_blocks.block_count() ||
+            block_level_contexts.size() != block_levels.size() ||
             block_evaluations.size() != block_levels.size() ||
             block_evaluation_candidates.size() != block_levels.size() ||
             block_evaluation_published.size() != block_levels.size() ||
@@ -3482,6 +3491,7 @@ struct AmrSystem<Dim>::Impl {
           return false;
         for (std::size_t block = 0; block < block_levels.size(); ++block) {
           if (block_levels[block].size() != live.hierarchy().num_levels() ||
+              block_level_contexts[block].size() != live.hierarchy().num_levels() ||
               block_evaluations[block].size() != live.hierarchy().num_levels() ||
               block_evaluation_candidates[block].size() != live.hierarchy().num_levels() ||
               block_evaluation_published[block].size() != live.hierarchy().num_levels() ||
@@ -3497,7 +3507,9 @@ struct AmrSystem<Dim>::Impl {
                 !same_field_contract(block_evaluation_candidates[block][level]->residual,
                                      live_blocks.state(block, level)) ||
                 !field_storage_matches(live_blocks.state(block, level),
-                                       block_state_storage[block][level]))
+                                       block_state_storage[block][level]) ||
+                (block_level_contexts[block][level].context.provider_storage != nullptr &&
+                 block_level_contexts[block][level].context.provider_storage != provider_storage[level].get()))
               return false;
         }
         for (std::size_t level = 0; level < live.hierarchy().num_levels(); ++level) {
@@ -7668,6 +7680,7 @@ struct AmrSystem<Dim>::Impl {
       candidate->provider_candidate_physical_boundaries.resize(level_count);
       candidate->embedded_boundary.resize(level_count);
       candidate->block_levels.resize(prepared_blocks.size());
+      candidate->block_level_contexts.resize(prepared_blocks.size());
       candidate->accepted_halo_boundary_preflight.resize(prepared_blocks.size());
       candidate->accepted_halo_initial_point_preflight.resize(prepared_blocks.size());
       candidate->accepted_halo_boundary_fields.resize(prepared_blocks.size());
@@ -7678,6 +7691,7 @@ struct AmrSystem<Dim>::Impl {
       candidate->block_state_storage.resize(prepared_blocks.size());
       for (std::size_t block = 0; block < prepared_blocks.size(); ++block) {
         candidate->block_levels[block].reserve(level_count);
+        candidate->block_level_contexts[block].reserve(level_count);
         candidate->accepted_halo_boundary_preflight[block].reserve(level_count);
         candidate->accepted_halo_initial_point_preflight[block].reserve(level_count);
         candidate->accepted_halo_boundary_fields[block].reserve(level_count);
@@ -8332,6 +8346,12 @@ struct AmrSystem<Dim>::Impl {
           for (const auto& invocation : prepared_external.fluxes)
             prepared_fluxes.push_back(
                 {invocation.provider, invocation.session, invocation.dependencies});
+          std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>>
+              owned_provider_plan;
+          if (prepared_block.provider_components != 0)
+            owned_provider_plan =
+                std::make_shared<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>>(
+                    auxiliary_registry.consumer_plan(prepared_block.provider_consumer_qid));
           GeneratedAmrLevelContext<Dim> context{
               .level = level,
               .profiler = &program.profiler_,
@@ -8343,10 +8363,7 @@ struct AmrSystem<Dim>::Impl {
                   prepared_block.provider_components == 0 || provider_storage.groups.empty()
                       ? nullptr
                       : &provider_storage,
-              .provider_plan =
-                  prepared_block.provider_components == 0
-                      ? nullptr
-                      : &auxiliary_registry.consumer_plan(prepared_block.provider_consumer_qid),
+              .provider_plan = owned_provider_plan.get(),
               .state_ghost_fill = std::move(state_ghost_fill),
               .provider_ghost_fill = std::move(provider_ghost_fill),
               .root_state_ghost_fill = std::move(root_state_ghost_fill),
@@ -8456,6 +8473,8 @@ struct AmrSystem<Dim>::Impl {
                       : prepared_block.cut_cell_provider_identity,
               .clock_identity_capacity = kPreparedAmrClockIdentityCapacity,
           };
+          candidate->block_level_contexts[block_index].push_back(
+              {std::move(owned_provider_plan), context});
           prepared_level.emplace(
               prepared_block.prepare_level(candidate_engine, std::move(context)));
           // Authenticate every path edge from its compiled operator before any fine ghost
@@ -12338,6 +12357,14 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
         state.size() != transaction_groups.size())
       throw std::invalid_argument(
           "AMR auxiliary checkpoint level count differs from the accepted/candidate hierarchy");
+    const auto& hierarchy = *p_->prepared_hierarchy;
+    if (hierarchy.block_level_contexts.size() != p_->prepared_blocks.size() ||
+        hierarchy.block_levels.size() != p_->prepared_blocks.size())
+      throw std::logic_error("AMR auxiliary checkpoint lost its block preparation inputs");
+    for (std::size_t block = 0; block < p_->prepared_blocks.size(); ++block)
+      if (hierarchy.block_level_contexts[block].size() != state.size() ||
+          hierarchy.block_levels[block].size() != state.size())
+        throw std::logic_error("AMR auxiliary checkpoint has incomplete block preparation inputs");
     ExactContractBuilder exact;
     exact.text("pops.amr-exact-auxiliary-checkpoint")
         .scalar(std::uint32_t{1})
@@ -12487,6 +12514,121 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
       candidate_ghost_copy_error, &lane,
       "AMR auxiliary checkpoint ghost copy failed collectively before publication");
 
+  // Carrier bindings @1: every route that captures accepted/candidate storage is
+  // rebuilt against the private restored owners before any live carrier is replaced.
+  // Generated level blocks also capture provider_storage and the registry consumer plan.
+  using hierarchy_type = typename Impl::PreparedHierarchy;
+  decltype(hierarchy_type::provider_candidate_ghost_fills) next_candidate_ghost_fills;
+  decltype(hierarchy_type::provider_candidate_physical_boundaries) next_physical_boundaries;
+  decltype(hierarchy_type::block_level_contexts) next_block_contexts;
+  decltype(hierarchy_type::block_levels) next_block_levels;
+  std::vector<std::string> candidate_route_identities;
+  std::exception_ptr binding_error;
+  try {
+    next_candidate_ghost_fills.resize(state.size());
+    next_physical_boundaries.resize(state.size());
+    next_block_levels = p_->prepared_hierarchy->block_levels;
+    next_block_contexts = p_->prepared_hierarchy->block_level_contexts;
+    candidate_route_identities.reserve(state.size());
+    for (const auto& identity : p_->prepared_hierarchy->provider_storage_field_identities)
+      candidate_route_identities.push_back(identity + "/candidate");
+  } catch (...) {
+    binding_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      binding_error, &lane, "AMR auxiliary checkpoint route allocation failed collectively");
+  for (std::size_t level = 0; level < state.size(); ++level) {
+    const auto& layout = p_->engine->hierarchy().layout(level);
+    const auto& identity = p_->prepared_hierarchy->provider_storage_field_identities[level];
+    if (!transaction_candidates[level]->groups.empty()) {
+      if (level == 0)
+        next_candidate_ghost_fills[level] = prepare_provider_groups_root_ghost_fill(
+            *transaction_candidates[level], layout.domain(), *restored_topology,
+            candidate_route_identities[level], p_->engine->topology_epoch(),
+            p_->engine->materialization_generation(), lane);
+      else
+        next_candidate_ghost_fills[level] = prepare_provider_groups_fine_ghost_fill(
+            *transaction_candidates[level - 1], *transaction_candidates[level],
+            p_->engine->hierarchy().layout(level - 1).domain(), layout.domain(),
+            layout.ratio_from_parent(), *restored_topology, candidate_route_identities[level],
+            static_cast<int>(level), p_->engine->topology_epoch(),
+            p_->engine->materialization_generation(), lane);
+      next_physical_boundaries[level].emplace(
+          runtime::system::prepare_auxiliary_physical_boundaries(
+              *transaction_candidates[level], candidate_registries[level], layout.domain(),
+              Geometry<Dim>::from_bounds(layout.domain(), p_->cfg.lower, p_->cfg.upper),
+              *restored_topology, &lane));
+    }
+    for (std::size_t block = 0; block < p_->prepared_blocks.size(); ++block) {
+      const auto& prepared_block = p_->prepared_blocks[block];
+      if (prepared_block.provider_components == 0)
+        continue;
+      auto& preparation = next_block_contexts[block][level];
+      auto& context = preparation.context;
+      binding_error = {};
+      try {
+        context.provider_storage = accepted_candidates[level]->groups.empty()
+                                       ? nullptr : accepted_candidates[level].get();
+        preparation.provider_plan =
+            std::make_shared<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>>(
+                candidate_registries[level].consumer_plan(prepared_block.provider_consumer_qid));
+        context.provider_plan = preparation.provider_plan.get();
+      } catch (...) {
+        binding_error = std::current_exception();
+      }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          binding_error, &lane, "AMR auxiliary checkpoint block binding failed collectively");
+      if (context.provider_storage != nullptr) {
+        if (level == 0)
+          context.root_provider_ghost_fill = prepare_provider_groups_root_ghost_fill(
+              *accepted_candidates[level], layout.domain(), *restored_topology, identity,
+              p_->engine->topology_epoch(), p_->engine->materialization_generation(), lane);
+        else
+          context.provider_ghost_fill = prepare_provider_groups_fine_ghost_fill(
+              *accepted_candidates[level - 1], *accepted_candidates[level],
+              p_->engine->hierarchy().layout(level - 1).domain(), layout.domain(),
+              layout.ratio_from_parent(), *restored_topology, identity, static_cast<int>(level),
+              p_->engine->topology_epoch(), p_->engine->materialization_generation(), lane);
+      }
+      binding_error = {};
+      try {
+        next_block_levels[block][level] = prepared_block.prepare_level(*p_->engine, context);
+        if (next_block_levels[block][level].collective_contract() !=
+            p_->prepared_hierarchy->block_levels[block][level].collective_contract())
+          throw std::logic_error("AMR auxiliary checkpoint changed a compiled block contract");
+      } catch (...) {
+        binding_error = std::current_exception();
+      }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          binding_error, &lane, "AMR auxiliary checkpoint block preparation failed collectively");
+    }
+  }
+  std::string binding_contract;
+  binding_error = {};
+  try {
+    ExactContractBuilder exact;
+    exact.text("pops.amr.auxiliary-checkpoint-carrier-bindings")
+        .scalar(std::uint32_t{1})
+        .bytes(p_->prepared_hierarchy->collective_contract)
+        .scalar(static_cast<std::uint64_t>(state.size()));
+    for (std::size_t level = 0; level < state.size(); ++level) {
+      exact.optional_collective_contract(next_candidate_ghost_fills[level]);
+      exact.presence(next_physical_boundaries[level].has_value());
+      if (next_physical_boundaries[level])
+        exact.bytes(next_physical_boundaries[level]->collective_contract());
+      for (const auto& block : next_block_levels)
+        exact.bytes(block[level].collective_contract());
+    }
+    binding_contract = std::move(exact).release();
+  } catch (...) {
+    binding_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      binding_error, &lane, "AMR auxiliary checkpoint binding contract failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"amr-checkpoint-carrier-bindings", binding_contract}}, lane))
+    throw std::invalid_argument("AMR checkpoint carrier bindings differ across ranks");
+
   std::vector<std::map<std::string, std::vector<const Real*>>> next_accepted_identity;
   std::vector<std::map<std::string, std::vector<const Real*>>> next_candidate_identity;
   std::exception_ptr identity_error;
@@ -12514,6 +12656,12 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
                 typename decltype(p_->prepared_hierarchy->provider_storage)::value_type>);
   static_assert(noexcept(p_->prepared_hierarchy->auxiliary_registries.swap(candidate_registries)));
   static_assert(noexcept(p_->auxiliary_invalidations.swap(candidate_dirty)));
+  static_assert(noexcept(p_->prepared_hierarchy->provider_candidate_ghost_fills.swap(
+      next_candidate_ghost_fills)));
+  static_assert(noexcept(p_->prepared_hierarchy->provider_candidate_physical_boundaries.swap(
+      next_physical_boundaries)));
+  static_assert(noexcept(p_->prepared_hierarchy->block_levels.swap(next_block_levels)));
+  static_assert(noexcept(p_->prepared_hierarchy->block_level_contexts.swap(next_block_contexts)));
   for (std::size_t level = 0; level < state.size(); ++level) {
     p_->prepared_hierarchy->provider_storage[level].swap(accepted_candidates[level]);
     p_->prepared_hierarchy->provider_candidate_storage[level].swap(transaction_candidates[level]);
@@ -12521,8 +12669,13 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
     p_->prepared_hierarchy->provider_candidate_storage_identity[level].swap(
         next_candidate_identity[level]);
   }
+  p_->prepared_hierarchy->provider_candidate_ghost_fills.swap(next_candidate_ghost_fills);
+  p_->prepared_hierarchy->provider_candidate_physical_boundaries.swap(next_physical_boundaries);
+  p_->prepared_hierarchy->block_levels.swap(next_block_levels);
+  p_->prepared_hierarchy->block_level_contexts.swap(next_block_contexts);
   p_->prepared_hierarchy->auxiliary_registries.swap(candidate_registries);
   p_->auxiliary_invalidations.swap(candidate_dirty);
+  p_->discard_level_evaluations();
   if (p_->restart_transaction && !p_->restart_transaction_committed)
     p_->restart_auxiliary_replacement_pending = false;
 }
