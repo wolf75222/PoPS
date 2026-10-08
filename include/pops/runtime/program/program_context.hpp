@@ -248,12 +248,20 @@ class ProgramContext {
   }
 
   void configure_primary_clock(const std::string& clock) const {
+    const auto& manifest = runtime_state().checkpoint_metadata_.uniform_auxiliary_clocks;
+    if (!manifest.owner_identity.empty()) {
+      manifest.require_owned(clock);
+      if (clock != manifest.primary_clock_identity)
+        throw std::invalid_argument("Program context primary clock differs from installed ownership");
+    }
     clock_schedule_.configure_primary_clock(clock);
     primary_clock_ = clock;
   }
 
   void declare_clock_relation(const std::string& parent, const std::string& child,
                               int count) const {
+    const auto& manifest = runtime_state().checkpoint_metadata_.uniform_auxiliary_clocks;
+    if (!manifest.owner_identity.empty()) { manifest.require_owned(parent); manifest.require_owned(child); }
     clock_schedule_.declare_relation(parent, child, count);
   }
 

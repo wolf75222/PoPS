@@ -1,5 +1,8 @@
 """Prospective installed per-instance solved-field publication; requires a fresh Native build."""
 from pathlib import Path
+import ctypes
+import hashlib
+import io
 import sys
 import numpy as np
 import pops
@@ -12,6 +15,60 @@ from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.evolved_stage_v_capture import retain_v_provenance,pin,save_json
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
+
+
+def _owned_uniform_capacity_receipt(runtime, artifact):
+    """Read installed ownership after public bind; never configure runtime clocks."""
+    executor = runtime._executor
+    engines = getattr(executor, "_engines", None)
+    rows = tuple(engines.items()) if engines is not None else (("uniform", executor),)
+    programs = {row.layout_id: row.program for row in getattr(artifact, "layout_programs", ())}
+    receipts = []
+    for layout, engine in rows:
+        program = programs[layout] if engines is not None else artifact.program
+        path = Path(program.so_path).resolve()
+        dso = ctypes.CDLL(str(path))
+        def text(symbol, *arguments):
+            fn = getattr(dso, symbol)
+            fn.restype = ctypes.c_char_p
+            fn.argtypes = [ctypes.c_int] if arguments else []
+            raw = fn(*arguments)
+            assert raw is not None, symbol
+            return raw.decode("utf8")
+        assert text("pops_program_checkpoint_clock_manifest_contract") == "pops.program.owned-clock-manifest@1"
+        count = dso.pops_program_checkpoint_logical_clock_count
+        count.argtypes = []
+        count.restype = ctypes.c_int
+        clocks = tuple(text("pops_program_checkpoint_logical_clock_identity", i) for i in range(count()))
+        primary = text("pops_program_checkpoint_primary_clock_identity")
+        assert clocks and len(set(clocks)) == len(clocks) and primary in clocks
+        owner = text("pops_program_hash")
+        assert owner == engine._s.installed_program_hash()
+        future = tuple(engine._s._checkpoint_program_auxiliary_capacity())
+        assert len(future) == 2 and all(type(x) is int and x >= 0 for x in future)
+        receipts.append(dict(layout=layout, installed_hash=owner, dso_path=str(path),
+            dso_sha256=hashlib.sha256(path.read_bytes()).hexdigest(), contract="pops.program.owned-clock-manifest@1",
+            primary=primary, clocks=clocks, clock_utf8_bytes=[len(c.encode("utf8")) for c in clocks],
+            cold_future_metadata_bytes=future[0], component_count=future[1]))
+    return rows, receipts
+
+
+def _actual_uniform_auxiliary_sizes(checkpoint):
+    """Inspect actual public archives, retaining the producer's child order."""
+    def walk(blob):
+        with np.load(io.BytesIO(blob), allow_pickle=False) as archive:
+            if "auxiliary_checkpoint" in archive.files:
+                raw = archive["auxiliary_checkpoint"]
+                assert raw.dtype == np.dtype("uint8") and raw.ndim == 1
+                payload = raw.tobytes()
+                assert payload[:8] in (b"POPSAUX2", b"POPSAUX3")
+                return [dict(wire_magic=payload[:8].decode("ascii"), bytes=len(payload),
+                             sha256=hashlib.sha256(payload).hexdigest())]
+            children = sorted((name for name in archive.files if name.startswith("layout_checkpoint_")),
+                              key=lambda name: int(name.rsplit("_", 1)[1]))
+            assert children
+            return [row for name in children for row in walk(archive[name].tobytes())]
+    return walk(Path(checkpoint).read_bytes())
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
@@ -46,6 +103,12 @@ def test_installed_three_instance_solved_provider_reads(cells,reverse,different,
     seed=dict(zip(NAMES,(a,b,c,forcing),strict=True))
     runtime=collective_call(world,lambda:pops.bind(artifact,initial_state=seed,
         resources={'execution_context':artifact_execution_context(artifact)}))
+    capacity_engines, capacity_owners = collective_call(world, lambda: _owned_uniform_capacity_receipt(runtime, artifact))
+    collective_call(world, lambda: save_json(directory/('cold-capacity-rank%d.json'%rank), dict(
+        schema='sol61.uniform-owned-capacity-native@1', native=pin(native.__file__), owners=capacity_owners, cells=cells,
+        before_first_run=True, macro_step=runtime.macro_step(), time=runtime.time(),
+        pending_attempt_snapshot_qualified=False,
+        clock_scope='actual canonical SHA clock IDs only; no variable-byte or subclock execution claim')))
     def capture(label):
         clock=collective_call(world,lambda:(runtime.time(),runtime.macro_step()))
         cursors=collective_call(world,lambda:runtime.consumer_cursors.to_data())
@@ -62,6 +125,23 @@ def test_installed_three_instance_solved_provider_reads(cells,reverse,different,
             files[name]=collective_call(world,lambda:pin(path));collective_call(world,lambda:write(False))
         checkpoint=collective_call(world,lambda:runtime.checkpoint(directory/(label+'-checkpoint')))
         collective_call(world,lambda:save_json(directory/('%s-cp-rank%d.json'%(label,rank)),pin(checkpoint)))
+        auxiliary_sizes = collective_call(world, lambda: _actual_uniform_auxiliary_sizes(checkpoint))
+        capacity_observations = []
+        assert len(auxiliary_sizes) == len(capacity_owners)
+        for (layout, engine), owner, observed in zip(capacity_engines, capacity_owners, auxiliary_sizes, strict=True):
+            current = collective_call(world, lambda engine=engine: tuple(engine._s._checkpoint_auxiliary_capacity()))
+            future = collective_call(world, lambda engine=engine: tuple(engine._s._checkpoint_program_auxiliary_capacity()))
+            with collective_check(world):
+                assert future == (owner['cold_future_metadata_bytes'], owner['component_count'])
+                assert current[1] == owner['component_count']
+                scalar_bytes = owner['component_count'] * int(np.prod(cells)) * 8
+                assert observed['bytes'] == current[0] + scalar_bytes
+                assert observed['bytes'] <= owner['cold_future_metadata_bytes'] + scalar_bytes
+            capacity_observations.append(dict(owner=owner, actual=observed,
+                current_metadata_bytes=current[0], scalar_payload_bytes=scalar_bytes))
+        collective_call(world, lambda: save_json(directory/('%s-capacity-rank%d.json'%(label,rank)), dict(
+            schema='sol61.uniform-owned-capacity-phase@1', native=pin(native.__file__), phase=label, checkpoint=pin(checkpoint),
+            owners=capacity_observations, pending_attempt_snapshot_qualified=False)))
         collective_call(world,lambda:write(True))
         return files
     capture('initial');expected=(a.copy(),b.copy(),c.copy(),forcing.copy())

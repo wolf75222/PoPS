@@ -1,0 +1,63 @@
+{
+  "scope": "Current tracked code fixture inventory by export definitions; historical docs/evidence excluded",
+  "scan_command": [
+    "rtk",
+    "proxy",
+    "rg",
+    "-l",
+    "extern.*pops_(program_abi_key|install_program)",
+    "include",
+    "src",
+    "tests",
+    "python",
+    "--glob",
+    "*.{cpp,hpp,py}"
+  ],
+  "mandatory_uniform": [
+    {
+      "path": "tests/cpp/integration/native_loader/test_program_abi_symbols.cpp",
+      "clock": "symbol-presence-clock",
+      "route": "Uniform symbol-only stub and eight negative contracts"
+    },
+    {
+      "path": "tests/cpp/integration/native_loader/test_program_loader.cpp",
+      "clock": "clock.macro",
+      "route": "Uniform actual install fixture"
+    },
+    {
+      "path": "tests/python/support/explicit_program.py",
+      "clock": "pops.test.clock.macro",
+      "route": "Uniform and AMR; exact new discriminator on Uniform only"
+    },
+    {
+      "path": "tests/cpp/support/field_rhs_value_program_fixture.hpp",
+      "clock": "test.field-rhs-v2.clock",
+      "route": "Uniform and AMR shared DSO"
+    },
+    {
+      "path": "include/pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp",
+      "clock": "test.field-rhs-v2.clock",
+      "route": "Uniform and AMR shared DSO"
+    }
+  ],
+  "amr_only_existing_contract": [
+    "tests/cpp/support/synthetic_loader_fixture.hpp",
+    "tests/cpp/integration/amr/test_amr_hierarchy_field_scratch.cpp"
+  ],
+  "intentional_earlier_abi_rejection": [
+    "tests/python/unit/time/test_time_ops_polish.py"
+  ],
+  "other_matches_are_generated_source_or_assertions": [
+    "tests/review/test_sol61_m17_full_eight_preparation.py",
+    "tests/python/unit/time/test_local_transform.py",
+    "tests/python/unit/time/test_post_synchronization.py",
+    "tests/python/unit/codegen/test_program_source_kernel_reuse.py",
+    "tests/python/integration/amr/test_amr_install_program.py",
+    "python/pops/codegen/program_emit_amr.py",
+    "python/pops/codegen/program_emit_kernels.py",
+    "python/pops/codegen/program_codegen.py",
+    "tests/python/unit/codegen/test_hierarchy_scoped_solve_emit.py",
+    "tests/python/unit/codegen/test_amr_implicit_diffusion_codegen.py",
+    "tests/python/unit/codegen/test_composite_tensor_fac_provider.py"
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "scope": "Cumulative external candidate against actual current Main. Source/Host only; no installed Native or System execution qualification.",
+  "version": 3,
+  "base": {
+    "main": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "head": "a20adf3f3b71055018a88510fd5c2ba0e029b208",
+    "status": "* codex/api040-integrated-main-20261004\n M docs/development/api_040/evidence/guarded_publication_source_20261008/manifest.json\n M tests/python/integration/runtime/test_guarded_field_diffusion_publication.py\n?? PoPS_Codex_handoff_0.4.0/\n?? docs/development/api_040/evidence/guarded_publication_source_20261008/fixture-checkpoint-source-checks.json\n?? docs/development/api_040/evidence/guarded_publication_source_20261008/fixture-independent-source.json\n",
+    "file_hashes": {
+      "docs/development/api_040/auxiliary_checkpoint_lazy_invalidation.md": "e90bacdf6d7b580fff287cc677e2b3a6a86fc93d04a31b5fef6ba26e9323b6ac",
+      "include/pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp": "4a83d15db358174ecb6508310c65d205c5b9c474a3e4a13e840137ccb5923107",
+      "include/pops/runtime/program/module_metadata.hpp": "ac6257d31cd88e8ea39045d7f9038af236db8fbb18834e8472b637969a206309",
+      "include/pops/runtime/program/program_context.hpp": "e2dd065305a451a97afee0896f75e620732302130e86fc1b07dd82fe400d72f1",
+      "include/pops/runtime/system/auxiliary_checkpoint_capacity.hpp": null,
+      "include/pops/runtime/system.hpp": "f9c583199b1ea21cd22d417ff7bc94ec9c63b5da30c9cd683b750cf171581e4a",
+      "include/pops_headers.manifest": "3abe493f65ea3c9025e95fe22f1afac91df8dacccf1b891d454f5c66aa420406",
+      "python/bindings/core/init/init_system.cpp": "a092a7c7a67d7f173b51b23ff69c2d75264f88ad1479ce769e8c57f07244f609",
+      "python/pops/codegen/program_codegen.py": "c3c5a4806302b1be86ff1731fec6b7fde2be4b734c227202208acd8faeb698bb",
+      "python/pops/runtime/_checkpoint_resource_budget.py": "9b64085d7c833d0ec13bc4bb9e2cd4359131cd9eacebcc3c623cbf315f10fee5",
+      "src/runtime/system/system_aux.cpp": "836eba0cdd9dcdf2660462fc2469e76243d5444a8257fdaf83d30e46b6e9e80a",
+      "src/runtime/system/system_io.cpp": "27b2688a6ab2fc5f99393d682133f0542a4c1361287bafb52c99f085e0972aa7",
+      "tests/cpp/integration/native_loader/test_program_abi_symbols.cpp": "018643201968fbbd21976a7e4ccc25fff82bcc501f02dab5de9228ed1ba9d913",
+      "tests/cpp/integration/native_loader/test_program_loader.cpp": "bb800a4cbc412df4d862341d9a711432895da307448ef29225187835acf43e48",
+      "tests/cpp/support/field_rhs_value_program_fixture.hpp": "30892b2d3018c3bd4e7ada7955283748afad77bd4eca66a07fef59876850b9e9",
+      "tests/cpp/unit/runtime/test_exact_aux_registry_nd.cpp": "604d30292efbb14e6f6d46d49b94cf9fd2b9850540608d5d43dcbebd8780aea5",
+      "tests/python/support/explicit_program.py": "a4a3dafd3c86bd0f4a7e7007d999adf604311337ff24b639d68345694fd14466",
+      "tests/python/test_durations.json": "bf4b39fc364f29369b9e01db553959775ea23aa32db2c6f72e7a8f17fb42d726",
+      "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py": null
+    }
+  },
+  "patch": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-capacity-v3.patch",
+    "sha256": "a08d2cff5fc5e02d199c7238b96cfe83f475af9a8763695dce07428cec10a868",
+    "files": [
+      "docs/development/api_040/auxiliary_checkpoint_lazy_invalidation.md",
+      "include/pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp",
+      "include/pops/runtime/program/module_metadata.hpp",
+      "include/pops/runtime/program/program_context.hpp",
+      "include/pops/runtime/system/auxiliary_checkpoint_capacity.hpp",
+      "include/pops/runtime/system.hpp",
+      "include/pops_headers.manifest",
+      "python/bindings/core/init/init_system.cpp",
+      "python/pops/codegen/program_codegen.py",
+      "python/pops/runtime/_checkpoint_resource_budget.py",
+      "src/runtime/system/system_aux.cpp",
+      "src/runtime/system/system_io.cpp",
+      "tests/cpp/integration/native_loader/test_program_abi_symbols.cpp",
+      "tests/cpp/integration/native_loader/test_program_loader.cpp",
+      "tests/cpp/support/field_rhs_value_program_fixture.hpp",
+      "tests/cpp/unit/runtime/test_exact_aux_registry_nd.cpp",
+      "tests/python/support/explicit_program.py",
+      "tests/python/test_durations.json",
+      "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py"
+    ]
+  },
+  "overlay": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-v3-overlay",
+  "overlay_hashes": {
+    "docs/development/api_040/auxiliary_checkpoint_lazy_invalidation.md": "aef77b46de55474845f2ca3e39237ecf9cfdbaad5c45347c4899d6ef64d37529",
+    "include/pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp": "c25f24868e1f9d558d282a5944efdd0ec586f6923d5c485641ad1cb51587839f",
+    "include/pops/runtime/program/module_metadata.hpp": "bd82b018ced016e715591645b38db800a5f2f04191f9e1b8e5b2358b85c2b8f3",
+    "include/pops/runtime/program/program_context.hpp": "7d4d860b0da9d0eba17a7107be0ca745fed85bfc9c1113f32dc22537055c34c8",
+    "include/pops/runtime/system/auxiliary_checkpoint_capacity.hpp": "58c4a96d1ab8eacad7e5fc4a779e011c48988198f2c69d90bc59bba68d073339",
+    "include/pops/runtime/system.hpp": "a3e57178b6aaa8992c95f28560cf39b07e10efc3519ae137e9fb27bf6cc546be",
+    "include/pops_headers.manifest": "31b8f1b3efba602f1d195d58cac8795f38cdb9bab69ebe12b311ac5dc3b23b9d",
+    "python/bindings/core/init/init_system.cpp": "53596c2c4c30e0a952ec855dbe9fcdffd9fc299693c1a9114d5aaa615e7ee4ee",
+    "python/pops/codegen/program_codegen.py": "276b489a300df63174f951b81ba1ba3a94b174a1f27d9ebf288b7ff2c370dd78",
+    "python/pops/runtime/_checkpoint_resource_budget.py": "6b6d6cf62b8399441acdd4c28be0ea1d13f322d4e446c67bdd7b8f0664bc0b10",
+    "src/runtime/system/system_aux.cpp": "3c41907d4013ac3a7c6706e1a8550bc63af36779690731b1f591f36fe4fe7794",
+    "src/runtime/system/system_io.cpp": "024d6cd21029478033623db0ad6e998076d82d06ddbc00a2af228182e626669c",
+    "tests/cpp/integration/native_loader/test_program_abi_symbols.cpp": "7c19a6e3a2e73923389c75f6ef4f416d059591d65f984bcd33db556e9feeb007",
+    "tests/cpp/integration/native_loader/test_program_loader.cpp": "c5f4b56d0355779c8874387a3e438f2847a09b2f5c06e21f784cfd1cf5f5befd",
+    "tests/cpp/support/field_rhs_value_program_fixture.hpp": "6a6849055763e61add9f561148723a61c8d536049b8fa447f48980d8d3a53c56",
+    "tests/cpp/unit/runtime/test_exact_aux_registry_nd.cpp": "4203da5ffcb438ab8d22fea0808fac5cd41f966ec145b327e981184cbf4f70ea",
+    "tests/python/support/explicit_program.py": "4b99fe88dd537b071546f0793902848b3896c12b190d52e25201f332337b5fc8",
+    "tests/python/test_durations.json": "5adf9e559a4725e0a0a1931ad2d2eac37e1d898e0a1d5242f107a4f05384a37d",
+    "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py": "af1d32346a212fa8a2e3694af274edae18a441f37aaeb8bc8bdce0cf189a928f"
+  },
+  "applycheck": {
+    "argv": [
+      "rtk",
+      "git",
+      "apply",
+      "--check",
+      "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-capacity-v3.patch"
+    ],
+    "cwd": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "exit": 0
+  },
+  "roundtrip": {
+    "all_files_match": true,
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-v3-tiny-roundtrip"
+  },
+  "sdk": {
+    "header_count": 384,
+    "header_signature": "e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f",
+    "function": "python/pops/codegen/toolchain.py:pops_header_signature",
+    "function_file_sha256": "6ff9d2b76a8d2af337fb288246c3fca2261cb0963dfc92d1ca7a95b9d14bc0b1"
+  },
+  "source_checks": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-v3-source-checks.json",
+  "python_tests": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-v3-python-contract.json",
+  "compatibility_decision": {
+    "contract_export": "pops_program_checkpoint_clock_manifest_contract",
+    "exact_discriminator": "pops.program.owned-clock-manifest@1",
+    "typed_version": 1,
+    "old_uniform_dso": "rejected; regenerate with exact matching rebuilt SDK/runtime",
+    "amr_contract": "unchanged existing temporal metadata; new Uniform discriminator not consumed",
+    "native_abi_number": "unchanged by this explicit metadata supplement; ABI key/header signature changes and old Native receipt is unusable",
+    "math": "No model equations, integrators or per-model dispatch changed"
+  },
+  "required_remaining": [
+    "Root independent review and integration",
+    "fresh matching Native SDK/build and exact identity authentication",
+    "Uniform actual bind/checkpoint/restart acceptance; MPI/GPU and scientific acceptance outside source scope"
+  ],
+  "duration_catalog": {
+    "base_entries": 880,
+    "candidate_entries": 881,
+    "existing_weights_all_preserved": true,
+    "added": {
+      "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py": 1.0
+    },
+    "guarded600row": {
+      "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py": 600
+    }
+  },
+  "source_python_ast_all_pass": true,
+  "check_receipt_hashes": {
+    "production-v3-source-checks.json": "51fde0adbebfbed287e049ce8f759b239fcf8189874b300f633307686c55a43a",
+    "production-v3-python-contract.json": "f02a31a9e3e41818abeb118f950b39ba3e17e27274ce842c9f29e1c4a37564d0"
+  },
+  "fixture_inventory": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-v3-fixture-inventory.json",
+    "sha256": "e25681b6fcd1ee933236fbec9dccfa18e0e5470d9f440ee06a10264ca058d150",
+    "mandatory_uniform_count": 5
+  }
+}

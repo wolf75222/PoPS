@@ -1,0 +1,47 @@
+{
+  "status": "PASS_SOURCE_ONLY",
+  "native_loaded": false,
+  "checkpoint_helper": "full outer bytes and nested actual-member digests checked against disposable nonproduction fixture; deleted",
+  "collective_checkpoint_path": "shared / accepted-checkpoint",
+  "spectral_oracle": {
+    "baseline": {
+      "spectral_vs_stencil_max_abs": 2.220446049250313e-16,
+      "coefficient_rational": [
+        57,
+        175
+      ],
+      "negative_laplacian_eigenvalues": [
+        9.743419838555294,
+        4.287187078897962
+      ],
+      "sufficient_fe_frequency": 52.114285714285714,
+      "dt_times_frequency": 0.005211428571428572
+    },
+    "renamed": {
+      "spectral_vs_stencil_max_abs": 2.220446049250313e-16,
+      "coefficient_rational": [
+        57,
+        175
+      ],
+      "negative_laplacian_eigenvalues": [
+        9.743419838555294,
+        4.287187078897962
+      ],
+      "sufficient_fe_frequency": 52.114285714285714,
+      "dt_times_frequency": 0.005211428571428572
+    },
+    "changed_expression": {
+      "spectral_vs_stencil_max_abs": 4.440892098500626e-16,
+      "coefficient_rational": [
+        1974,
+        6875
+      ],
+      "negative_laplacian_eigenvalues": [
+        9.743419838555294,
+        4.287187078897962
+      ],
+      "sufficient_fe_frequency": 45.940363636363635,
+      "dt_times_frequency": 0.004594036363636363
+    }
+  }
+}

@@ -32,6 +32,16 @@
       "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-composed-CPP-source-admission-20261008/admission.json",
       "sha256": "650dc2e72ae1bc9999e835957e293ef405262a08b2ae1d354d6fc8cb4885c80f"
     },
+    "fixture-checkpoint-source-checks.json": {
+      "bytes": 1366,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-reception-prep-20261008/source-only-checks.json",
+      "sha256": "c298a5a8f37dd869bea6b3fe2937c9caee5d8de4287b4a40dff162b6206be7cc"
+    },
+    "fixture-independent-source.json": {
+      "bytes": 5035,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-reception-prep-20261008/source-counterreview.json",
+      "sha256": "dd08dbbb2af8dff4039df8bf48ea1b5767fae6c4e4d53e45717730a9e297f554"
+    },
     "lossless-report-author.json": {
       "bytes": 1244,
       "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-V2-port-v2-lossless-report-20261008/source-port-receipt.json",
@@ -52,6 +62,11 @@
       "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-V2-port-1766b40b-20261008/source-port-receipt.json",
       "sha256": "8e88cf622887371e2a852f7a375ecf7520443e3a0670cfa76e496678af64aee8"
     }
+  },
+  "fixture_checkpoint_supplement": {
+    "patch_sha256": "75fc229446bb8f073df5e4d3bfd00bdca3c639a6cd46c31028028b5ce288510d",
+    "scope": "Source-reviewed actual public capture added; true Native accepted checkpoint and restart not yet executed. Same collective path across MPI ranks.",
+    "test_sha256": "ff3e07e66d2fa02a25b959371a51c5e096561cb0d96b5ed747f08cec35561c0c"
   },
   "integrated_source_files": {
     "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp": {

@@ -99,6 +99,9 @@ extern "C" const char* pops_program_checkpoint_history_clock_identity(int) { ret
 extern "C" const char* pops_program_checkpoint_history_interpolation_identity(int) { return ""; }
 extern "C" int pops_program_checkpoint_history_depth(int) { return 0; }
 extern "C" int pops_program_checkpoint_history_components(int) { return 0; }
+extern "C" const char* pops_program_checkpoint_clock_manifest_contract() {
+  return "pops.program.owned-clock-manifest@1";
+}
 extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
 extern "C" const char* pops_program_checkpoint_logical_clock_identity(int i) {
   return i == 0 ? "test.field-rhs-v2.clock" : "";

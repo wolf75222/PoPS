@@ -30,3 +30,48 @@ this extension does not qualify a ghost formula, scientific execution, or GPU/MP
 Source validation uses the real ExactAuxiliaryRegistry and checkpoint header in dimensions 1–3,
 the actual Uniform Python wire guards, and syntax compilation of both complete runtime units.
 Native checkpoint/restart reception remains a separate rebuilt execution owned by ROOT.
+
+
+Uniform installed Program clock ownership contract @1
+---------------------------------------------------
+
+The Uniform future auxiliary reserve is owned by the exact installed Program DSO,
+including cold providers that acquire their first accepted point later. It uses the
+longest installed logical clock identity and the sealed registry's wire framing;
+pending Input publications are not accepted invalidations. Raw registry publication
+with an unrelated longer clock remains outside this Program-owned certificate.
+Accepted checkpoint restore prepares the Input cache from the accepted image and
+publishes it with the existing full transaction. Full pending-attempt rollback
+continues to retain its own pre-attempt state.
+
+A Uniform Program DSO must export
+`const char* pops_program_checkpoint_clock_manifest_contract()` returning exactly
+`pops.program.owned-clock-manifest@1`, together with the mandatory logical-clock
+count, indexed identity and primary identity accessors. The count is positive and
+bounded; all identities are nonempty and unique and the primary belongs to the
+owned set. The exact schema discriminator is checked before invoking any clock
+callback, before invoking the install entry and before publishing installation
+state. Missing, null, empty, future-version and near-match discriminators fail
+closed and require artifact regeneration. The reader records typed version1 in
+`ProgramOwnedClockManifest`; version, owner, primary and clock set enter exact
+installation authentication and the existing install snapshot/rollback owner.
+Clock identities authorize provenance and never select numerical formulas.
+
+This is a deliberate mandatory Uniform Program metadata contract change. Old
+Uniform Program DSOs lacking the discriminator are rejected even if their table
+exports happen to exist. The matching SDK header signature changes and generated
+Program cache inputs change, so regenerate Uniform DSOs against the rebuilt
+matching runtime. The Native ABI number, Uniform checkpoint envelope and auxiliary
+wire versions are unchanged by this metadata supplement; no old Native receipt
+qualifies the modified headers. AMR keeps its existing temporal metadata contract
+and does not consume this Uniform-only export. Handwritten Uniform fixtures must
+provide the same contract as generated DSOs; intentionally wrong-ABI fixtures
+continue to fail at their earlier ABI fence.
+
+Durable tests reside in `test_exact_aux_registry_nd.cpp` (cold reserve, long owned
+clocks, accepted cache restore, invalid manifest/overflow and existing install
+rollback), `test_program_abi_symbols.cpp` (complete export surface and eight real
+isolated DSO negative contracts), and
+`test_uniform_clock_manifest_contract.py` (actual pure emitter and installed-owner
+capacity helpers). Source-only host checks do not qualify installed Native,
+System execution, MPI, GPU or scientific checkpoint/restart behavior.

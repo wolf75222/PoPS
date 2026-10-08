@@ -473,6 +473,7 @@
   "tests/python/unit/codegen/test_resolved_operations.py": 5.0,
   "tests/python/unit/codegen/test_scharfetter_gummel_program.py": 10,
   "tests/python/unit/codegen/test_source_state_storage.py": 5.0,
+  "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py": 1.0,
   "tests/python/unit/codegen/test_uniform_field_roles.py": 25.0,
   "tests/python/unit/fields/test_case_field_storage.py": 5.0,
   "tests/python/unit/fields/test_field_observation_history.py": 5.0,
@@ -582,7 +583,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 814,
+    "estimated_count": 815,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -709,6 +710,7 @@
       "tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py",
       "tests/python/integration/runtime/test_finite_m09_runtime.py",
       "tests/python/integration/runtime/test_generic_physical_maps.py",
+      "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py",
       "tests/python/integration/runtime/test_hyqmom15_relaxation_runtime.py",
       "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py",
       "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py",
@@ -767,6 +769,7 @@
       "tests/python/integration/runtime/test_public_captured_diffusion.py",
       "tests/python/integration/runtime/test_public_completed_original_interaction.py",
       "tests/python/integration/runtime/test_public_composite_field.py",
+      "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py",
       "tests/python/integration/runtime/test_public_diffusion_field_predictor.py",
       "tests/python/integration/runtime/test_public_diffusion_matrix.py",
       "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py",
@@ -1039,6 +1042,7 @@
       "tests/python/unit/codegen/test_tensor_transport_composition.py",
       "tests/python/unit/codegen/test_transport_quadrature.py",
       "tests/python/unit/codegen/test_typed_phase_records.py",
+      "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py",
       "tests/python/unit/codegen/test_uniform_field_roles.py",
       "tests/python/unit/codegen/test_user_joint_reconstruction.py",
       "tests/python/unit/codegen/test_user_joint_reconstruction_storage.py",
@@ -1395,9 +1399,7 @@
       "tests/python/unit/time/test_time_std_rk.py",
       "tests/python/unit/time/test_time_where.py",
       "tests/python/unit/time/test_typed_provenance_guards.py",
-      "tests/python/unit/time/test_typed_schedule.py",
-      "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py",
-      "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py"
+      "tests/python/unit/time/test_typed_schedule.py"
     ],
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact. Migration additions use explicit 5/120/300/600 s estimates recorded in migration_estimates. Local source/native qualification timings are not substituted for CI per-file measurements.",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
@@ -1497,7 +1499,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 879,
+    "total_files": 880,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -4753,6 +4755,14 @@
         "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py"
       ],
       "basis": "Conservative600-second scheduling estimate for three true-installed two-owner Field publication/Euler variants; not measured Native or CI timing. Existing costs/caps preserved."
+    },
+    "ci_20261008_owned_clock_manifest": {
+      "files": [
+        "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py"
+      ],
+      "estimated_seconds": 1.0,
+      "basis": "Unmeasured one-second scheduling estimate for 15 isolated pure emitter/capacity contract tests; no Native computation. Local Source timings are not a CI measurement. Existing file weights and shard caps preserved.",
+      "source_sha256": "af1d32346a212fa8a2e3694af274edae18a441f37aaeb8bc8bdce0cf189a928f"
     }
   },
   "tests/python/integration/amr/test_accepted_halo_extent_binding.py": 600,

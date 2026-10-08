@@ -160,6 +160,11 @@ std::string loader_source(bool include_block_identities = true, bool install_ste
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "forward_euler_stub"; }
+extern "C" const char* pops_program_checkpoint_clock_manifest_contract() { return "pops.program.owned-clock-manifest@1"; }
+extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
+extern "C" const char* pops_program_checkpoint_logical_clock_identity(int i) { return i == 0 ? "clock.macro" : ""; }
+extern "C" const char* pops_program_checkpoint_primary_clock_identity() { return "clock.macro"; }
+extern "C" const char* pops_program_hash() { return "test.loader.owned-clock@1"; }
 extern "C" int pops_program_operator_authority_count() { return 0; }
 extern "C" std::uint64_t pops_program_operator_authority_word(int, int) { return 0; }
 extern "C" int pops_module_operator_count() { return 1; }

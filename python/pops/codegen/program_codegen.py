@@ -339,7 +339,8 @@ def _emit_cpp_program_impl(
         field_boundaries=field_boundaries,
         model_helpers=(_emit_program_model_helpers(program, authority)
                        + provider_plans.source_kernel_helpers.cpp()),
-        block_names=_emit_block_names(program, value_authority.block_names),
+        block_names=(_emit_block_names(program, value_authority.block_names)
+                     + (_emit_uniform_clock_manifest(program) if target == "system" else "")),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         system_install=_emit_system_install(
             target, prelude, body, provider_plans.cpp_install(target)),
@@ -355,6 +356,27 @@ def _emit_cpp_program_impl(
             post_synchronization,
         ),
     )
+
+
+def _emit_uniform_clock_manifest(program: Any) -> str:
+    """Export frozen clock ownership data; no clock identity selects an arithmetic recipe."""
+    temporal = program.temporal_manifest()
+    clocks = tuple(str(row["id"]) for row in temporal["clocks"])
+    primary = str(temporal["primary_clock"])
+    if not clocks or len(clocks) > 2**31 - 1 or len(set(clocks)) != len(clocks):
+        raise ValueError("Uniform Program clock ownership table is invalid")
+    if any(not clock for clock in clocks) or primary not in clocks:
+        raise ValueError("Uniform Program primary clock is outside its ownership table")
+    cases = "".join("    case %d: return %s;\n" % (index, cpp_string_literal(clock))
+                    for index, clock in enumerate(clocks))
+    return (
+        'extern "C" const char* pops_program_checkpoint_clock_manifest_contract() {\n'
+        '  return "pops.program.owned-clock-manifest@1";\n}\n'
+        'extern "C" int pops_program_checkpoint_logical_clock_count() { return %d; }\n'
+        'extern "C" const char* pops_program_checkpoint_logical_clock_identity(int i) {\n'
+        '  switch (i) {\n%s    default: return "";\n  }\n}\n'
+        'extern "C" const char* pops_program_checkpoint_primary_clock_identity() { return %s; }\n'
+    ) % (len(clocks), cases, cpp_string_literal(primary))
 
 
 def _emit_history_replay_authorities(program: Any) -> str:

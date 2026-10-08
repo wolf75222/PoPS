@@ -781,7 +781,9 @@ void bind_system_checkpoint(py::class_<System>& cls) {
           },
           "Capture exact auxiliary accepted metadata and field payloads in one sealed image.")
       .def("_checkpoint_auxiliary_capacity", &System::checkpoint_auxiliary_capacity,
-           "Return the sealed Uniform auxiliary metadata/scalar checkpoint capacity.")
+           "Return the current Uniform accepted auxiliary metadata/scalar size observation.")
+      .def("_checkpoint_program_auxiliary_capacity", &System::checkpoint_program_auxiliary_capacity,
+           "Return the installed Program owned-clock future auxiliary metadata/scalar reserve.")
       .def(
           "restore_auxiliary_checkpoint_accepted_state",
           [](System& s, py::object payload) {

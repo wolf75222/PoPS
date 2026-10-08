@@ -1,6 +1,7 @@
 """Installed two-owner elliptic publication and nonlinear-coefficient diffusion."""
 
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -24,6 +25,30 @@ pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def checkpoint_payload_receipt(path):
+    """Pin every actual archive member, including full nested layout payloads."""
+    path = Path(path).resolve()
+    raw = path.read_bytes()
+
+    def describe(blob):
+        members = {}
+        with np.load(io.BytesIO(blob), allow_pickle=False) as archive:
+            for name in archive.files:
+                value = np.asarray(archive[name])
+                data = value.tobytes(order="C")
+                row = dict(dtype=value.dtype.str, shape=list(value.shape),
+                           nbytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+                if name.startswith("layout_checkpoint_"):
+                    assert value.dtype == np.dtype("uint8") and value.ndim == 1
+                    row["archive_members"] = describe(data)
+                members[name] = row
+        assert members
+        return members
+
+    return dict(path=str(path), size_bytes=len(raw),
+                sha256=hashlib.sha256(raw).hexdigest(), members=describe(raw))
 
 
 @pytest.mark.parametrize(
@@ -229,6 +254,25 @@ def test_public_guarded_field_coefficient_diffusion(
                 directory / ("actual-" + name + ".npy"), array, allow_pickle=False
             ),
         )
+    # Preserve the actual report before a genuine public checkpoint may fail.
+    collective_call(
+        world,
+        lambda: (directory / "accepted-run-report.json").write_text(
+            evidence_dumps(dict(report=report.to_data(), evidence_encoding=ENCODING))
+        ),
+    )
+    checkpoint = collective_call(
+        world, lambda: runtime.checkpoint(shared / "accepted-checkpoint")
+    )
+    checkpoint_evidence = collective_call(
+        world, lambda: checkpoint_payload_receipt(checkpoint)
+    )
+    collective_call(
+        world,
+        lambda: (directory / "accepted-checkpoint-receipt.json").write_text(
+            evidence_dumps(checkpoint_evidence)
+        ),
+    )
     errors = {}
     with collective_check(world):
         assert (
@@ -248,6 +292,7 @@ def test_public_guarded_field_coefficient_diffusion(
         artifact=artifact.artifact_identity.token,
         comparisons=errors,
         report=report.to_data(),
+        checkpoint=checkpoint_evidence,
         evidence_encoding=ENCODING,
         limits=[
             "one-level qualification only; no refinement/coarse-fine extrapolation",

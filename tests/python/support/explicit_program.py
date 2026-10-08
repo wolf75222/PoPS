@@ -209,6 +209,21 @@ def _make_test_field_solve_explicitly_coarse(body: str) -> str:
     )
 
 
+def _uniform_clock_exports() -> str:
+    """Match the exact clock configured by the handwritten Uniform installer."""
+    return '''extern "C" const char* pops_program_checkpoint_clock_manifest_contract() {
+  return "pops.program.owned-clock-manifest@1";
+}
+extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
+extern "C" const char* pops_program_checkpoint_logical_clock_identity(int clock) {
+  return clock == 0 ? "pops.test.clock.macro" : "";
+}
+extern "C" const char* pops_program_checkpoint_primary_clock_identity() {
+  return "pops.test.clock.macro";
+}
+'''
+
+
 def _source(
     *,
     target: str,
@@ -262,7 +277,7 @@ extern "C" pops::Real %s(%s*, pops::Real) {
         _empty_module_metadata_exports(),
         _amr_budget_exports(len(block_names), coupled_sources, identity)
         if target == "amr_system"
-        else "",
+        else _uniform_clock_exports(),
         "pops_program_dt_bound_amr" if target == "amr_system" else "pops_program_dt_bound",
         (
             "pops::AmrSystem<pops::kNativeDimension>"

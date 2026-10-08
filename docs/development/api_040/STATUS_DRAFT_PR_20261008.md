@@ -3,6 +3,26 @@
 Snapshot du 8 octobre 2026, actualisé à 19:52 UTC pour la
 [PR brouillon 681](https://github.com/wolf75222/PoPS/pull/681).
 **Mission encore ouverte ; cette PR est un brouillon.**
+Le lot suivant intègre la capacité Aux Uniform et le contrat explicite
+`pops.program.owned-clock-manifest@1`, issu du DSO réellement installé. Les
+images acceptées et le travail Input encore en attente conservent des propriétés
+distinctes ; le restore prépare aussi le cache Input accepté avant publication.
+La contre-revue a trouvé et fait corriger le versionnement obligatoire et trois
+fixtures DSO supplémentaires. Le lot intégré passe 86 contrôles Source et les
+tests Host de registre/capacité et de huit DSOs invalides. Un premier contrôle
+d'inventaire a échoué sur le compteur de fichiers du catalogue, puis passe après
+correction des seules métadonnées ; ses preuves sont conservées.
+Les [reçus de ce lot](evidence/owned_clock_capacity_source_20261008/manifest.json)
+identifient 384 headers et SDK
+`e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f`.
+Native ABI13, CP9/AMR12 et POPSAUX3 restent inchangés ; les anciens DSOs Uniform
+sans discriminateur sont refusés et doivent être régénérés. L'ABI complète inclut
+la signature exacte des headers. Le test public existant à trois instances
+enregistre désormais le propriétaire installé, la réserve à froid et les tailles
+réelles des checkpoints. Le test à deux modèles capture aussi un checkpoint
+public sur un chemin commun aux rangs. Ces exécutions natives attendent le build
+officiel ; aucune preuve de l'ancien cœur n'est reportée sur ce nouveau lot.
+
 Actualisation à 21:15 UTC : sept fichiers de production sont intégrés pour
 l'autorité détachée des publications Field, les alias de garde réussie,
 l'identité canonique des historiques, la copie Kokkos portable et le callback

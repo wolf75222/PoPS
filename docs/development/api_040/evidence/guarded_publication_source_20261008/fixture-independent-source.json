@@ -1,0 +1,84 @@
+{
+  "status": "BOUNDED_SOURCE_REVIEW_COMPLETE_NATIVE_RECEPTION_PENDING",
+  "author_role": "non-author reviewer; did not author historical guarded diffusion fixture",
+  "checkout": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+  "branch": "codex/api040-integrated-main-20261004",
+  "head": "6a3cfc5d1b3ad2f196a4f049d3d16c79f0880f29",
+  "source_dirty": true,
+  "finding": "No additional blocking Source defect identified in the reviewed guarded publication and one-step physical fixture path.",
+  "scope": {
+    "dimension": 2,
+    "levels": 1,
+    "cells": [
+      16,
+      12
+    ],
+    "owners": [
+      "donor",
+      "receiver"
+    ],
+    "steps": 1,
+    "method": "forward Euler",
+    "dt": [
+      1,
+      10000
+    ]
+  },
+  "source_authentication": {
+    "guard_alias": "successful_guard_input validates exact terminal FailRun/RejectAttempt action, boolean condition, original type/owner/clock/point/storage; only successful path aliases actual input; emitted failure conditions retained",
+    "publication": "publication_target_space checks exact ProgramModelGraph membership, destination block model owner equals declaration owner, authenticates source module declaration; proof and emitter use same helper",
+    "history": "canonical_handle removes authoring-only identity from storage witness emitted to store_global_field_history; actual guarded CPP has no #authoring=",
+    "auxiliary_registry": "accepted_dependent_provider_identities retains complete dependency traversal, then drops never-accepted consumers only; matches stale-image persistence intent"
+  },
+  "mathematical_derivation": {
+    "donor": [
+      3,
+      5
+    ],
+    "phi_baseline": [
+      1,
+      5
+    ],
+    "phi_changed": [
+      3,
+      25
+    ],
+    "coefficient_baseline": [
+      57,
+      175
+    ],
+    "coefficient_changed": [
+      1974,
+      6875
+    ],
+    "negative_laplacian_eigenvalues": "4 sin(pi/16)^2/(2/16)^2 and 4 sin(pi/12)^2/(3/12)^2",
+    "endpoint": "1 + (1-dt*k*lambda_x) mode_x + (1-dt*k*lambda_y) mode_y; modes integrated analytically over each cell",
+    "original_tolerances": "state=4096*float64_eps*1.2; phi=192*.6/reaction*1e-12+1e-14+state; preserved exactly",
+    "tolerance_judgment": "conservative modest float64 envelope for this constant RHS shifted SPD solve and one-step stencil; does not certify arbitrary ill-conditioned problems"
+  },
+  "execution_boundary": "Source generated CPP retains both real guards, native staged publication, native PreparedDiffusion apply and global Field history. This proves lowering structure, not actual execution; Native receipt required to claim executed C++ path. Python array math belongs only to initial inputs/oracle/reception.",
+  "fixture_identity": "checks installed site-packages origin, optional frozen Source/Native hashes, verify_installed_native origin/ABI and every tracked shipped Python-source suffix plus full packaging header manifest against current checkout; dirty Source requires separately frozen exact files, not HEAD alone",
+  "evidence_patch": "checkpoint-capture.patch uses true public collective checkpoint(shared/accepted-checkpoint), returns full actual archive bytes and every nested layout payload; lossless original Report saved before checkpoint failure; runtime failure is not hidden or replaced",
+  "checks": "source-only-checks.json; git apply --check PASS; AST parses; Native not imported",
+  "source_cpp": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-guarded-publication-CPP-source-retry2-20261008/tmp/test_changed_guarded_publicati0/original.cpp",
+    "sha256": "6acf4765d469edfbefb3fb2828eecaa65ee18dbbcd382c7fbabadd8912ca96c9",
+    "checks": "native guard/publication/diffusion/history lowering structure asserted"
+  },
+  "reviewed_source_sha256": {
+    "python/pops/codegen/program_accepted_ssp.py": "bd799da58c0e547318b318ec0f4e2ec8a7c95cfc70235c68b9f6efe5f8585194",
+    "python/pops/codegen/program_field_publication.py": "cd24092df4840ca171f7d497d894cd4eb2470e5056b650c49d0ecb0ab1f058bf",
+    "python/pops/codegen/program_emit_field_publication.py": "69aaef32943ff91d912f7de2aa8c6094bba55a0470cc3037fa47da151e31bbff",
+    "python/pops/codegen/program_emit_ops.py": "091187d1844c52601423a88d7c414f663e113cda27b553ca9cecfee23e20676c",
+    "src/runtime/system/system_fields.cpp": "45a5b7a96ea60a4ee5438c6643e4d6bfa0c67ac002c48eaaa184a7c5f4f90efc",
+    "tests/python/support/guarded_field_diffusion_case.py": "63725bd7a6a528a65b30ae5fb3cf497f3cc81a4817623a913601805461e4dc6e",
+    "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py": "e9af0d5d68f0f53d9f90d4f0009f8ad39822f82bca2f6c9b8a8ed13eb45766cb"
+  },
+  "limits": [
+    "new Native not built/installed by reviewer",
+    "no official actual 192-value arrays received yet",
+    "no real checkpoint capture or restart qualified yet",
+    "no MPI execution, GPU, refined AMR or scientific long-time qualification",
+    "Source test XML belongs to root execution; no reinterpretation as Native pass"
+  ]
+}

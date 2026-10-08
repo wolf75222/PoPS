@@ -901,13 +901,23 @@ def _common_budget(
     return candidate
 
 
+
+def _installed_program_auxiliary_capacity(owner: Any) -> tuple[int, int]:
+    """Read the installed DSO owner's future reserve for either Uniform bind route."""
+    capacity = owner._s._checkpoint_program_auxiliary_capacity()
+    if not isinstance(capacity, tuple) or len(capacity) != 2:
+        raise TypeError("Uniform native auxiliary checkpoint capacity has an invalid schema")
+    return (
+        _capacity(capacity[0], where="auxiliary metadata capacity"),
+        _capacity(capacity[1], where="auxiliary component capacity"),
+    )
+
+
 def install_uniform_checkpoint_resource_budget(owner: Any, install_plan: Any) -> None:
     from pops.runtime._checkpoint_spatial import require_checkpoint_spatial_contract
 
     spatial = require_checkpoint_spatial_contract(owner)
-    capacity = owner._s._checkpoint_auxiliary_capacity()
-    if not isinstance(capacity, tuple) or len(capacity) != 2:
-        raise TypeError("Uniform native auxiliary checkpoint capacity has an invalid schema")
+    capacity = _installed_program_auxiliary_capacity(owner)
     program, block_nvars = _program_for_install(install_plan)
     artifact = install_plan.artifact
     candidate = _common_budget(
@@ -1061,7 +1071,7 @@ def install_layout_checkpoint_resource_budget(
     if not block_names or len(block_names) != len(set(block_names)):
         raise ValueError("layout checkpoint budget requires unique child block names")
     spatial = require_checkpoint_spatial_contract(owner)
-    capacity = owner._s._checkpoint_auxiliary_capacity()
+    capacity = _installed_program_auxiliary_capacity(owner)
     block_nvars = {
         name: _capacity(
             int(owner._s.n_vars(name)), where="layout block component count", positive=True

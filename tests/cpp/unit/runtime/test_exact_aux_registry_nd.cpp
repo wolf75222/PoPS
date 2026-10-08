@@ -1228,3 +1228,190 @@ TEST(ExactAuxiliaryRegistryNd, RejectedInvalidationDrainDoesNotPublishOrConsumeR
   verifies_rejected_drain_preserves_accepted_provenance_and_retry<3>();
 }
 } // namespace
+
+#include <pops/runtime/system/auxiliary_checkpoint_capacity.hpp>
+#include <pops/runtime/program/program_runtime_state.hpp>
+#include <bit>
+namespace {
+template <int Dim>
+ExactAuxiliaryRegistry<Dim> cold_capacity_registry() {
+  auto calls = std::make_shared<std::vector<std::string>>();
+  auto seed = output<Dim>("capacity/seed-owner", "input", "value", 0);
+  auto dormant = output<Dim>("capacity/dormant-owner", "derived", "value", 1);
+  ExactAuxiliaryRegistry<Dim> registry;
+  registry.add(input<Dim>("seed", seed));
+  registry.add(derived<Dim>("dormant", dormant, {dependency(seed)}, calls));
+  registry.add_consumer_plan({"read-dormant", {{dependency(dormant), 0}}});
+  registry.seal();
+  return registry;
+}
+template <int Dim>
+void capacity_counterexamples() {
+  using namespace pops::runtime::system;
+  auto registry = cold_capacity_registry<Dim>();
+  const auto clean = capture_auxiliary_checkpoint_state(registry);
+  EXPECT_THROW(require_no_pending_auxiliary_input_checkpoint(registry, {"seed"}), std::logic_error);
+  EXPECT_THROW(require_no_pending_auxiliary_input_checkpoint(registry, {"foreign"}),
+               std::invalid_argument);
+  EXPECT_NO_THROW(require_no_pending_auxiliary_input_checkpoint(registry, {}));
+  EXPECT_TRUE(current_accepted_auxiliary_checkpoint_observation(registry, {"seed", "dormant"})
+                  .invalidated_providers.empty());
+  EXPECT_THROW((void)current_accepted_auxiliary_checkpoint_observation(registry, {"foreign"}),
+               std::invalid_argument);
+  EXPECT_THROW((void)current_accepted_auxiliary_checkpoint_observation(registry, {"seed", "seed"}),
+               std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"seed"}), std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"dormant"}),
+               std::invalid_argument);
+  EXPECT_FALSE(registry.last_accepted_point("seed"));
+  EXPECT_FALSE(registry.last_accepted_point("dormant"));
+  auto restored = registry;
+  restore_auxiliary_checkpoint_state(clean, restored);
+  auto retry = restored.begin_publication(point("p", 0, AuxiliaryEvaluationEvent::before_residual),
+                                          {"seed"}, {"read-dormant"});
+  EXPECT_TRUE(retry.requires_staging("seed"));
+  EXPECT_TRUE(retry.requires_staging("dormant"));
+  retry.reject();
+  EXPECT_FALSE(restored.last_accepted_point("seed"));
+  EXPECT_FALSE(restored.last_accepted_point("dormant"));
+}
+TEST(ExactAuxiliaryCapacityNd, ColdPendingIdentitiesAreNotAcceptedInvalidations) {
+  capacity_counterexamples<1>();
+  capacity_counterexamples<2>();
+  capacity_counterexamples<3>();
+}
+template <int Dim>
+void future_owned_clock_bound() {
+  using namespace pops::runtime::system;
+  auto registry = cold_capacity_registry<Dim>();
+  const std::string long_clock(4096, 'q');
+  pops::runtime::program::ProgramOwnedClockManifest manifest{
+      "installed-owner", "p", {"p", long_clock}};
+  const auto initial_size =
+      serialize_auxiliary_checkpoint_state(capture_auxiliary_checkpoint_state(registry)).size();
+  const auto bound = program_auxiliary_metadata_capacity(registry, manifest);
+  EXPECT_GT(bound, initial_size);
+  auto initialization = registry.begin_external_publication(
+      point("p", 0, AuxiliaryEvaluationEvent::initialization), {"seed"});
+  initialization.stage_external("seed");
+  initialization.launch_ready_native();
+  initialization.accept();
+  EXPECT_FALSE(registry.last_accepted_point("dormant"));
+  const auto dormant_image = capture_auxiliary_checkpoint_state(registry);
+  auto restored = registry;
+  restore_auxiliary_checkpoint_state(dormant_image, restored);
+  auto publication = restored.begin_publication(
+      point(long_clock, 1, AuxiliaryEvaluationEvent::before_residual), {}, {"read-dormant"});
+  EXPECT_TRUE(publication.requires_staging("dormant"));
+  publication.launch_ready_native();
+  publication.accept();
+  ASSERT_TRUE(restored.last_accepted_point("dormant"));
+  EXPECT_EQ(restored.last_accepted_point("dormant")->clock, long_clock);
+  const auto image = capture_auxiliary_checkpoint_state(restored, {"dormant"});
+  EXPECT_EQ(current_accepted_auxiliary_checkpoint_observation(restored, {"seed", "dormant"}),
+            image);
+  EXPECT_LE(serialize_auxiliary_checkpoint_state(image).size(), bound);
+  EXPECT_EQ(program_auxiliary_metadata_capacity(restored, manifest), bound);
+  // Raw System/registry clocks remain unbounded. An unrelated longer raw clock is valid,
+  // but invalidates any claim that the original Program-owned capacity bound covers it.
+  const std::string raw_clock(bound + 1, 'r');
+  auto raw = restored.begin_publication(
+      point(raw_clock, 2, AuxiliaryEvaluationEvent::before_residual), {}, {"read-dormant"});
+  raw.launch_ready_native();
+  raw.accept();
+  const auto raw_image = capture_auxiliary_checkpoint_state(restored);
+  EXPECT_GT(serialize_auxiliary_checkpoint_state(raw_image).size(), bound);
+  EXPECT_GT(program_auxiliary_metadata_capacity(restored, manifest), bound);
+}
+TEST(ExactAuxiliaryCapacityNd, ActualLongClockPublicationAndInvalidationFitOwnedReserve) {
+  future_owned_clock_bound<1>();
+  future_owned_clock_bound<2>();
+  future_owned_clock_bound<3>();
+}
+TEST(ExactAuxiliaryCapacityNd, IncompleteManifestAndOverflowFailClosed) {
+  pops::runtime::program::ProgramOwnedClockManifest incomplete{"", "p", {"p"}};
+  EXPECT_THROW(incomplete.validate(), std::invalid_argument);
+  auto unsupported = incomplete;
+  unsupported.contract_version =
+      static_cast<pops::runtime::program::ProgramOwnedClockManifestVersion>(2);
+  EXPECT_THROW(unsupported.validate(), std::invalid_argument);
+  pops::runtime::program::ProgramOwnedClockManifest foreign{"owner", "p", {"q"}};
+  EXPECT_THROW(foreign.validate(), std::invalid_argument);
+  pops::runtime::program::ProgramOwnedClockManifest duplicate{"owner", "p", {"p", "p"}};
+  EXPECT_THROW(duplicate.validate(), std::invalid_argument);
+  EXPECT_THROW(pops::runtime::system::checked_auxiliary_capacity_add(
+                   std::numeric_limits<std::size_t>::max(), 1),
+               std::overflow_error);
+}
+}  // namespace
+
+namespace {
+template <int Dim>
+void accepted_input_cache_restore() {
+  using namespace pops::runtime::system;
+  auto registry = cold_capacity_registry<Dim>();
+  auto publication = registry.begin_external_publication(
+      point("p", 0, AuxiliaryEvaluationEvent::initialization), {"seed"});
+  publication.stage_external("seed");
+  publication.accept();
+  auto image = capture_auxiliary_checkpoint_state(registry);
+  for (auto& group : image.groups) {
+    group.payload.resize(group.component_count * 2);
+    for (std::size_t i = 0; i < group.payload.size(); ++i)
+      group.payload[i] = i % 2 ? -0.0 : 7.0;
+  }
+  auto cache = restored_accepted_auxiliary_inputs(image, 2);
+  ASSERT_EQ(cache.size(), 1U);
+  const auto input_component =
+      std::find_if(image.components.begin(), image.components.end(), [](const auto& component) {
+        return component.provider_kind == AuxiliaryProviderKind::input;
+      });
+  ASSERT_NE(input_component, image.components.end());
+  const auto expected = input_component->key.exact_key();
+  ASSERT_EQ(cache.at(expected).size(), 2U);
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(cache.at(expected)[0]), std::bit_cast<std::uint64_t>(7.0));
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(cache.at(expected)[1]),
+            std::bit_cast<std::uint64_t>(-0.0));
+  // Accepted-only restore replaces a newer staged cache rather than leaking it into the restart.
+  std::map<std::string, std::vector<double>> staged{{expected, {99.0, 98.0}}};
+  staged.swap(cache);
+  EXPECT_EQ(staged.at(expected)[0], 7.0);
+  EXPECT_EQ(cache.at(expected)[0], 99.0);  // retired owner remains intact until commit completes
+  auto cold = capture_auxiliary_checkpoint_state(cold_capacity_registry<Dim>());
+  for (auto& group : cold.groups)
+    group.payload.resize(group.component_count * 2, 0.0);
+  EXPECT_TRUE(restored_accepted_auxiliary_inputs(cold, 2).empty());
+  EXPECT_FALSE(cold.providers[0].accepted_point);
+  EXPECT_FALSE(cold.providers[1].accepted_point);
+  image.groups[0].payload.pop_back();
+  EXPECT_THROW((void)restored_accepted_auxiliary_inputs(image, 2), std::invalid_argument);
+}
+TEST(ExactAuxiliaryCapacityNd, AcceptedRestoreCacheOwnsBytesAndLeavesColdProvidersUninitialized) {
+  accepted_input_cache_restore<1>();
+  accepted_input_cache_restore<2>();
+  accepted_input_cache_restore<3>();
+}
+template <int Dim>
+void manifest_install_rollback() {
+  pops::runtime::program::ProgramRuntimeState<Dim> state;
+  const pops::runtime::program::ProgramOwnedClockManifest original{
+      "owned-install", "main", {"main", std::string(4096, 's')}, 7};
+  state.step_install_generation_ = 7;
+  state.checkpoint_metadata_.uniform_auxiliary_clocks = original;
+  auto snapshot = state.capture_artifact_step_install();
+  state.install_unverified_step([](double) {});
+  EXPECT_TRUE(state.checkpoint_metadata_.uniform_auxiliary_clocks.owner_identity.empty());
+  state.rollback_artifact_step_install(std::move(snapshot));
+  EXPECT_EQ(state.checkpoint_metadata_.uniform_auxiliary_clocks, original);
+  EXPECT_EQ(state.step_install_generation_, 7U);
+  EXPECT_NO_THROW(
+      state.checkpoint_metadata_.uniform_auxiliary_clocks.require_owned(std::string(4096, 's')));
+  EXPECT_THROW(state.checkpoint_metadata_.uniform_auxiliary_clocks.require_owned("foreign"),
+               std::invalid_argument);
+}
+TEST(ExactAuxiliaryCapacityNd, InstalledClockManifestSharesExistingFullInstallRollback) {
+  manifest_install_rollback<1>();
+  manifest_install_rollback<2>();
+  manifest_install_rollback<3>();
+}
+}  // namespace

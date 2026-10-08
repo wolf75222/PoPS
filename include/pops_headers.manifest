@@ -378,6 +378,7 @@ sdk-support pops/runtime/recovery/uniform_recovery_consumer.hpp
 api pops/runtime/system.hpp
 sdk-support pops/runtime/system/exact_named_field.hpp
 sdk-support pops/runtime/system/auxiliary_checkpoint.hpp
+sdk-support pops/runtime/system/auxiliary_checkpoint_capacity.hpp
 sdk-support pops/runtime/system/derived_aux_provider.hpp
 sdk-root pops/runtime/system/native_package_capability.hpp
 sdk-support pops/runtime/system/auxiliary_ghost_fill.hpp

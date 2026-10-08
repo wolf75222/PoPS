@@ -537,10 +537,16 @@ class System {
   /// owner-qualified ComponentKeys, shapes, and accepted provider generations before publication.
   [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
   capture_auxiliary_checkpoint_accepted_state() const;
-  /// Rank-local checkpoint capacity derived from the sealed auxiliary registry. The pair is
-  /// ``(payload-free POPSAUX2/3 bytes, scalar values per full-domain level)``.
+  /// Current accepted-image size observation for raw System callers. Pending task inputs are
+  /// excluded. Arbitrary raw logical clocks make this a dynamic observation, not a future bound.
+  /// The pair is ``(payload-free POPSAUX2/3 bytes, scalar values per full-domain level)``.
   [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t> checkpoint_auxiliary_capacity()
       const;
+  /// Future accepted-image reserve owned by the authenticated installed Program clock manifest.
+  /// Raw publication outside that manifest is not covered by this certificate.
+  [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t> checkpoint_program_auxiliary_capacity() const;
+  /// Restore supersedes transient staged input work with the checkpoint's accepted input cache;
+  /// attempt rollback separately snapshots the complete transient journal and dirty set.
   /// Restore the accepted provider provenance only after the checkpoint backend has staged a
   /// compatible rank-local group payload privately.  The collective preflight and rollback image
   /// ensure a rejected checkpoint cannot expose a partial auxiliary generation.
