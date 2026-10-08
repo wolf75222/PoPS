@@ -1,4 +1,133 @@
 {
+  "current_scoped_summary_20261008": {
+    "date": "2026-10-08",
+    "observed_source_commit": "637c3220da44102ff7dbe3468c99086d141f6981",
+    "scope": "Bounded Source/CPP reception:86 T/C/M/W obligations plus8 principles=94 total; historical mapping,28 models,12 witnesses and prior scoped entries unchanged. Mission remains open.",
+    "identity": {
+      "core_commit": "f32c5195f72af8dbca8e2b97c5cf5cade6f08606",
+      "core_cpp_sha256": "f3e4727bec9da03d09af3307c74e62973ffccd315deece0400795a3ace2bbf4e",
+      "current_test_sha256": "3e98d2cdaf0b6e6dc5f1471929f9f004e798c0651745cc68c366639e264f105f",
+      "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+      "NativeABI": 13,
+      "packageABI": 8,
+      "FieldInputReadContract": 2,
+      "callable_header_commit": "637c3220da44102ff7dbe3468c99086d141f6981",
+      "callable_header_sha256": "ec50b10fdf582f51515fce07fb622dde32a13edba0009102ae29f8c0d5817231",
+      "signed_header_rows": 383
+    },
+    "CPP16": "e1867b5a/test38ef/Coref3/bin c11a8bb6: 16 cases world1 plus16 perrank world2 =48 total rank executions;0failure/error/skip. Root351649 and independent7634 close this bounded reception;102 artifacts rehashed bytes/modes, mtimes not requalified. Repeated public restore/publication and malformed rank0 checkpoint refusal received; no Registry21 rerun.",
+    "malformed_refusal": "Identity/shape preflight before binding candidate preparation; not an injected carrier-binding preparation failure.",
+    "ownership": "Only three instrumented legacy cases record rank0 Fab1/cells64 and MPI2rank1 Fab0/cells0. AMR-incidence cases emit no ownership census; no AMR empty-rank qualification follows.",
+    "STATE17": "First v2 representativeworld1 PASS1/0error/skip received Rootf45bb and independente055:Source2cb88/CPP3e98/Coref3/SDK967, binarye625, XML0.629s,97manifestentries bytes/modes. Exact in-test source=currentQ=immutablehighQ reference, tag0, low6, Q2Phi and pergloballevelchangedforcing predicates pass; no independent positive arrays/phase telemetry. Original6b609 firstnegative8assertions/99closure unchanged.",
+    "STATE17_boundary": "Actual recorded Phi BoundaryEvaluationPoint is not STATE SSA proof or proof of cadence equality with restored provider point. Empty-consumer refresh fine failure follows coarse candidate preparation, before all-level accepted commit, then real registry-snapshot/swap rollback.",
+    "installed_python": "NativeD154/package2793 retained; old9db/600 PDE/retry/Native8 receipts remain historical and do not qualify Coref3. Current wholemanifest source/installed synchronization not received.",
+    "CUDA": "Portable callable header contract1 actually integrated637c, headerec50/signatureaf8 over383 signed Source headers. Source/Host probe and independentf0d3/Root3bfc only: no af8 compile/import/Native/DSO/scientific/NVCC/GPU qualification yet. Old736186 FAILED NVCC remains historical and unchanged.",
+    "remaining": "af8 actual Native/DSO rebuild/install/import/doctor and scoped scientific nonregression; binding-prepare failure, AMR emptyrank/ownership, enclosingSnapshot, GPU/3D/otherprecision/inter-node/convergence/cost/CI and mission remain separately open.",
+    "STATE17_source_critique": "produce_stage(...,1,2) scales activelevel only; real Field request explicitly uses accepted State on other levels. Sparse composite RHS is mixed-level, so constantPhi6/Q12 is not implied. Diagnostic phase labels and actual issued RHS/Phi/Q/source observations are required before choosing a new strict oracle; no failure phase assigned from chronology.",
+    "STATE17_correction": "Exact v2 CPP3e98/patch3b4bc8 admitted Source0ac081, integrated2cb88. V1 unadmitted869c NaNblocker, frozen/unrun. Corrected strictownedhighQ/finite-to-infinity/Q2Phi/pergloballeveldistinctness/baseline6 oracles received firstworld1; no unsupported constant12 oracle, no STATE SSA/cadence/emptyrank/enclosingAcceptedSnapshot proof inferred.",
+    "STATE17_source_count": "17 GTest cases/224 syntactic assertion occurrences with original16/192 preserved;224 is not runtimeexecutioncount. Actual fullsuite17 cohort=51 rank executions, representativefirst1 separately recorded.",
+    "CPP17": "Suite17 Source2cb/CPP3e98/Coref3/SDK967 independently received0cd and Root939:17world1+17perMPI2rank=51TOTAL,0fail/error/skip,68artifact byte/mode closure. Firstrepresentative1 is separate, receivede055/f45/97closure. No build/link in fullcohort: reuses received freshe625. Historicale186 suite16/48 and negative6b609/99 unchanged. Not SDKaf8 qualification.",
+    "source_activation_delta": "Separate b21d conda-activation Source delta; not evidence of an actual runtime abort or a received run.",
+    "executed_CPP_identity": {
+      "source_head": "2cb88e33d91ba3d0bf016b8d440ddd04881a2cb8",
+      "CPP_sha256": "3e98d2cdaf0b6e6dc5f1471929f9f004e798c0651745cc68c366639e264f105f",
+      "Core_sha256": "f3e4727bec9da03d09af3307c74e62973ffccd315deece0400795a3ace2bbf4e",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "binary_sha256": "e625ba7c6f61902b11995627510bcba696dfd463adce349fe8e24896c1ff9326"
+    },
+    "Core_contract_then_header_contract": "Private carrier-bindings@1/f32 initially preserves SDK967. The separate later public callable@1/header637c changes signature toaf8, while Coref3/test3e98 remain exact. NativeD154 and received e625/fixtureDSOs967 are oldSDK artifacts, not qualified af8 consumers.",
+    "Native_af8_flow": "Version2 official incremental exact-wheel/install/prove/codeSign/verify/doctor flow prepared, NOT launched; awaits Primary final documentation HEAD/GO. No actual abort inferred from separate b21d activation Source delta."
+  },
+  "scoped_reception_evidence_20261008": {
+    "suite16_root": {
+      "path": "/Users/romaindespoulain/dev/tmp/root-restore-bindings-suite16-positive-reception-e1867b5a-20261008.json",
+      "sha256": "351649ce36c00573616309307019e80a35328d0d6d4361a0d35a7b97e6e9fb12"
+    },
+    "suite16_independent": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-restore-bindings-suite16-reception2-20261008/reception.json",
+      "sha256": "7634bdbfc67cb7959aa3d8f8f157f31929a3469ce1b46a919d5c05da6153c864"
+    },
+    "state17_source": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-review2-20261008/review.json",
+      "sha256": "fcc02a7f325184fc417b198b7533464b28b550aca8fd9cfadde01f3c7949210c"
+    },
+    "state17_clarification": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-restore-accepted-state-witness3-20261008/CLARIFICATION.md",
+      "sha256": "1289e57fbab708666f99fec94773f09b9795dd95484ad0b3fcc87d4a95179d68"
+    },
+    "state17_comment_admission": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-witness3-comment-admission-review2-20261008/reception.json",
+      "sha256": "e0ace16596e070be705cf23afde8dac7e6f0c3b4f3602ff74770aea305e8c1b4"
+    },
+    "cuda_source": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-named-RHS-callable-V1-source-review-20261007/review.json",
+      "sha256": "f0d3fa70bb9143b06b3b111888b0d9e3742ecc6dfbf5b55dd981d071e1b6f45e"
+    },
+    "cuda_contract": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cuda-rhs-callable-source-admission-v1-811ee2b1-20261007/contract-addendum-v1.json",
+      "sha256": "4c1feade4c8d90c316b0e289129edcc3509ad5bd36bc9aa741c156955e5b8be7"
+    },
+    "cuda_root_source_admission": {
+      "path": "/Users/romaindespoulain/dev/tmp/root-named-rhs-callable-v1-source-admission-20261008.json",
+      "sha256": "3bfc59ee663246b608a3a9d0de9727e5d791d4bf1569b4321eca3903c5116b39"
+    },
+    "state17_first_negative_root": {
+      "path": "/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-first-world1-negative-6b609b5c-20261008.json",
+      "sha256": "368a312dd3ad117010e77d3790815371ec496ed71dc641fd171b01af1ecf01e5"
+    },
+    "state17_first_negative_producer": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-CPP-world1-6b609b5c-20261008/complete-receipt.json",
+      "sha256": "e98d9bddacae172a53c4803cdaad2630a5359bc54cf3994d475e57df4a6d9a2c"
+    },
+    "state17_first_negative_manifest": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-CPP-world1-6b609b5c-20261008/evidence-manifest.json",
+      "sha256": "edb2c536f634881d60a84fdb28623955672064333791a41daaa2332d28db8ccb"
+    },
+    "state17_first_negative_independent": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-negative-reception2-20261008/reception.json",
+      "sha256": "302b81538429e9507b910c91dc62f9e74256f60f407271036ac4912983cb0e1c"
+    },
+    "state_highref_v1_source_blocker": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v1-review2-20261008/review.json",
+      "sha256": "869c831807d4ceee3b30062726e6305b482a9fccd8bf79a7ac2d80fb4452a88e"
+    },
+    "state_highref_v2_source_admission": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v2-review2-20261008/review.json",
+      "sha256": "0ac0815fc0c91c8f3670a3c32de35cc768d7bbf9269f3233c36593373feeb1f4"
+    },
+    "state_v2_first_world1_root": {
+      "path": "/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-world1-positive-2cb88e33-20261008.json",
+      "sha256": "f45bb0d8924dc502f462b1059f4241ae1cc478ee7ea7f43ad6882a9b47f87313"
+    },
+    "state_v2_first_world1_independent": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-world1-reception2-20261008/reception.json",
+      "sha256": "e05511517ad82c1c49d49bca4238bf01ef34c5eac9c58152ad3020010c593122"
+    },
+    "state_v2_first_world1_producer": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-world1-2cb88e33-20261008/complete-receipt.json",
+      "sha256": "504fc0bc0739e6b692e2dfb872ff835b85e77bb4f3c4c96ce2c83fb72546d383"
+    },
+    "state_v2_first_world1_manifest": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-world1-2cb88e33-20261008/evidence-manifest.json",
+      "sha256": "f61f805c5dad36bebbb46802d22d20e80a1a5916305e50354097dac3e5080517"
+    },
+    "state_v2_suite17_producer": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-suite17-2cb88e33-20261008/complete-receipt.json",
+      "sha256": "32027c6cadbfc3d9eecb2bdf5932fa3eac3b4c8101f4abef8c2bf77fa64df977"
+    },
+    "state_v2_suite17_manifest": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-suite17-2cb88e33-20261008/evidence-manifest.json",
+      "sha256": "a5953781cc5c624ed3f70773909434359532320dd0b04b4af72e8da97d271bbb"
+    },
+    "state_v2_suite17_independent": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-suite17-reception2-20261008/reception.json",
+      "sha256": "0cd3584342eee4f7b5e19b022c49a686efd97b7ef0ff6194a2cb87156503eb9f"
+    },
+    "state_v2_suite17_root": {
+      "path": "/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-suite17-positive-2cb88e33-20261008.json",
+      "sha256": "939ed75c970b60a85b0ac2b4211357c17e85afffd7993216edb684a81a4b5bd8"
+    }
+  },
   "current_scoped_summary_20261007": {
     "date": "2026-10-07",
     "observed_source_commit": "c0f18d50efd454396d6761992a9817adf353f412",
@@ -2606,6 +2735,150 @@
       "corrected_runtime_received": false,
       "scope": "Test-only correction Source integrated, no correctedworld2PDE/case acceptance yet",
       "full94_received": false
+    },
+    "SDK967e_CPP_world2_corrected_native_positive_600": {
+      "source": "6006749593bcbd3ed32b5b1906951786aaced5d0",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-world2-corrected-positive-reception-60067495-20261007.json",
+        "sha256": "a0c2c26ee18c87d9914380aa3a8a20ece6c7cb4605a0709a9c28ab6104275cc9"
+      },
+      "unique_cases": 13,
+      "total_rank_executions": 26,
+      "passed": 26,
+      "failed": 0,
+      "skipped": 0,
+      "MPI_ranks": 2,
+      "former_three_cases_actual_census": {
+        "rank0": {
+          "local_fabs": 1,
+          "valid_cells": 64
+        },
+        "rank1": {
+          "local_fabs": 0,
+          "valid_cells": 0
+        }
+      },
+      "local_identities": "exact0 nonempty, exact negative-infinity empty",
+      "registry_world2_repeated": false,
+      "new_world1_run": false,
+      "full94_received": false
+    },
+    "SDK967e_original_checkpoint_own_retry_native_positive_600": {
+      "source": "6006749593bcbd3ed32b5b1906951786aaced5d0",
+      "Native": "d154b257484040c18b4a2a1439240e5ec963954715d6cb340cad0c7b12a8e2a1",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-original-own-retry-positive-reception-60067495-20261007.json",
+        "sha256": "3b454c9311088ed0ed5e2d5a9d07ad5fbaa4c86f6887d6df842b8864e51253e1"
+      },
+      "artifacts": 110,
+      "MPI_ranks": 1,
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 1
+      },
+      "scope": "Bounded executed CPU evidence; refer to receipt for exact arrays/checkpoints/history and context limits",
+      "full94_received": false
+    },
+    "SDK967e_affected_Native8_nonreg_positive_600": {
+      "source": "6006749593bcbd3ed32b5b1906951786aaced5d0",
+      "Native": "d154b257484040c18b4a2a1439240e5ec963954715d6cb340cad0c7b12a8e2a1",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-native8-positive-reception-60067495-20261007.json",
+        "sha256": "68571307f9d3e34a27d27419051960fff56d2de9009ca7830e0cf914837da47c"
+      },
+      "artifacts": 195,
+      "MPI_ranks": 1,
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 8
+      },
+      "scope": "Bounded executed CPU evidence; refer to receipt for exact arrays/checkpoints/history and context limits",
+      "full94_received": false
+    },
+    "AMR_phi_Q_psi_R4_test_Source_integrated_811": {
+      "source": "811ee2b157f3832ce3c62f96524fc998c36c4f70",
+      "patch_sha256": "a375d4a8ebe0b665483a2611f39fffe64d3731dda11eab09b00448186f77d28a",
+      "root_Source_admission": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-phi-Q-psi-r4-source-admission-60067495-20261007.json",
+        "sha256": "92663adc8c2f1774fce3452068bb7b9991662c3486a5109f098c5bb414f44c00"
+      },
+      "independent_Source_review_sha256": "2e139903bb63566722cb75dcd60bd436bf53460f29160d9d8c382e3d19a4830f",
+      "old_cases_assertions": [
+        13,
+        122
+      ],
+      "new_cases_assertions": [
+        1,
+        52
+      ],
+      "test_only_files": 5,
+      "signed383_unchanged": true,
+      "whole_manifest_changed": true,
+      "current_installed_package_synchronized": false,
+      "actual_CPP_run_received": false,
+      "full94_received": false
+    },
+    "SDK48_CUDA736186_actual_submission_only": {
+      "Source": "9db1c37b6be06f0a11a1fad2041825492851394e",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "actual_job": 736186,
+      "submissions": 1,
+      "root_submit_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk48-cuda-dispatch-9db1c37b-20261007/submission.json",
+      "root_pre_dispatch_review_sha256": "adaad97af512a833bf4454bc00b609178b3605ebfa4a0cc5dff9ab22a28fc17f",
+      "payload_members": 27,
+      "preserved_CPU_GPU_Source_cohorts": [
+        19,
+        9,
+        20
+      ],
+      "profile": "CPU8/GPUh1001/memory96G/time12h strictFP build+identity only",
+      "build_or_PDE_GPU_received": false,
+      "full94_received": false
+    },
+    "CPP811_phi_Q_psi_first_compile_negative": {
+      "Source": "811ee2b157f3832ce3c62f96524fc998c36c4f70",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-CPP811-phi-Q-psi-first-compile-negative-reception-20261007.json",
+        "sha256": "d209abbe96ea35cdffcf1026bd581d96761e3f21302d3de90cb96d3ec08582d9"
+      },
+      "artifacts": 66,
+      "two_fixture_API_errors": "make_poisson_rhs_v2<D> vs template<classModel>",
+      "old_fixture_regenerated_same_bytes_new_mtime": true,
+      "successful_CXX_TU": 1,
+      "failed_CXX_TU": 1,
+      "new_test_links": 0,
+      "runtime_tests": 0,
+      "full94_received": false
+    },
+    "GPU736186_whole_compile_negative": {
+      "Source": "9db1c37b6be06f0a11a1fad2041825492851394e",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-GPU736186-whole-compile-negative-reception-20261007.json",
+        "sha256": "a44e58630ce1fa65626acdbdcf897b31979a52a82694e74c59e0061d80b30b0f"
+      },
+      "job": 736186,
+      "Slurm": "FAILED1:0",
+      "members": 92,
+      "regular_files": 74,
+      "regular_bytes": 454883912,
+      "observed_CXX_rows": 5,
+      "completed_objects_claimed": false,
+      "bindings": 0,
+      "wheel_Native_GPU_PDE_received": false,
+      "first_error": "NVCC extended HDlambda parent make_poisson_rhs_v2 may not have deduced returntype",
+      "preservation_CPU_GPU_Source": [
+        19,
+        9,
+        20
+      ],
+      "full94_received": false
     }
   },
   "scoped_receptions_20261006": {
@@ -2697,5 +2970,19 @@
       "compiler_to_binary_graph_or_populated_Field_history_cache_received": false,
       "transport_Landau_full_BGK_convergence_costs_MPI2_GPU_ROMEO_CI_received": false
     }
+  },
+  "sdk967e_supplemental_scoped_summary_20261007_received_20261008": {
+    "date": "2026-10-07",
+    "observed_source_commit": "8c1cf54184a1ee20f2f9cefcef55aac3b0a2147f",
+    "full_94_obligations_closed": false,
+    "scope": "Dated bounded reception; historical current_head/mapping_baseline and original obligations are unchanged",
+    "PDE": "New actual9dbSDK967e/NativeD154 built/installed originalonelevelworld1PASS, originalU/Fbounds+CP exact, Ynotmeasured and OMPeffectiveunmeasured",
+    "Cpp13": "World1 Field13/Registry21 PASS0skip. Correctedworld2 Field13casesperrank/26executions PASS0skip, actual former3cases rank0 localFab1/cells64 andrank1 Fab0/cells0, exact0/negativeinfinity. Original23PASS3FAIL preserved separately.",
+    "formal_order": "99de181 Main Source61 PASS via archived XML/command; separate frozen author Source cohort noSO, Root stdout absent; formal certificate, no PDE convergence qualification",
+    "ROMEO735830": "Historical FAILED allocation/preparation before checkout/build; missing metadata corrected in SDK48 payload, originals unchanged.",
+    "retry": "Original current600/D154/SDK967e world1 PASS0skip independently received,110artifacts, same seal/inode; exact2levels, regrid/topology counters2→3, histories/cache empty; OpenMP2 actually measured only this process.",
+    "Native8": "Eight installed current600/D154/SDK967e tests PASS0skip471.63s,195artifacts received independently;17validCP/13scientific archives/9negative excluded; actual adaptive history/cache/queue and child-history evidence. EffectiveOpenMP2 only manual fixture.",
+    "CPP_phi_Q_psi": "R4 test811 firstcompile failed wrong<D> calls; R5 integrated8c1cf withonly2callsdeduction, secondcompile now instantiates then fails Count0 Phi model arity. No testcase run. R6 fixture and genericCUDAcallable correction prepared separately, physical guards/criteria unchanged.",
+    "ROMEO736186": "Actual FAILED1:0/build-python70min48s on9db/SDK967e: NVCC1560 rejects extendedlambda in deducedreturn factory;92members/74files454883912bytes whole received,19CPU9GPU20Sources+dependencies preserved. No completedbinding/fullNativeGPU/wheel/PDE. Roota44e586."
   }
 }

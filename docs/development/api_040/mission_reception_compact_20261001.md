@@ -1,3 +1,24 @@
+# Réception actuelle bornée — 8 octobre 2026
+
+Deux identités restent séparées. **Headers Source actuels** : Main `637c3220da44102ff7dbe3468c99086d141f6981`, callable `ec50b10fdf582f51515fce07fb622dde32a13edba0009102ae29f8c0d5817231`, signature des383 headers `af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1`. **C++ réellement reçu** : Source2cb88/CPP3e98/Coref3, SDK967e, binairee625. Coref3 et test3e98 sont inchangés ; ce résultat SDK967 ne qualifie ni les nouveaux headers/Native/DSO af8 ni le Python installé D154.
+
+| Domaine | Réception exacte | Limite actuelle |
+|---|---|---|
+| Première v2 STATE world1 SDK967 | PASS1, zéro error/skip, XML0.629s ; Rootf45bb + independente055,97 artefacts octets/modes | Oracles in-test source/currentQ/référence highQ immuable, tag0, Q2Phi, low6 et forcing global distinct ; aucune réexportation indépendante des tableaux/télémétrie positive de phase |
+| Suite17 SDK967 | **17world1 +17 par rang MPI2 =51 exécutions totales**, zéro fail/error/skip ; producteur32027, indépendante0cd et Root939,68 artefacts octets/modes ; binaire reçu précédent réutilisé sans build/lien supplémentaire | Première1 séparée ; anciennes16/48 e186 et négatif6b609/huit assertions/99 artefacts inchangés ; aucune qualification af8 héritée |
+| Oracles STATE corrigés | v2 Source admise0ac081/intégrée2cb88, vieux16/192 et Phi3/Q6/Psi6/1e-9 préservés ; highQ possédé/immutable, égalités exactes/Q2Phi/différence globale envers6>1e-9 par niveau |17 cas/224 assertions sont syntaxiques, pas224 exécutions ; pas de high12 imposé, solution analytique/convergence du PDE high mixte, STATE SSA/cadence ou enclosingSnapshot déduits |
+| Refus/ownership | Refus rank0 halo incompatible au préflight ; census de rang vide dans trois cas legacy seulement | Pas de faute de préparation des bindings ni census des nouveaux cas AMR |
+| Header portable actuel af8 | Contrat callable@1 intégré637c ; Source/Host probe, indépendantef0d3 et Root3bfc | Aucun build/import/Native/DSO/science/NVCC/GPU af8 reçu ; versions numériques ABI13/package8/read2 conservées, signature modifiée impose rebuild/relink réel |
+| Python et anciens CUDA | NativeD154/DSOs967 et anciens reçus9db/600 conservés ;736186 FAILED NVCC historique | Ils ne qualifient pas Coref3/af8 ; Nativeflowv2 exactwheel/install/prove/codeSign/verify/doctor préparé **non lancé**, Root finalHEAD/GO attendu ; GPU/3D/CI/coûts/science distincts |
+
+Les86 obligations T/C/M/W et8 principes font **94 au total** ;28 modèles/12 témoins en sont des sous-ensembles. Historiques, mapping et flags restent inchangés. Le contrat privé `pops.amr.auxiliary-checkpoint-carrier-bindings@1` a initialement conservé SDK967 ; le changement public callable@1 est ultérieur et produit af8. Les workspaces précommit peuvent utiliser les kernels existants, sans promesse « zéro kernel ». Le défaut fin du refresh suit coarse candidate preparation avant commit accepté, puis le vrai rollback du registre.
+
+[Critique Source](/Users/romaindespoulain/dev/tmp/root-sdk967e-reception-doc-update-20261008-coref3-suite16-state17/STATE17_SOURCE_CRITIQUE.md), [correction v2](/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-high-reference-correction-v2-20261008/REVIEW.md), [admission suite17 indépendante](/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-suite17-reception2-20261008/reception.json). Le delta Sourceb21d d’activation conda est séparé ; aucun abort réel n’en est déduit. Aucun résultat ferme la mission.
+
+---
+
+## Front historique Main conserve avant la reception du 8 octobre
+
 # Réception actuelle bornée — 7 octobre 2026
 
 Cette synthèse porte sur Source `c0f18d50efd454396d6761992a9817adf353f412` et conserve les anciennes réceptions ci-dessous. **La mission des 94 obligations reste ouverte** ; chaque obligation garde ses critères et sa portée propres, sans requalification de ligne, équation ou identité de mapping par ce résumé.
@@ -16,7 +37,9 @@ Le [contrôle AMR cohérent](/Users/romaindespoulain/dev/tmp/root-amr-aux-clock-
 
 Les nouvelles entrées bornées figurent dans `scoped_receptions_20261007` de [corpus.json](corpus.json). Les valeurs historiques `current_head` et `mapping_baseline_head`, les réceptions précédentes et leurs négatifs restent inchangés. La [correction d'incidence et de nettoyage](amr_auxiliary_invalidation_incidence_v1.md) est intégrée après revue Source, SHA `56d99eda5cadf1af45df1236015fd0c55f7340f27e135e3730f37d491d4a3f81`. Elle ajoute une sélection de registre commune et change la signature SDK en `967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8`, avec ABI13/package8/input2 et wire POPSAUX3 inchangés. Aucun nouveau résultat natif n'est attribué au correctif de lane, à cette correction ou aux six tests de registre encore inexécutés.
 
+
 ---
+
 
 ## SDK37 Source catalogue addendum — 2026-10-04 17:15 UTC
 
