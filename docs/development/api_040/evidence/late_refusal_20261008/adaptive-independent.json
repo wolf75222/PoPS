@@ -1,0 +1,263 @@
+{
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source": "e01eb5b8b39b20762639be1e7dde45d12542b770",
+  "Source_corrections": {
+    "V4": "Authored maximum lag1 allocates native depth2; two accepted stores give fill2; previous depth1 interpretation explicitly superseded",
+    "V5": "Store front then end-of-step accepted rotate swaps physical slots; native history_global directly gathers ring.at(slot). Latest accepted sample post-rotate is slot1, recycled first sample slot0. Source functions other than save_positive/adaptive-declaration byte-AST equal V4.",
+    "math_guard_dt_bounds_changed": false
+  },
+  "accepted": 2,
+  "core_files_rehashed": 1198,
+  "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "final_macro_step": 2,
+  "final_time": 0.0078125,
+  "independent_math": {
+    "all_eight_array_comparisons": {
+      "accepted": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 6.661338147750939e-16,
+        "values": 192
+      },
+      "initial": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 6.661338147750939e-16,
+        "values": 192
+      },
+      "phi_stage": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 1.5987211554602254e-14,
+        "values": 192
+      },
+      "phi_stage_physical_slot0": {
+        "bound": 1.4647123675443233e-10,
+        "max_abs_error": 5.862865748440527e-12,
+        "values": 192
+      },
+      "phi_stage_physical_slot1": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 1.5987211554602254e-14,
+        "values": 192
+      },
+      "predictor": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 6.661338147750939e-16,
+        "values": 192
+      },
+      "predictor_physical_slot0": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 6.661338147750939e-16,
+        "values": 192
+      },
+      "predictor_physical_slot1": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 6.661338147750939e-16,
+        "values": 192
+      }
+    },
+    "gain_two_DT_Euler": 0.9697835860273427,
+    "lambda_h": 38.973679354221176,
+    "norm_initial_2DT": 0.14820842583575788,
+    "norm_retry_DT": 0.07410421291787894,
+    "physical_slot_deltas": {
+      "phi": 0.00831527221602002,
+      "predictor": 0.007304973357258104
+    },
+    "selected_latest_bytes_equal_slot1": true
+  },
+  "limits": [
+    "No previously-populated pre-attempt ring rollback proof",
+    "No retained ticket validator, public parameter update, rank0-only refusal, MPI2,AMR2,3D,GPU or full94 admission",
+    "8 NPY arrays are actual saved values; reference calculations remain ephemeral",
+    "Original failed observer output retained; no rerun/Native import by reviewer"
+  ],
+  "metadata_scope": "accepted/rejected/time/macro raw RunReport recorded. Physicaldepth2/fill2 are successful assertions of pinned actual fixture + PASS XML; no independently saved raw history metadata/Program/aux snapshot or CP in adaptive run.",
+  "physical_pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/core-manifest.json": {
+      "bytes": 197327,
+      "sha256": "0c871f738710bd736e099b0e7f21d2fb35d6b47958860556a08dc61c697b7ac5"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/runtime/program/amr_program_context_history_checkpoint_services.inc": {
+      "bytes": 23062,
+      "sha256": "574880164931afbeaa5b85a0b8730d9330a8f8c406b674dc17e716aa586c77ac"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/runtime/_runtime_instance.py": {
+      "bytes": 124402,
+      "sha256": "b8f80e3840c2c70301e734ad62ebeb32ccf452bc34dee0dc19064b56645bb90b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_system.cpp": {
+      "bytes": 1349845,
+      "sha256": "59e3fd9fe42cc8c31d2999840d16b1e2ac5ca399a828986126c98265add0a185"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/identity.json": {
+      "bytes": 2850,
+      "sha256": "be198e608be967ebac68bd1889c2747418bbfa3c2018e3aee4da6e71600dc7a8"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/accepted.npy": {
+      "bytes": 1664,
+      "sha256": "acee6a66a5ba5cd78b3ff9c30a5f954a53ab735331b9bf705834da477bfc8e7f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/actual-receipt.json": {
+      "bytes": 9571,
+      "sha256": "2ab9d4eea66eb59ecfe407b515b4175c5a3a32d312f57c25c4fa6607f8d3f693"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/declared-inputs.json": {
+      "bytes": 1057,
+      "sha256": "263833d625f054cc5061e8d7d3d0dd99e92ceaa606e6c52bb3126675d0ea08b7"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/initial.npy": {
+      "bytes": 1664,
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/inputs.json": {
+      "bytes": 959,
+      "sha256": "c16bde5b5d77b74d13019baf8fbfe7a569bd65fd27a6d12d9e05b6f600b5339b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/model0.cpp": {
+      "bytes": 27175,
+      "sha256": "81bf4291652085692c1d475d52ae6285a56a4a3a5eb529d8faca40547c18da25"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/phi_stage.npy": {
+      "bytes": 1664,
+      "sha256": "3ea9baf2d336d74660ccc08ba1f671b7125c79cf68e53dc398a1976e5d4af80f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/phi_stage_physical_slot0.npy": {
+      "bytes": 1664,
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/phi_stage_physical_slot1.npy": {
+      "bytes": 1664,
+      "sha256": "3ea9baf2d336d74660ccc08ba1f671b7125c79cf68e53dc398a1976e5d4af80f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/predictor.npy": {
+      "bytes": 1664,
+      "sha256": "acee6a66a5ba5cd78b3ff9c30a5f954a53ab735331b9bf705834da477bfc8e7f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/predictor_physical_slot0.npy": {
+      "bytes": 1664,
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/predictor_physical_slot1.npy": {
+      "bytes": 1664,
+      "sha256": "acee6a66a5ba5cd78b3ff9c30a5f954a53ab735331b9bf705834da477bfc8e7f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/program0.cpp": {
+      "bytes": 32541,
+      "sha256": "4c619c0230790b254e0c1ef51c7638329e341eea775d5ede606e385b629a2958"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/pops-native-cache/8b9d84c1863b18a5bc3e11e48071faf8d2dbab43a9d789b3612bc80a8d18e0c6.so": {
+      "bytes": 556200,
+      "sha256": "9e7d12b6fe788ee678049f05ca559493524de33069f7d50b1ac9c29831e4135d"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/pops-native-cache/8b9d84c1863b18a5bc3e11e48071faf8d2dbab43a9d789b3612bc80a8d18e0c6.so.pops-artifact.json": {
+      "bytes": 591,
+      "sha256": "ed8622cf92a62bef99258f71122c5efaa28600ac0e5fa62047d3fbe1bad94e0b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/pops-native-cache/8b9d84c1863b18a5bc3e11e48071faf8d2dbab43a9d789b3612bc80a8d18e0c6.so.pops-model-compile.json": {
+      "bytes": 2292,
+      "sha256": "ef29603af2351bf1d9c52f56636922b27bf38c296b30074ed214e7107fb29c43"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/pops-native-cache/8b9d84c1863b18a5bc3e11e48071faf8d2dbab43a9d789b3612bc80a8d18e0c6.so.pops-model.cpp": {
+      "bytes": 27175,
+      "sha256": "81bf4291652085692c1d475d52ae6285a56a4a3a5eb529d8faca40547c18da25"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/pops-native-cache/fb599b13129568f42e07504da869a0762014b6ce717e6044179173350abc6d4d.so": {
+      "bytes": 1988880,
+      "sha256": "3efffc975d8ec64fb088263600e868b4e8eb0d496bb2a9955a8451242c27d1f9"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/pops-native-cache/fb599b13129568f42e07504da869a0762014b6ce717e6044179173350abc6d4d.so.pops-artifact.json": {
+      "bytes": 490,
+      "sha256": "032779389471d170c3300119964517c93f460180fadd47d24fa905ee2a7fa3f0"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest.log": {
+      "bytes": 1208,
+      "sha256": "d93d83311ddc312cbe7246cdc5826e0b7d26c6e55160d42bc673d288af600349"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/pytest.xml": {
+      "bytes": 661,
+      "sha256": "62d8639c537070f2a5d739a3e9203d6f161fa6a0f4adb292afc645059cc7969a"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/result.json": {
+      "bytes": 1575,
+      "sha256": "729e48df0c0bbbbb8da7f2d7e16195180b6c89d5bb7f422d3ab7058bff224283"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/source-files.json": {
+      "bytes": 136555,
+      "sha256": "c3c4ebffbf50cf56cc7943b6af90b0e2ed5a8414889b930b35a88e94db7ba8b7"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/identity.json": {
+      "bytes": 2850,
+      "sha256": "246ec3589de9b03ba517a8a00d40bb4801bc4d772b52775fa421f09a1d6cdef6"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/accepted.npy": {
+      "bytes": 1664,
+      "sha256": "acee6a66a5ba5cd78b3ff9c30a5f954a53ab735331b9bf705834da477bfc8e7f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/phi_stage.npy": {
+      "bytes": 1664,
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/pytest-tmp/test_public_late_refusal_autom0/late-refusal-adaptive/rank0/predictor.npy": {
+      "bytes": 1664,
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/pytest.log": {
+      "bytes": 3066,
+      "sha256": "246686f7fe44d3555a73c63e1cfca81eae39c680f97bff50590734e5e6151052"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/pytest.xml": {
+      "bytes": 1866,
+      "sha256": "64fc15df685fbdd19d26c9b35c755048a5eaf68253790678beca9b8c0be22448"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/result.json": {
+      "bytes": 1577,
+      "sha256": "5fc6e6c801e3dd8a95a4ccd6951b03d3c0d7f10d396c55ee5877afb7a47f6865"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v4-physical-history-slots-20261008/physical-history-slots-v3-to-v4.patch": {
+      "bytes": 1233,
+      "sha256": "ea3cf136db1cbf81ee95eef2f07b31cabd8c227e2300fd7084ae86677e7e127b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v4-physical-history-slots-20261008/source-preparation-receipt.json": {
+      "bytes": 2042,
+      "sha256": "e9bedd0586a624eb5b68d9d5f7fd8c432cb24001246f9dbf4e246121bff9f763"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v4-physical-history-slots-20261008/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "bytes": 15301,
+      "sha256": "8fea64a1bbd3465bc1137fced5be2b89becb2815e307d377d30da9a2126a4478"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v5-accepted-history-slot-20261008/accepted-history-slot-v4-to-v5.patch": {
+      "bytes": 2300,
+      "sha256": "81e514bb473071d9d835fc733cf80ec497c41cab3e342c078868bbb622eec232"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v5-accepted-history-slot-20261008/source-preparation-receipt.json": {
+      "bytes": 3121,
+      "sha256": "8a730eee8ac028458a3fb9aa1ce81ae8f801bc6f96d2e426e76ce0af1c0ec719"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v5-accepted-history-slot-20261008/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "bytes": 16504,
+      "sha256": "740335fa944d79b4764676a36ad5d650938116b8118a75238b4a8680225c794a"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so": {
+      "bytes": 14446456,
+      "sha256": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b"
+    }
+  },
+  "preserved_original_negative": {
+    "Source_fixture_reproduction": "Frozen V4 path pinned; avoids claiming later Main file is unchanged.",
+    "math_comparisons": {
+      "accepted": 6.661338147750939e-16,
+      "phi_stage": 5.862865748440527e-12,
+      "predictor": 6.661338147750939e-16
+    },
+    "status": "Observed stale physical slot0 extraction after actual two accepts; accepted state independently satisfies two-step oracle. Predictor/phi stale slot0 satisfy first-step/timeDT oracle."
+  },
+  "producer_counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 1
+  },
+  "producer_seconds": 52.73175437499958,
+  "rejected": 1,
+  "status": "PASS_BOUNDED_PUBLIC_AUTOMATIC_RETRY_TWO_ACCEPTED_INTERVALS"
+}

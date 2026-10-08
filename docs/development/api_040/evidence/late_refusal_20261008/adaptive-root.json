@@ -1,0 +1,8 @@
+{
+  "date_utc": "2026-10-08T20:28:38.248788+00:00",
+  "peer": "/Users/romaindespoulain/dev/tmp/PoPS-independent-adaptive-late-refusal-e01-ed2-reception-20261008/reception.json",
+  "peer_sha256": "9f774f79ebe7bd80ad537fe5a0a449b0230cf2404e125a4705302abd57b53fd3",
+  "physical_pins_rehashed": 42,
+  "scope": "Finite trueAMR1 adaptiveEuler publicdt retry2accepted1rejected and8NPY math/historyslot observations; no rawfillmetadata/CP/fullpopulatedenvelope/ticketrevocation/publicsnapshot/GPU/universality admission",
+  "GO": "Independent adaptive reception complete; continue populated ring failure and original native nonregression"
+}

@@ -85,9 +85,18 @@ le rollback d’anneaux déjà peuplés. SSPRK2 refus/contrôle est également r
 `store_history(depth=1)` déclare le lag maximal et produit deux slots physiques ;
 l’assertion adaptative a été corrigée à fill2 avant son premier run. Ce run
 effectue un rejet puis deux acceptations et vérifie l’état final, mais échoue
-dans l’oracle du prédicteur : le fixture extrait le slot0 recyclé après rotation,
-au lieu du slot1 du dernier intervalle accepté. La correction d’observation
-reste à rejouer avec les mêmes équations et bornes. Les snapshots Aux/historiques utilisent
+d’abord dans l’oracle du prédicteur : le fixture extrait le slot0 recyclé après
+rotation, au lieu du slot1 du dernier intervalle accepté. La correction
+d’observation `e01eb5b8` passe au run suivant avec les mêmes équations et bornes ;
+les deux slots physiques sont conservés. La réception indépendante vérifie les
+huit tableaux de192 cellules, le gain de deux Euler, le potentiel à2DT et le
+rapport de deux acceptations/un rejet. Elle n’infère pas un checkpoint ni un
+rollback englobant à partir de la seule assertion fill2.
+Le fixture de continuation après un premier pas accepté est intégré en
+`a6f104f6`, après quatre tests Source et revue mathématique indépendante ; son
+run Native reste à faire. Il demande un refus via la composition publique
+`limit−2560*tau`, puis compare les deux slots déjà peuplés et le contrôle de
+deux pas. Les snapshots Aux/historiques utilisent
 des accesseurs privés du journal Native ; ils ne qualifient pas une API publique
 de snapshot, un changement de paramètres sur la même instance ou la révocation
 d’un ticket retenu. Le retry adaptatif corrigé et la réception MPI2 restent à
@@ -317,6 +326,40 @@ prefixes Kokkos/HDF5/MPI et configurations réellement utilisés sont consignés
 dans les reçus ; les backends non exécutés ne deviennent pas reçus par cette
 recette. Les preuves volumineuses originales restent externes ; seules les
 petites réceptions vérifiées sont copiées [ici](evidence/draft_status_20261008/manifest.json).
+
+Les nouveaux cas publics se reproduisent avec le même pilote du vrai paquet
+installé. Sur ce poste, `FI_PROVIDER=tcp` est nécessaire au MPICH configuré ;
+les préfixes des dépendances du build doivent être conservés dans l’environnement.
+Les sorties doivent avoir un chemin neuf, hors du dossier du prototype :
+
+```sh
+rtk proxy env -u PYTHONPATH -u PYTHONOPTIMIZE PYTHONDONTWRITEBYTECODE=1 \
+  FI_PROVIDER=tcp POPS_NATIVE_DIM=2 OMP_NUM_THREADS=2 OMP_PROC_BIND=false \
+  python docs/development/api_040/run_installed_checks.py \
+  --output /tmp/pops-public-diffusion-new \
+  --test tests/python/integration/runtime/test_public_diffusion_field_predictor.py
+rtk proxy env -u PYTHONPATH -u PYTHONOPTIMIZE PYTHONDONTWRITEBYTECODE=1 \
+  FI_PROVIDER=tcp POPS_NATIVE_DIM=2 OMP_NUM_THREADS=2 OMP_PROC_BIND=false \
+  python docs/development/api_040/run_installed_checks.py \
+  --output /tmp/pops-late-refusal-new \
+  --test 'tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py::test_public_late_refusal_same_artifact_control[ssprk2]'
+```
+
+Pour MPI2, le pilote d’identité et pytest doivent s’exécuter dans le même
+processus sur chaque rang. Le [reçu MPI2](evidence/fixed_core_methods_53fd_20261008/mpi2-independent.json)
+pointe le `run_rank.py` réellement exécuté, ses deux identités et ses sorties.
+Le pilote MPI du dépôt possède aussi ce mode worker en processus ; la commande
+suivante est la recette du dépôt, distincte du lanceur exact déjà reçu :
+
+```sh
+rtk proxy env -u PYTHONPATH -u PYTHONOPTIMIZE PYTHONDONTWRITEBYTECODE=1 \
+  FI_PROVIDER=tcp python docs/development/api_040/run_installed_mpi_checks.py \
+  --output /tmp/pops-late-refusal-mpi-new --ranks 2 --dimension 2 --threads 2 \
+  --test 'tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py::test_public_late_refusal_same_artifact_control[ssprk2]'
+```
+
+Le pilote série lance pytest dans un sous-processus ; le lancer tel quel sous
+MPICH ne reproduit pas le worker MPI en processus.
 
 Pour reproduire le lot211 contrôles de sources après activation de conda pops,
 depuis ce checkout, choisir des noms XML neufs. Le bootstrap sélectionne

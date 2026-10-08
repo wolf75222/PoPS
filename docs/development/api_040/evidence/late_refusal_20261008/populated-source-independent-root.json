@@ -1,0 +1,18 @@
+{
+  "date_utc": "2026-10-08T20:26:54.138056+00:00",
+  "author_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-preparation-receipt.json",
+  "author_sha256": "46bfa595ab080f61f1b48926afe1a965ecffedfcb3d6dcf2d1c151f8ece64307",
+  "patch": "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/populated-history-v1-on-V5.patch",
+  "patch_sha256": "ef3b3e403f3feb67099793db0da640429acf708df7e04d7505465f03fb9632fb",
+  "physical_source_pins_rehashed": 9,
+  "Source_counts": {
+    "tests": 4,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "math_review": "Failure40 thresholds30atDT/pass20at2DT/refuse against raw norm28; control80 thresholds70/60 accepts. Diagnostic limit param\u22122560*tau not part of ddt equation. Two public FixedDt invocations and unchanged two-intervalFV oracle; native readslot1 explicit afteracceptedrotation; fullphysicalhistory2 slots before/after and control retained.",
+  "instrumentation_review": "Private Native journal snapshots clearly labeled. Existing public consumer_cursors.to_data primitive shape has likely empty rows because fixture declares no consumergraph; this does not prove populated output-cursor rollback.",
+  "scope": "Root nonauthor Source GO for bounded actual previouslypopulated history fail/control; no Native/scientific admission",
+  "old_costs": "Only estimate basis text changes; all878 numericweights unchanged"
+}

@@ -1,6 +1,6 @@
 {
   "date_utc": "2026-10-08T20:03:40.528792+00:00",
-  "scope": "Source preparation and preserved negative, independently received Euler and SSPRK2 initial-envelope late refusal/control; adaptive andworld2pending",
+  "scope": "Independently received Euler/SSPRK2 initial-envelope late refusal/control and publicadaptive2accepted1rejected; previouslypopulatedenvelope and distributed peer stillpending",
   "files": {
     "source-author.json": {
       "bytes": 4382,
@@ -121,6 +121,41 @@
       "bytes": 1166,
       "sha256": "515d5a3dd32977e85fa5850da11e002cd983028a4e62d376472e7f8d2a175750",
       "original_local_path": "Root interpretation; raw negative inputs/arrays/log remain external and unchanged"
+    },
+    "accepted-slot-author.json": {
+      "bytes": 3121,
+      "sha256": "8a730eee8ac028458a3fb9aa1ce81ae8f801bc6f96d2e426e76ce0af1c0ec719",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v5-accepted-history-slot-20261008/source-preparation-receipt.json"
+    },
+    "populated-source-author.json": {
+      "bytes": 4750,
+      "sha256": "46bfa595ab080f61f1b48926afe1a965ecffedfcb3d6dcf2d1c151f8ece64307",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-preparation-receipt.json"
+    },
+    "populated-declared-plan.json": {
+      "bytes": 2476,
+      "sha256": "ef7b25a1a01f04082e71aece05900fd12c8c6402865115720e67e3d8d20ba0e3",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/declared-inputs-and-plan.json"
+    },
+    "populated-source-independent-root.json": {
+      "bytes": 1498,
+      "sha256": "4d15a7b3d4fa9a93b5ff892c67d2323ee5e28e26cb794352f7c89297942589f0",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-populated-history-fixture-source-review-20261008/review.json"
+    },
+    "adaptive-independent.json": {
+      "bytes": 15562,
+      "sha256": "9f774f79ebe7bd80ad537fe5a0a449b0230cf2404e125a4705302abd57b53fd3",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-adaptive-late-refusal-e01-ed2-reception-20261008/reception.json"
+    },
+    "adaptive-root.json": {
+      "bytes": 633,
+      "sha256": "606d76c37cc1f7267c34983429c79d848510fedec7b8e1127ca0629df6ec0324",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-current-late-refusal-native-preparation-20261008/root-adaptive-positive-admission.json"
+    },
+    "adaptive-result.json": {
+      "bytes": 1575,
+      "sha256": "729e48df0c0bbbbb8da7f2d7e16195180b6c89d5bb7f422d3ab7058bff224283",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-accepted-slot-ed2-20261008/result.json"
     }
   }
 }
