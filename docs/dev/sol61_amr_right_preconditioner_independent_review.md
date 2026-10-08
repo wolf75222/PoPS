@@ -1,4 +1,4 @@
-# Independent C++ right-preconditioner review — 1 October 2026
+# Independent C++ right-preconditioner review - 1 October 2026
 
 Reviewed original candidate `c7cdd2c38cc7145abb5981b90f38e9b6035b6e5e`
 (parent `619fec88665983843b00e33f52c136658e99befb`), then author corrections

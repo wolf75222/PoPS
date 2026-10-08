@@ -1,4 +1,4 @@
-# Contre-réception AMR ghosts — 30 septembre 2026
+# Contre-réception AMR ghosts - 30 septembre 2026
 
 Candidate exacte : `def8c752fde989734cfc4aace76a447ce3d0d63d`.
 Checkout exclusif `PoPS-sol61-dot-all-ghost-review`, branche

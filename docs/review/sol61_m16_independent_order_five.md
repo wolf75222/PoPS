@@ -1,4 +1,4 @@
-# Independent M16 review — Source / actual-header CPU only
+# Independent M16 review - Source / actual-header CPU only
 
 Reviewed author 251c51099696beac9393078ba1c519e2acd6755d and basis 78d9624,
 against base 3f5a5502, materialized on the private cubature preparation f9685154.

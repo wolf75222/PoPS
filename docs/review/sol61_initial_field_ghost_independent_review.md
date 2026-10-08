@@ -1,4 +1,4 @@
-# Initial Field→Ghost independent review — SOURCE/host only
+# Initial Field→Ghost independent review - SOURCE/host only
 
 Exact author gel 4e8b4b0d41e0523d1b01197ad80da0811204f12e, parent5582d98a, WT PoPS-sol61-initial-field-ghost. No Source blocker found in bounded review.
 

@@ -1,4 +1,4 @@
-# M19 independent counter-review — source only
+# M19 independent counter-review - source only
 
 Reviewed author freezes ce6ef7b2 and de0b6a59 in a separate clean review worktree. No production integration, JIT, build, native receipt or environment mutation is claimed.
 

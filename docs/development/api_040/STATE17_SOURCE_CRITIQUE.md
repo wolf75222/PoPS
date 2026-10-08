@@ -1,4 +1,4 @@
-# STATE17 constant-reference counterexample — Source only
+# STATE17 constant-reference counterexample - Source only
 
 Main6b609b5c / CPP99358d38, Coref3e472. No code/probe/run/Main change.
 
@@ -38,9 +38,9 @@ These exact receipts remain Source2cb/SDK967; later header637c/af8 has no Native
 or scientific runtime reception yet. Original negative/invalidhigh12 counterexample remains preserved. Counts17
 cases/224 assertions are syntactic Source counts, not runtime executions.
 
-- [state_highref_v1_source_blocker](/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v1-review2-20261008/review.json), SHA `869c831807d4ceee3b30062726e6305b482a9fccd8bf79a7ac2d80fb4452a88e`.
-- [state_highref_v2_source_admission](/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v2-review2-20261008/review.json), SHA `0ac0815fc0c91c8f3670a3c32de35cc768d7bbf9269f3233c36593373feeb1f4`.
+- state_highref_v1_source_blocker (`/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v1-review2-20261008/review.json`), SHA `869c831807d4ceee3b30062726e6305b482a9fccd8bf79a7ac2d80fb4452a88e`.
+- state_highref_v2_source_admission (`/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v2-review2-20261008/review.json`), SHA `0ac0815fc0c91c8f3670a3c32de35cc768d7bbf9269f3233c36593373feeb1f4`.
 
-Current runtime links: [first v2 independent](/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-world1-reception2-20261008/reception.json), [first v2 Root](/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-world1-positive-2cb88e33-20261008.json), [suite17 producer](/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-suite17-2cb88e33-20261008/complete-receipt.json).
+Current runtime links: first v2 independent (`/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-world1-reception2-20261008/reception.json`), first v2 Root (`/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-world1-positive-2cb88e33-20261008.json`), suite17 producer (`/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-suite17-2cb88e33-20261008/complete-receipt.json`).
 
-Suite17 closed refs: [independent0cd](/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-suite17-reception2-20261008/reception.json), [Root939](/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-suite17-positive-2cb88e33-20261008.json). Source Main637c/af8 integration does not inherit these SDK967 receipts.
+Suite17 closed refs: independent0cd (`/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-suite17-reception2-20261008/reception.json`), Root939 (`/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-suite17-positive-2cb88e33-20261008.json`). Source Main637c/af8 integration does not inherit these SDK967 receipts.

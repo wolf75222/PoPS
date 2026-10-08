@@ -1,4 +1,4 @@
-# M18 independent source and mathematical review — 30 September 2026
+# M18 independent source and mathematical review - 30 September 2026
 
 Reviewed candidate: `279e0cd9a696c6fccabafa949d3fa592ee9caa42`.
 Private branch starts at `99d651c182d24aba5aaaf431c5e667f810ad5bb5`.

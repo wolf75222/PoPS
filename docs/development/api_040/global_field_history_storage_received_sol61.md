@@ -15,17 +15,17 @@ neither solver is executed by the Python probes.
 
 ## Historical findings on the first production gel
 
-1. **P2 — the public linear route cannot decode its frozen field identity.**
+1. **P2 - the public linear route cannot decode its frozen field identity.**
    `storage_contract` reconstructs the handle from a `field_problem_load` node's
    immutable attributes. `OwnerPath.from_data` receives a tuple of nodes and
    rejects it because its wire protocol requires a list. Both TimePoint and
    StagePoint linear witnesses fail before the storage contract is issued.
-2. **P2 — a real StagePoint is treated as a TimePoint.** A valid public
+2. **P2 - a real StagePoint is treated as a TimePoint.** A valid public
    `Program.stage(..., c=0)` has partition coordinates and `.time`, but no
    `.clock`. The nonlinear witness reaches the direct `.clock` access and raises
    AttributeError. Its exact coordinates must be resolved through the declared
    stage contract; they must not be relabelled onto an arbitrary clock.
-3. **P2 — the original storage owner is not independently authenticated.**
+3. **P2 - the original storage owner is not independently authenticated.**
    Replacing the store's block with another issued same-Case/frame/clock block,
    recomputing `global_field_storage`, and replacing `_history_blocks[name]`
    coherently is accepted by `_ir_hash`. The expected contract is recomputed

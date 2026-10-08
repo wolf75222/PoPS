@@ -1,4 +1,4 @@
-# CUDA737206 braced-range source candidate v1 — isolated one CPP
+# CUDA737206 braced-range source candidate v1 - isolated one CPP
 
 Exact Source6d/SDKaf8 failure: recorded node receipt e0536c5f and complete native
 build log526738 bytes SHA5eb1166d. The real outer Ninja command is preserved at

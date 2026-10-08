@@ -1,4 +1,4 @@
-# M26 independent source and host review — 2026-09-30
+# M26 independent source and host review - 2026-09-30
 
 Reviewed candidate: `ccfc656e7b4d8f4f2e765872a4ef0e5e989bb710`.
 Checkout: `PoPS-resource-lifetime`, branch `codex/api040-m26-frozen-review`.

@@ -1,4 +1,4 @@
-# Réception actuelle bornée — 8 octobre 2026
+# Réception actuelle bornée - 8 octobre 2026
 
 Deux identités restent séparées. **Headers Source actuels** : Main `637c3220da44102ff7dbe3468c99086d141f6981`, callable `ec50b10fdf582f51515fce07fb622dde32a13edba0009102ae29f8c0d5817231`, signature des383 headers `af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1`. **C++ réellement reçu** : Source2cb88/CPP3e98/Coref3, SDK967e, binairee625. Coref3 et test3e98 sont inchangés ; ce résultat SDK967 ne qualifie ni les nouveaux headers/Native/DSO af8 ni le Python installé D154.
 
@@ -13,32 +13,32 @@ Deux identités restent séparées. **Headers Source actuels** : Main `637c3220d
 
 Les86 obligations T/C/M/W et8 principes font **94 au total** ;28 modèles/12 témoins en sont des sous-ensembles. Historiques, mapping et flags restent inchangés. Le contrat privé `pops.amr.auxiliary-checkpoint-carrier-bindings@1` a initialement conservé SDK967 ; le changement public callable@1 est ultérieur et produit af8. Les workspaces précommit peuvent utiliser les kernels existants, sans promesse « zéro kernel ». Le défaut fin du refresh suit coarse candidate preparation avant commit accepté, puis le vrai rollback du registre.
 
-[Critique Source](/Users/romaindespoulain/dev/tmp/root-sdk967e-reception-doc-update-20261008-coref3-suite16-state17/STATE17_SOURCE_CRITIQUE.md), [correction v2](/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-high-reference-correction-v2-20261008/REVIEW.md), [admission suite17 indépendante](/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-suite17-reception2-20261008/reception.json). Le delta Sourceb21d d’activation conda est séparé ; aucun abort réel n’en est déduit. Aucun résultat ferme la mission.
+Critique Source (`/Users/romaindespoulain/dev/tmp/root-sdk967e-reception-doc-update-20261008-coref3-suite16-state17/STATE17_SOURCE_CRITIQUE.md`), correction v2 (`/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-high-reference-correction-v2-20261008/REVIEW.md`), admission suite17 indépendante (`/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-suite17-reception2-20261008/reception.json`). Le delta Sourceb21d d’activation conda est séparé ; aucun abort réel n’en est déduit. Aucun résultat ferme la mission.
 
 ## Références actuelles vérifiées
 
-- [suite16_root](/Users/romaindespoulain/dev/tmp/root-restore-bindings-suite16-positive-reception-e1867b5a-20261008.json), SHA `351649ce36c00573616309307019e80a35328d0d6d4361a0d35a7b97e6e9fb12`.
-- [suite16_independent](/Users/romaindespoulain/dev/tmp/PoPS-independent-restore-bindings-suite16-reception2-20261008/reception.json), SHA `7634bdbfc67cb7959aa3d8f8f157f31929a3469ce1b46a919d5c05da6153c864`.
-- [state17_source](/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-review2-20261008/review.json), SHA `fcc02a7f325184fc417b198b7533464b28b550aca8fd9cfadde01f3c7949210c`.
-- [state17_clarification](/Users/romaindespoulain/dev/tmp/PoPS-restore-accepted-state-witness3-20261008/CLARIFICATION.md), SHA `1289e57fbab708666f99fec94773f09b9795dd95484ad0b3fcc87d4a95179d68`.
-- [state17_comment_admission](/Users/romaindespoulain/dev/tmp/PoPS-independent-witness3-comment-admission-review2-20261008/reception.json), SHA `e0ace16596e070be705cf23afde8dac7e6f0c3b4f3602ff74770aea305e8c1b4`.
-- [cuda_source](/Users/romaindespoulain/dev/tmp/PoPS-independent-named-RHS-callable-V1-source-review-20261007/review.json), SHA `f0d3fa70bb9143b06b3b111888b0d9e3742ecc6dfbf5b55dd981d071e1b6f45e`.
-- [cuda_contract](/Users/romaindespoulain/dev/tmp/PoPS-cuda-rhs-callable-source-admission-v1-811ee2b1-20261007/contract-addendum-v1.json), SHA `4c1feade4c8d90c316b0e289129edcc3509ad5bd36bc9aa741c156955e5b8be7`.
-- [cuda_root_source_admission](/Users/romaindespoulain/dev/tmp/root-named-rhs-callable-v1-source-admission-20261008.json), SHA `3bfc59ee663246b608a3a9d0de9727e5d791d4bf1569b4321eca3903c5116b39`.
-- [state17_first_negative_root](/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-first-world1-negative-6b609b5c-20261008.json), SHA `368a312dd3ad117010e77d3790815371ec496ed71dc641fd171b01af1ecf01e5`.
-- [state17_first_negative_producer](/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-CPP-world1-6b609b5c-20261008/complete-receipt.json), SHA `e98d9bddacae172a53c4803cdaad2630a5359bc54cf3994d475e57df4a6d9a2c`.
-- [state17_first_negative_manifest](/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-CPP-world1-6b609b5c-20261008/evidence-manifest.json), SHA `edb2c536f634881d60a84fdb28623955672064333791a41daaa2332d28db8ccb`.
-- [state17_first_negative_independent](/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-negative-reception2-20261008/reception.json), SHA `302b81538429e9507b910c91dc62f9e74256f60f407271036ac4912983cb0e1c`.
-- [state_highref_v1_source_blocker](/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v1-review2-20261008/review.json), SHA `869c831807d4ceee3b30062726e6305b482a9fccd8bf79a7ac2d80fb4452a88e`.
-- [state_highref_v2_source_admission](/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v2-review2-20261008/review.json), SHA `0ac0815fc0c91c8f3670a3c32de35cc768d7bbf9269f3233c36593373feeb1f4`.
-- [state_v2_first_world1_root](/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-world1-positive-2cb88e33-20261008.json), SHA `f45bb0d8924dc502f462b1059f4241ae1cc478ee7ea7f43ad6882a9b47f87313`.
-- [state_v2_first_world1_independent](/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-world1-reception2-20261008/reception.json), SHA `e05511517ad82c1c49d49bca4238bf01ef34c5eac9c58152ad3020010c593122`.
-- [state_v2_first_world1_producer](/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-world1-2cb88e33-20261008/complete-receipt.json), SHA `504fc0bc0739e6b692e2dfb872ff835b85e77bb4f3c4c96ce2c83fb72546d383`.
-- [state_v2_first_world1_manifest](/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-world1-2cb88e33-20261008/evidence-manifest.json), SHA `f61f805c5dad36bebbb46802d22d20e80a1a5916305e50354097dac3e5080517`.
-- [state_v2_suite17_producer](/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-suite17-2cb88e33-20261008/complete-receipt.json), SHA `32027c6cadbfc3d9eecb2bdf5932fa3eac3b4c8101f4abef8c2bf77fa64df977`.
-- [state_v2_suite17_manifest](/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-suite17-2cb88e33-20261008/evidence-manifest.json), SHA `a5953781cc5c624ed3f70773909434359532320dd0b04b4af72e8da97d271bbb`.
-- [state_v2_suite17_independent](/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-suite17-reception2-20261008/reception.json), SHA `0cd3584342eee4f7b5e19b022c49a686efd97b7ef0ff6194a2cb87156503eb9f`.
-- [state_v2_suite17_root](/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-suite17-positive-2cb88e33-20261008.json), SHA `939ed75c970b60a85b0ac2b4211357c17e85afffd7993216edb684a81a4b5bd8`.
+- suite16_root (`/Users/romaindespoulain/dev/tmp/root-restore-bindings-suite16-positive-reception-e1867b5a-20261008.json`), SHA `351649ce36c00573616309307019e80a35328d0d6d4361a0d35a7b97e6e9fb12`.
+- suite16_independent (`/Users/romaindespoulain/dev/tmp/PoPS-independent-restore-bindings-suite16-reception2-20261008/reception.json`), SHA `7634bdbfc67cb7959aa3d8f8f157f31929a3469ce1b46a919d5c05da6153c864`.
+- state17_source (`/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-review2-20261008/review.json`), SHA `fcc02a7f325184fc417b198b7533464b28b550aca8fd9cfadde01f3c7949210c`.
+- state17_clarification (`/Users/romaindespoulain/dev/tmp/PoPS-restore-accepted-state-witness3-20261008/CLARIFICATION.md`), SHA `1289e57fbab708666f99fec94773f09b9795dd95484ad0b3fcc87d4a95179d68`.
+- state17_comment_admission (`/Users/romaindespoulain/dev/tmp/PoPS-independent-witness3-comment-admission-review2-20261008/reception.json`), SHA `e0ace16596e070be705cf23afde8dac7e6f0c3b4f3602ff74770aea305e8c1b4`.
+- cuda_source (`/Users/romaindespoulain/dev/tmp/PoPS-independent-named-RHS-callable-V1-source-review-20261007/review.json`), SHA `f0d3fa70bb9143b06b3b111888b0d9e3742ecc6dfbf5b55dd981d071e1b6f45e`.
+- cuda_contract (`/Users/romaindespoulain/dev/tmp/PoPS-cuda-rhs-callable-source-admission-v1-811ee2b1-20261007/contract-addendum-v1.json`), SHA `4c1feade4c8d90c316b0e289129edcc3509ad5bd36bc9aa741c156955e5b8be7`.
+- cuda_root_source_admission (`/Users/romaindespoulain/dev/tmp/root-named-rhs-callable-v1-source-admission-20261008.json`), SHA `3bfc59ee663246b608a3a9d0de9727e5d791d4bf1569b4321eca3903c5116b39`.
+- state17_first_negative_root (`/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-first-world1-negative-6b609b5c-20261008.json`), SHA `368a312dd3ad117010e77d3790815371ec496ed71dc641fd171b01af1ecf01e5`.
+- state17_first_negative_producer (`/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-CPP-world1-6b609b5c-20261008/complete-receipt.json`), SHA `e98d9bddacae172a53c4803cdaad2630a5359bc54cf3994d475e57df4a6d9a2c`.
+- state17_first_negative_manifest (`/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-CPP-world1-6b609b5c-20261008/evidence-manifest.json`), SHA `edb2c536f634881d60a84fdb28623955672064333791a41daaa2332d28db8ccb`.
+- state17_first_negative_independent (`/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-negative-reception2-20261008/reception.json`), SHA `302b81538429e9507b910c91dc62f9e74256f60f407271036ac4912983cb0e1c`.
+- state_highref_v1_source_blocker (`/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v1-review2-20261008/review.json`), SHA `869c831807d4ceee3b30062726e6305b482a9fccd8bf79a7ac2d80fb4452a88e`.
+- state_highref_v2_source_admission (`/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v2-review2-20261008/review.json`), SHA `0ac0815fc0c91c8f3670a3c32de35cc768d7bbf9269f3233c36593373feeb1f4`.
+- state_v2_first_world1_root (`/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-world1-positive-2cb88e33-20261008.json`), SHA `f45bb0d8924dc502f462b1059f4241ae1cc478ee7ea7f43ad6882a9b47f87313`.
+- state_v2_first_world1_independent (`/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-world1-reception2-20261008/reception.json`), SHA `e05511517ad82c1c49d49bca4238bf01ef34c5eac9c58152ad3020010c593122`.
+- state_v2_first_world1_producer (`/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-world1-2cb88e33-20261008/complete-receipt.json`), SHA `504fc0bc0739e6b692e2dfb872ff835b85e77bb4f3c4c96ce2c83fb72546d383`.
+- state_v2_first_world1_manifest (`/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-world1-2cb88e33-20261008/evidence-manifest.json`), SHA `f61f805c5dad36bebbb46802d22d20e80a1a5916305e50354097dac3e5080517`.
+- state_v2_suite17_producer (`/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-suite17-2cb88e33-20261008/complete-receipt.json`), SHA `32027c6cadbfc3d9eecb2bdf5932fa3eac3b4c8101f4abef8c2bf77fa64df977`.
+- state_v2_suite17_manifest (`/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-suite17-2cb88e33-20261008/evidence-manifest.json`), SHA `a5953781cc5c624ed3f70773909434359532320dd0b04b4af72e8da97d271bbb`.
+- state_v2_suite17_independent (`/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-suite17-reception2-20261008/reception.json`), SHA `0cd3584342eee4f7b5e19b022c49a686efd97b7ef0ff6194a2cb87156503eb9f`.
+- state_v2_suite17_root (`/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-suite17-positive-2cb88e33-20261008.json`), SHA `939ed75c970b60a85b0ac2b4211357c17e85afffd7993216edb684a81a4b5bd8`.
 
 ## Reproduction future après admission des nouveaux artefacts af8
 
@@ -75,7 +75,7 @@ rtk proxy env -u PYTHONPATH -u PYTHONOPTIMIZE \
 
 ---
 
-## Corps historique conservé — brouillon du 7 octobre
+## Corps historique conservé - brouillon du 7 octobre
 
 # SDK967e : incidence AMR, MPI et checkpoint original
 
@@ -137,10 +137,10 @@ et ne qualifie pas rétroactivement les autres processus lancés avec OMP2.
 
 ## Preuves conservées
 
-- [PDE original reçu par Root](/Users/romaindespoulain/dev/tmp/root-sdk967e-nonautonomous-positive-reception-9db1c37-20261007.json), SHA `8cbae51f8f5ed27a7f0f402e9d70b5d2a15c470f2e35364dee1d8955e52d030c`.
-- [Suites C++ world1 reçues par Root](/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-cohort-world1-positive-reception-9db1c37-20261007.json), SHA `d7998d072289ae6a0af7346c32d821cb62b26e65b9117f5992e72ae5aff29328`.
-- [C++ world2 corrigé reçu par Root](/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-world2-corrected-positive-reception-60067495-20261007.json), SHA `a0c2c26ee18c87d9914380aa3a8a20ece6c7cb4605a0709a9c28ab6104275cc9`.
-- [OwnRetry reçu par Root](/Users/romaindespoulain/dev/tmp/root-sdk967e-original-own-retry-positive-reception-60067495-20261007.json), SHA `3b454c9311088ed0ed5e2d5a9d07ad5fbaa4c86f6887d6df842b8864e51253e1` : 110 artefacts rehashés, paquet2793 entrées inchangé, [contre-revue indépendante](/Users/romaindespoulain/dev/tmp/PoPS-independent-sdk967e-original-own-retry-reception-20261007-60067495/reception.json), SHA `0f81238c7962246a13551e15c6b603aa2ed5e1390d3a92144392d56bddaba174`.
+- PDE original reçu par Root (`/Users/romaindespoulain/dev/tmp/root-sdk967e-nonautonomous-positive-reception-9db1c37-20261007.json`), SHA `8cbae51f8f5ed27a7f0f402e9d70b5d2a15c470f2e35364dee1d8955e52d030c`.
+- Suites C++ world1 reçues par Root (`/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-cohort-world1-positive-reception-9db1c37-20261007.json`), SHA `d7998d072289ae6a0af7346c32d821cb62b26e65b9117f5992e72ae5aff29328`.
+- C++ world2 corrigé reçu par Root (`/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-world2-corrected-positive-reception-60067495-20261007.json`), SHA `a0c2c26ee18c87d9914380aa3a8a20ece6c7cb4605a0709a9c28ab6104275cc9`.
+- OwnRetry reçu par Root (`/Users/romaindespoulain/dev/tmp/root-sdk967e-original-own-retry-positive-reception-60067495-20261007.json`), SHA `3b454c9311088ed0ed5e2d5a9d07ad5fbaa4c86f6887d6df842b8864e51253e1` : 110 artefacts rehashés, paquet2793 entrées inchangé, contre-revue indépendante (`/Users/romaindespoulain/dev/tmp/PoPS-independent-sdk967e-original-own-retry-reception-20261007-60067495/reception.json`), SHA `0f81238c7962246a13551e15c6b603aa2ed5e1390d3a92144392d56bddaba174`.
 
 Les reçus Python Native contiennent les commandes effectives, XML, identités
 importées, sources générées, DSO et checkpoints. Ces essais importent le paquet installé sous
@@ -181,12 +181,12 @@ archive : certains tests construisent des négatifs. Les quatre comparaisons de
 tableaux sauvegardés manual/restored, continuous/restarted, manual/preset et
 rejected-before/after ont une erreur nulle. La mesure OpenMP2/world1 est capturée
 dans la fixture originale manuelle. Les autres tests ne reçoivent pas cette
-mesure par association. [Commandes effectives du lot](/Users/romaindespoulain/dev/tmp/PoPS-sdk967e-affected-nonreg-60067495-20261007/planned-command.txt)
-et [reçu producteur](/Users/romaindespoulain/dev/tmp/PoPS-sdk967e-affected-nonreg-60067495-20261007/nonreg-pass.json),
+mesure par association. Commandes effectives du lot (`/Users/romaindespoulain/dev/tmp/PoPS-sdk967e-affected-nonreg-60067495-20261007/planned-command.txt`)
+et reçu producteur (`/Users/romaindespoulain/dev/tmp/PoPS-sdk967e-affected-nonreg-60067495-20261007/nonreg-pass.json`),
 SHA `69f43029011d83841322956869826db45ea7792afaeb6ac38c9d7646d772703d`.
-La [réception Root du lot](/Users/romaindespoulain/dev/tmp/root-sdk967e-native8-positive-reception-60067495-20261007.json),
+La réception Root du lot (`/Users/romaindespoulain/dev/tmp/root-sdk967e-native8-positive-reception-60067495-20261007.json`),
 SHA `68571307f9d3e34a27d27419051960fff56d2de9009ca7830e0cf914837da47c`,
-joint la [contre-revue indépendante](/Users/romaindespoulain/dev/tmp/PoPS-independent-sdk967e-native8-reception-20261007-60067495/reception.json),
+joint la contre-revue indépendante (`/Users/romaindespoulain/dev/tmp/PoPS-independent-sdk967e-native8-reception-20261007-60067495/reception.json`),
 SHA `e5dfe655828812e3efe0a3ce2062a7845b1a201a142ed4597e9a49521475359f`.
 Les39 NPZ se répartissent en17 checkpoints validés par leurs manifestes et
 payloads,13 archives scientifiques/snapshots et neuf négatifs délibérés exclus
@@ -214,7 +214,7 @@ checkout. Le premier essai prévu est le target C++ officiel, filtré sur
 Le job réel ROMEO **736186** est soumis une seule fois sur Source9db et SDK967e,
 après réception indépendante du payload27 et préflight distant. Le premier
 état observé à17:34:52UTC est RUNNING sur `romeo-a046`, phase `originals-before`,
-CPU8/GPU h100:1/96Go/12h. [Soumission réelle et revue Root](/Users/romaindespoulain/dev/tmp/root-sdk48-cuda-dispatch-9db1c37b-20261007/submission.json).
+CPU8/GPU h100:1/96Go/12h. Soumission réelle et revue Root (`/Users/romaindespoulain/dev/tmp/root-sdk48-cuda-dispatch-9db1c37b-20261007/submission.json`).
 Le job termine FAILED1:0 après1h10min48s. NVCC refuse la lambda étendue dans
 `make_poisson_rhs_v2`, dont le retour est déduit, à la compilation de
 `system_install.cpp.o`. Cinq lignes CXX sont observées, sans démontrer cinq
@@ -223,7 +223,7 @@ La copie originale entière est vérifiée :92 membres,74 fichiers réguliers,
 454883912 octets, modes/liens/octets exacts. La Source9db/SDK967e et les
 dépendances après setup sont identiques avant/après.
 Les espaces existants19CPU/9GPU/20Sources sont couverts par la préservation.
-Le négatif antérieur735830 reste inchangé. Le [négatif réel736186](/Users/romaindespoulain/dev/tmp/sol61-sdk48-cuda-736186-monitor-20261007/terminal-negative-receipt.json)
+Le négatif antérieur735830 reste inchangé. Le négatif réel736186 (`/Users/romaindespoulain/dev/tmp/sol61-sdk48-cuda-736186-monitor-20261007/terminal-negative-receipt.json`)
 reste distinct, avec préservation19CPU/9GPU/20Sources enregistrée.
 
 La mission des94 obligations reste ouverte. Le nouveau cas public C++ φ→Q→ψ,

@@ -1,4 +1,4 @@
-# Independent diffusive/ALE review — 30 September 2026
+# Independent diffusive/ALE review - 30 September 2026
 
 This review reads exact commits `b03b47b231776324832a358b8dcb3d4261b53ba5`
 and `88c755d31fd7a4f1ec3451d5917ed3d400a455cf`. It does not install them,

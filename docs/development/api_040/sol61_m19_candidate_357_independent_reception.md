@@ -1,4 +1,4 @@
-# Independent reception of M19 candidate 357 — 1 October 2026
+# Independent reception of M19 candidate 357 - 1 October 2026
 
 Candidate: `357e2c2bf5dee3487218bfec65f65132195db5a0`, exact parent
 `9fb7e8fb64c3e3de289d9c139ba310e9e47e43a6`. Private checkout

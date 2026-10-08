@@ -1,4 +1,4 @@
-# M19 independent finite product contract — 30 September 2026
+# M19 independent finite product contract - 30 September 2026
 
 Scope: source/math reception at `9fb7e8fb64c3e3de289d9c139ba310e9e47e43a6`,
 private branch `codex/api040-sol61-m19-product-review`. Production, installed

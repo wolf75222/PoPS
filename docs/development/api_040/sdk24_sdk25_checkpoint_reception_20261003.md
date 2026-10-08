@@ -1,4 +1,4 @@
-# SDK24/25 — checkpoint Uniform9, migration et consommateurs reçus
+# SDK24/25 - checkpoint Uniform9, migration et consommateurs reçus
 
 La tranche obligatoire UniformCP9/V@3 est reçue par ROOT dans les profils ci-dessous. Cette réception ne ferme aucune des94 obligations dans sa portée complète. Les preuves Source, build/install, Native, math et engineering sont distinctes ; GPU, inter-node, CI et performance à calcul comparable restent non reçus. L'[index transportable](sdk24_sdk25_receipt_index_20261003.json) épingle14 reçus ROOT et six preuves/commandes complémentaires par SHA exact. Tous les historiques sont conservés.
 

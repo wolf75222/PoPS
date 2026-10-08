@@ -1,4 +1,4 @@
-# Independent review — Cartesian CoupledGradient in Dim2/Dim3
+# Independent review - Cartesian CoupledGradient in Dim2/Dim3
 
 Reviewed author commits `08ebcc95`, `6176eb14`, `221dd9af73974201b7d8493b9d8939db656b58c4`, relative to `9ea0342`. Review edits contain tests, an independent NumPy oracle and this receipt only. Production files belong to the author. Verdict: no blocking source defect found in the bounded periodic constant-matrix extension; installed numerical reception is still required.
 

@@ -1,4 +1,4 @@
-# M03 Euler/EOS — source and oracle receipt (pre-native)
+# M03 Euler/EOS - source and oracle receipt (pre-native)
 
 Date: 2026-09-29. This is a source/analytic receipt, **not** an installed native
 Euler run or a Dim=1 qualification. The independent review belongs to GPT-6 Sol;

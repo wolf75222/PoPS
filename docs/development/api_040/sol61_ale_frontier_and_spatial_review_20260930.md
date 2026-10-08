@@ -1,4 +1,4 @@
-# Independent ALE/frontier review and spatial interaction design — 2026-09-30
+# Independent ALE/frontier review and spatial interaction design - 2026-09-30
 
 This is a GPT-6.1 Sol review of `6c51d6f` and `f6aad44`, read by Git object
 without merging them into the frozen M26 review checkout. No environment was

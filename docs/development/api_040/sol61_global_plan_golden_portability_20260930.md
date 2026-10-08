@@ -1,4 +1,4 @@
-# Physical global plan fixture portability — 30 September 2026
+# Physical global plan fixture portability - 30 September 2026
 
 This change repairs tests only, on parent
 `f7378be89e10de170b37f7158bb91031c754829b`. Production Python, headers, native

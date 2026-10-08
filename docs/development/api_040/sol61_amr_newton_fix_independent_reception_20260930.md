@@ -1,4 +1,4 @@
-# Independent reception of c100 AMR Newton repair — 30 September 2026
+# Independent reception of c100 AMR Newton repair - 30 September 2026
 
 Candidate `c1009a821dca080bf1bbf8aa52641e9aa6ea247d`, parent
 `47a7b2aa`: received in a new private checkout, then combined with the earlier

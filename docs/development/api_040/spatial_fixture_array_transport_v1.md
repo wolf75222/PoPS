@@ -1,4 +1,4 @@
-# Spatial fixture array transport @1 — source/host receipt
+# Spatial fixture array transport @1 - source/host receipt
 
 Base fixture: `e7da8f75a6f142ef627b1e4dccd2ca073e27796b`. This correction changes only test capture transport. Program equations, Native collective producers/encoder, InitialConditionPlan admission, nonlocal/history contracts, archive keys, checkpoint anchors and receipt @1 remain unchanged.
 

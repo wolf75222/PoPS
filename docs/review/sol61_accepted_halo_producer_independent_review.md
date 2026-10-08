@@ -14,7 +14,7 @@ Source emitter suites pytest --noconftest -o pythonpath=python tests/python/unit
 
 Additional independent host probe extracts the actual optional primary export loader into an explicit dynamic-symbol stub harness. Absent export preserves empty legacy authority; z.primary is retained despite a.secondary sorting first; foreign/null/empty export refuses. This is the retained Source loader branch compiled with C++20, not a real DSO loading proof. Both independent host nodes:2PASS1.70s.
 
-## Final Source review —0e6de1b6 on cb8d71ab
+## Final Source review -0e6de1b6 on cb8d71ab
 
 The author supplement closes the required causal gaps for its explicit supported route. Final verdict: no blocking Source defect found for compiler-certified direct valid-cell named RHS and an acyclic required typed-Field boundary closure. Unknown/prepared-level RHS, positive read extent, uncertified InputAux and required cycles are rejected inside the voted request preflight before materialization/backups/state staging. The default route is preserved. This is an explicit support boundary, not a claim that arbitrary Field/InputAux/nonlocal RHS is ready.
 

@@ -1,4 +1,4 @@
-# Fixture dt_bound : initialisation authentique et frontières MPI — 30 septembre 2026
+# Fixture dt_bound : initialisation authentique et frontières MPI - 30 septembre 2026
 
 Ce suivi du gel `893379b4255711135b1d1a8ab2e0e896bbc542a1` corrige seulement
 les tests indépendants et ajoute le présent rapport. Production Python 9c4209a5

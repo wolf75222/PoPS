@@ -1,4 +1,4 @@
-# Finite linear support contract v1 — W06 / M09
+# Finite linear support contract v1 - W06 / M09
 
 This increment implements explicit finite linear maps in the common native Program
 expression mechanism. It does **not** implement a globally distributed mesh solve,

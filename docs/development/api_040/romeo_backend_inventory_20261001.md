@@ -1,4 +1,4 @@
-# Inventaire backend ROMEO — 2026-10-01
+# Inventaire backend ROMEO - 2026-10-01
 
 Inventaire réel en lecture seule ; aucun sbatch/srun, build, installation, copie de source, import numérique ou backend test exécuté. Réalisé depuis MAIN source `3b2b05098e6bf4f23dccc67b43baf4f1556b0e39`, branche `codex/api-040-native-20260928`, avec fichiers non suivis existants. Gel documentaire ensuite dans le worktree docs-only base `6fafed46`. L'état ordonnanceur est un instantané et doit être revérifié avant une campagne.
 

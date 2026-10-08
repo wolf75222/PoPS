@@ -1,4 +1,4 @@
-# Cubature Raw M17 — installed Native fixture preparation @1
+# Cubature Raw M17 - installed Native fixture preparation @1
 
 This is Source-only preparation, not a runtime receipt. ROOT owns compilation,
 Native Serial/MPI execution and external identity/qualification.

@@ -1,4 +1,4 @@
-# Independent three-owner Halo stage-failure review — SOURCE_ONLY
+# Independent three-owner Halo stage-failure review - SOURCE_ONLY
 
 Exact author gel 8ddc955, parent a542cd42, private WT PoPS-sol61-halo-stage-proof-persistence. Source review finds no blocker: third owner binds same authentic artifact, runs first step, arms the same genuine one-shot failure, publishes reached receipts, checkpoints its own rollback, retries without rearming. All calls that communicate, including checkpoint calls, use collective_call/attempt; local comparisons/publication use collective_check. Aligned receipts equal the original receipts; aligned final CP compares every payload including accepted state and authority, except the two lifecycle seals. Continuous control remains uninterrupted and physically exact; four CP differences are explicitly reported. New pair schema @2 prevents reinterpretation of old @1 failure.
 

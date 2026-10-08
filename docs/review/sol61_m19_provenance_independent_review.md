@@ -1,4 +1,4 @@
-# M19 provenance correction independent review — SOURCE_ONLY
+# M19 provenance correction independent review - SOURCE_ONLY
 
 Exact reviewed gel: 6b8f158dc92eb402551e1c8927ff4bfdc3317bf1, parent a491ad65, author worktree PoPS-sol61-m19-provenance-capture. No Source blocker found.
 

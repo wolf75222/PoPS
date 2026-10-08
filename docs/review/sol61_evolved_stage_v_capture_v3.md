@@ -1,4 +1,4 @@
-# V strict fixture @3 — Source preparation, not Native reception
+# V strict fixture @3 - Source preparation, not Native reception
 
 Base: `3302c4a19d94a0b08dbba9c05c4de3ae2debb232`. Historical fixture/archive @2 and all saved readers remain unchanged. SDK21 V@2 Serial job732119 and MPI2 job732149 have their separate authority; this change cannot reseal them.
 

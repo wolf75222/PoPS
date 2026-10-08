@@ -1,4 +1,4 @@
-# Réception native de l'échec après préparation Halo — 2026-10-02
+# Réception native de l'échec après préparation Halo - 2026-10-02
 
 La préparation Halo suivie d'un échec sur le rang ciblé, le rollback et la
 reprise sont reçus dans le périmètre du [reçu ROOT pinné](sdkeef92c_halo_stage_failure_reception.json).

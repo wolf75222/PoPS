@@ -1,4 +1,4 @@
-# Full AMR state carrier persistence — independent Source review
+# Full AMR state carrier persistence - independent Source review
 
 Review worktree based on MAIN 3b2b0509. Root production candidates copied into this private worktree as uncommitted review inputs; this commit owns only the independent tests and this note. M19 freeze de48143 is preserved in its separate worktree.
 

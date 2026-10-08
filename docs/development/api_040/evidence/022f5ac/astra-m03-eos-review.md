@@ -1,4 +1,4 @@
-# M03 Euler EOS — independent scientific review
+# M03 Euler EOS - independent scientific review
 
 2026-09-29. Shared checkout branch `codex/api-040-native-20260928`, HEAD at review completion `022f5acbb9181eb85a6d9cd05e30a92aad1c4872`, with concurrent uncommitted work. Source hashes are in `outputs/astra-m03-eos-source-hashes.json`. Production files were read only by this reviewer; Sol6_reference applied the example correction below.
 

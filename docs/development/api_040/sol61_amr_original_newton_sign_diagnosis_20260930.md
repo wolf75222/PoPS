@@ -1,4 +1,4 @@
-# Original AMR field Newton: independent sign diagnosis — 30 September 2026
+# Original AMR field Newton: independent sign diagnosis - 30 September 2026
 
 Source reviewed in an exclusive checkout:
 `29daef24292f17c3f11b0b6c8c9357523e951600`.

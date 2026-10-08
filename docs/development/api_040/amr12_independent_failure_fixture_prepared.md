@@ -1,4 +1,4 @@
-# AMR12 independent real-native failure fixture — prepared source only
+# AMR12 independent real-native failure fixture - prepared source only
 
 Base `f1edec55`; private worktree `PoPS-sol61-amr12-failure-fixture`. This change edits tests/documentation only. No environment installation, native compilation, JIT, numerical execution or MPI launch was performed. Python AST parsing and in-memory bytecode compilation succeeded; the AST contains one selected native test. This is source inventory, not successful pytest collection or a native test result.
 

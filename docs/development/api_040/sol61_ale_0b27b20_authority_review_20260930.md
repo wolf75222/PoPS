@@ -1,4 +1,4 @@
-# Independent ALE interval-authority review — 30 September 2026
+# Independent ALE interval-authority review - 30 September 2026
 
 Exact candidate: `0b27b20240a3a23061a2197e262b603783a6d258`.
 The source/host review finds one required guard before approval: publication

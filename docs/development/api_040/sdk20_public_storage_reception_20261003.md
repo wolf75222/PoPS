@@ -1,4 +1,4 @@
-# SDK20 — stockage public reçu, échec scientifique installé conservé
+# SDK20 - stockage public reçu, échec scientifique installé conservé
 
 Le gel Native `bdfea618dd5479e30f451f16e0dea5b632b12ccf` correspond aux sources
 et tests de MAIN `9dc62a332df587d9ec2175a70b922e61cda97570`. Les quatorze commits

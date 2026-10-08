@@ -1,4 +1,4 @@
-# C30 — Descriptor deletion after public validation
+# C30 - Descriptor deletion after public validation
 
 Date: 2026-09-29. Shared checkout `work/PoPS`, branch
 `codex/api-040-native-20260928`. Only the two files below were edited for this task;

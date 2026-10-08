@@ -1,4 +1,4 @@
-# Explicit Original Newton stopping policy — Source preparation
+# Explicit Original Newton stopping policy - Source preparation
 
 Base: 5486e2d9. No Native extension, runtime, MPI execution or JIT qualification is claimed.
 

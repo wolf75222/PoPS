@@ -1,8 +1,8 @@
-# Field→Ghost initial — SDK11–14, preuves et échecs conservés
+# Field→Ghost initial - SDK11–14, preuves et échecs conservés
 
-Actualisation ROOT SDK14 — build Source8d438518 réel rc0/28 TU, DSO2738b99f,
+Actualisation ROOT SDK14 - build Source8d438518 réel rc0/28 TU, DSO2738b99f,
 SDK8c238f29, 1 140 fichiers installés authentifiés. La
-[réception scientifique positive ROOT](/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-initial-field-ghost-positive-scientific-root-reception.json) reçoit Serial et MPI2 :
+réception scientifique positive ROOT (`/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-initial-field-ghost-positive-scientific-root-reception.json`) reçoit Serial et MPI2 :
 vraie Field consommée avant Ghost au point initial et après une FE, OriginalF
 initial maximal1,02e−11 et accepted maximal4,61e−12 pour la garde intacte1e−10,
 CP12/accepted9 et restart bit exact. Serial possède28 exports, MPI2 en possède34 ;
@@ -24,7 +24,7 @@ L'exemple utilise le FAC par défaut : son succès ne qualifie pas la garde SCI1
 Les suites Source99PASS et27PASS sont distinctes des runs et ne sont pas
 additionnées aux suites qui les recouvrent.
 
-L'[injection native@6 ROOT](/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-initial-ghost-capture-fault-root-reception.json) est reçue Serial et MPI2. Le recompute ROOT
+L'injection native@6 ROOT (`/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-initial-ghost-capture-fault-root-reception.json`) est reçue Serial et MPI2. Le recompute ROOT
 rehash les57 pins du gel indépendant, relit les9/14 exports réels, compare ses
 résultats au rapport non-auteur et authentifie les1 140 fichiers du paquet et du
 checkout ainsi que le DSO. En Serial, le XML compte1PASS49,277 s ; en MPI2,
@@ -83,9 +83,9 @@ utiliser une sortie distincte vide et `run_installed_mpi_checks.py --output
 Ce driver conserve ses authentifications avant/après et XML par rang.
 Les commandes exactes et environnements des exécutions reçues sont dans les
 `root-commands.json` liés aux sorties du sceau. Le
-[lecteur indépendant reproductible](/Users/romaindespoulain/dev/tmp/sol61-sdk14-initial-capture-fault-independent-20261002/README.md)
+lecteur indépendant reproductible (`/Users/romaindespoulain/dev/tmp/sol61-sdk14-initial-capture-fault-independent-20261002/README.md`)
 permet le recompute offline sans importer PoPS ni écrire dans les originaux.
-Le [driver ROOT](/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-capture-fault-root-receiver.py) est figé ;
+Le driver ROOT (`/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdk14-capture-fault-root-receiver.py`) est figé ;
 son reçu existant se lit sans le régénérer. Les hashes ne sont pas un résultat CI.
 
 Historique SDK13 (avant le build SDK14 et sa réception positive) :

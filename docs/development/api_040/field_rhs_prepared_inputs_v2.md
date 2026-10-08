@@ -240,17 +240,17 @@ the header signature remains `4b2c57fbdc84b72f8b0c66c7c943eb2f793d519181d7f9032f
 The unchanged public nonautonomous test passes once, with no skip, from the real
 installed package. U and Field meet the original bounds; checkpoint arrays are exact.
 Y remains a reference, and effective OpenMP concurrency is not measured in this run.
-The [Root receipt](/Users/romaindespoulain/dev/tmp/root-field-rhs-native13-core-r4-nonautonomous-positive-20261007.json)
+The Root receipt (`/Users/romaindespoulain/dev/tmp/root-field-rhs-native13-core-r4-nonautonomous-positive-20261007.json`)
 joins 34 raw artifacts and independent reception. Exact reproduction commands are
-retained in [build-command.txt](/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-B-20261007-c0f18d50efd4/build-command.txt)
-and [first-command.txt](/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-B-20261007-c0f18d50efd4/first-command.txt).
+retained in build-command.txt (`/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-B-20261007-c0f18d50efd4/build-command.txt`)
+and first-command.txt (`/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-B-20261007-c0f18d50efd4/first-command.txt`).
 
 The corresponding C++ world1 tranche reaches 11 PASS, 2 FAIL and zero skips in
 13 cases. The lane expectation now captures an owning string from the live public
 System getter; expiry, lane size and release checks remain. This test-only correction
 has no new execution receipt yet.
 
-A [separate coherent AMR diagnostic](/Users/romaindespoulain/dev/tmp/root-amr-aux-clock-coherent-diagnostic-reception-20261007.json)
+A separate coherent AMR diagnostic (`/Users/romaindespoulain/dev/tmp/root-amr-aux-clock-coherent-diagnostic-reception-20261007.json`)
 observes three physical `before_field_solve` Analytic calls at levels 0, 0 and 1,
 then `after_regrid` at level 0 with the topology diagnostic Clock and no physical
 payload. The original guard throws during bootstrap commit. No full native stack

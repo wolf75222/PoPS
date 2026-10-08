@@ -1,4 +1,4 @@
-# Réception scientifique N8/N16, profil @4 — 2026-10-02
+# Réception scientifique N8/N16, profil @4 - 2026-10-02
 
 Les quatre exécutions réelles N8/N16 Serial/MPI2 sont reçues avec des sceaux ROOT distincts et une contre-revue indépendante des archives. La fixture et le lecteur @4 sont nouveaux ; leurs prédécesseurs @3 restent inchangés. [Reçu et hashes](sdk3d8481_spatial_v4_scientific_reception.json).
 
@@ -11,7 +11,7 @@ Chaque ligne représente un cas par backend, exécuté identiquement sur les deu
 
 La physique, la méthode et les critères originaux sont préservés : deux macro-pas, diffusion couplée signée constante, quantités composites Q et contrôle de restriction à 3e-8, norme physique Original-F à 1e-10. Le résidu relatif brut est conservé ; la méthode sélectionnée teste `norm <= 1e-10*max(1,r0)`. Les masques actifs comptent 48/64 cellules N8 et 192/256 N16, avec volume physique composite 1. Le contre-modèle qui moyenne T au lieu de Q est discriminé. Les carriers complets, histoires, diagnostics et horloges restent exacts après reprise et replay.
 
-La [contre-revue des quatre archives](/Users/romaindespoulain/dev/tmp/sol61-spatial-v4-four-independent-20261002/README.md) rejoue les lecteurs gelés, rehash les 50/51 pins et les 1 136 fichiers installés de chaque route, puis recalcule depuis les NPZ les volumes, masques et quantités Q. Vingt adversaires SourceOnly sont refusés. Ils constituent des contrôles du lecteur ; ils ne représentent pas vingt simulations natives.
+La contre-revue des quatre archives (`/Users/romaindespoulain/dev/tmp/sol61-spatial-v4-four-independent-20261002/README.md`) rejoue les lecteurs gelés, rehash les 50/51 pins et les 1 136 fichiers installés de chaque route, puis recalcule depuis les NPZ les volumes, masques et quantités Q. Vingt adversaires SourceOnly sont refusés. Ils constituent des contrôles du lecteur ; ils ne représentent pas vingt simulations natives.
 
 Commandes de reproduction sur le paquet conservé :
 

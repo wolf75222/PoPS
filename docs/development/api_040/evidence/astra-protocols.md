@@ -1,4 +1,4 @@
-# T4/T5 native prepared-resource publication — 2026-09-28
+# T4/T5 native prepared-resource publication - 2026-09-28
 
 Checkout: `work/PoPS`, shared branch `codex/api-040-native-20260928`, supplied base
 `3a93ba7`. Existing edits by other workers were preserved. No commits, environment

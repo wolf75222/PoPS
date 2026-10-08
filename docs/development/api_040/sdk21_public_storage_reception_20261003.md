@@ -1,4 +1,4 @@
-# SDK21 — huit pas originaux reçus CPU/MPI2, stockage et reprise AMR bornés
+# SDK21 - huit pas originaux reçus CPU/MPI2, stockage et reprise AMR bornés
 
 Gel Native `3302c4a19d94a0b08dbba9c05c4de3ae2debb232`, code MAIN équivalent
 `c1dcc9a9d684fcf947734a0f2949cd19805b214d`. [Résumé JSON](sdk21_public_storage_reception_20261003.json),

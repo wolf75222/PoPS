@@ -41,7 +41,7 @@ and Root admission `3bfc59ee663246b608a3a9d0de9727e5d791d4bf1569b4321eca3903c511
 The recorded Host syntax probe checks actual Count-0 and Count-2 model interfaces
 and callable bodies; it does not establish NVCC compilation or device execution.
 
-## Actual Source integration — 2026-10-08
+## Actual Source integration - 2026-10-08
 
 The exact header is now integrated in Main
 `637c3220da44102ff7dbe3468c99086d141f6981`, SHA

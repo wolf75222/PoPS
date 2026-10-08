@@ -1,4 +1,4 @@
-# Réception indépendante bornée de dot_all a77e1b1 — 30 septembre 2026
+# Réception indépendante bornée de dot_all a77e1b1 - 30 septembre 2026
 
 Candidate exacte : `a77e1b1ce09b84171fd3f63ffc64f6995614b8e5`.
 Comparaison legacy : `21a56b910c421eee465afcb6f16123dd309360a9`.

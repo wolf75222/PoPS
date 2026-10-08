@@ -1,4 +1,4 @@
-# PR brouillon — état réel de l’intégration PoPS 0.4.0
+# PR brouillon - état réel de l’intégration PoPS 0.4.0
 
 Snapshot du 8 octobre 2026. **Mission encore ouverte ; cette PR est un brouillon.**
 La révision reconstruite et exécutée pour CPU/MPI est `6d898599a3f66fa9aa3c049ba0f3114f1960b6dc`.
@@ -93,6 +93,25 @@ projet/rmdraux n’est qu’un dernier recours. Les anciennes preuves/emprunts
 projet sont conservés et lus seulement. Leurs chemins actuels avec `/rmdraux/`
 sont distingués des anciens chemins historiques, sans supposer une cause de
 relocation. La sonde n’a modifié ni anciennes sources, ni environnements, ni jobs.
+
+## Première CI GitHub de la PR681
+
+Sur le commit initial de PR `a82e626896a7ab79883d7a14ad95013efd95fbb5`,
+les premiers checks sont **en échec**, malgré les validations locales listées.
+Le [run CI37799501091](https://github.com/wolf75222/PoPS/actions/runs/37799501091)
+rapporte un internal compiler error GCC13 dans apply_identity_attributes lors du
+prewarm de amr_system.cpp sur Serial/OpenMP/MPI, et des écarts de classement des
+includes/inventaires dans les tests Python architecture. Les jobs dépendants
+sont donc partiellement sautés et le gate d’agrégation échoue. Les correctifs
+correspondants et une CI au SHA final restent à réaliser.
+
+Le [run Docs37799501092](https://github.com/wolf75222/PoPS/actions/runs/37799501092)
+avait320violations de forme/liens : tirets longs et liens absolus vers des preuves
+locales indisponibles sur Linux, ainsi que3références au handoff non suivi.
+La correction de portabilité documentaire conserve les labels et chemins de
+provenance en texte littéral, ou lie les petites copies suivies ; aucune règle
+CI ni garde n’est assouplie. `bash scripts/build_docs.sh` passe localement après
+ces corrections. Cela ne déclare pas les prochains checks GitHub verts.
 
 ## Ce qui reste
 

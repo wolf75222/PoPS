@@ -24,7 +24,7 @@ An independent NumPy calculation starts from each actual initial distribution, f
 | Time and mappings | Exact clocks; each of six mappings has counters `0 → 2 → 4` |
 | Unrelated state | Both sentinel components remain bitwise unchanged |
 
-[Original runs, commands and failure](/Users/romaindespoulain/dev/tmp/root-m19-bgk-current-native-20261006/report.json), pins `cfb168851453a7fec86a1b7a2062cb102e14db62579e93923244e564fa0814e5`, preserve 559 regular payloads and two literal links. The [independent report](/Users/romaindespoulain/dev/tmp/sol61-m19-bgk-local-independent-20261006/report.json), pins `5f2f90b0a03d45d1547c2d4170d4e6c24eb97142b9ea8115e42f184089065134`, and [ROOT reception](/Users/romaindespoulain/dev/tmp/root-m19-bgk-local-reception-20261006.json), SHA `3d16db81a8f76d99cab527bb47e6cf27dad70be75841f0294788d7dd678a263e`, receive this scope.
+Original runs, commands and failure (`/Users/romaindespoulain/dev/tmp/root-m19-bgk-current-native-20261006/report.json`), pins `cfb168851453a7fec86a1b7a2062cb102e14db62579e93923244e564fa0814e5`, preserve 559 regular payloads and two literal links. The independent report (`/Users/romaindespoulain/dev/tmp/sol61-m19-bgk-local-independent-20261006/report.json`), pins `5f2f90b0a03d45d1547c2d4170d4e6c24eb97142b9ea8115e42f184089065134`, and ROOT reception (`/Users/romaindespoulain/dev/tmp/root-m19-bgk-local-reception-20261006.json`), SHA `3d16db81a8f76d99cab527bb47e6cf27dad70be75841f0294788d7dd678a263e`, receive this scope.
 
 ## Reproduction
 
@@ -45,7 +45,7 @@ env -u PYTHONPATH -u PYTHONOPTIMIZE "$CONDA_PREFIX/bin/python" \
   --test tests/python/integration/runtime/test_m19_bgk_runtime.py
 ```
 
-The [actual command](/Users/romaindespoulain/dev/tmp/root-m19-bgk-current-native-20261006/corrected/command.json) uses `conda run -n pops` with explicit Kokkos roots and no `PYTHONPATH`. The driver authenticates installed Python/headers and the exact native extension in the pytest process. Later revisions require their own identity and results.
+The actual command (`/Users/romaindespoulain/dev/tmp/root-m19-bgk-current-native-20261006/corrected/command.json`) uses `conda run -n pops` with explicit Kokkos roots and no `PYTHONPATH`. The driver authenticates installed Python/headers and the exact native extension in the pytest process. Later revisions require their own identity and results.
 
 ## Exact remaining scope
 

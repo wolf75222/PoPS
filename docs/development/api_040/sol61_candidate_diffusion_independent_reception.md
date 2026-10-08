@@ -1,4 +1,4 @@
-# Independent candidate diffusion reception — 1 October 2026
+# Independent candidate diffusion reception - 1 October 2026
 
 Reviewed production: `48292403c0f42192e17c61a3be9f97b3dd2d3c19`, allocation drain follow-up `2e9a07329d008cf910f442998e54f5a47ed6e6d4`, and mandatory true-correction follow-up `5394fda54aaf9623f784a74703da69635f4d2dae`. Parent: `7d91f5ab06eca3db1d32f2c0164359a5426c2c9c`. This commit contains independent tests/documentation only. The author's later fixture freeze `be6665bd19fb5a32a276a0e4ae9e03734bdfb2c4` is an additional native test inventory, not an execution receipt.
 

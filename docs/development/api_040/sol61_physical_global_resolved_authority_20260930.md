@@ -1,4 +1,4 @@
-# Physical globals across the resolved compiler boundary — 30 September 2026
+# Physical globals across the resolved compiler boundary - 30 September 2026
 
 Base: `368055dbe1f4c1f5fad4a11791508ae2b0520f03`.
 Private checkout: `PoPS-sol61-global-ownership`.

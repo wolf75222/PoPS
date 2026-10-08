@@ -1,4 +1,4 @@
-# M04/W02 advection–diffusion — pre-native source receipt
+# M04/W02 advection–diffusion - pre-native source receipt
 
 Date: 2026-09-29. GPT-6 Sol authored this independent migration example and
 oracle; no heavy native build or run was performed here.

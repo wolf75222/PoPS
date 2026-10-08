@@ -1,4 +1,4 @@
-# Genuine Dim3 CoupledGradient reception — SDK20d
+# Genuine Dim3 CoupledGradient reception - SDK20d
 
 This is a completed execution of the installed production package. Source is
 `48871851f10cd0acb4c0dfa45bd0f3195ab2ef0a`; the native extension is

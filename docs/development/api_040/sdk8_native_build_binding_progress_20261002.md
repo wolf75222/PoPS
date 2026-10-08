@@ -1,4 +1,4 @@
-# SDK8 native construction and bind reception — 2026-10-02
+# SDK8 native construction and bind reception - 2026-10-02
 
 The [pinned receipt](sdk8_native_build_binding_progress_20261002.json) records
 actual repository builds and installed-package tests. Full scientific reception
@@ -29,7 +29,7 @@ already compiled **program component**, not as a method on the core SDK classes.
 The independent binding review verifies the precise ranked converter and
 43 Source tests. Source fakes alone had missed both integration seams.
 
-The [independent Tag report](/Users/romaindespoulain/dev/tmp/pops-public-tag-independent-reception-20261002/REVIEW.md)
+The independent Tag report (`/Users/romaindespoulain/dev/tmp/pops-public-tag-independent-reception-20261002/REVIEW.md`)
 authenticates all 1,136 installed sources for the representative Serial/MPI2
 routes. Its separate binary parser checks every grown constant, physical strip
 selection, epochs, inventory and payload truncation. These are `POPSCAR1`

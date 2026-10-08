@@ -50,7 +50,7 @@ on the second step.
 | --- | ---: | ---: |
 | N8 restart | 0.7118500624999999 | 0.7236549032181168 |
 | N16 restart | 0.7119124312499999 | 0.7237795053013649 |
-| N8 safe retry | 0.7118500624999999 | — |
+| N8 safe retry | 0.7118500624999999 | - |
 
 Rejected-attempt state/q/clock/rank-ledger bytes and accepted cursors remain
 identical to the before image. Restore matches the accepted image; replay matches

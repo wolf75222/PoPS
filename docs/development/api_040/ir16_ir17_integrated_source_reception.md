@@ -1,4 +1,4 @@
-# Integrated IR16/IR17 source reception — 2026-10-01
+# Integrated IR16/IR17 source reception - 2026-10-01
 
 The explicit global-field history storage port and the direct spatial interaction
 port are integrated in the real PoPS tree. Their extensions are conditional:

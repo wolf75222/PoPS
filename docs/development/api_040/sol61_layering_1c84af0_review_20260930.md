@@ -1,4 +1,4 @@
-# Independent finite-sharing fix reception — 30 September 2026
+# Independent finite-sharing fix reception - 30 September 2026
 
 Author fix `1c84af06bad8f86680427e1066d8ec64481ad68c` was applied alone on the
 exclusive review tree containing `908508a`, yielding

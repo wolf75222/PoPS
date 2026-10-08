@@ -147,7 +147,7 @@ hashes, false aggregate binding, false historical M04 closure and pending
 native source-only records. This consistency check and `git diff --check` pass;
 they are metadata validation, not an additional scientific/native or CI run.
 
-## Later exact reception window — SDK7 and candidate diffusion
+## Later exact reception window - SDK7 and candidate diffusion
 
 The preceding six entries and their status text are retained as their earlier window. The added m19_sdk7_finite_product_received entry receives actual Serial6/MPI2 six-per-rank original saved states and exact replay, with independent ROOT seals and12 genuine offline copied/resealed refusals per backend. Earlier M19 compile/bind/initial-save reds remain historical evidence. See m19_sdk7_native_reception.json; C05/C15/C39/C40 links describe only the finite reduction/extension chain.
 

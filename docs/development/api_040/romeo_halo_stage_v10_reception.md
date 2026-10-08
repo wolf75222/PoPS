@@ -1,4 +1,4 @@
-# ROMEO Halo et reprise après échec — réception bornée @10
+# ROMEO Halo et reprise après échec - réception bornée @10
 
 Le vrai paquet construit depuis `5582d98ad49dd5d93d5ededa43448fb9c54e8cd4`
 reçoit les quatre cas ci-dessous sur CPU x86 Kokkos OpenMP/MPICH Dim2.

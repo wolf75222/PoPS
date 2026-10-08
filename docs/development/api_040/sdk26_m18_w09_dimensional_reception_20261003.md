@@ -1,4 +1,4 @@
-# SDK26 M18/W09 et CP9 dimensionnel — réception bornée, 2026-10-03
+# SDK26 M18/W09 et CP9 dimensionnel - réception bornée, 2026-10-03
 
 ROOT a reçu les scopes ci-dessous après rejeux purs et contre-revues indépendantes. Cette actualisation ne clôt ni M_N général, ni les 94 obligations de la mission. Les anciens textes, reçus et échecs restent historiques. Le [nouvel index](sdk26_m18_w09_dimensional_reception_20261003.index.json) donne les chemins originaux, sept SHA256 ROOT complets et copies byte-identiques ; aucun reçu n'est régénéré. Cette documentation n'effectue aucune nouvelle exécution.
 

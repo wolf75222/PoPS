@@ -1,4 +1,4 @@
-# SDK8 nonconstant N8 reception — 2026-10-02
+# SDK8 nonconstant N8 reception - 2026-10-02
 
 The [sealed receipt](sdk3d8481_spatial_n8_scientific_reception.json) receives one
 nonconstant N8, width2 periodic full-y AMR strip on each of Serial and MPI2.
@@ -23,7 +23,7 @@ the saved raw quotient is preserved separately. The reference norm is
 and the `4*dimension/h_min²` sensitivity bound. No equation, initial data,
 Newton control, physical guard or empirical rounding margin was changed.
 
-The [independent read-only audit](/Users/romaindespoulain/dev/tmp/sol61-n8-independent-20261002/README.md)
+The independent read-only audit (`/Users/romaindespoulain/dev/tmp/sol61-n8-independent-20261002/README.md`)
 replays both sealed receptions exactly, rehashes 50/51 pins and every shipped
 source, and refuses ten copied, synthetic SourceOnly adversaries. These are
 reader adversaries, not native failure injections. The earlier SDKbb N8 run

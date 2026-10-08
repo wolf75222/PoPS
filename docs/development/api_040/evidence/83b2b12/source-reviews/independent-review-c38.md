@@ -1,4 +1,4 @@
-# Independent C38 review — 2026-09-29
+# Independent C38 review - 2026-09-29
 
 ## Final source review: gaps resolved in 8ca34ec
 

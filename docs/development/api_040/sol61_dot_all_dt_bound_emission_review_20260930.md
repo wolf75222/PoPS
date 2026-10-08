@@ -1,4 +1,4 @@
-# Deux contre-cas publics dt_bound — 30 septembre 2026
+# Deux contre-cas publics dt_bound - 30 septembre 2026
 
 Source reçue : `a77e1b1ce09b84171fd3f63ffc64f6995614b8e5` ; checkout exclusif
 `PoPS-sol61-dot-all-a77-review`. Le nouveau dot_all se sérialise en IR v7,

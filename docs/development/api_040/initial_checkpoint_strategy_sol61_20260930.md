@@ -1,4 +1,4 @@
-# Initial accepted checkpoint strategy — 30 September 2026
+# Initial accepted checkpoint strategy - 30 September 2026
 
 Base: `5c361200bbfd324ceeefd604446f2bfb55bfa31e`, exclusive worktree
 `PoPS-sol61-initial-checkpoint`, branch `codex/api040-sol61-initial-checkpoint`.

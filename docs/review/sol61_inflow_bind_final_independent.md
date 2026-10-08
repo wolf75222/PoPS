@@ -1,4 +1,4 @@
-# Final detached Inflow bind review — SOURCE only
+# Final detached Inflow bind review - SOURCE only
 
 Exact final author ee21c042592dfa1881a0f7a140f1c00291f07ec2 (parent f45c54c2), cherry-picked onto private red1f6099b WT PoPS-sol61-inflow-bind-independent. Source imported path explicitly checked against current worktree. No remaining bounded Source blocker found.
 

@@ -1,4 +1,4 @@
-# Consumed Field mapping — Source contract
+# Consumed Field mapping - Source contract
 
 `mapped-consumed-output@1` selects an explicitly declared component or gradient
 of a consumed Field solve. Its FieldProblem owns the scalar FieldSpace (support,

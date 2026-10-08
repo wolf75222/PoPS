@@ -1,4 +1,4 @@
-# Contre-réception indépendante pureté dt_bound — 30 septembre 2026
+# Contre-réception indépendante pureté dt_bound - 30 septembre 2026
 
 Candidate production exacte : `7c68cbaad14024868922664461fa804d4067128c`,
 parent `9c4209a5e5ecb05ac71a62f4d2c21b6e3acd4300`.

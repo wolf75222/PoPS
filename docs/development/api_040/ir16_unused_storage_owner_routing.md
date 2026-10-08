@@ -1,4 +1,4 @@
-# IR16 declared storage-only owner routing — source receipt
+# IR16 declared storage-only owner routing - source receipt
 
 Base: `378f29084c915ae316308481949ea174858197b2` (including the ea13 descriptor alignment). Production correction: `a02e151d4f6c393d1193f442c1a9eb173a825fd8` (one Python file, nine added lines). This is a correction to the existing `pops.program.global-field-history-storage@1` promise, not a new schema or physical evolution rule. Root's Native/SDK/environment are untouched.
 

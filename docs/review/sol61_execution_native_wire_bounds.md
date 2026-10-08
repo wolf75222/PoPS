@@ -29,4 +29,4 @@ test files/command as f1b's note. After the additional level_count range guard,
 the final focused execution-contract file passes separately (result below).
 No Root/ENV/cache/JIT/Binary write, C++ build, Native campaign or SCI seal.
 
-Final focused command: `rtk proxy env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops/bin/python -m pytest --noconftest -o pythonpath=python tests/python/unit/runtime/test_amr_execution_contract.py -q --tb=short` — **19 PASS in21.37s**.
+Final focused command: `rtk proxy env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops/bin/python -m pytest --noconftest -o pythonpath=python tests/python/unit/runtime/test_amr_execution_contract.py -q --tb=short` - **19 PASS in21.37s**.

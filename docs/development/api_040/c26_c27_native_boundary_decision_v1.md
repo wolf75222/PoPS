@@ -1,4 +1,4 @@
-# C26/C27 — production native boundary decision v1
+# C26/C27 - production native boundary decision v1
 
 Evidence snapshot: MAIN `5d65191c3e70bdf6f6359694001d83ab21a203f0`
 (dirty working tree; source paths checked on 2026-09-29). Reference:

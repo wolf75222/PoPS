@@ -1,4 +1,4 @@
-# Bound initial checkpoint envelope — 30 September 2026
+# Bound initial checkpoint envelope - 30 September 2026
 
 Base: `5e69b3425184446ea2cd318fe2d31d038cca3035`, exclusive
 `PoPS-sol61-initial-checkpoint`. This is the second production lifecycle correction

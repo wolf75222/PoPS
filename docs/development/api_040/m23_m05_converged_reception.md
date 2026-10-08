@@ -1,4 +1,4 @@
-# M23 / M05 — archived SDK623 reception
+# M23 / M05 - archived SDK623 reception
 
 This bundle preserves local CPU Kokkos/OpenMP reception, including the earlier failures. It is independent of the older SDK396 `finite-amr-converged` bundle. The XML testcase elements, rather than a moving checkout HEAD or a combined pass label, determine the counts below.
 

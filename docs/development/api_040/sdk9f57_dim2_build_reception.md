@@ -1,4 +1,4 @@
-# SDK9f57 actual Dim2 build reception — 2026-10-01
+# SDK9f57 actual Dim2 build reception - 2026-10-01
 
 The repository build at source `0abbe25395a44e570d8d5525693b8e2dcbf4d387`
 completed and installed the real PoPS Dim2 Kokkos/MPI module in

@@ -1,4 +1,4 @@
-# Corrected Field/Ghost fixture independent review — SOURCE only
+# Corrected Field/Ghost fixture independent review - SOURCE only
 
 Exact8179f04ecc18b04475b2b871380e1c3078ec27e2 reviewed in separate materialized WT. Earlier dbf finding remains historical. No remaining Source blocker found for this uniform specimen.
 

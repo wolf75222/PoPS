@@ -1,4 +1,4 @@
-# Contre-revue indépendante M15/M16 — c66f602
+# Contre-revue indépendante M15/M16 - c66f602
 
 Aucun cœur PoPS modifié. Base examinée c66f602, appliquée comme dépendance b7fc57d dans le checkout isolé PoPS-principal-group. Le rapport auteur n'a pas servi d'oracle.
 

@@ -1,6 +1,6 @@
 # Actual delegation
 
-## Current Sol6.1 phase — 2026-10-01
+## Current Sol6.1 phase - 2026-10-01
 
 The user prefers GPT-6.1 Sol and reserves Astra for actual blockage. The four callable Sol workers use gpt-6.1-sol/high: sol61_ale authors D(q)/FullLU; sol61_coverage_review authors Q/tau stage and independently reviews FullLU; sol61_frontier independently receives M19, authors archived reader and reviews Q/tau/candidate MMS; sol61_m26_review independently received D(q) and authors diagnostics checkpoint. Primary integrates, rebuilds and closes real native/scientific receptions. No model delegation is simulated, and source/host/syntax evidence is distinct from native reception.
 

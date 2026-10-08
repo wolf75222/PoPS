@@ -1,4 +1,4 @@
-# SDK2e4 product, entropy and feedback non-regression — 2026-10-01
+# SDK2e4 product, entropy and feedback non-regression - 2026-10-01
 
 The authenticated installed package completes the 13-case MPI2 selection at source `135179aa`: **seven pass and six fail per rank**, with no error, skip or timeout. Both rank inventories match. Before/after authentication succeeds and all installed Python/header bytes, native DSO bytes and test sources remain unchanged. The [machine receipt](sdk2e4_product_entropy_feedback_nonreg.json) pins both raw XMLs, logs, test sources and installation identities.
 

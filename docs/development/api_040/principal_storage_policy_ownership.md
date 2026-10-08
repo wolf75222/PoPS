@@ -1,4 +1,4 @@
-# Principal numerical policy ownership — implementation clarification 1
+# Principal numerical policy ownership - implementation clarification 1
 
 The C11 principal group owns the joint physical flux, its authored wave-speed
 bound, reconstruction and numerical face policies. Its constituent native blocks

@@ -1,4 +1,4 @@
-# M19 publication correction: independent source reception — 1 October 2026
+# M19 publication correction: independent source reception - 1 October 2026
 
 Received exact author correction `bc8259c7eae2c165ea9106aa4bcfac7cde3e0915`,
 parent `357e2c2bf5dee3487218bfec65f65132195db5a0`, in the private

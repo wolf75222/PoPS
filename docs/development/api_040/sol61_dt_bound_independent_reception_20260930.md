@@ -1,4 +1,4 @@
-# Contre-réception indépendante dt_bound — 30 septembre 2026
+# Contre-réception indépendante dt_bound - 30 septembre 2026
 
 Candidate exacte : `9c4209a5e5ecb05ac71a62f4d2c21b6e3acd4300`.
 Checkout exclusif `PoPS-sol61-dt-bound-review`, branche

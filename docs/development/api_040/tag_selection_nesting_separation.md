@@ -1,4 +1,4 @@
-# Explicit tag selection and derived parent coverage — source correction
+# Explicit tag selection and derived parent coverage - source correction
 
 Base606e2a06; independent author worktree PoPS-sol61-tag-selection-contract. Production change, not a new Native receipt. The earlier genuine SDK a37c run demonstrated complete fine coverage at N8 despite authored Buffer0; ROOT traced the correct mesh_marker component/threshold and transition buffer2/lookahead1. [Independent causal review](hooke_tag_buffer_nesting_causal_review.md) establishes that both latter fields are derived nesting requirements, not authored tag anticipation. No physical equation, threshold, mesh, clipping, acceptance guard or example is changed here.
 

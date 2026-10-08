@@ -1,4 +1,4 @@
-# Independent symbolic-layering review — 30 September 2026
+# Independent symbolic-layering review - 30 September 2026
 
 Candidate `908508a7ce8ccc05c6241f6239818380fd0760e3`, exact parent
 `bc37b0af4012a10fa3e9bd7ecaccd1f7befc897b`. Exclusive worktree
