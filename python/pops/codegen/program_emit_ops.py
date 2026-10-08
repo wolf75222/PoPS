@@ -413,6 +413,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # Operation lowering explicitly identifies the storage setup needed by both cadence
     # branches. Evaluation context and kernels remain in the guarded body.
     output_setup_end = None
+    delegated_before_write = None
     evaluation_prelude = []
     if v.op in {"source", "implicit_source", "local_transform", "affine_moment_update", "apply", "integral_candidate",
                 "solve_local_linear", "solve_local_nonlinear", "solve_implicit_source"}:
@@ -976,8 +977,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         defer_bound = (has_independent_diffusion_transport(node_model)
                        and any(node is v for node in program._values)
                        and v.attrs.get("schedule") is None)
+        publications = []
         _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
-                            defer_explicit_bound=defer_bound)
+                            defer_explicit_bound=defer_bound,
+                            output_publication=publications.append)
+        if len(publications) != 1:
+            raise ValueError("diffusive delegate lacks one actual output publication boundary")
+        from .program_value_authority import delegated_output_boundaries
+        output_setup_end, delegated_before_write = delegated_output_boundaries(
+            v, var, lines, _profile_start, bidx, publications[0])
         var[("partition_frequency", v.id)] = "diffusion_frequency_%d" % v.id
         if defer_bound:
             key = ("partition_stability_deferred",)
@@ -1688,7 +1696,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # source, linear_combine, where, ...) reuses the one general mechanism -- no per-op special
     # case. The wrap nests INSIDE the per-node profiling pair below (the profiler times the guarded
     # block as the node's cost). An always() schedule (or no schedule) leaves the lines untouched.
-    evaluation_start = output_setup_end if output_setup_end is not None else _profile_start
+    evaluation_start = (delegated_before_write if delegated_before_write is not None else
+                        output_setup_end if output_setup_end is not None else _profile_start)
     lines[evaluation_start:evaluation_start] = evaluation_prelude
     from .program_value_authority import instrument_value_cpp
     instrument_value_cpp(v, var, lines, evaluation_start + len(evaluation_prelude))

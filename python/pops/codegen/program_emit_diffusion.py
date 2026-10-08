@@ -203,13 +203,20 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
 
 
 def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
-                        prepared_var=None, *, defer_explicit_bound=False):
+                        prepared_var=None, *, defer_explicit_bound=False,
+                        output_publication=None):
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
+    setup_start = len(lines)
+    stage_prelude = []
     if "evaluation_partition" in v.attrs:
         from pops.time._evaluation_point import evaluation_stage_fraction
         stage = evaluation_stage_fraction(v)
-        lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        stage_prelude.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+    if output_publication is None:
+        lines.extend(stage_prelude)
+    elif not callable(output_publication):
+        raise TypeError("delegated output publication requires a boundary receiver")
     impl,selected,rows=_selected(v,node_model)
     if selected.get("coupled") and target != "system":
         raise NotImplementedError("coupled gradient has no AMR composite face route")
@@ -233,12 +240,22 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                 raise ValueError("explicit TensorDiffusion requires affine gradient variables and state-independent tensors; use an implicit spatial stage for nonlinear laws")
             pending.extend(_children(node))
     constitutive_family, transport_family = _diffusive_flux_families(v)
+    allocation = "pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);" % (
+        out,v.id,state_var)
+    if output_publication is not None:
+        # Only the actual output allocation is shared with off-cadence branches.
+        # Stage selection and physical preparation remain in the guarded body.
+        lines.append(allocation)
+        setup_end = len(lines)
+        lines.extend(stage_prelude)
+        before_write = len(lines)
     if prepared_var is None:
         prepared_var="diffusion_prepared_%d" % v.id
         lines.extend(_emit_diffusive_preparation(v,state_var,prepared_var,node_model,
                                                  provider_plans,bidx,target))
-    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);" % (
-        out,v.id,state_var))
+    if output_publication is None:
+        # Residual/implicit callers retain the original return API and ordering.
+        lines.append(allocation)
     from pops._ir.primitive_expansion import expand_evaluation_boundaries
     exprs=tuple(expand_evaluation_boundaries(_law_expressions(selected), impl.prim_defs))
     sources=tuple(row for row in v.attrs["physical_balance"].occurrences if row.kind=="source")
@@ -331,6 +348,11 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         lines.extend(_emit_source_kernel(node_model,row.payload.reg_name,state_var,temporary,bidx,
             provider_plans=provider_plans,consumer_qid=qid,plan_exprs=roots))
         lines.append("ctx.axpy(%s,%s,%s);" % (out,scalar_cpp(row.coefficient),temporary))
+    if output_publication is not None:
+        from .program_value_authority import DelegatedOutputPublication
+        output_publication(DelegatedOutputPublication(
+            v.id, bidx, "RhsScratch", v.id, 0, out,
+            setup_start, setup_end, before_write, len(lines)))
     return prepared_var
 
 

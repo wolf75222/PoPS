@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -29,7 +30,17 @@ def _load():
 
 proof = _load()
 
-_METADATA = "Metadata-Version: 2.3\nName: PoPS\nVersion: 1.0.0\n"
+# Bind synthetic artifacts to the exact Source release declaration, never the
+# installed distribution or a package already imported from another checkout.
+_VERSION_TREE = ast.parse((ROOT / "python/pops/_generated_release_contract.py").read_text())
+_PACKAGE_VERSION = ast.literal_eval(next(
+    node.value for node in _VERSION_TREE.body
+    if isinstance(node, ast.Assign)
+    and any(isinstance(target, ast.Name) and target.id == "PACKAGE_VERSION"
+            for target in node.targets)
+))
+_DIST_INFO = f"pops-{_PACKAGE_VERSION}.dist-info"
+_METADATA = f"Metadata-Version: 2.3\nName: PoPS\nVersion: {_PACKAGE_VERSION}\n"
 
 
 def _distribution_identity() -> dict[str, str]:
@@ -46,7 +57,7 @@ def _synthetic_wheel(path: Path, *, omit: str | None = None) -> None:
                 continue
             archive.write(source, "pops/" + relative)
         archive.writestr(
-            "pops-1.0.0.dist-info/METADATA",
+            f"{_DIST_INFO}/METADATA",
             _METADATA,
         )
 
@@ -63,7 +74,7 @@ def _installed_package(root: Path) -> Path:
 
 def _installed_distribution(root: Path) -> Path:
     package = _installed_package(root)
-    distribution = package.parent / "pops-1.0.0.dist-info"
+    distribution = package.parent / _DIST_INFO
     distribution.mkdir()
     (distribution / "METADATA").write_text(
         _METADATA,
@@ -71,15 +82,15 @@ def _installed_distribution(root: Path) -> Path:
     )
     (distribution / "RECORD").write_text(
         "pops/__init__.py,,\n"
-        "pops-1.0.0.dist-info/METADATA,,\n"
-        "pops-1.0.0.dist-info/RECORD,,\n",
+        f"{_DIST_INFO}/METADATA,,\n"
+        f"{_DIST_INFO}/RECORD,,\n",
         encoding="utf-8",
     )
     return package
 
 
 def test_exact_wheel_and_source_share_public_api_typing_and_lazy_authoring(tmp_path):
-    wheel = tmp_path / "pops-1.0.0-py3-none-any.whl"
+    wheel = tmp_path / f"pops-{_PACKAGE_VERSION}-py3-none-any.whl"
     _synthetic_wheel(wheel)
     installed = _installed_package(tmp_path)
 
@@ -105,7 +116,7 @@ def test_exact_wheel_and_source_share_public_api_typing_and_lazy_authoring(tmp_p
 
 
 def test_wheel_proof_fails_closed_when_typing_payload_is_missing(tmp_path):
-    wheel = tmp_path / "pops-1.0.0-py3-none-any.whl"
+    wheel = tmp_path / f"pops-{_PACKAGE_VERSION}-py3-none-any.whl"
     _synthetic_wheel(wheel, omit="_pops.pyi")
     installed = _installed_package(tmp_path)
 
@@ -114,7 +125,7 @@ def test_wheel_proof_fails_closed_when_typing_payload_is_missing(tmp_path):
 
 
 def test_installed_proof_rejects_payload_drift_and_source_checkout_alias(tmp_path):
-    wheel = tmp_path / "pops-1.0.0-py3-none-any.whl"
+    wheel = tmp_path / f"pops-{_PACKAGE_VERSION}-py3-none-any.whl"
     _synthetic_wheel(wheel)
     installed = _installed_package(tmp_path)
     (installed / "__init__.py").write_text(
@@ -129,7 +140,7 @@ def test_installed_proof_rejects_payload_drift_and_source_checkout_alias(tmp_pat
 
 
 def test_installed_proof_rejects_distribution_identity_drift(tmp_path):
-    wheel = tmp_path / "pops-1.0.0-py3-none-any.whl"
+    wheel = tmp_path / f"pops-{_PACKAGE_VERSION}-py3-none-any.whl"
     _synthetic_wheel(wheel)
     installed = _installed_package(tmp_path)
     drifted = {**_distribution_identity(), "version": "1.0.1"}
@@ -145,7 +156,7 @@ def test_installed_proof_rejects_distribution_identity_drift(tmp_path):
 def test_installed_cli_resolves_distribution_after_install_without_checkout_shadowing(
     tmp_path,
 ):
-    wheel = tmp_path / "pops-1.0.0-py3-none-any.whl"
+    wheel = tmp_path / f"pops-{_PACKAGE_VERSION}-py3-none-any.whl"
     _synthetic_wheel(wheel)
     installed = _installed_distribution(tmp_path)
     evidence = tmp_path / "installed-public-api.json"

@@ -1,0 +1,5 @@
+{
+  "date_utc": "2026-10-08T17:34:49.470393+00:00",
+  "ssh_exit": 0,
+  "remote_output": "{\"schema\": \"pops.root.full-private-CUDA-dispatch@1\", \"date_utc\": \"2026-10-08T17:34:49.515551+00:00\", \"Source\": \"db206100d81de834482c8a3b093ce30065aa1b43\", \"script_sha256\": \"8bf638fad0dab6849346d52dc60eab19281cf277b85a29654481269a4e3fce73\", \"plan_sha256\": \"548fe1146df298416d458abf4134614b3c1c6226407e92c78d16b0842fb0459b\", \"independent_review_sha256\": \"b9f7a2c05d09f301549fd239b20ee9624a4ded4a67977510b7806afc5c0b3309\", \"verified_payload_files\": 16, \"new_work_private_scratch\": \"/gpfs/scratch/rmdraux/PoPS-db206-full-cuda-native-dim2-20261008\", \"observed_user_jobs_before\": \"\", \"argv\": [\"sbatch\", \"--parsable\", \"/gpfs/scratch/rmdraux/PoPS-db206-full-cuda-native-dim2-20261008/campaign.sbatch\"], \"returncode\": 0, \"stdout\": \"737948\\n\", \"stderr\": \"\", \"job_id\": \"737948\"}\n"
+}

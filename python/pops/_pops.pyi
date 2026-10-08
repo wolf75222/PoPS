@@ -206,6 +206,10 @@ class AmrSystemConfig:
     transition_ratios: tuple[tuple[int, ...], ...]
     transition_buffers: tuple[tuple[int, ...], ...]
     transition_lookaheads: tuple[tuple[int, ...], ...]
+    accepted_halo_contract_version: int
+    accepted_halo_extent: tuple[int, ...]
+    tag_selection_contract_version: int
+    tag_selection_buffer: tuple[int, ...]
     explicit_bootstrap: bool
     periodicity: tuple[bool, ...]
     distribute_coarse: bool

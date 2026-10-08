@@ -59,11 +59,59 @@ class ProgramValueAuthorityPlan:
 
 
 _BUFFER_TYPES = frozenset(("state", "rhs", "scalar_field", "vector_field", "mask"))
-_RHS_STORAGE = frozenset(("rhs", "source", "implicit_source", "apply"))
+_RHS_STORAGE = frozenset(("rhs", "diffusive_rhs", "source", "implicit_source", "apply"))
 _STATE_STORAGE = frozenset(("linear_combine", "solve_local_linear", "solve_local_nonlinear",
                             "solve_implicit_source", "where", "pointwise_expression"))
 _PURE_ALIASES = frozenset(("solve_outcome", "solve_outcome_component",
                            "acceptance_guard", "store_history"))
+
+
+@dataclass(frozen=True, slots=True)
+class DelegatedOutputPublication:
+    """delegated-output-publication@1: emitted allocation and successful-write boundaries.
+
+    This describes emitted storage, not a completed runtime value. The common
+    ticket instrumentation remains the sole successful publication issuer.
+    """
+    ssa: int
+    block: int
+    storage: str
+    storage_id: int
+    subslot: int
+    output: str
+    setup_start: int
+    setup_end: int
+    before_write: int
+    evaluation_end: int
+    version: int = 1
+
+
+def delegated_output_boundaries(value: Any, var: Any, lines: list[str],
+                                start: int, owner: int,
+                                publication: DelegatedOutputPublication) -> tuple[int, int]:
+    """Authenticate a delegate's actual output against its installed SSA storage."""
+    if type(publication) is not DelegatedOutputPublication or (
+            type(publication.version) is not int or publication.version != 1):
+        raise ValueError("delegate requires delegated-output-publication@1")
+    if any(type(identity) is not int for identity in (
+            publication.ssa, publication.block, publication.storage_id, publication.subslot)):
+        raise ValueError("delegated output requires exact integer storage identities")
+    if publication.ssa != value.id or publication.block != owner or (
+            publication.output != var.get(value.id)):
+        raise ValueError("delegated output changes its exact SSA/owner/storage token")
+    points = (publication.setup_start, publication.setup_end,
+              publication.before_write, publication.evaluation_end)
+    if any(type(point) is not int for point in points) or not (
+            publication.setup_start == start < publication.setup_end <=
+            publication.before_write <= publication.evaluation_end == len(lines)):
+        raise ValueError("delegated output has no exact allocation/evaluation boundary")
+    plan = _plan(var)
+    row = plan.producer(value.id) if plan is not None else None
+    if row is not None and (publication.block, publication.storage,
+                            publication.storage_id, publication.subslot) != (
+            row.block, row.storage, row.storage_id, row.subslot):
+        raise ValueError("delegated output differs from its installed storage identity")
+    return publication.setup_end, publication.before_write
 
 
 def prepare_program_value_authority(program: Any, authority: Any,

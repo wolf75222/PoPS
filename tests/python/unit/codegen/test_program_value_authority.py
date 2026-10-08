@@ -197,3 +197,168 @@ def test_field_point_follows_authored_partition_and_actual_runtime_cursor():
     node.attrs["evaluation_partition"] = "foreign"
     with pytest.raises(ValueError, match="not declared"):
         field_point_cpp(program, node, "exact-field")
+
+
+def _authored_diffusive(*, off=None, partition=False, source=False):
+    from pops import math
+    from pops.numerics import Diffusion, DiscretizationPlan
+    model, physical_state, operator = _field_model(name="delegated-diffusion-field")
+    flux = model.diffusive_flux("actual-conduction", state=physical_state,
+                               value=.1 * math.grad(physical_state[0]))
+    expression = math.div(flux)
+    if source:
+        reaction = model.source("actual-reaction", on=physical_state, value=(physical_state[0],))
+        expression += .25 * reaction
+    rate = model.rate("actual-balance", equation=math.ddt(physical_state) == expression)
+    case = pops.Case("delegated-diffusion-value")
+    block = case.block("selected", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, Diffusion(flux=flux))
+    case.numerics(numerics, block=block)
+    field = case.field(operator, FieldDiscretization(
+        method=CellCenteredSecondOrder(), boundaries=(), solver=GeometricMG()))
+    program = Program("delegated-diffusion-value")
+    state = program.state(block[physical_state])
+    diffusion = rate(state.n)
+    if partition:
+        from pops.time import StagePoint, TimePoint
+        from fractions import Fraction
+        point = StagePoint("actual-diffusion-stage", {
+            "selected": TimePoint(program.clock, offset=Fraction(1, 3))})
+        diffusion = program._replace_value(diffusion, attrs={
+            **diffusion.attrs, "evaluation_partition": "selected"}, point=point)
+    if off is not None:
+        from pops.time import Schedule, Every, AcceptedStep
+        schedule = Schedule(Every(AcceptedStep(program.clock), 2), off=off)
+        diffusion = program._replace_value(diffusion, attrs={**diffusion.attrs, "schedule": schedule})
+    stage = program.value("actual-predictor", state.n + program.dt * diffusion, at=state.next.point)
+    field(stage).consume(action=FailRun())
+    # Partition/cadence cases observe a produced candidate without claiming an
+    # unsupported accepted diffusive quadrature. The ordinary witness advances Euler.
+    endpoint = (program.value("unchanged-endpoint", 1 * state.n, at=state.next.point)
+                if partition or off is not None else stage)
+    program.commit(state.next, endpoint)
+    provider = case.resolve(model.module.operator_handle(operator.name), block=block)
+    key = model.module.operator_registry().get(operator.name).lowering["field_provider"]["key"]
+    solve = next(node for node in program._values if node.op == "solve_fields")
+    plans = {field.local_id: SimpleNamespace(rhs_providers=(provider,), native_options={
+        "provider_slot": "source-only-resolved-route",
+        "provider_pack": ({"owner_block": "selected", "key": key},),
+        "output_route": {"components": solve.field_context.outputs},
+        "boundary_kernel_required": False,
+    })}
+    emitter, _ = lower_and_validate(model, facade=model)
+    return program, emitter, plans, state.n, diffusion, stage, solve
+
+
+def test_diffusive_field_source_seals_actual_rhs_allocation_identity():
+    program, model, fields, state, diffusion, stage, solve = _authored_diffusive()
+    plan = prepare_program_value_authority(program, model, fields)
+    row = plan.producer(diffusion.id)
+    assert (row.storage, row.storage_id, row.subslot, row.inputs) == (
+        "RhsScratch", diffusion.id, 0, (state.id,))
+    assert plan.producer(stage.id).inputs == (state.id, diffusion.id)
+    assert plan.fields[0].field_node == solve.id and plan.fields[0].source == stage.id
+
+
+@pytest.mark.parametrize("target", ["system", "amr_system"])
+def test_diffusive_publication_follows_real_stage_write_and_successful_guard_tail(target):
+    from pops.codegen.program_codegen import emit_cpp_program
+    program, model, fields, state, diffusion, stage, _ = _authored_diffusive(
+        source=True, partition=True)
+    source = emit_cpp_program(program, model=model, field_plans=fields, target=target)
+    allocation = source.index("& diffusive_rhs_%d = ctx.rhs_scratch(%d, 0," % (
+        diffusion.id, diffusion.id))
+    point = source.index("ctx.set_stage_time(1, 3);", allocation)
+    begin = source.index("ctx.begin_program_value_write(%d," % diffusion.id, point)
+    preparation = source.index("ctx.require_cartesian_generated_operator(", begin)
+    apply = source.index(".apply(", preparation)
+    stability = source.index('"combined_transport_diffusion_stability"', apply)
+    last_source = source.index("ctx.axpy(diffusive_rhs_%d,0.25,diffusive_source_" % diffusion.id,
+                               stability)
+    complete = source.index("ctx.complete_program_value_write(std::move(value_write_%d))" %
+                            diffusion.id, last_source)
+    consumer = source.index("ctx.solve_fields_from_program_values_at(", complete)
+    assert allocation < point < begin < preparation < apply < stability < last_source < complete < consumer
+    assert "ctx.program_value(%d, 0, u%d)" % (state.id, state.id) in source[begin:preparation]
+    assert 'catch (const pops::runtime::program::DiffusiveEvaluationError& error)' in source[apply:complete]
+    assert "diffusive_face_evaluation" in source[apply:complete]
+
+
+@pytest.mark.parametrize("policy_name, action", [("Hold", "cache_restore_scratch"),
+                                               ("Zero", "set_val")])
+def test_scheduled_diffusion_shares_allocation_without_hoisting_physical_preparation(policy_name, action):
+    from pops import time
+    from pops.codegen.program_codegen import emit_cpp_program
+    program, model, fields, _, diffusion, _, _ = _authored_diffusive(
+        off=getattr(time, policy_name)(), partition=True)
+    source = emit_cpp_program(program, model=model, field_plans=fields)
+    allocation = source.index("& diffusive_rhs_%d = ctx.rhs_scratch(%d, 0," % (
+        diffusion.id, diffusion.id))
+    due = source.index("if (ctx.schedule_decision(%d," % diffusion.id, allocation)
+    point = source.index("ctx.set_stage_time(1, 3);", due)
+    prepare = source.index("ctx.require_cartesian_generated_operator(", point)
+    off = source.index("} else {", prepare)
+    alternate = source.index("ctx.begin_program_value_write(%d," % diffusion.id, off)
+    alternate_action = source.index(action, alternate)
+    complete = source.index("ctx.complete_program_value_write(std::move(value_write_%d))" %
+                            diffusion.id, alternate_action)
+    assert allocation < due < point < prepare < off < alternate < alternate_action < complete
+    assert ", {});" in source[alternate:source.index("\n", alternate)]
+    assert "ctx.set_stage_time" not in source[allocation:due]
+    assert "PreparedDiffusion" not in source[allocation:due]
+    assert "ctx.require_cartesian_generated_operator" not in source[allocation:due]
+
+
+@pytest.mark.parametrize("changes", [
+    {"version": 2}, {"ssa": -7}, {"block": 1}, {"output": "foreign_storage"},
+    {"storage_id": -7}, {"subslot": 1}, {"setup_end": 0}, {"evaluation_end": 99},
+    {"ssa": True},
+])
+def test_delegated_boundary_cannot_publish_foreign_or_unallocated_storage(changes):
+    from dataclasses import replace
+    from pops.codegen.program_value_authority import (
+        DelegatedOutputPublication, delegated_output_boundaries,
+    )
+    program, model, fields, state, diffusion, *_ = _authored_diffusive()
+    plan = prepare_program_value_authority(program, model, fields)
+    var = {("program_value_authority",): plan, state.id: "actual_input", diffusion.id: "actual_rhs"}
+    lines = ["auto& actual_rhs = ctx.rhs_scratch(1, 0, actual_input);", "physical_evaluation();"]
+    boundary = DelegatedOutputPublication(
+        diffusion.id, 0, "RhsScratch", diffusion.id, 0, "actual_rhs", 0, 1, 1, 2)
+    with pytest.raises(ValueError):
+        delegated_output_boundaries(diffusion, var, lines, 0, 0, replace(boundary, **changes))
+
+
+def test_implicit_diffusion_delegate_preserves_prepared_result_api_and_cpp_order():
+    from pops.codegen.program_emit_kernels import ProgramProviderPlans
+    from pops.codegen.program_emit_diffusion import _emit_diffusive_rhs
+    program, model, _, state, diffusion, *_ = _authored_diffusive()
+    # Residual delegates own their repeated output; they are not a top-level SSA publication.
+    lines = []
+    variables = {state.id: "actual_input"}
+    provider_plans = ProgramProviderPlans()
+    returned = _emit_diffusive_rhs(diffusion, variables, lines, model, provider_plans, 0,
+                                    "system", prepared_var="retained_implicit_operator")
+    assert returned == "retained_implicit_operator"
+    assert "begin_program_value_write" not in "\n".join(lines)
+    assert "retained_implicit_operator.apply(" in "\n".join(lines)
+    assert "ctx.rhs_scratch(%d, 0, actual_input)" % diffusion.id in lines[0]
+
+
+def test_late_refusal_remains_after_rate_and_field_candidates_before_atomic_commit():
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.time.solve_outcome import RejectAttempt
+    program, model, fields, _, diffusion, stage, _ = _authored_diffusive()
+    # A deliberately impossible late observation tests ordering without replacing
+    # the physics or suppressing any generated stability/publication guard.
+    program.guard("late-diffusive-refusal", stage, program.norm2(stage) < 0,
+                  action=RejectAttempt())
+    source = emit_cpp_program(program, model=model, field_plans=fields)
+    complete = source.index("ctx.complete_program_value_write(std::move(value_write_%d))" %
+                            diffusion.id)
+    field = source.index("ctx.solve_fields_from_program_values_at(", complete)
+    refusal = source.index("throw pops::runtime::program::StepAttemptRejected", field)
+    commit = source.index("ctx.commit_many(", refusal)
+    assert complete < field < refusal < commit
+    assert "acceptance guard 'late-diffusive-refusal' failed" in source[refusal:commit]

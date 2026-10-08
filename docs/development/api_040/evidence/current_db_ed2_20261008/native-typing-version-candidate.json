@@ -1,0 +1,87 @@
+{
+  "Main_head": "db206100d81de834482c8a3b093ce30065aa1b43",
+  "Main_modified": false,
+  "Source_cohort": {
+    "XML": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-contract-candidate-20261008/source-cohort.xml",
+    "errors": 0,
+    "failures": 0,
+    "log": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-contract-candidate-20261008/source-cohort.log",
+    "log_sha256": "9fe08d390be2215d8c2b6913d99f75a8cae1c658e65fd61eeb889b343aea8783",
+    "scope": "Candidate bytes execute in isolated Source harness with dependency roots bound to real Main and STUB bound to actual candidate typing file. Synthetic wheel/install fixture only; no real package install or Native qualification.",
+    "sha256": "56e8d2d438f0c4639fb5aae62b3ea07e29d980b0f32e610256304274e6e90cdd",
+    "skips": 0,
+    "tests": 18
+  },
+  "actions": {
+    "Main_edits": 0,
+    "Native_build_or_runs": 0,
+    "ROMEO_or_external_messages": 0,
+    "actual_package_install": 0,
+    "independent_review_pending": true,
+    "push": 0
+  },
+  "all25_classification": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-contract-candidate-20261008/classified-failures.json",
+  "candidate_files": [
+    {
+      "base_sha256": "ce0c84612b6d7ed46141ce4ea15341978ede0742ae51e00e1c46a95d17d066a7",
+      "candidate_sha256": "e7409eb4c933580192237fc244e4d54e48d4b9fa9220264014f41ffad1f69b9d",
+      "path": "python/pops/_pops.pyi"
+    },
+    {
+      "base_sha256": "866c9ba83643ad072382516f80be35a79756f47cd0042e825b719a036be5ec8b",
+      "candidate_sha256": "99f8922b75bc43c3c44db584a4942bdf827e1eda160cf04da8f37a71644201b5",
+      "path": "tests/python/architecture/test_native_stub_contract.py"
+    },
+    {
+      "base_sha256": "c830bda8bc9eb81ae22b6ee9930bf7ddb9f8c631a4c16b48874143a406917239",
+      "candidate_sha256": "932ddc811bdb5b83de893797f1aaf4de31e7c8ef9f9825724b64ef725c75c489",
+      "path": "tests/python/architecture/test_release_contract.py"
+    },
+    {
+      "base_sha256": "3840adf8019fbedb6873660a1be3c7e54fd586304e50b2e5ba64c5f6c2bf674c",
+      "candidate_sha256": "acb4c0dded585935204abe7e44bd83aa650332bb0267833f9b5bf21c97b8d506",
+      "path": "tests/python/architecture/test_public_api_parity_proof.py"
+    }
+  ],
+  "contracts": {
+    "ABI": "Declared Native13 compared to exact generated contract; Package8/read2/Uniform9/AMR12 remain unchanged",
+    "compiler_routes": "All three original compile_native/_compile_problem_impl/compile_component retained; indirect compile_native runner requires exact model_compile_evidence.retain import and fifth _run_compile argument; central flags mandatory, ABI macro injection forbidden",
+    "guards_retained": [
+      "closed exact POD fields",
+      "no Any/__getattr__ escape",
+      "three exact compiler routes",
+      "central loader flags",
+      "missing typing payload refusal",
+      "installed payload/source-alias refusal",
+      "distribution identity drift refusal",
+      "ABI/version/matrix guards"
+    ],
+    "native_POD_authority": "python/bindings/core/init/init_amr.cpp and include/pops/runtime/amr_system.hpp; exact internal bootstrap fields, no public direct-native expansion",
+    "synthetic_distribution": "Package version comes from literal PACKAGE_VERSION in actual Source _generated_release_contract.py, not installed distribution; version currently1.1.0",
+    "typed_POD_fields": {
+      "accepted_halo_contract_version": "int",
+      "accepted_halo_extent": "tuple[int, ...]",
+      "tag_selection_buffer": "tuple[int, ...]",
+      "tag_selection_contract_version": "int"
+    }
+  },
+  "exclusions": [
+    "immutable duration70 candidate untouched",
+    "numerical CPP and Aux repair owned elsewhere",
+    "Dewey public diffusive codegen hooks untouched",
+    "runtime/time exports and genuine dependency cycles not blanket-allowed"
+  ],
+  "fixed_failed_nodes": [
+    "tests/python/architecture/test_native_stub_contract.py::test_every_native_plugin_compile_route_uses_the_central_loader_manifest",
+    "tests/python/architecture/test_native_stub_contract.py::test_bootstrap_types_match_the_native_config_pods_without_dynamic_escape_hatches",
+    "tests/python/architecture/test_public_api_parity_proof.py::test_exact_wheel_and_source_share_public_api_typing_and_lazy_authoring",
+    "tests/python/architecture/test_public_api_parity_proof.py::test_installed_proof_rejects_distribution_identity_drift",
+    "tests/python/architecture/test_public_api_parity_proof.py::test_installed_cli_resolves_distribution_after_install_without_checkout_shadowing",
+    "tests/python/architecture/test_release_contract.py::test_release_contract_versions_every_protocol_and_declares_exact_matrix"
+  ],
+  "git_apply_check_exit": 0,
+  "patch": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-contract-candidate-20261008/native-typing-and-version-contracts-v1.patch",
+  "patch_sha256": "605cd43311744e0141654aaf46201605e2a118bc144ac0e337be0e50caf2b067",
+  "remaining_count_from_original25": 19,
+  "schema": "pops.architecture-native-typing-version-candidate@1"
+}

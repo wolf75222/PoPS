@@ -1,0 +1,87 @@
+{
+  "schema": "pops.independent-diffusive-output-boundary-source-review@1",
+  "decision": "ADMIT_SOURCE_PATCH_FOR_ROOT_INTEGRATION",
+  "Source_context": "db206100d81de834482c8a3b093ce30065aa1b43",
+  "patch": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/diffusive-rhs-value-authority-v1.patch",
+    "sha256": "22ea1f575694ce8276cce5f19389faaa9f0c8d28cdecfc9ff8c9d2a558798028"
+  },
+  "source_review_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/source-review-receipt.json",
+    "sha256": "e63251689776b7ba9cfb0e7ddfd766beecbe65d94a1990ed441a15fac8d2a700"
+  },
+  "independently_accounted_XML": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/candidate-tests.xml",
+      "sha256": "a97897f76e32bbbbfdd3911aa3838918c133bb24275ebba552e735cb1d643e9d",
+      "tests": 28,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/baseline-nonregression/pytest.xml",
+      "sha256": "fd7f928d0a04793c1d98a30f788b9da14c866d11bd373c0135453089ee69fd93",
+      "tests": 3,
+      "failures": 3,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T165224964323Z/candidate-tests.xml",
+      "sha256": "8818ef9b70d883bdcad3e3b4ec48902a0328a24931a38c46dce22293135bb2d6",
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T165429621839Z/candidate-tests.xml",
+      "sha256": "03a90a6126e0a58ae953cae4713278024346669862234a3f4a1791db42198762",
+      "tests": 92,
+      "failures": 3,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T170123704221Z/candidate-tests.xml",
+      "sha256": "a97897f76e32bbbbfdd3911aa3838918c133bb24275ebba552e735cb1d643e9d",
+      "tests": 28,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T165847468903Z/candidate-tests.xml",
+      "sha256": "9a9bb25208098f3df5e00c1c4f329678644142a16c8b4c512d13c697389c46ab",
+      "tests": 27,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "findings": [
+    "Only diffusive_rhs is added to existing RHS storage vocabulary; exact slot is RhsScratch(SSA id,0).",
+    "Frozen version1 delegate envelope binds actual SSA/owner/storage/output token and allocation/evaluation indices to existing immutable authority plan.",
+    "Allocation-only setup is shared with cadence branches; evaluation_partition stage setter and physical preparation remain due-only.",
+    "Existing common ticket instrumentation inserts read/write tickets after stage selection, before prepare/apply; completion follows stability, local refusal and all source accumulation tails.",
+    "Default no-hook implicit/residual delegate retains prepared_var return API and preexisting allocation/preparation ordering.",
+    "Rate and Field candidate completion remain provisional; existing deferred combined stability and late rejection precede atomic accepted commit.",
+    "Unknown producers and model/path-specific routes remain rejected; no equation, threshold, dtype, projection, native ABI/header or numerical arithmetic changes."
+  ],
+  "source_only_limits": [
+    "XML28PASS is codegen/source evidence, not Native/runtime/scientific acceptance.",
+    "Broader89PASS/3FAIL and same3 baseline failures are separately retained; this patch does not repair or reclassify those AMRdt regex expectations.",
+    "Nonempty-RHS Aux screened Fourier Euler/SSPRK2 public AMR1 witness still needs fresh installed Python codegen origin plus actual module execution and saved-array oracle.",
+    "Native wrong-owner/stale/late-refusal rollback must be qualified on the actual new source/backend; prior receipts are not inherited.",
+    "Uniform screened solver provider coverage remains a distinct unfinished gap; Reaction=1 is preserved."
+  ],
+  "reviewer_actions": {
+    "Main_edit": false,
+    "Native_import": false,
+    "compile": false,
+    "build": false,
+    "run": false,
+    "remote": false
+  }
+}

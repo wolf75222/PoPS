@@ -3,7 +3,39 @@
 Snapshot du 8 octobre 2026, actualisé à 16:30 UTC pour la
 [PR brouillon 681](https://github.com/wolf75222/PoPS/pull/681).
 **Mission encore ouverte ; cette PR est un brouillon.**
-La révision reconstruite et exécutée pour CPU/MPI est `6d898599a3f66fa9aa3c049ba0f3114f1960b6dc`.
+Actualisation suivante du 8 octobre : le code `db206100` a été reconstruit et
+installé avec Native `ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b`.
+Les dix tests Python originaux passent à nouveau et leurs données sont reçues
+indépendamment : PDE1, OwnRetry1 et Native8. Les
+[reçus db/ed2](evidence/current_db_ed2_20261008/manifest.json) distinguent cette
+réception des modifications Source suivantes. Sept objets bindings af8 sont
+réutilisés après authentification ; les deux compilations runtime appartiennent
+au premier essai, terminé en erreur pendant MPI_Finalize. Le second essai avec
+FI_PROVIDER=tcp réussit le lien, la wheel, l’installation et doctor. Le wrapper
+du premier essai sort1 et sa commande Ninja échoue143 ; le libellé conflant ces
+sorties dans le reçu producteur est explicitement corrigé, sans réécrire le reçu.
+
+La campagne complète GPU737948 a ensuite échoué après la construction et
+l’installation de Kokkos5.2.1/HOPPER90 : NVCC refuse une lambda device sous une
+méthode privée de CompositeFAC. Treize TUs runtime sur17 ont terminé ; zéro
+binding sur7, aucune wheel/install Native GPU ni PDE reçu. L’allocation Slurm
+h100 expose ici un GH200120GB, CC9.0. Les nouvelles ressources restent dans le
+scratch personnel. Les4298 fichiers réguliers empruntés sont inchangés ; l’unique
+ligne d’enregistrement Conda du nouvel environnement a été retirée après
+conservation des preuves, retrouvant exactement les deux lignes précédentes.
+
+Le raccordement Source diffusive_rhs→FieldV2 est désormais intégré. L’exemple
+Python public Euler nonconstant résout et émet du C++ avec cette candidate ;
+l’exécution du paquet reconstruit reste à faire. La deuxième méthode SSPRK2
+expose un refus supplémentaire de preuve sur le graphe global contenant un
+Field indépendant. Une preuve générique de la mise à jour acceptée est en cours,
+sans reconnaissance de noms/tableaux. Le
+[contrat de traduction](core_expression_translation_contract_v1.md) reprend
+le critère utilisateur : cœur figé, expressions traduites exactement, et
+variations de noms/coefficients reçues séparément sur ce même cœur.
+
+La réception historique détaillée ci-dessous concerne
+`6d898599a3f66fa9aa3c049ba0f3114f1960b6dc`.
 Cette PR ajoute ensuite les correctifs privés de portabilité NVCC et GCC13,
 la portabilité documentaire et la correction des inventaires/sélecteurs CI.
 Les résultats CPU/MPI précédents restent liés à6d ; un nouveau
