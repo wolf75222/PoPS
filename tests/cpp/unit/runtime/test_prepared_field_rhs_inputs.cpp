@@ -806,6 +806,32 @@ struct IncidenceStorageModel {
   POPS_HD nd::StateConversionStatus admissibility(const State&) const { return {}; }
   POPS_HD Real elliptic_rhs(const State& state) const { return state[0]; }
 };
+// Generic externally forced equation u_t=Q with zero transport; tag is passive.
+// This is an actual provider-aware STATE operator, separate from storage-only witnesses.
+struct IncidenceForcedStateModel : IncidenceStorageModel {
+  struct Schema {
+    static constexpr int dimension = D, nvars = 2;
+    using Conservative = StateVec<nvars>;
+    using Primitive = StateVec<nvars>;
+  };
+  static constexpr int n_providers = 1;
+  static constexpr bool program_only_storage = false;
+  static PreparedProviderIdentity provider_identity() {
+    return {"test.amr-aux.incidence-forced-state", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& exact) const {
+    exact.text("u_t=Q; tag_t=0; zero transport").scalar(std::uint32_t{1});
+  }
+  POPS_HD State flux(const State&, const auto&, int) const { return {}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
+  POPS_HD void wave_speeds(const State&, const auto&, int,
+                          Real& lower, Real& upper) const { lower = upper = Real(0); }
+  POPS_HD State source(const State&, const ProviderValues<1>& providers) const {
+    return State{providers[0], Real(0)};
+  }
+};
+static_assert(PhysicalModel<IncidenceForcedStateModel>);
+
 struct IncidencePhiRhs {
   using State = StateVec<2>;
   static constexpr int dimension = D, n_vars = 2, n_providers = 0;
@@ -839,6 +865,15 @@ struct IncidenceDependencyErrorKernel {
   int phi_component, Q_component;
   POPS_HD void operator()(const Index<D>& cell) const {
     error(cell, 0) = Kokkos::abs(Q(cell, Q_component) - Real(2) * phi(cell, phi_component));
+  }
+};
+struct IncidenceStateSourceErrorKernel {
+  FieldView<const Real, D> source, Q;
+  FieldView<Real, D> error;
+  int Q_component;
+  POPS_HD void operator()(const Index<D>& cell) const {
+    error(cell, 0) = Kokkos::max(Kokkos::abs(source(cell, 0) - Q(cell, Q_component)),
+                                Kokkos::abs(source(cell, 1)));
   }
 };
 using IncidenceCheckpoint = AuxiliaryCheckpointAcceptedState<D>;
@@ -914,7 +949,9 @@ runtime::program::AmrProgramContext<D>& incidence_context(AmrSystem<D>& system) 
   return *context;
 }
 
-enum class IncidenceRestoreWitness { original, repeated_publication, rank_local_refusal };
+enum class IncidenceRestoreWitness {
+  original, repeated_publication, rank_local_refusal, accepted_state_consumer
+};
 
 void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   ready();
@@ -930,9 +967,17 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   AmrSystem<D> system(config);
   test::install_amr_runtime_authority(system, "test.amr-aux.incidence-execution");
   system.install_block_state_route("material", "test.amr-aux.incidence-state");
+  if (extra == IncidenceRestoreWitness::accepted_state_consumer) {
+    auto prepared = prepare_compiled_amr_system_block<D>(
+      "material", IncidenceForcedStateModel{}, "none", "rusanov", "conservative", "imex",
+      1.4, 1, 1, 0.0, double(kWenoEpsilon), false, "test.amr-aux.incidence-state-source");
+    ASSERT_EQ(prepared.provider_components, 1);
+    system.install_prepared_amr_block(std::move(prepared));
+  } else {
   system.install_prepared_amr_block(prepare_compiled_amr_system_block<D>(
     "material", IncidenceStorageModel{}, "state_storage", "unavailable", "conservative", "imex",
     1.4, 1, 1, 0.0, double(kWenoEpsilon), false, "test.amr-aux.incidence-state-model"));
+  }
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "field", "scalar"};
   AuxiliaryStorageShape<D> shape;
@@ -983,6 +1028,8 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
         Kokkos::fence();
       })});
   system.install_auxiliary_consumer_plan({"test.amr-aux.psi-consumer", {{{Q, contract, shape}, 0}}});
+  if (extra == IncidenceRestoreWitness::accepted_state_consumer)
+    system.install_auxiliary_consumer_plan({"test.amr-aux.incidence-state-source", {{{Q, contract, shape}, 0}}});
   system.seal_auxiliary_providers();
   system.register_elliptic_field("material", "phi", {phi}, 1);
   system.register_elliptic_field("material", "psi", {psi}, 1);
@@ -1227,6 +1274,99 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
     else
       EXPECT_EQ(dependency_error, Real(0));
   }
+  if (extra == IncidenceRestoreWitness::accepted_state_consumer) {
+    // The source operator belongs to the accepted generated block, not the Field RHS adapter.
+    const auto check_accepted_state_source = [&](Real expected) {
+      for (int level = 0; level < 2; ++level) {
+        ASSERT_TRUE(observed.phi_points[level].has_value());
+        const auto& accepted = system.prepared_amr_block_state(0, level);
+        Field accepted_input(accepted);
+        Field source(accepted.layout(), accepted.distribution(), accepted.local_rank(),
+                     accepted.ncomp(), accepted.ghosts());
+        source.set_val(Real(0));
+        system.prepared_amr_block_level_source_into_at(
+          0, *observed.phi_points[level], accepted_input, source);
+        Field error(source.layout(), source.distribution(), source.local_rank(), 1, source.ghosts());
+        error.set_val(Real(0));
+        const auto* groups = system.prepared_amr_provider_storage_groups(level);
+        ASSERT_NE(groups, nullptr);
+        const auto Q_address = system.auxiliary_address(Q);
+        const auto* current_Q = groups->find(Q_address.group);
+        ASSERT_NE(current_Q, nullptr);
+        for (std::size_t local = 0; local < source.local_size(); ++local)
+          for_each_cell(source.box(local), IncidenceStateSourceErrorKernel{
+            std::as_const(source).fab(local).view(), current_Q->fab(local).view(), error.fab(local).view(),
+            kernel_component(Q_address.component)});
+        Kokkos::fence();
+        const Real dependency_error = reduce_max_local(error);
+        if (local_valid_cell_count(source) == 0)
+          EXPECT_EQ(dependency_error, -std::numeric_limits<Real>::infinity());
+        else
+          EXPECT_EQ(dependency_error, Real(0));
+        for (int component = 0; component < 2; ++component) {
+          const Real reference = component == 0 ? expected : Real(0);
+          for (std::size_t local = 0; local < source.local_size(); ++local)
+            for_each_cell(source.box(local), IncidenceConstantErrorKernel{
+              std::as_const(source).fab(local).view(), error.fab(local).view(), component, reference});
+          Kokkos::fence();
+          const Real actual_error = reduce_max_local(error);
+          if (local_valid_cell_count(source) == 0)
+            EXPECT_EQ(actual_error, -std::numeric_limits<Real>::infinity());
+          else
+            EXPECT_LE(actual_error, field_bound);
+        }
+        const Real Q_error = incidence_local_constant_error(system, Q, level, expected);
+        if (local_valid_cell_count(source) == 0)
+          EXPECT_EQ(Q_error, -std::numeric_limits<Real>::infinity());
+        else
+          EXPECT_LE(Q_error, field_bound);
+      }
+    };
+    check_accepted_state_source(Real(6));
+    const auto accepted_state_coarse = system.block_level_state_global("material", 0);
+    const auto accepted_state_fine = system.block_level_state_global("material", 1);
+    const auto original_image = system.capture_auxiliary_checkpoint_accepted_state();
+
+    // An actually produced scaled SSA state yields a different real accepted forcing.
+    context.set_stage_time(7, 8);
+    auto& doubled_stage = produce_stage(context, 1, Real(2));
+    auto doubled_phi = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(16),
+      10, "test.amr-aux.phi-slot", {{0, &doubled_stage, 1}});
+    ASSERT_TRUE(doubled_phi.report().solved_value_available()) << doubled_phi.report().reason;
+    (void)doubled_phi.consume(SolveConsumption::kAccept);
+    auto doubled_psi = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(17),
+      13, "test.amr-aux.psi-slot", {{0, &doubled_stage, 1}});
+    ASSERT_TRUE(doubled_psi.report().solved_value_available()) << doubled_psi.report().reason;
+    (void)doubled_psi.consume(SolveConsumption::kAccept);
+    const auto doubled_image = system.capture_auxiliary_checkpoint_accepted_state();
+    ASSERT_FALSE(observed.Q_launches.empty());
+    const auto actual_refresh_point = observed.Q_launches.back();
+    check_accepted_state_source(Real(12));
+
+    system.restore_auxiliary_checkpoint_accepted_state(original_image);
+    EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), original_image);
+    check_accepted_state_source(Real(6)); // Rejects a stale pre-restore Q=12 binding.
+
+    // Public all-level refresh at a genuinely issued point. The real fine launcher
+    // throws after coarse candidate preparation, before accepted publication;
+    // refresh restores its registry snapshot by swap.
+    observed.fail_fine_Q = true;
+    observed.fine_Q_fault_point.reset();
+    EXPECT_THROW(system.refresh_auxiliary(actual_refresh_point), std::exception);
+    ASSERT_TRUE(observed.fine_Q_fault_point.has_value());
+    EXPECT_EQ(observed.fine_Q_fault_point->level, 1);
+    EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), original_image);
+    observed.fail_fine_Q = false;
+    check_accepted_state_source(Real(6)); // Accepted provider plan must survive registry rollback.
+    system.refresh_auxiliary(actual_refresh_point);
+    check_accepted_state_source(Real(6));
+
+    system.restore_auxiliary_checkpoint_accepted_state(doubled_image);
+    EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), doubled_image);
+    check_accepted_state_source(Real(12));
+    EXPECT_EQ(system.block_level_state_global("material", 0), accepted_state_coarse);
+    EXPECT_EQ(system.block_level_state_global("material", 1), accepted_state_fine);
+  }
 }
 
 TEST(PreparedFieldRhsInputs, ActualFieldPublicationReopensCoarseAuxWhileFineRemainsDirty) {
@@ -1239,5 +1379,9 @@ TEST(PreparedFieldRhsInputs, RepeatedActualAuxiliaryRestoreRebindsEveryNewFieldP
 
 TEST(PreparedFieldRhsInputs, OneRankAuxiliaryRestoreRefusalLeavesAcceptedIncidenceExact) {
   actual_field_incidence_lifecycle(IncidenceRestoreWitness::rank_local_refusal);
+}
+
+TEST(PreparedFieldRhsInputs, AcceptedProviderStateSourceSurvivesRestoreAndRegistryRollback) {
+  actual_field_incidence_lifecycle(IncidenceRestoreWitness::accepted_state_consumer);
 }
 } // namespace
