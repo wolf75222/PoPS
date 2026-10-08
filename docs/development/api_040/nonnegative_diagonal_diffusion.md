@@ -47,3 +47,39 @@ reduced frequency, all-zero law, compatible value and zero-conormal faces,
 negative/nonfinite dynamic coefficient rollback, incompatible conormal
 rollback, and periodic AMR composite conservation. They require rebuilding
 and authenticating the isolated installed native artifact before execution.
+
+
+Constitutive cell support and provider transport @1
+-------------------------------------------------
+
+A pointwise coefficient expression can require neighboring cell values when its
+selected numerical operation constructs face fluxes. Provider halos therefore
+come from the typed resolved operation's stencil radius and its exact qualified
+component reads, alongside explicit boundary widths and derived prerequisite
+closure. A field declaration's pointwise shape alone is insufficient. The same
+resolved width must enter provider materialization and the Program consumer plan.
+This transport requirement changes no physical coefficient or boundary formula.
+This internal support contract uses the exact resolved sampling variants:
+`face_trace`, `left_face_trace` and `right_face_trace` read adjacent cells,
+independently of the wider State reconstruction stencil. Cell reads use the
+selected operation radius. It adds no physical model selector or public math
+syntax, and leaves Native ABI13 and checkpoint schemas unchanged. The changed
+header content changes the SDK signature, requiring rebuilt consumers.
+
+For AMR diagonal/fitted diffusion, the native constitutive law is evaluated on
+`valid_box.grow(1)`; the adjoint tensor realization needs `valid_box.grow(2)`.
+Nonperiodic exterior cells retain the existing clipping to the physical domain.
+The tensor gradient is then evaluated on the existing inner box, one layer inside
+that constitutive support. State allocations may retain larger transport halos;
+those extra cells are not additional constitutive inputs. Minimal one/two-cell
+State allocations preserve their previous evaluation boxes exactly. Every status,
+finite-coefficient and admissibility check within the mathematical support remains
+mandatory, and invalid required ghost data still fail before RHS/face publication.
+
+The durable `test_prepared_diffusion.cpp` additions compare a three-halo State
+against minimal diagonal/tensor references using real one/two-halo coefficient
+storage, with a refusal before any out-of-storage dereference. The diagonal case
+fails against the prior header and both pass with the bounded evaluation box.
+Existing sparse periodic, internal-ghost failure and mixed physical-boundary
+checks cover the retained guard and clipping behavior. These are Source/Host
+checks; actual matching installed Native reception requires its rebuilt SDK.

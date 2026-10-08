@@ -1,0 +1,25 @@
+{
+  "command": [
+    "rtk",
+    "proxy",
+    "bash",
+    "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/run-official-build.sh"
+  ],
+  "exit": 0,
+  "duration_seconds": 259.7255094579996,
+  "finished_utc": "2026-10-08T21:32:53.038581+00:00",
+  "log_sha256": "bcce3f8f0a4b77e7e233ebbdfd4a2663992da95638f6dbc2c7327879339f858d",
+  "disk_before": {
+    "total": 494384795648,
+    "used": 489852993536,
+    "free": 4531802112
+  },
+  "disk_after": {
+    "total": 494384795648,
+    "used": 489901187072,
+    "free": 4483608576
+  },
+  "Source": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+  "SDK": "e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f",
+  "core_fingerprint": "3576bd9bef51c608146692bbc7f7ba9f4167edcd93c38a7928fa2b8af0f91e38"
+}

@@ -1,0 +1,101 @@
+{
+  "status": "BUILD_ADMISSION_RECEIVED_BASELINE_FAILED",
+  "Source": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+  "Native": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+  "SDK": "e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f",
+  "core_fingerprint": "3576bd9bef51c608146692bbc7f7ba9f4167edcd93c38a7928fa2b8af0f91e38",
+  "core_scope_schema": 2,
+  "core_files_physically_verified": 1213,
+  "installed_and_wheel_source_files_physically_verified": 1167,
+  "wheel_sha256": "1b55b3952db23cabd61e90f972758a418e780b9b2a8af80db9805729a160c4f1",
+  "wheel_native_sha256": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+  "cache_native_sha256": "2579cd938b23e5b3e8e21f5aafce89704fba32eb491bedadb3bd76c559b60133",
+  "installed_native_sha256": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+  "build_result_exit": 0,
+  "observed_compilation_actions": {
+    "runtime": 17,
+    "bindings": 7,
+    "total": 24,
+    "object_bytes_changed": 14,
+    "same_bytes_after_observed_compile": 10
+  },
+  "native_loaded_by_receiver": false,
+  "baseline": {
+    "terminal_result": {
+      "returncode": 1,
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "duration_seconds": 41.383670666997205,
+      "status": "failed",
+      "Source": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+      "Native": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+      "SDK": "e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f",
+      "pytest_args": [
+        "-ra",
+        "--strict-markers",
+        "--strict-config",
+        "-x",
+        "-ra",
+        "-v",
+        "--tb=short",
+        "-o",
+        "pythonpath=",
+        "-p",
+        "no:cacheprovider",
+        "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest.xml",
+        "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp",
+        "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[baseline]"
+      ],
+      "identity_sha256": "303cb6b8732343fbb1070437457679ce757080e63574a605cfe9db1756f8ba3d"
+    },
+    "junit_counts": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "failure": "StepAttemptRejected during native_evaluation; invalid_evaluation; diffusive_face_evaluation block=1 evaluation=16 reason_code=501",
+    "scientific_receipt": "NOT_RUN_NO_ACTUAL_ACCEPTED_VALUES",
+    "missing_physical_evidence": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/actual-donor.npy",
+      "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/actual-receiver.npy",
+      "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/actual-phi.npy",
+      "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/accepted-run-report.json",
+      "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/accepted-checkpoint-receipt.json",
+      "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/actual-receipt.json"
+    ],
+    "preserved_cpp": [
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/model0.cpp",
+        "sha256": "1a521c559cab5812f442619df68e53140268a2d7494d50faf95b83473b5da112",
+        "bytes": 9195
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/model1.cpp",
+        "sha256": "02f2610a6b809361e8eb7b808c7ceb3a049d5d482616009df7887192cc36b468",
+        "bytes": 13317
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/program0.cpp",
+        "sha256": "6acf4765d469edfbefb3fb2828eecaa65ee18dbbcd382c7fbabadd8912ca96c9",
+        "bytes": 175477
+      }
+    ]
+  },
+  "input_receipts": {
+    "admission_sha256": "89af4b7b7b23cef255c27a3c097000dc038185e82d622fa2ff2fc08a55824a88",
+    "identity_sha256": "37644203de2e3a764504114c46fb8d5e562ca852838ef5816c34ef86a7ebb4ac",
+    "baseline_result_sha256": "90bb24d1efde787d4430853f11ff4e1e1f7cbeb2d1f43180a26d55aea91360a1",
+    "baseline_xml_sha256": "88af6f0983b71460f87947a983376ac1cd4c052e400b4e0fed707c77ff1a56b8"
+  },
+  "limits": [
+    "successful build/install is distinct from failed native baseline",
+    "no scientific endpoint or checkpoint qualification",
+    "no new native execution or tests by receiving agent",
+    "recorded root doctor/native capability results pinned; no separate reload by receiving agent"
+  ]
+}

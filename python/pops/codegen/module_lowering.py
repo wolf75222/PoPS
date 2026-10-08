@@ -134,6 +134,7 @@ def _module_to_model(module: Any, state_space: Any = None,
             raise TypeError("compiler requires an exact resolved operation plan")
         provider_packs = resolved_operations.require_provider_packs(module)
         object.__setattr__(m, "_resolved_operations", resolved_operations)
+        object.__setattr__(m._m, "_resolved_operations", resolved_operations)
     m.__pops_bind_component_provider_packs__(provider_packs)
     # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
     # backing model before the first declaration so every derived operator registry retains the
@@ -675,6 +676,8 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
                     owns_emitter=True,
                 )
             object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
+            object.__setattr__(getattr(lowering.emit_model, "_m", lowering.emit_model),
+                               "_resolved_operations", resolved_operations)
         from pops.codegen.nonconservative_lowering import prepare_path_carrier
         prepare_path_carrier(lowering.emit_model, lowering.source_module, resolved_operations, numerics)
         from pops.codegen.user_reconstruction_lowering import prepare_user_reconstruction_carrier

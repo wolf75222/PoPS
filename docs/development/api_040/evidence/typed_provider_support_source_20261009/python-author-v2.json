@@ -1,0 +1,26 @@
+{
+  "Source": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+  "scope": "Source-only actual installed Python author/validate/resolve/lower plus generated registry/Program C++; process-local two-file candidate; no native build/run",
+  "Native_sha256_current": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+  "tests": {
+    "V2": "7 passed,46 deselected",
+    "V1_real_WENO_discriminator": "1 expected failure: assert provider support {3} == {1}; typed WENO State radius3 and field sampling face_trace",
+    "baseline_renamed_changed_equation": "real provider+Program Shape1",
+    "selected_tensor": "real provider+constitutive consumer Shape2, full explicit AMR still correctly refused by existing composite stability guard",
+    "authentication": "wrapper and backing same exact ResolvedOperationPlan; require_provider_packs reauthenticates Source Module; emitter attachment witness verified",
+    "perturbations": "zero stencil no halo; foreign owner not matched; unread component not widened; provider prerequisite propagation; explicit boundary width max preserved"
+  },
+  "math": "Provider read width is1 for typed face traces at adjacent cells, selected operation radius for cell sampled reads; existing explicit boundaries/dependency closure retained",
+  "hashes": {
+    "typed-read-support.patch": "beaefd3092ccc4219e5bf3c7c752d4f40976dd2f8578bf2ab37007890776abf8",
+    "typed-read-support-with-regressions.patch": "119fbd1bf1c958973a6b9b3b19d4ae6004a0bd84fd77a005170dd76d564bcdb5",
+    "regressions.patch": "a63b720fb8644d762b443bb71aa5f8b5443ddab661e1eaec642f49e33676599f",
+    "typed-read-support-with-regressions-v2.patch": "cf4817d61339de05162d978e883d5f64adb134b3fef2626bb5f1dc70de662bad",
+    "regressions-v2.patch": "a50938f335839eb1f0dcff52b8632a68ff525e9902eb25c86834db03dc3b31f1",
+    "_native_auxiliary_shapes_v2.py": "40713ff41ba745ce6aac5752efeb3ef3e775c3eba62b68039eca8ba13663a5b0",
+    "module_lowering_v2.py": "8d50bf8a6e4f9865eb59c3e37f1d85e42b56261aba27b0eecf5d4eb52abc5aa5",
+    "test_diffusion_frozen_input_quadrature_v2.py": "20423e8c8a5496400ce32c88295e1b5971f0208e4854347fe61fcdb86f01c52f",
+    "source-tests-v2-final.xml": "da8969f0848c327bc0a3ce8ce6e0adfcbad6a3a576f7f76ec2f93da33e183653",
+    "source-tests-fv-v1-discriminator.xml": "607e485d749a86e5d3862986e0815a4839049e9700b5e2d0ca7bf1bbeb086599"
+  }
+}

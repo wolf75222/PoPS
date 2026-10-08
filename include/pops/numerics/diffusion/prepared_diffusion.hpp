@@ -107,7 +107,9 @@ class PreparedDiffusion {
   Box<Dim> evaluation_box_(const Field& input, std::size_t local) const {
     if (!prepared_amr_ghosts_)
       return input.box(local);
-    auto box = input.fab(local).grown_box();
+    // The diagonal face formula reads adjacent cells; the tensor cell-gradient
+    // formula reads one more layer. Extra State allocation halos are not law inputs.
+    auto box = input.box(local).grow(Tensor ? 2 : 1);
     for (int axis = 0; axis < Dim; ++axis) {
       if (physical_[2 * axis].kind != DiffusiveBoundaryKind::periodic)
         box.lo[axis] = std::max(box.lo[axis], geometry_.domain().lo[axis]);

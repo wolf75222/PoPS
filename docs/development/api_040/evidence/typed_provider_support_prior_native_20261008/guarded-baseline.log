@@ -1,0 +1,61 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops/bin/python
+rootdir: /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004
+configfile: pyproject.toml
+collecting ... collected 1 item
+
+tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[baseline] FAILED [100%]
+
+=================================== FAILURES ===================================
+__________ test_public_guarded_field_coefficient_diffusion[baseline] ___________
+tests/python/integration/runtime/test_guarded_field_diffusion_publication.py:228: in test_public_guarded_field_coefficient_diffusion
+    report = collective_call(
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('StepAttemptRejected', 'step attempt rejected during native_evaluation: solve status=invalid_evaluation (attempt_action=reject, reason_code=501, diffusive_face_evaluation block=1 evaluation=16 reason_code=501)', True),)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] guarded two-owner public Field diffusion: compile and publish start
+[rank 0] guarded two-owner public Field diffusion: compile and publish done
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[baseline]
+  tests/python/integration/runtime/test_guarded_field_diffusion_publication.py:54: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[baseline]
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+======================== 1 failed, 1 warning in 41.29s =========================
+{
+  "returncode": 1,
+  "counts": {
+    "tests": 1,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  },
+  "duration_seconds": 41.383670666997205,
+  "status": "failed",
+  "Source": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+  "Native": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+  "SDK": "e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f",
+  "pytest_args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-x",
+    "-ra",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "-p",
+    "no:cacheprovider",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/pytest-tmp",
+    "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[baseline]"
+  ],
+  "identity_sha256": "303cb6b8732343fbb1070437457679ce757080e63574a605cfe9db1756f8ba3d"
+}

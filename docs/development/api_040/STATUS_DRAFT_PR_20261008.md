@@ -1,8 +1,65 @@
 # PR brouillon - état réel de l’intégration PoPS 0.4.0
 
-Snapshot du 8 octobre 2026, actualisé à 19:52 UTC pour la
+Snapshot du 8 octobre 2026 UTC (9 octobre à Paris) pour la
 [PR brouillon 681](https://github.com/wolf75222/PoPS/pull/681).
 **Mission encore ouverte ; cette PR est un brouillon.**
+
+Le dernier lot réellement construit et exécuté est `67623c95`, Native
+`22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52`, SDK
+`e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f`.
+Le build officiel incrémental termine en 259,73 s : 24 actions C++ réelles,
+17 runtime et sept bindings, wheel/install/prove/doctor réussis. Quatorze objets
+changent d'octets, dix restent identiques après compilation. La réception
+indépendante authentifie 1 167 fichiers Source/installés/wheel et les 24 actions.
+Le gel conservateur du cœur inclut les bindings : schéma de preuve 2,
+1 213 fichiers, empreinte `3576bd9bef51c608146692bbc7f7ba9f4167edcd93c38a7928fa2b8af0f91e38`.
+
+Le nouveau cas public à deux modèles compile et bind, puis **échoue** dans
+`diffusive_face_evaluation`, bloc 1, évaluation 16, raison `501`. Il ne produit
+aucun état accepté, rapport réussi ni checkpoint. À `(-1,-1)`, l'état possède
+une cellule fantôme, mais le provider n'a que l'image valide `(16,12)` d'origine
+`(0,0)`. Un diagnostic JIT conservant équations et gardes observe la lecture hors
+allocation et un coefficient infini ; ses bits ne sont pas attribués au premier
+essai sans instrumentation.
+
+Une expérience indépendante de capacité Uniform passe : trois checkpoints CP9,
+68 clés chacun, états et propriétaire `owned-clock@1` reçus indépendamment.
+Réserve froide : 33 808 octets de métadonnées plus 1 176 octets scalaires.
+Images Aux mesurées : 31 698 puis 32 448 et 32 448 octets ; réserves restantes :
+3 286 puis 2 536 octets. Le lecteur préserve les identités binaires opaques ;
+son échec initial de décodage UTF-8 est conservé. Ce résultat ne qualifie ni la
+diffusion refusée, ni le restart, ni des sous-horloges ou IDs de longueur variable.
+Les [reçus de ce lot](evidence/typed_provider_support_prior_native_20261008/manifest.json)
+sont distincts de ceux du correctif suivant.
+
+Le correctif intégré suivant conserve le plan résolu sur l'émetteur réel et
+déduit le support des lectures typées. Les traces de face demandent une couche,
+même avec WENO5 et trois couches de reconstruction de l'état ; la loi diagonale
+demande une couche, la réalisation tensorielle deux. Le C++ évalue ce support
+mathématique, avec le clipping physique antérieur, sans sélecteur de modèle.
+Le contrat interne est versionné [support constitutif @1](nonnegative_diagonal_diffusion.md).
+Deux agents Sol 6.1 ont effectué les contre-revues croisées : sept tests Source
+ciblés et 21 tests Host passent. Un contrôle Source élargi conserve 113 PASS et
+un échec d'assertion de forme C++ dans un ancien test de sous-cyclage. L'émission
+est bit à bit identique entre Source installé `67623c95` et Source corrigé, aux
+trois résolutions. Le test corrigé vérifie le RHS intermédiaire puis l'unique
+puissance de dt ; les 123 contrôles Source passent, zéro failure/error/skip,
+sans import Native. Les [reçus Source et Host](evidence/typed_provider_support_source_20261009/manifest.json)
+conservent les négatifs et les contre-revues. Le SDK est maintenant `de2b5ef2…` ;
+le nouveau lot exige son propre build officiel.
+
+La CI du SHA `67623c95` comporte des échecs réels : 17 tests d'architecture,
+trois cas de diffusion avec Input statique et deux cas C++ AMR notamment.
+La contre-revue distingue les scans textuels trop larges d'un vrai manque de
+preuve sur la provenance résolue des Inputs. Un raccourci `input_fields -> frozen`
+reste incorrect lorsqu'une publication remplace leur producteur. La prochaine
+campagne GPU reste non soumise. Le profil CudaSpace habituel refuse les lectures
+hôte du ledger diffusif ; une réalisation Kokkos distincte à mémoire unifiée
+sur GH200 est proposée, non exécutée. Toutes les 94 obligations restent suivies.
+
+## Historique conservé des lots précédents
+
+État Source du lot capacité avant sa construction :
 Le lot suivant intègre la capacité Aux Uniform et le contrat explicite
 `pops.program.owned-clock-manifest@1`, issu du DSO réellement installé. Les
 images acceptées et le travail Input encore en attente conservent des propriétés
@@ -304,11 +361,11 @@ ne découle ni des211 contrôles locaux ni des prewarms.
 | Travail | État réel | Prochaine étape |
 |---|---|---|
 | Code cumulé et correctifs récents | Publiés dans cette PR brouillon ; les anciens travaux sont conservés | Relire le diff et poursuivre la réception. |
-| CI de53fd6ec2 | Échecs réels ; run37833215669 encore actif | Diagnostiquer les logs puis recevoir les contrôles requis au SHA final. |
-| Native CPU après les deux changements C++ | db206100 reconstruit/installé, Nativeed2 reçu ; wheel53fd installée | Recompiler après les prochains headers C++ ; ne pas hériter de la réception. |
-| Science CPU | PDE1 et OwnRetry/Native8 reçus à nouveau surbd291, dix tests au total ; cinq constructions publiques et leurs refus/retry reçus | Recevoir le rollback peuplé puis qualifier le prochain cœur modifié. |
-| Native CUDA complet et PDE GPU | Pas de campagne complète suivante soumise à ce checkpoint | Construire depuis le SHA figé dans le scratch personnel, puis qualifier les calculs réels. |
-| Extension publique diffusion→FieldV2 | Euler/deux SSPRK2 et MPI2SSP reçus ; refus initial série/MPI, retry adaptatif et rollback peuplé reçus | Intégrer puis qualifier la construction nouvelle à deux modèles et son autorité détachée. |
+| CI de67623c95 | Échecs réels d'architecture, diffusion et AMR ; run37847164198 | Corriger les défauts exacts puis recevoir les contrôles requis au SHA final. |
+| Native CPU | 67623c95 reconstruit/installé, Native22da/SDKe0b reçu | Recompiler les consommateurs du nouveau SDKde2b ; ne pas hériter de la réception. |
+| Science CPU | Nouveau cas à deux modèles refusé501 ; capacité Uniform reçue. Les dix tests originaux et cinq compositions précédentes restent des réceptions historiques surbd291 | Recevoir le nouveau baseline, ses variantes et les non-régressions sur le nouveau cœur. |
+| Native CUDA complet et PDE GPU | Aucune nouvelle campagne soumise ; CudaSpace standard ne permet pas le ledger hôte | Qualifier le profil distinct Kokkos à mémoire unifiée et les vrais kernels, après réception CPU. |
+| Extension publique diffusion→FieldV2 | Le raccordement public existe ; correction de support intégrée, Source123/Host21 reçus | Exécuter la construction nouvelle à deux modèles avec ses lectures de fantômes réelles. |
 
 La préparation du prochain build CPU est conservée dans
 `/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/`.

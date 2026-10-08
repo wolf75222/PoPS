@@ -1,0 +1,50 @@
+{
+  "scope": "Independent bounded readonly Source review; tracked Main dirty sixfiles at HEAD676; Native acceptance pending rebuilt runtime",
+  "physical_file_hashes": {
+    "docs/development/api_040/nonnegative_diagonal_diffusion.md": "189a94b25420e375da976950a8e4e648b5ccba2c551a6c379094893160799512",
+    "include/pops/numerics/diffusion/prepared_diffusion.hpp": "5f0adf266d50f6b38397179d78a88a1b56f177324ed1031d58b4b9cbfb9a1c39",
+    "python/pops/codegen/_native_auxiliary_shapes.py": "c5fb7767b1f772fd7f322d1592d6b6ab0a7d1b94c57351ff5a0fd5177eda44fa",
+    "python/pops/codegen/module_lowering.py": "8d50bf8a6e4f9865eb59c3e37f1d85e42b56261aba27b0eecf5d4eb52abc5aa5",
+    "tests/cpp/unit/runtime/test_prepared_diffusion.cpp": "308626cb81f56b09e657557345f74f30e816e6ec2b0904c69e26a322ee5ec99f",
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": "20423e8c8a5496400ce32c88295e1b5971f0208e4854347fe61fcdb86f01c52f"
+  },
+  "existing_source_prefixes_preserved": {
+    "tests/cpp/unit/runtime/test_prepared_diffusion.cpp": true,
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": true,
+    "docs/development/api_040/nonnegative_diagonal_diffusion.md": true
+  },
+  "exact_sampling_set": [
+    "face_trace",
+    "left_face_trace",
+    "right_face_trace"
+  ],
+  "review_findings": {
+    "exact_resolved_plan_shared_by_wrapper_and_backing": true,
+    "resolved_plan_authenticates_source_module_before_attachment": true,
+    "provider_and_program_shapes_use_same_authority": true,
+    "WENO_state_radius3_provider_face_radius1": true,
+    "diagonal1_tensor2": true,
+    "physical_clipping_and_tensor_inner_formula_preserved": true,
+    "no_arbitrary_sampling_substring": true,
+    "no_model_name_dispatch_or_equation_changes": true
+  },
+  "bounded_independent_Source_probe": {
+    "selector": "selected_constitutive_reads or provider_support_matches or selected_provider_support or weno_state_reconstruction",
+    "tests": 7,
+    "passed": 7,
+    "deselected": 46,
+    "elapsed_seconds": 18.29152562499803,
+    "Native_loaded": [],
+    "result_path": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/integrated-final-source-probes/result.json",
+    "result_sha256": "f9161aae90db56f1f88e4f1a59a2f27edcf3a5e754deaadc81c9fe218b18e12c",
+    "Source_modules": {
+      "pops": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/__init__.py",
+      "pops.codegen.program_accepted_ssp": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_accepted_ssp.py",
+      "pops.codegen._native_auxiliary_shapes": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/_native_auxiliary_shapes.py",
+      "pops.codegen.program_codegen": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_codegen.py",
+      "pops.codegen.module_lowering": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/module_lowering.py"
+    }
+  },
+  "physical_hashes_unchanged_during_review": true,
+  "verdict": "SOURCE_ACCEPT; official matching Native rebuild and reception remain required"
+}

@@ -16,6 +16,31 @@ def native_auxiliary_halos(model: Any) -> dict[tuple[str, str, str, str], int]:
     halos = {tuple(row["key"][name] for name in
                    ("owner_qid", "space_kind", "space_name", "component")): 1
              for row in flux_plan}
+    # Selected numerical operations own their cell read support. A constitutive
+    # law may be pointwise while its face construction reads adjacent cells;
+    # storage declarations and the FV flux subset cannot express that demand.
+    plan = getattr(model, "_resolved_operations", None)
+    if plan is not None:
+        from pops.model.handles import Handle
+        owner = model._owner_path.canonical()
+        references = {
+            key: Handle(key[2], kind=key[1], owner=owner).qualified_id
+            for component in model._auxiliary_provider_pack
+            for key in (key_tuple(component),) if key[0] == str(owner)
+        }
+        for operation in plan.operations:
+            if operation.stencil_radius == 0:
+                continue
+            for read in operation.inputs:
+                for key, reference in references.items():
+                    if read.reference == reference and (
+                            read.complete or key[3] in read.components):
+                        # Reconstructed face state stencils can be wider than
+                        # pointwise provider traces at the two adjacent cells.
+                        face_sampling = read.sampling in {
+                            "face_trace", "left_face_trace", "right_face_trace"}
+                        width = 1 if face_sampling else operation.stencil_radius
+                        halos[key] = max(halos.get(key, 0), width)
     for key, route in typed_routes.items():
         boundary = route.get("boundary")
         halos[key] = max(halos.get(key, 0), 0 if boundary is None else boundary.width)

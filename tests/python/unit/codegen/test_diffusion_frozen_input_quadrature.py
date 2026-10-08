@@ -612,3 +612,193 @@ def test_changed_guarded_publication_equations_change_actual_numerical_cpp_and_o
             program, model_authority=authority
         )
         assert certificate is not None and certificate.b == (1,), reason
+
+
+def _guarded_native_read_support_emitter(monkeypatch, *, suffix="", tensor=False,
+                                          **math_inputs):
+    import pops
+    from pops.solvers import CompositeFieldGMRES
+    from pops.numerics import TensorDiffusion
+    from pops.codegen.module_lowering import lower_and_validate
+    import tests.python.support.guarded_field_diffusion_case as authored
+
+    with monkeypatch.context() as numerical_choice:
+        if tensor:
+            numerical_choice.setattr(authored, "Diffusion", TensorDiffusion)
+        case, layout, _, _ = authored.author_case(
+            solver=CompositeFieldGMRES(max_iter=200, rel_tol=1e-12, abs_tol=1e-14),
+            suffix=suffix, **math_inputs)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    block = resolved.blocks[1]
+    emitter, module = lower_and_validate(block.model,
+        resolved_operations=block.resolved_operations, numerics=block.numerics)
+    return emitter, module, block.resolved_operations, resolved
+
+
+@pytest.mark.parametrize("suffix,reaction,offset,tensor,depth", [
+    ("", 3, Fraction(2, 7), False, 1),
+    ("_different_names", 3, Fraction(2, 7), False, 1),
+    ("", 5, Fraction(3, 11), False, 1),
+    ("_tensor", 3, Fraction(2, 7), True, 2),
+])
+def test_selected_constitutive_reads_determine_native_provider_support(
+    monkeypatch, suffix, reaction, offset, tensor, depth,
+):
+    from pops.codegen._native_auxiliary_shapes import native_auxiliary_halos
+    from pops.codegen.component_provider_packs import require_emitter_provider_carrier
+    from pops.codegen._compile_emit import _emit_auxiliary_route_registration
+    from pops.codegen._orchestration_compile import build_program_model_graph
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_emit_kernels import ProgramProviderPlans, program_provider_consumer_qid
+    from pops.codegen.program_emit_model_kernels import _provider_binding
+    from pops.codegen.program_emit_diffusion import _selected, _law_expressions
+
+    emitter, module, plan, resolved = _guarded_native_read_support_emitter(monkeypatch,
+        suffix=suffix, reaction=reaction, diffusion_offset=offset, tensor=tensor)
+    implementation = emitter._m
+    assert emitter._resolved_operations is implementation._resolved_operations is plan
+    packs = implementation._resolved_operations.require_provider_packs(module)
+    assert packs.auxiliary.to_data() == implementation._auxiliary_provider_pack.to_data()
+    require_emitter_provider_carrier(implementation)
+    # This field publication is not a hyperbolic flux or a model auxiliary recipe.
+    assert not implementation._component_flux_consumer_plan
+    assert not implementation._auxiliary_provider_routes
+    demands = native_auxiliary_halos(implementation)
+    assert len(demands) == 1 and set(demands.values()) == {depth}
+    key = next(iter(implementation._auxiliary_provider_pack))
+    assert demands[(key.owner_qid, key.space_kind, key.space_name, key.component)] == depth
+    registration = _emit_auxiliary_route_registration(implementation, target="amr_system")
+    assert "halo[axis] = %d;" % depth in registration
+    evaluation = next(value for value in resolved.time._values if value.op == "diffusive_rhs")
+    _, selected_law, _ = _selected(evaluation, emitter)
+    consumers = ProgramProviderPlans(target="amr_system", provider_halos=demands)
+    _provider_binding(implementation, _law_expressions(selected_law), consumers,
+        program_provider_consumer_qid(emitter, evaluation.id, evaluation.block))
+    consumer_cpp = consumers.cpp_install("amr_system")
+    assert "halo[axis] = %d;" % depth in consumer_cpp
+    graph = build_program_model_graph(resolved)
+    if tensor:
+        with pytest.raises(ValueError, match="proven composite stability bound"):
+            emit_cpp_program(resolved.time, model_graph=graph,
+                             field_plans=resolved.field_plans, target="amr_system")
+    else:
+        program_cpp = emit_cpp_program(resolved.time, model_graph=graph,
+                                      field_plans=resolved.field_plans, target="amr_system")
+        rows = [line for line in program_cpp.splitlines() if "ConsumerValue{Dependency{" in line]
+        assert rows and all("halo[axis] = %d;" % depth in line for line in rows)
+
+
+def test_provider_support_matches_typed_components_and_canonical_owner(monkeypatch):
+    from dataclasses import replace
+    from pops.model import Handle, OwnerPath
+    from pops.model.provider_pack import ProviderPack
+    from pops.codegen._native_auxiliary_shapes import native_auxiliary_halos
+
+    emitter, _, plan, _ = _guarded_native_read_support_emitter(monkeypatch)
+    implementation = emitter._m
+    probe = SimpleNamespace(**vars(implementation))
+    probe._resolved_operations = SimpleNamespace(operations=tuple(
+        replace(operation, stencil_radius=0) for operation in plan.operations))
+    assert native_auxiliary_halos(probe) == {}
+
+    selected = next(iter(implementation._auxiliary_provider_pack))
+    foreign = Handle(selected.space_name, kind=selected.space_kind,
+        owner=OwnerPath.model("independent-foreign-owner").canonical()).qualified_id
+    probe._resolved_operations = SimpleNamespace(operations=tuple(replace(operation,
+        inputs=tuple(replace(read, reference=foreign) if read.kind == "field" else read
+                     for read in operation.inputs)) for operation in plan.operations))
+    assert native_auxiliary_halos(probe) == {}
+
+    # A three-cell reconstructed State still takes pointwise provider traces
+    # from the two cells adjacent to a face; those sampling contracts differ.
+    probe._resolved_operations = SimpleNamespace(operations=tuple(replace(operation,
+        stencil_radius=3,
+        inputs=tuple(replace(read, sampling="right_face_trace")
+                     if read.kind == "field" else read for read in operation.inputs))
+        for operation in plan.operations))
+    assert set(native_auxiliary_halos(probe).values()) == {1}
+
+    probe._resolved_operations = plan
+    unread = replace(selected, component="unread-neighbor")
+    original = implementation._auxiliary_provider_pack
+    probe._auxiliary_provider_pack = ProviderPack([
+        (key, original.contract(key), original.declared_entry(key)) for key in original
+    ] + [(unread, original.contract(selected), original.declared_entry(selected))])
+    demands = native_auxiliary_halos(probe)
+    assert len(demands) == 1
+    assert (unread.owner_qid, unread.space_kind, unread.space_name, unread.component) not in demands
+
+
+def test_selected_provider_support_propagates_to_native_prerequisites_and_boundaries(
+    monkeypatch,
+):
+    from dataclasses import replace
+    from pops.codegen._native_auxiliary_shapes import native_auxiliary_halos
+
+    emitter, _, _, _ = _guarded_native_read_support_emitter(monkeypatch, tensor=True)
+    implementation = emitter._m
+    selected = next(iter(implementation._auxiliary_provider_pack))
+    dependency = replace(selected, component="prerequisite")
+    probe = SimpleNamespace(**vars(implementation))
+    probe._auxiliary_provider_routes = {selected: {"dependencies": (dependency,)}}
+    demands = native_auxiliary_halos(probe)
+    assert demands[(dependency.owner_qid, dependency.space_kind,
+                    dependency.space_name, dependency.component)] == 2
+    probe._auxiliary_provider_routes = {
+        selected: {"boundary": SimpleNamespace(width=3), "dependencies": (dependency,)}}
+    demands = native_auxiliary_halos(probe)
+    assert set(demands.values()) == {3}
+
+
+def test_weno_state_reconstruction_keeps_pointwise_provider_face_support():
+    import pops
+    from pops import math
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.numerics import FiniteVolume, DiscretizationPlan, variables, riemann, reconstruction
+    from pops.time import Program, FixedDt
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.codegen.module_lowering import lower_and_validate
+    from pops.codegen._native_auxiliary_shapes import native_auxiliary_halos
+    from pops.codegen._compile_emit import _emit_auxiliary_route_registration
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    frame = Rectangle("fv-support-domain", (0, 0), (1, 1)).frame(Cartesian2D())
+    model = pops.Model("variable-velocity-material", frame=frame)
+    state = model.state("inventory", components=("inventory",))
+    speed = model.aux("imposed_speed")
+    flux = model.flux("physical-transport", frame=frame, state=state,
+        components={frame.x: (speed * state[0],), frame.y: (0 * state[0],)},
+        waves={frame.x: (speed,), frame.y: (0,)})
+    rate = model.rate("conservation", equation=math.ddt(state) == -math.div(flux))
+    case = pops.Case("provider-face-support")
+    block = case.block("material", model)
+    methods = DiscretizationPlan()
+    methods.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(state),
+        reconstruction=reconstruction.WENO5(), riemann=riemann.Rusanov()))
+    case.numerics(methods, block=block)
+    program = Program("advance-material")
+    q = program.state(block[state])
+    fields = program.input_fields(q.n, for_rate=rate)
+    rhs = rate(q.n, fields)
+    endpoint = program.value("actual-endpoint", q.n + program.dt * rhs, at=q.next.point)
+    program.commit(q.next, endpoint)
+    program.step_strategy(FixedDt(1e-5))
+    case.program(program)
+    resolved = pops.resolve(pops.validate(case), layout=Uniform(CartesianGrid(
+        frame=frame, cells=(16, 16), periodic=PeriodicAxes(frame.axes))))
+    selected = resolved.blocks[0]
+    emitter, _ = lower_and_validate(selected.model,
+        resolved_operations=selected.resolved_operations, numerics=selected.numerics)
+    reads = [(operation.stencil_radius, read.sampling)
+             for operation in selected.resolved_operations.operations
+             for read in operation.inputs if read.kind == "field"]
+    assert reads and all(radius == 3 and sampling == "face_trace"
+                         for radius, sampling in reads)
+    assert set(native_auxiliary_halos(emitter._m).values()) == {1}
+    registration = _emit_auxiliary_route_registration(emitter._m)
+    assert "halo[axis] = 1;" in registration and "halo[axis] = 3;" not in registration
+    program_cpp = emit_cpp_program(resolved.time, model=emitter)
+    consumers = [line for line in program_cpp.splitlines() if "ConsumerValue{Dependency{" in line]
+    assert consumers and all("halo[axis] = 1;" in line for line in consumers)

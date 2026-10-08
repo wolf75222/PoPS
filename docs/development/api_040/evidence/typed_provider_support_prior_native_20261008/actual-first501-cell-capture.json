@@ -1,0 +1,52 @@
+{
+  "scope": "actual fresh matching Native diagnostic with JIT-only logging; equations/law reads/guards unchanged. No accepted step/scientific success.",
+  "Source": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+  "Native": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+  "SDK": "e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f",
+  "phase_result": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline-cell-diagnostic2/result.json",
+  "same_process_identity": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline-cell-diagnostic2/identity.json",
+  "invocation": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline-cell-diagnostic2/invocation.json",
+  "first_evaluated_outside_provider_cell": "DIFFUSION_CELL index=(-1,-1) density=0x1.1b4aa15d28ea4p+0 mobility=0x1.f65766974616ep+726 coefficient=inf provider_origin=(0,0) provider_extent=(16,12) state_origin=(-1,-1) state_extent=(18,14) outside_provider=1 outside_state=0",
+  "first_recorded_nonfinite_coefficient_cell": "DIFFUSION_CELL index=(-1,-1) density=0x1.1b4aa15d28ea4p+0 mobility=0x1.f65766974616ep+726 coefficient=inf provider_origin=(0,0) provider_extent=(16,12) state_origin=(-1,-1) state_extent=(18,14) outside_provider=1 outside_state=0",
+  "logged_outside_provider_cells": 60,
+  "logged_nonfinite_coefficient_cells": 15,
+  "actual_compile_receipts": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/diagnostic2-actual-compile-receipts.json",
+  "actual_compile_receipts_sha256": "ba18d67892e9b8138ca10d00e00f1d53e01822e7b6e09465cc50320ac47040b0",
+  "preserved_original_first501": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/result.json",
+  "instrumentation_script": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/run-actual-cell-diagnostic2.py",
+  "instrumentation_script_sha256": "ad771415d94cb52e9e6727a4d7661562f5aba47893edc865db13bc271c8ad8e2",
+  "log": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/actual-cell-diagnostic2.log",
+  "log_sha256": "a3f6f577934fb2a2bb8bc6a97096389ec526712b6b30713b88985c3a5207db35",
+  "result": {
+    "returncode": 1,
+    "counts": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "duration_seconds": 44.12798874999862,
+    "status": "failed",
+    "Source": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+    "Native": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+    "SDK": "e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f",
+    "pytest_args": [
+      "-ra",
+      "--strict-markers",
+      "--strict-config",
+      "-x",
+      "-ra",
+      "-v",
+      "--tb=short",
+      "-o",
+      "pythonpath=",
+      "-p",
+      "no:cacheprovider",
+      "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline-cell-diagnostic2/pytest.xml",
+      "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline-cell-diagnostic2/pytest-tmp",
+      "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[baseline]"
+    ],
+    "identity_sha256": "56ddac65abd289a2bd2c7fce9c5ccd1e8cbc23ada17066186443bd4f43a93c47"
+  },
+  "causal_scope": "the actual law reads mobility at index(-1,-1) outside provider origin(0,0)/extent(16,12) while State owns the cell; actual coefficient is infinity. Shape inference omitted selected diffusion stencil support."
+}
