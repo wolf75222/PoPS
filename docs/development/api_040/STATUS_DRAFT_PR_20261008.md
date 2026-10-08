@@ -93,16 +93,16 @@ huit tableaux de192 cellules, le gain de deux Euler, le potentiel à2DT et le
 rapport de deux acceptations/un rejet. Elle n’infère pas un checkpoint ni un
 rollback englobant à partir de la seule assertion fill2.
 Le fixture de continuation après un premier pas accepté est intégré en
-`a6f104f6`, après quatre tests Source et revue mathématique indépendante ; son
-run Native reste à faire. Il demande un refus via la composition publique
-`limit−2560*tau`, puis compare les deux slots déjà peuplés et le contrôle de
-deux pas. Les snapshots Aux/historiques utilisent
+`a6f104f6`, après quatre tests Source et revue mathématique indépendante. Son
+run Native termine PASS1 : refus via la composition publique `limit−2560*tau`,
+image de40456 octets avec deux slots déjà peuplés avant/après et contrôle de
+deux pas ; la réception indépendante est en cours. Les snapshots Aux/historiques utilisent
 des accesseurs privés du journal Native ; ils ne qualifient pas une API publique
 de snapshot, un changement de paramètres sur la même instance ou la révocation
 d’un ticket retenu. Le refus SSPRK2 est également reçu sur deux vrais rangs MPI :
 images exactes sur chaque rang, deux diagnostics de refus collectif, tableaux
 du contrôle bit à bit égaux entre rangs et au cas série. Le rollback d’anneaux
-déjà peuplés reste à exécuter. Les [preuves d’échec tardif](evidence/late_refusal_20261008/manifest.json)
+déjà peuplés attend sa réception indépendante. Les [preuves d’échec tardif](evidence/late_refusal_20261008/manifest.json)
 conservent les déclarations antérieures au run et les négatifs.
 
 La réception historique détaillée ci-dessous concerne
@@ -266,9 +266,9 @@ ne découle ni des211 contrôles locaux ni des prewarms.
 | Code cumulé et correctifs récents | Publiés dans cette PR brouillon ; les anciens travaux sont conservés | Relire le diff et poursuivre la réception. |
 | CI de53fd6ec2 | Échecs réels ; run37833215669 encore actif | Diagnostiquer les logs puis recevoir les contrôles requis au SHA final. |
 | Native CPU après les deux changements C++ | db206100 reconstruit/installé, Nativeed2 reçu ; wheel53fd installée | Recompiler après les prochains headers C++ ; ne pas hériter de la réception. |
-| Science CPU | PDE1/OwnRetry1/Native8 reçus surdb ; cinq nouveaux cas publics reçus sur53fd | Non-régression de la nouvelle preuve, échec tardif/contrôle et retry. |
+| Science CPU | PDE1 et OwnRetry/Native8 reçus à nouveau surbd291, dix tests au total ; cinq constructions publiques et leurs refus/retry reçus | Recevoir le rollback peuplé puis qualifier le prochain cœur modifié. |
 | Native CUDA complet et PDE GPU | Pas de campagne complète suivante soumise à ce checkpoint | Construire depuis le SHA figé dans le scratch personnel, puis qualifier les calculs réels. |
-| Extension publique diffusion→FieldV2 | Euler/deux SSPRK2 et MPI2SSP reçus ; refus initial série/MPI et retry adaptatif reçus | Exécuter le rollback d’anneaux déjà peuplés et finir la non-régression. |
+| Extension publique diffusion→FieldV2 | Euler/deux SSPRK2 et MPI2SSP reçus ; refus initial série/MPI et retry adaptatif reçus ; rollback peuplé producteurPASS | Recevoir indépendamment ce rollback, puis la construction nouvelle à deux modèles. |
 
 La préparation du prochain build CPU est conservée dans
 `/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/`.
