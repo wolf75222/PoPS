@@ -49,8 +49,12 @@ Le même cas a aussi terminé avec deux vrais rangs MPI : un PASS par rang, zér
 failure/error/skip. Le lanceur utilise l’identité et pytest dans le même processus
 pour conserver les descripteurs PMI ; le checkpoint a un chemin partagé et les
 tableaux sont propres à chaque rang. Deux erreurs antérieures de lanceur et de
-chemin du fixture sont conservées. La réception mathématique MPI2 indépendante
-est encore en cours. Ces corrections ne modifient aucun fichier du cœur.
+chemin du fixture sont conservées. La [réception MPI2 indépendante](evidence/fixed_core_diffusion_20261008/mpi2-independent.json)
+est maintenant PASS : identités des deux rangs authentifiées, quatre tableaux
+globaux bit à bit égaux entre rangs et au cas série, même oracle indépendant,
+checkpoint partagé et ses72 charges reçus. Le census local des cellules/owners
+n’a pas été capturé et n’est pas inféré. Il s’agit d’un cas distribué physique,
+pas de deux cas. Ces corrections ne modifient aucun fichier du cœur.
 
 La méthode SSPRK2 émet maintenant du C++ dans une candidate de preuve algébrique
 externe ; des cas de dépendances Field/frozen-driver restent à corriger avant

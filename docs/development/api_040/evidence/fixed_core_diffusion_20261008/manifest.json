@@ -1,6 +1,6 @@
 {
   "date_utc": "2026-10-08T18:17:13.384673+00:00",
-  "scope": "Exact receipts of fixed-core finite witnesses. MPI2 results are producer results pending separate independent mathematical reception. No universal language/SSP/GPU/full94 claim.",
+  "scope": "Exactreceipts of fixed-core finite Euler witnesses, including independently received actualMPI2. No universal language/SSP/GPU/full94 claim.",
   "files": {
     "core-manifest.json": {
       "bytes": 197575,
@@ -41,6 +41,11 @@
       "bytes": 831,
       "sha256": "0b833d57cdf1ead98f9b4c2fc317a1ae1702fa2f431622c0d336b5c3d8b0f3a3",
       "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-Euler-MPI2-sharedcp-16b4-ed2-20261008/rank1/result.json"
+    },
+    "mpi2-independent.json": {
+      "bytes": 19893,
+      "sha256": "8e42500dff0c427786c4acd80568e1fcd00a93b326a32ac391a5872f9488497d",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-public-diffusion-Euler-MPI2-16b4-ed2-reception-20261008/reception.json"
     }
   }
 }
