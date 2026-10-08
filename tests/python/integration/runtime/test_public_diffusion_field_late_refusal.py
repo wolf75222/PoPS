@@ -382,6 +382,9 @@ def test_public_late_refusal_automatic_retry(
         max_steps=2,
         max_rejections=1,
         norm_bounds_before_run={"initial": [0.14, 0.16], "retry": [0.07, 0.08]},
+        history_max_readable_lag=1,
+        history_physical_slots_expected=2,
+        history_fill_count_expected_after_accepts=2,
     )
     collective_call(
         world,
@@ -399,7 +402,14 @@ def test_public_late_refusal_automatic_retry(
         assert report.accepted_steps == 2 and report.rejected_steps == 1
         assert runtime.time() == 2 * float(DT) and runtime.macro_step() == 2
         for name in runtime.history_names():
-            assert runtime._executor._s.history_fill_count(name, 0) == 1
+            assert (
+                runtime.history_depth(name)
+                == declared["history_physical_slots_expected"]
+            )
+            assert (
+                runtime._executor._s.history_fill_count(name, 0)
+                == declared["history_fill_count_expected_after_accepts"]
+            )
     save_positive(world, runtime, authored, directory, identity, adaptive=True)
     result = dict(
         declared,
