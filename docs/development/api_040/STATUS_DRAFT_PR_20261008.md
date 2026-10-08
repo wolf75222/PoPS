@@ -1,9 +1,12 @@
 # PR brouillon - état réel de l’intégration PoPS 0.4.0
 
-Snapshot du 8 octobre 2026. **Mission encore ouverte ; cette PR est un brouillon.**
+Snapshot du 8 octobre 2026, actualisé à 16:30 UTC pour la
+[PR brouillon 681](https://github.com/wolf75222/PoPS/pull/681).
+**Mission encore ouverte ; cette PR est un brouillon.**
 La révision reconstruite et exécutée pour CPU/MPI est `6d898599a3f66fa9aa3c049ba0f3114f1960b6dc`.
-Cette PR ajoute ensuite le correctif privé de portabilité AMR testé dans la sonde
-CUDA737830. Les résultats CPU/MPI précédents restent liés à6d ; un nouveau
+Cette PR ajoute ensuite les correctifs privés de portabilité NVCC et GCC13,
+la portabilité documentaire et la correction des inventaires/sélecteurs CI.
+Les résultats CPU/MPI précédents restent liés à6d ; un nouveau
 rebuild/relink et une réception CPU/GPU du code intégré final restent nécessaires.
 
 ## Ce que contient la PR
@@ -16,6 +19,13 @@ documents/preuves. Ces nombres décrivent le diff Git ; ils ne sont pas des nomb
 de fonctionnalités reçues ou de tests exécutés. Les travaux antérieurs inclus
 restent identifiables par leur historique ; aucune attribution globale d’auteur
 ni validation universelle n’en découle.
+
+Le dernier commit déjà poussé lors du relevé CI est
+`65861f43124ebd70987af66908afe97f3f5286f3` ; la présente mise à jour publie
+également les dix fichiers terminés du lot architecture/catalogue CI.
+La branche contient tout le code suivi terminé à ce checkpoint. Le dossier
+de référence local `PoPS_Codex_handoff_0.4.0/` demeure non suivi ; les archives,
+environnements et sorties binaires volumineuses restent aux chemins des reçus.
 
 Le code couvre le frontend/IR et son abaissement vers les composants réels
 C++/Kokkos/MPI/AMR, les contrats de valeurs SSA, les plans/providers Field et Aux,
@@ -50,6 +60,7 @@ La wheel est `414add1e2b1289c31c37f51ca3bbf8476c2409839b069094ab5cd06071767622`.
 | OwnCheckpointRetry original | 1 PASS, 93,80 s | [OwnRetry indépendant](evidence/draft_status_20261008/own-retry-independent.json). Deux publications du même seal178806octets ; reference/accepted/restored et continuation/restart tableaux/JSON/Program exacts. Deux niveaux AMR ; compteurs regrid/topologie2→3. |
 | Huit non-régressions Python originales | 8 PASS, zéro fail/error/skip, 482,66 s | [Native8 indépendant](evidence/draft_status_20261008/native8-independent.json) : manual/preset/rejection/publication rollback et cinq guards temporal restart ; 17 checkpoints/809 charges vérifiées. Déclaration producteur `-x` non étayée : commande réelle sans `-x`. |
 | Contrats/packaging statiques | PASS | release_preflight en mode développement ; 172 API +7 ABI +19 sdk-root +185 sdk-support =383 headers signés, 9 test-only. Ce n’est pas GitHub CI. |
+| Réparation architecture/catalogue CI | 158 +53 =211 PASS, zéro fail/error/skip | [Reçu du lot](evidence/draft_status_20261008/architecture-ci-repair.json). Contrôles de sources, inventaires, includes et sharding ; import explicite du vrai frontend de ce checkout pour cette portée statique. Aucun import Native ni calcul scientifique dans ce lot. |
 
 Les équations, gardes et budgets scientifiques originaux n’ont pas été assouplis.
 Un premier nouvel oracle Q=12 partout était incorrect car la SSA doublait le
@@ -94,7 +105,7 @@ projet sont conservés et lus seulement. Leurs chemins actuels avec `/rmdraux/`
 sont distingués des anciens chemins historiques, sans supposer une cause de
 relocation. La sonde n’a modifié ni anciennes sources, ni environnements, ni jobs.
 
-## Première CI GitHub de la PR681
+## CI GitHub et correctifs intégrés
 
 Sur le commit initial de PR `a82e626896a7ab79883d7a14ad95013efd95fbb5`,
 les premiers checks sont **en échec**, malgré les validations locales listées.
@@ -103,7 +114,8 @@ rapporte un internal compiler error GCC13 dans apply_identity_attributes lors du
 prewarm de amr_system.cpp sur Serial/OpenMP/MPI, et des écarts de classement des
 includes/inventaires dans les tests Python architecture. Les jobs dépendants
 sont donc partiellement sautés et le gate d’agrégation échoue. Les correctifs
-correspondants et une CI au SHA final restent à réaliser.
+correspondants ont ensuite été intégrés ; leur réception au SHA final reste
+nécessaire.
 
 Le [run Docs37799501092](https://github.com/wolf75222/PoPS/actions/runs/37799501092)
 avait320violations de forme/liens : tirets longs et liens absolus vers des preuves
@@ -111,7 +123,55 @@ locales indisponibles sur Linux, ainsi que3références au handoff non suivi.
 La correction de portabilité documentaire conserve les labels et chemins de
 provenance en texte littéral, ou lie les petites copies suivies ; aucune règle
 CI ni garde n’est assouplie. `bash scripts/build_docs.sh` passe localement après
-ces corrections. Cela ne déclare pas les prochains checks GitHub verts.
+ces corrections. Le check Docs est ensuite **PASS** sur `d227c8b5`, puis sur
+`65861f43` dans le [run Docs37804221414](https://github.com/wolf75222/PoPS/actions/runs/37804221414).
+
+Le correctif GCC13 de `65861f43` déplace uniquement le type privé local Carrier
+vers Impl ; son contrat est [versionné à 1](gcc13_private_carrier_portability_v1.md).
+Le [run CI37804221197](https://github.com/wolf75222/PoPS/actions/runs/37804221197)
+compile désormais amr_system.cpp avec succès sur les prewarms Serial, OpenMP
+et MPI. C’est une preuve de compilation de la TU avec le compilateur CI,
+distincte des calculs CPU/Python encore liés à6d.
+
+Au [relevé conservé](evidence/draft_status_20261008/ci-65861f43-snapshot.json)
+du 8 octobre à16:29:59UTC, les checks comptent54SUCCESS,43FAILURE et un shard
+Python encore en cours ; la CI globale n’est donc pas verte. Les écarts
+architecture/catalogue C++ sont corrigés dans le lot211PASS : quatre fragments
+et six contrats amont classifiés, anciennes limites conservées avec régions
+supplémentaires disjointes et bornées, cible external-field backend réellement
+enregistrée, découverte runtime pour les déclarations device conditionnelles,
+inventaire C++201→202 et miroir MPI121→123. Tous les anciens coûts restent
+exacts ; le nouveau poids2s/0,2s est explicitement estimé, sans mesure prétendue.
+Le raffinement déterministe du sharding réduit le maximum modélisé910,3325s
+à902,62s, sous la borne inchangée906s. Ces résultats locaux attendent la CI.
+La [contre-revue indépendante](evidence/draft_status_20261008/architecture-ci-independent-review.json)
+admet les dix fichiers exacts du lot, sans relancer ni prétendre les tests Native.
+Les [deux logs CI conservés](evidence/draft_status_20261008/manifest.json)
+permettent de relire la compilation GNU13.3 et le refus du catalogue Python.
+
+Un échec supplémentaire a été lu directement dans le shard Python5 :
+`ci_pytest_timings.py` refuse dix fichiers absents du catalogue de durées
+Python, avant leur exécution. Cette correction reste à faire. Les autres
+shards en échec demandent également un diagnostic de leurs logs ; leur succès
+ne découle ni des211 contrôles locaux ni des prewarms.
+
+## État des travaux en cours à ce checkpoint
+
+| Travail | État réel | Prochaine étape |
+|---|---|---|
+| Code cumulé et correctifs récents | Publiés dans cette PR brouillon ; les anciens travaux sont conservés | Relire le diff et poursuivre la réception. |
+| CI de65861f43 | Échecs et un shard encore actif au relevé ; Docs et prewarms AMR PASS | Recevoir la CI du commit de ce checkpoint et diagnostiquer les échecs restants. |
+| Nouveau Native CPU après les deux changements C++ | Préparation terminée, aucune nouvelle compilation/installation/exécution | Figer le SHA, préserver le module a936, exécuter le build incrémental officiel puis la réception indépendante. |
+| Nouvelle science CPU | Pas encore relancée sur le nouveau Native | PDE original, réception mathématique, OwnRetry, puis Native8 avec sorties neuves. |
+| Native CUDA complet et PDE GPU | Pas de campagne complète suivante soumise à ce checkpoint | Construire depuis le SHA figé dans le scratch personnel, puis qualifier les calculs réels. |
+| Extension publique diffusion→FieldV2 | Défaut concret identifié ; implémentation encore à faire | Raccorder la publication réelle de diffusive_rhs, puis un cas nonconstant écrit indépendamment. |
+
+La préparation du prochain build CPU est conservée dans
+`/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/`.
+Son [plan](evidence/draft_status_20261008/next-native-preparation-plan.json)
+requiert deux objets runtime recompilés et un nouveau lien ; les sept bindings
+ne peuvent être réutilisés qu’après authentification de leurs sources,
+flags, dépendances et objets af8. Préparer cette procédure n’est pas l’exécuter.
 
 ## Ce qui reste
 
@@ -137,7 +197,8 @@ pas toutes fermées. Les limites détaillées du corpus restent la référence.
    englobant, regrid/history/cache pertinents réellement peuplés, convergence
    spatiale/temporelle, coûts à calcul comparable et campagnes distribuées.
 5. Rafraîchir la matrice par exigence, les exemples et les preuves de chaque
-   backend ; recevoir la CI GitHub sur le SHA final. Cette PR n’est pas déclarée
+   backend ; compléter le catalogue de durées Python, diagnostiquer les autres
+   shards et recevoir la CI GitHub sur le SHA final. Cette PR n’est pas déclarée
    green, merge-ready ou scientifiquement qualifiée sur toute la mission.
 
 ## Reproduction
@@ -163,3 +224,37 @@ prefixes Kokkos/HDF5/MPI et configurations réellement utilisés sont consignés
 dans les reçus ; les backends non exécutés ne deviennent pas reçus par cette
 recette. Les preuves volumineuses originales restent externes ; seules les
 petites réceptions vérifiées sont copiées [ici](evidence/draft_status_20261008/manifest.json).
+
+Pour reproduire le lot211 contrôles de sources après activation de conda pops,
+depuis ce checkout, choisir des noms XML neufs. Le bootstrap sélectionne
+volontairement le frontend Source ; ces commandes ne qualifient pas Native :
+
+```sh
+rtk proxy env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python -c '
+import sys, pathlib, importlib.util
+sys.path.insert(0, str(pathlib.Path.cwd() / "python"))
+print("Source pops origin:", importlib.util.find_spec("pops").origin, flush=True)
+import pytest
+raise SystemExit(pytest.main([
+    "-q",
+    "tests/python/architecture/test_amr_program_support_parity.py",
+    "tests/python/architecture/test_final_nd_amr_consumers.py",
+    "tests/python/architecture/test_ci_cpp_include_impact.py",
+    "tests/python/architecture/test_ci_impacted_selection.py",
+    "--junitxml=/tmp/pops-architecture-owned-new.xml",
+]))'
+rtk proxy env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 python -c '
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path.cwd() / "python"))
+import pytest
+raise SystemExit(pytest.main([
+    "-q",
+    "tests/python/architecture/test_automatic_reflux_balance_fence.py",
+    "tests/python/architecture/test_automatic_projection_balance_fence.py",
+    "tests/python/architecture/test_final_nd_state_consumers.py",
+    "tests/python/architecture/test_prepared_reflux_runtime_execution_fence.py",
+    "tests/python/architecture/test_program_only_temporal_facades.py",
+    "tests/python/architecture/test_cpp_suite_registration.py",
+    "--junitxml=/tmp/pops-architecture-dependent-new.xml",
+]))'
+```

@@ -214,6 +214,11 @@ function(pops_add_test name)
     # gtest_add_tests does not recursively scan #include declarations.
     pops_add_gtest_suite(NAME ${name} DISCOVERY_SOURCES
       "${CMAKE_CURRENT_SOURCE_DIR}/cpp/unit/elliptic/amr_original_field_residual.inc")
+  elseif(name STREQUAL "test_external_field_backend_preparation")
+    # Device-only declarations must not create absent CPU CTest entries.
+    pops_add_gtest_suite(NAME test_external_field_backend_preparation RUNTIME_DISCOVERY)
+  elseif(name STREQUAL "test_physical_support_transfer")
+    pops_add_gtest_suite(NAME test_physical_support_transfer RUNTIME_DISCOVERY)
   else()
   pops_add_gtest_suite(NAME ${name})
   endif()
@@ -481,6 +486,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_brick_catalog
   test_component_interfaces
   test_physical_support_transfer
+  test_external_field_backend_preparation
   test_fill_boundary
   test_fill_boundary_cache
   test_copy_schedule_cache

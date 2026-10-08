@@ -315,6 +315,17 @@ def test_cpp_target_shards_are_deterministic_duration_balanced_exact_cover():
     assert max(loads) <= lpt_bound + 1.0e-9
 
 
+def test_cpp_shard_refinement_can_cross_a_tied_critical_path():
+    # Each critical shard must give up a small target before the maximum falls.
+    # Rejecting the first equal-maximum move leaves an avoidable 11-second bound.
+    shards = [["a", "b"], ["c", "d"], ["e"]]
+    weights = {"a": 8.0, "b": 3.0, "c": 8.0, "d": 3.0, "e": 4.0}
+    refined = sel._refine_cpp_target_shards([list(row) for row in shards], weights)
+    sel.ci_shard_binpack.verify_partition(sorted(weights), refined, excluded=())
+    assert max(sum(weights[target] for target in row) for row in refined) == 10.0
+    assert sel._refine_cpp_target_shards([list(row) for row in shards], weights) == refined
+
+
 def test_cpp_duration_catalog_verifier_authenticates_full_inventory(capsys):
     class Args:
         shard_total = 13
@@ -468,7 +479,8 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     cmake = (REPO_ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert re.search(
         r"gtest_add_tests\(\s*TARGET \$\{ARG_NAME\}\s+"
-        r"SOURCES \$\{ARG_SOURCES\}\s+TEST_LIST _pops_discovered_tests\)",
+        r"SOURCES \$\{ARG_SOURCES\} \$\{ARG_DISCOVERY_SOURCES\}\s+"
+        r"TEST_LIST _pops_discovered_tests\)",
         cmake,
     )
     assert "DISCOVERY_MODE PRE_TEST" not in cmake
@@ -477,11 +489,12 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     # and checkpoint suite whose comments confuse CMake's TEST parser need discovery. MPI-only
     # executables use rank launches, so source scanning cannot create stale CTest entries.
     registrations = cmake.split("function(pops_add_test name)", maxsplit=1)[1]
-    assert registrations.count("RUNTIME_DISCOVERY") == 5
+    assert registrations.count("RUNTIME_DISCOVERY") == 7
     for target in (
         "test_amr_program_diffusion", "test_amr_path_rhs_barrier",
         "test_amr_scalar_output_history", "test_checkpoint_history_policy",
         "test_mapped_disk_tensor",
+        "test_external_field_backend_preparation", "test_physical_support_transfer",
     ):
         assert re.search(
             rf"pops_add_gtest_suite\(NAME {target}\b[^\n]*RUNTIME_DISCOVERY\)",
@@ -496,6 +509,7 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
         r"\b(?:TEST_P|TYPED_TEST|TYPED_TEST_P|INSTANTIATE_TEST_SUITE_P)\s*\("
     )
     test_declaration = re.compile(r"\b(?:TEST|TEST_F)\s*\(")
+    test_identity = re.compile(r"\b(?:TEST|TEST_F)\s*\(\s*(\w+)\s*,\s*(\w+)")
     conditional_start = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef)\b")
     conditional_end = re.compile(r"^\s*#\s*endif\b")
     parameterized_sources = []
@@ -505,30 +519,52 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
         if runtime_only.search(text):
             parameterized_sources.append(source.relative_to(REPO_ROOT).as_posix())
         conditional_depth = 0
-        for line_number, line in enumerate(text.splitlines(), start=1):
+        lines = text.splitlines()
+        for line_index, line in enumerate(lines):
             if conditional_start.match(line):
                 conditional_depth += 1
             elif conditional_end.match(line):
                 conditional_depth -= 1
             elif conditional_depth and test_declaration.search(line):
+                declaration = test_identity.search("\n".join(lines[line_index:]))
+                assert declaration is not None, (source, line_index + 1)
                 conditional_sources.append(
-                    (source.relative_to(REPO_ROOT).as_posix(), line_number)
+                    (source.relative_to(REPO_ROOT).as_posix(), ".".join(declaration.groups()))
                 )
     assert parameterized_sources == [
         "tests/cpp/integration/amr/test_amr_scalar_output_history.cpp",
     ], "parameterized GoogleTests require an explicit RUNTIME_DISCOVERY suite"
     assert conditional_sources == [
-        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp", 436),
-        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp", 448),
-        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp", 470),
-        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp", 505),
-        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp", 517),
-        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp", 540),
-        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp", 553),
-        ("tests/cpp/integration/amr/test_amr_program_diffusion.cpp", 515),
-        ("tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp", 325),
-        ("tests/cpp/unit/elliptic/test_mapped_disk_tensor.cpp", 195),
-        ("tests/cpp/unit/elliptic/test_mapped_disk_tensor.cpp", 201),
+        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
+         "AmrPathRhsBarrier.CanonicalSubfacesAndIndependentSidesPrecedeUpdatesAtPeriodicSeam"),
+        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
+         "AmrPathRhsBarrier.NonconstantParentMeansAndUnequalSubfacesUseExactInjection"),
+        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
+         "AmrPathRhsBarrier.ReconstructedOrMissingTransferRoutesRefuseBeforeHierarchyPublication"),
+        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
+         "AmrPathRhsBarrier.OrdinaryBlocksRetainDefaultAndLimitedLinearTransferAdmission"),
+        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
+         "AmrPathRhsBarrier.ActualStageCflDomainAndIdentityFailuresRollbackThenPermitRetry"),
+        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
+         "AmrPathRhsBarrier.FixedDtEnforcesTheUnitBudgetAndFailedAttemptCanRetry"),
+        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
+         "AmrPathRhsBarrier.RequiresTwoDimensionalNativeMomentCarrier"),
+        ("tests/cpp/integration/amr/test_amr_program_diffusion.cpp",
+         "test_amr_program_diffusion.PreparedConstitutiveFacesConserveAcrossPartialRefinementAndRollback"),
+        ("tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp",
+         "AmrSpatialMaterialization.PendingProofSurvivesPublicationAndRejectsRankLocalDamage"),
+        ("tests/cpp/unit/elliptic/test_mapped_disk_tensor.cpp",
+         "test_mapped_disk_tensor.homogeneous_neumann_suppresses_the_complete_tensor_flux"),
+        ("tests/cpp/unit/elliptic/test_mapped_disk_tensor.cpp",
+         "test_mapped_disk_tensor.conducting_disk_modes_converge_without_a_central_hole"),
+        ("tests/cpp/unit/runtime/test_external_field_backend_preparation.cpp",
+         "ExternalFieldBackend.ActualDeviceStorageIsMirroredOnlyForInspection"),
+        ("tests/cpp/unit/runtime/test_external_field_backend_preparation.cpp",
+         "ExternalFieldBackend.ActualDeviceQueueCompletesBeforeInspectionAndUnwinding"),
+        ("tests/cpp/unit/runtime/test_external_field_backend_preparation.cpp",
+         "ExternalFieldBackend.ActualManagedQueueCompletesBeforeInspectionAndUnwinding"),
+        ("tests/cpp/unit/runtime/test_physical_support_transfer.cpp",
+         "PhysicalSupportTransfer.ActualDeviceReductionUsesOwnedWeightsAndAllComponentStrides"),
     ]
     assert "test_mpi_amr_spatial_norm" in re.search(
         r"set\(POPS_CPP_MPI_ONLY_TESTS(?P<body>.*?)\n  \)", cmake, re.DOTALL

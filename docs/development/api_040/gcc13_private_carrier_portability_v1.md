@@ -23,6 +23,15 @@ jobs CI GNU13.3 au SHA intégré doivent compiler la TU réelle. Une sonde rédu
 GNU13.4 préparée, non exécutée, ne remplace pas cette preuve : un baselinePASS
 avec13.4 indiquerait seulement une non-reproduction par cet autre compilateur.
 
+Réception de compilation du 8 octobre 2026 : le
+[job Serial de65861f43](https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404398947)
+est PASS. Son log enregistre GNU13.3.0 et l’action Ninja de compilation réelle
+de amr_system.cpp ; les prewarms OpenMP et MPI sont aussi PASS au même SHA.
+Le warning AcceptedSnapshot/internal-linkage subsiste, distinct de l’ICE disparu.
+Cette réception de compilation ne qualifie pas les calculs scientifiques du
+nouveau Native ni la CI globale, encore en échec au relevé conservé dans
+[le statut](STATUS_DRAFT_PR_20261008.md).
+
 La réception Field/Registry/PDE/OwnRetry/Native8, ainsi que CUDA complet, reste
 requise après ce changement de CPP privé. Aucune acceptance historique a936
 n’est transférée par l’égalité du headerSignature.

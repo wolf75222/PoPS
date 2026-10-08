@@ -1,5 +1,6 @@
 {
   "_meta": {
+    "api040_external_field_backend_estimate_source": "Unmeasured scheduling estimate added 2026-10-08 for test_external_field_backend_preparation: 2.0 s copied from test_physical_support_transfer. Both are native memory-residence and Kokkos execution/inspection contract tests with real host paths and backend-conditional device cases; no provider DSO compilation is added by this target. This is not a measured build or CTest duration. Replace from a complete cold-CI/CTest timing artifact.",
     "api040_prepared_field_rhs_estimate_source": "Unmeasured scheduling estimate added 2026-10-07 for test_prepared_field_rhs_inputs: 720.0 s copied from test_amr_synthetic_program_loader_transaction. Both build native-loader test executables and precompiled provider DSO fixtures through native_dso_compiler.hpp in the heavy-test pool; the analogue's six fixtures make this a conservative seed for the single Field value-authority fixture and context-heavy AMR test translation unit. This is not a measured build duration. Replace from the next complete cold-CI timing artifact.",
     "api040_named_device_kernel_estimate_source": "Unmeasured scheduling seed added 2026-10-04 for test_elliptic_named_device_kernels: catalog median 2.0 s, following estimate_policy. Replace from the next complete CI timing artifact. Host correctness runs are not cold-CI build or CTest timing measurements.",
     "captured_utc": "2026-07-26",
@@ -29,6 +30,7 @@
       "test_composite_fac_variable_k",
       "test_composite_general_field",
       "test_elliptic_named_device_kernels",
+      "test_external_field_backend_preparation",
       "test_float32_poisson_residual",
       "test_generated_amr_system_block",
       "test_generated_stability_speed",
@@ -78,7 +80,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 201,
+    "target_count": 202,
     "v12_estimate_source": "No per-target cold-build receipt exists. History snapshot and AMR transition use the 300 s heavy-template tier; collective rejection uses the 2 s parallel-share floor. Replace from the next complete cold-CI build timing artifact.",
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor",
     "v18_estimate_source": "Unmeasured scheduling estimates: AMR publication and general composite solver use the existing 300 s heavy-template tier; small runtime contracts use the 2 s parallel-share floor. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -293,6 +295,7 @@
   "test_amr_program_field_publication": 300.0,
   "test_composite_general_field": 300.0,
   "test_physical_support_transfer": 2.0,
+  "test_external_field_backend_preparation": 2.0,
   "test_prepared_resource_cache": 2.0,
   "test_amr_layout_transfer": 300.0,
   "test_amr_synchronized_continuation": 309.79,

@@ -1,0 +1,147 @@
+{
+  "base_HEAD": "d227c8b54360ee5a51917ebef43ebd397226d293",
+  "branch": "codex/api040-integrated-main-20261004",
+  "catalog_costs": {
+    "build_durations.json": {
+      "all_original_201_rows_exact": true,
+      "declared_unmeasured_estimate": "Unmeasured scheduling estimate added 2026-10-08 for test_external_field_backend_preparation: 2.0 s copied from test_physical_support_transfer. Both are native memory-residence and Kokkos execution/inspection contract tests with real host paths and backend-conditional device cases; no provider DSO compilation is added by this target. This is not a measured build or CTest duration. Replace from a complete cold-CI/CTest timing artifact.",
+      "new_target": 2.0,
+      "target_count": 202
+    },
+    "test_durations.json": {
+      "all_original_201_rows_exact": true,
+      "declared_unmeasured_estimate": "Unmeasured scheduling estimate added 2026-10-08 for test_external_field_backend_preparation: 0.2 s copied from test_physical_support_transfer. Both are native memory-residence and Kokkos execution/inspection contract tests with real host paths and backend-conditional device cases; no provider DSO compilation is added by this target. This is not a measured build or CTest duration. Replace from a complete cold-CI/CTest timing artifact.",
+      "new_target": 0.2,
+      "target_count": 202
+    }
+  },
+  "changes": [
+    {
+      "path": "scripts/ci_select_tests.py",
+      "sha256": "f6840d651a2dc50be5a5a338855f2f2a4d920b850874acec050ab0fc730e69ca"
+    },
+    {
+      "path": "tests/CMakeLists.txt",
+      "sha256": "cbd9613ec6ab923a58604d2a9d28502d6acea8b87a53b599718b02dc979fd1f9"
+    },
+    {
+      "path": "tests/cpp/build_durations.json",
+      "sha256": "bcd55e343dff07ea267a6f21e1531a1672b7a89fb55b983a39ab690ce154c2e5"
+    },
+    {
+      "path": "tests/cpp/test_durations.json",
+      "sha256": "d131ca771f504fc5b35b1c623244b3a47fc30bda8134d91cf6451537d9d2d5ce"
+    },
+    {
+      "path": "tests/cpp/test_sources.cmake",
+      "sha256": "81af565f51d373ca7e7821fe4334ceca11eb2b1b105ec97cc0b1694ea370d43d"
+    },
+    {
+      "path": "tests/python/architecture/test_amr_program_support_parity.py",
+      "sha256": "925a73d763ef470a0f71d43dc818177099cf90cb6a3e3a84c2f59cd86bbcd737"
+    },
+    {
+      "path": "tests/python/architecture/test_ci_cpp_include_impact.py",
+      "sha256": "4c2d3f879706a6e2a6187b9f8fecbfe956ae6af2dd3e34ef622a9cc4cf3a34e2"
+    },
+    {
+      "path": "tests/python/architecture/test_ci_impacted_selection.py",
+      "sha256": "88fc16b48729d1b706e513de5c170aa0ad35fca17e556fdfcb2024114ffebca4"
+    },
+    {
+      "path": "tests/python/architecture/test_final_nd_amr_consumers.py",
+      "sha256": "5c08ba12d26769a72770c296922589d49ec9e58c75cffd0d9b2d43196c6ee269"
+    },
+    {
+      "path": "tests/test_manifest.toml",
+      "sha256": "be3f1a439f1c3d93d4e36c6bfe60b8aa3e70b47f5f7cdbc3bde011627c70d5d3"
+    }
+  ],
+  "checkout": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+  "classification": {
+    "actual_fragments": 4,
+    "budget_policy": "All original responsibility/scaffolding/shallow caps unchanged. Exact unique disjoint structural regions have separate bounded extension caps and remain counted in bounded aggregate closure; no blanket cap inflation.",
+    "new_upstream_bounded_contracts": 6,
+    "root_structural_region_cap": 160,
+    "root_structural_region_lines": 133,
+    "shared_unknown_context_fragments_also_rejected": true,
+    "unknown_include_fail_closed": true
+  },
+  "cpp_inventory": {
+    "all_prior_catalog_costs_preserved": true,
+    "conditional_declarations": "All11 prior identities retained plus4 device-only declarations; compare actual names rather than stale line offsets",
+    "mpi_ctest_count": 123,
+    "mpi_variants_added": [
+      "test_amr_history_ring_np2",
+      "test_prepared_field_rhs_inputs_np2"
+    ],
+    "new_registered_consumer": "test_external_field_backend_preparation",
+    "new_serial_targets": 202,
+    "prior_serial_targets": 201,
+    "runtime_discovery_target_count": 7
+  },
+  "external_change_rechecked": {
+    "CPP_includes_unchanged": true,
+    "integration_owner": "Root, separate GCC portability work; not modifications by this worker",
+    "paths": [
+      "docs/development/api_040/evidence/draft_status_20261008/gcc13-carrier-source-review.json",
+      "docs/development/api_040/gcc13_private_carrier_portability_v1.md",
+      "src/runtime/amr/amr_system.cpp"
+    ]
+  },
+  "logs": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-ci-support-repair-20261008/owned-cohort.log",
+      "sha256": "1a66fed1e96ddc04601e6846d3e7f7455ec777e9de52684624928046d6a03562"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-ci-support-repair-20261008/owned-cohort-v2.log",
+      "sha256": "7f4b8cbb88719509bc463679c9993c620b45f6d9ee5545d109231474831168d4"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-ci-support-repair-20261008/dependent-cohort.log",
+      "sha256": "46e0f0d9c400d3e252d355cf184c21c1aa6f8641b799d25afe4cfa3bc625768b"
+    }
+  ],
+  "observed_HEAD_at_receipt": "65861f43124ebd70987af66908afe97f3f5286f3",
+  "preservation": {
+    "GitHub_CI_green_claimed": false,
+    "Native_build_install": 0,
+    "Native_headers_CPP_physics_math_IR_workflows_docs_not_modified_by_worker": true,
+    "Native_runs": 0,
+    "committed": false,
+    "git_diff_check_exit": 0,
+    "no_guard_skips_added": true,
+    "pushed": false,
+    "remote_jobs": 0
+  },
+  "prior_owned_cohort": "155PASS/3FAIL preserved; corrected coherent cohort158PASS plus dependent53PASS",
+  "schema": "pops.architecture-support-ci-inventory-repair@1",
+  "sharding": {
+    "new_max_modeled_seconds": 902.6199999999999,
+    "original_max_modeled_seconds": 910.3325,
+    "synthetic_counterexample": "11,11,4 to maximum10 with exact coverage and deterministic result",
+    "tie_fix": "Strict descending-load-vector improvement reduces tied critical shards; individual modeled costs retained",
+    "unchanged_max_modeled_bound_seconds": 906,
+    "workers": 13
+  },
+  "source_tests_scope": "Actual pops-env Python, env -u PYTHONPATH, explicit Source python sys.path for source-only CI architecture parity; pops source origin recorded; no Native import/install/scientific qualification",
+  "test_result": [
+    {
+      "XML": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-ci-support-repair-20261008/owned-cohort-v2.xml",
+      "errors": 0,
+      "failures": 0,
+      "sha256": "158f5ef9dd037fa6d3ac3657be0dcea8a4630e699d1835720c8aac0a2cc5cefd",
+      "skipped": 0,
+      "tests": 158
+    },
+    {
+      "XML": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-ci-support-repair-20261008/dependent-cohort.xml",
+      "errors": 0,
+      "failures": 0,
+      "sha256": "8f3e9f8442300dffba3d62b23a24b1e910b050e05986dafbbc8a1349cf8730a7",
+      "skipped": 0,
+      "tests": 53
+    }
+  ]
+}

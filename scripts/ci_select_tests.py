@@ -937,13 +937,16 @@ def _refine_cpp_target_shards(
     Cold template builds are indivisible and can dominate a shard containing only
     three targets. Moving one such target rarely helps, but exchanging it for one
     or two targets elsewhere can fit the same measured work more evenly. Accept
-    only strictly lower maximum loads, retaining LPT's original upper bound. The
+    lexicographically lower descending load vectors, retaining LPT's original
+    maximum-load bound. This can improve one of several tied critical shards
+    before the final tied shard moves. The
     number of exchanges is capped by the number of selected targets.
     """
     for _ in range(sum(map(len, shards))):
         loads = [math.fsum(weights[target] for target in shard) for shard in shards]
         source = max(range(len(shards)), key=lambda index: (loads[index], -index))
         maximum = loads[source]
+        load_order = tuple(sorted(loads, reverse=True))
         best = None
         for destination, shard in enumerate(shards):
             if destination == source:
@@ -965,11 +968,17 @@ def _refine_cpp_target_shards(
                     candidate_maximum = max(candidate_loads)
                     # Avoid exchanges caused solely by floating-point summation
                     # noise; this tolerance never changes a modeled target cost.
-                    if candidate_maximum >= maximum - 1.0e-9:
+                    candidate_order = tuple(sorted(candidate_loads, reverse=True))
+                    if candidate_maximum > maximum + 1.0e-9:
+                        continue
+                    first_change = next((after - before for before, after in
+                                         zip(load_order, candidate_order)
+                                         if abs(after - before) > 1.0e-9), 0.0)
+                    if first_change >= 0.0:
                         continue
                     candidate = (
                         candidate_maximum,
-                        tuple(sorted(candidate_loads, reverse=True)),
+                        candidate_order,
                         destination, target, bundle,
                     )
                     if best is None or candidate < best:

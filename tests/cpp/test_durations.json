@@ -1,5 +1,6 @@
 {
   "_meta": {
+    "api040_external_field_backend_estimate_source": "Unmeasured scheduling estimate added 2026-10-08 for test_external_field_backend_preparation: 0.2 s copied from test_physical_support_transfer. Both are native memory-residence and Kokkos execution/inspection contract tests with real host paths and backend-conditional device cases; no provider DSO compilation is added by this target. This is not a measured build or CTest duration. Replace from a complete cold-CI/CTest timing artifact.",
     "api040_prepared_field_rhs_estimate_source": "Unmeasured scheduling estimate added 2026-10-07 for test_prepared_field_rhs_inputs: 45.0 s copied from the test_program_loader/test_amr_hierarchy_field_scratch native-loader tier. The new suite covers real compiled-Program loading, value-authority refusal, rollback and multilevel Field RHS checks, with a serial executable and an np2 variant. Its provider DSO is compiled during the build and is charged to build_durations.json, not measured as CTest work here. This is not a measured test duration. Replace from the next complete CTest timing artifact.",
     "api040_named_device_kernel_estimate_source": "Unmeasured scheduling seed added 2026-10-04 for test_elliptic_named_device_kernels: catalog median 0.05 s, following estimate_policy. Replace from the next complete CI timing artifact. Host correctness runs are not cold-CI build or CTest timing measurements.",
     "captured_utc": "2026-07-26",
@@ -28,6 +29,7 @@
       "test_composite_fac_variable_k",
       "test_composite_general_field",
       "test_elliptic_named_device_kernels",
+      "test_external_field_backend_preparation",
       "test_float32_poisson_residual",
       "test_generated_amr_system_block",
       "test_generated_stability_speed",
@@ -77,7 +79,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 201,
+    "target_count": 202,
     "unit_seconds": "aggregate CTest wall time per build target",
     "v12_estimate_source": "The edd85c10f6184e7b14b048ee16d5cc39bc606b62 full CTest diagnostic observed approximately 0.7 s history-snapshot, 0.52 s AMR-transition, and 0.5 s collective-rejection aggregate work. Each is conservatively scheduled at 1 s; these are scheduling estimates, not controlled performance measurements.",
     "v18_estimate_source": "Unmeasured analogous-target scheduling estimates: AMR publication uses test_amr_program_diffusion; general composite field uses test_composite_fac_variable_k; physical support transfer uses test_nd_transfer; prepared resource cache uses test_cache_manager. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -297,6 +299,7 @@
   "test_amr_program_field_publication": 0.3,
   "test_composite_general_field": 2.0,
   "test_physical_support_transfer": 0.2,
+  "test_external_field_backend_preparation": 0.2,
   "test_prepared_resource_cache": 0.04,
   "test_amr_layout_transfer": 45.0,
   "test_amr_synchronized_continuation": 1.07,

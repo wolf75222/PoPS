@@ -1,0 +1,68 @@
+{
+  "schema": "pops.private-CPP-af8-preparation-checkpoint@1",
+  "created_utc": "2026-10-08T16:30:27.378147+00:00",
+  "status": "PREPARE_ONLY_COMPLETE_EXECUTION_HELD",
+  "observed_Main": {
+    "root": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "HEAD": "65861f43124ebd70987af66908afe97f3f5286f3",
+    "branch": "codex/api040-integrated-main-20261004",
+    "tracked_dirty_files": [
+      "scripts/ci_select_tests.py",
+      "tests/CMakeLists.txt",
+      "tests/cpp/build_durations.json",
+      "tests/cpp/test_durations.json",
+      "tests/cpp/test_sources.cmake",
+      "tests/python/architecture/test_amr_program_support_parity.py",
+      "tests/python/architecture/test_ci_cpp_include_impact.py",
+      "tests/python/architecture/test_ci_impacted_selection.py",
+      "tests/python/architecture/test_final_nd_amr_consumers.py",
+      "tests/test_manifest.toml"
+    ],
+    "untracked": [
+      "PoPS_Codex_handoff_0.4.0/"
+    ],
+    "final_frozen_source_SHA": null
+  },
+  "actual_current_installed_native": {
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "a9367a4af3c9989ea03ebcaf66b76b8e20f5dd5bcd5bdf16b6b1172e942b5ca2",
+    "bytes": 14447736,
+    "imported": false,
+    "qualified_historical_Source": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+    "qualification_carried_to_CPP59_c4": false
+  },
+  "preparation_done": [
+    "New immutable output namespace with dormant Root-GO build/checkpoint/postreceiver templates.",
+    "Seven unchanged-af8 binding reuse classification and two changed runtime plus relink producer admission.",
+    "PDE1\u2192independent math\u2192OwnRetry\u2192independent OwnRetry\u2192Native8 gates; fresh caches; fail-first stop.",
+    "Eleven original equation/test/receipt input files physically pinned equal historical6d.",
+    "Python AST and bash-n validation only."
+  ],
+  "execution": {
+    "build": false,
+    "install": false,
+    "Native_import": false,
+    "science": false,
+    "remote": false,
+    "Source_edit": false,
+    "runs_in_progress_in_this_flow": [],
+    "before_after_wheel_run_output_created": false
+  },
+  "remaining": [
+    "Independent review of ten CI/catalog files and final Root commit.",
+    "Root one-time physical preservation of actual originala936 SO and full final SHA/GO.",
+    "Actual official incremental build/install and independent receipt for new Native.",
+    "Sequential original scientific cases and independent receipts on new Source/Native.",
+    "Actual GNU13.3 final-SHA CI repair/gate; full94 scientific/API matrix remains unfinished."
+  ],
+  "next_command_after_authorization": "rtk proxy env ROOT_GO=\"$FINAL_SOURCE_SHA\" EXPECTED_SDK=af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1 PRESERVED_A936_NATIVE=\"$ROOT_ARCHIVE_PATH\" bash /Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/run-after-root-go.sh",
+  "command_not_executed": true,
+  "PR": "Existing draft PR681; no new PR or remote action from this reviewer.",
+  "historical_receipts_preserved_and_not_promoted": [
+    "6d/a936 originalPDE1",
+    "6d/a936 OwnRetry1",
+    "6d/a936 Native8",
+    "6d/af8 C++72"
+  ],
+  "scope": "Preparation checkpoint only. No claims about currently running remote CI/jobs; not inspected in this preparation role."
+}

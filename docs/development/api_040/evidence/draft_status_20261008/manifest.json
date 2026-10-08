@@ -61,6 +61,61 @@
       "sha256": "61a4edb27ea4ec82df46f6fe3418844760e0e443839383080f952c5aa891b078",
       "bytes": 8619,
       "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-private-cuda-probe-737830-reception-20261008/independent-reception-receipt.json"
+    },
+    "architecture-ci-repair.json": {
+      "sha256": "7daea22ddbd84fc91ad4d8190067a3208a316f8d8f1d60f9487e8d9e85d6ca77",
+      "bytes": 6899,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-ci-support-repair-20261008/receipt.json"
+    },
+    "ci-65861f43-snapshot.json": {
+      "sha256": "40fcebf22e12c484d3ef33aeec4aa943d7006bcceec6177747015f73906cc7c0",
+      "bytes": 37846,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-draft681-checkpoint-20261008/ci-65861f43-snapshot.json"
+    },
+    "next-native-preparation-plan.json": {
+      "sha256": "3b607610cdd6b3e7a02464cde4bd3c1260c0a15686aad6421d5f08b359f09700",
+      "bytes": 4231,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/plan.json"
+    },
+    "next-native-preparation-receipt.json": {
+      "sha256": "3a1412165968f7478de48a5d5709ca5346f408b66080ea4095d2924281abf629",
+      "bytes": 3388,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/preparation-receipt.json"
+    },
+    "architecture-ci-owned-cohort.xml": {
+      "sha256": "158f5ef9dd037fa6d3ac3657be0dcea8a4630e699d1835720c8aac0a2cc5cefd",
+      "bytes": 26152,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-ci-support-repair-20261008/owned-cohort-v2.xml"
+    },
+    "architecture-ci-dependent-cohort.xml": {
+      "sha256": "8f3e9f8442300dffba3d62b23a24b1e910b050e05986dafbbc8a1349cf8730a7",
+      "bytes": 9216,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-ci-support-repair-20261008/dependent-cohort.xml"
+    },
+    "gcc13-carrier-source-review.json": {
+      "sha256": "9b7a68c294d5f49259779e38d156b779cb5ad704f47dd45b1edc7fd5ea1118bd",
+      "bytes": 9070,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-GCC13-carrier-source-admission-d227c8b5-20261008/source-admission.json"
+    },
+    "ci-65861f43-amr-runtime-prewarm.json": {
+      "sha256": "2eb4d6694d53011f793532b1bfb780d73ae810ba31044091eaba98f366788d23",
+      "bytes": 42661,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-draft681-checkpoint-20261008/ci-65861f43-amr-runtime-prewarm.log",
+      "raw_log_sha256": "52665b6c48f59d104fdd7b02b8140999e0ace3232d005add776848f8bf72e82f",
+      "scope": "Lossless UTF-8 JSON envelope; raw original log unchanged outside repository."
+    },
+    "ci-65861f43-python-shard5.json": {
+      "sha256": "ef49d5910126fe669be2dd8a9a94bc7015ac0418e7c66e7d1161a00c532b7b82",
+      "bytes": 30829,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-draft681-checkpoint-20261008/ci-65861f43-python-shard5.log",
+      "raw_log_sha256": "b70e95b79d8863b7bce769f669dc844a4c879e68377ab759ca1ff35dc76107dc",
+      "scope": "Lossless UTF-8 JSON envelope; raw original log unchanged outside repository."
+    },
+    "architecture-ci-independent-review.json": {
+      "sha256": "eee2d3fc3a4cb97a918b03e367bd503bf511074d0f95822af02d3b435586b298",
+      "bytes": 4666,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-architecture-ci-support-review-20261008/review.json"
     }
-  }
+  },
+  "updated_utc": "2026-10-08T16:32:55.056415+00:00"
 }
