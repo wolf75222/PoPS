@@ -1,6 +1,6 @@
 {
   "date_utc": "2026-10-08T20:03:40.528792+00:00",
-  "scope": "Independentlyreceived initialEuler+SSPRK2 lateFail/control world1 and SSPworld2, publicadaptive2accepted1rejected; populatedringSourceonlyawaitNative",
+  "scope": "Independentlyreceived finite lateFail/control initialseriesandMPI, publicadaptive2accepted1rejected and actualalready-populated-ring samebindingrollback/world1control oncorebd291; no fullmissiontransfer",
   "files": {
     "source-author.json": {
       "bytes": 4382,
@@ -176,6 +176,21 @@
       "bytes": 806,
       "sha256": "1724a253454d5e014c2a44e3509616572003c21100b3f1259d3c9ba7587ec7ce",
       "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank1/result.json"
+    },
+    "populated-independent.json": {
+      "bytes": 54216,
+      "sha256": "6c1e3307f196a1d501a572f328e536430923a702dc5e8d9b58eb8763dcc64f26",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-independent-reception-20261008/receipt.json"
+    },
+    "populated-root.json": {
+      "bytes": 1304,
+      "sha256": "14af1c7649184c25f37b3425b67eeaa03543eaafa49f312b45a0b4782d111787",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-current-late-refusal-native-preparation-20261008/root-populated-history-positive-admission.json"
+    },
+    "populated-result.json": {
+      "bytes": 1579,
+      "sha256": "74992817f46fa2c9e671ce5f702b48ca66feeffa516cced02b5a83bd98dd6dd3",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/result.json"
     }
   }
 }

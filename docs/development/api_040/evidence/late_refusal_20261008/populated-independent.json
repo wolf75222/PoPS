@@ -1,0 +1,1222 @@
+{
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source": "1766b40b94fa5310f99105e69efaae45095347f1",
+  "auxiliary_full_wire_metadata": {
+    "after": {
+      "accepted_generation": 3,
+      "components": [
+        {
+          "component": 0,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "auxiliary",
+            "unit": "1",
+            "value_kind": "cell_scalar"
+          },
+          "group_sha256": "c7092a0dc813004ef4f99d86a3bd5a65a46c203da18bdc7ae23f9f5a53e17bf6",
+          "key": [
+            "model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262",
+            "aux",
+            "stage_tau",
+            "stage_tau"
+          ],
+          "kind": 1,
+          "provider": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/stage_tau/stage_tau",
+          "shape": {
+            "halo": [
+              1,
+              1
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          }
+        },
+        {
+          "component": 0,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "field",
+            "unit": null,
+            "value_kind": null
+          },
+          "group_sha256": "91de5e2946c00912189d54905835c7846274e2a5151560c592fc6d892d82e8d9",
+          "key": [
+            "model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262",
+            "field",
+            "phi",
+            "screened_phi"
+          ],
+          "kind": 2,
+          "provider": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/phi/screened_phi",
+          "shape": {
+            "halo": [
+              0,
+              0
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          }
+        }
+      ],
+      "decoded_bytes": 14591,
+      "dimension": 2,
+      "groups": [
+        {
+          "component_count": 1,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "field",
+            "unit": null,
+            "value_kind": null
+          },
+          "identity_sha256": "91de5e2946c00912189d54905835c7846274e2a5151560c592fc6d892d82e8d9",
+          "max": 6.043870318120374,
+          "min": 5.9717546818679015,
+          "payload_sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15",
+          "shape": {
+            "halo": [
+              0,
+              0
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          },
+          "values": 192
+        },
+        {
+          "component_count": 1,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "auxiliary",
+            "unit": "1",
+            "value_kind": "cell_scalar"
+          },
+          "identity_sha256": "c7092a0dc813004ef4f99d86a3bd5a65a46c203da18bdc7ae23f9f5a53e17bf6",
+          "max": 0.00390625,
+          "min": 0.00390625,
+          "payload_sha256": "e6cc652333d60e6b23f848ab84100c58c5dd53fd02dcbb3e4256c827b4beb6cc",
+          "shape": {
+            "halo": [
+              1,
+              1
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          },
+          "values": 192
+        }
+      ],
+      "magic": "POPSAUX2",
+      "providers": [
+        {
+          "accepted_point": {
+            "accepted_step": 0,
+            "clock": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+            "event": 1,
+            "layout_generation": 0,
+            "level": 0,
+            "nonlinear_iteration": 1,
+            "stage": 2,
+            "substep": 0
+          },
+          "identity": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/stage_tau/stage_tau",
+          "kind": 1
+        },
+        {
+          "accepted_point": {
+            "accepted_step": 0,
+            "clock": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+            "event": 2,
+            "layout_generation": 0,
+            "level": 0,
+            "nonlinear_iteration": 0,
+            "stage": 4,
+            "substep": 0
+          },
+          "identity": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/phi/screened_phi",
+          "kind": 2
+        }
+      ],
+      "registry_sha256": "6cc2cde87e203465fcc1755ff0744642425c26cea4678ed6adbcc7b5d0a20119"
+    },
+    "before": {
+      "accepted_generation": 3,
+      "components": [
+        {
+          "component": 0,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "auxiliary",
+            "unit": "1",
+            "value_kind": "cell_scalar"
+          },
+          "group_sha256": "c7092a0dc813004ef4f99d86a3bd5a65a46c203da18bdc7ae23f9f5a53e17bf6",
+          "key": [
+            "model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262",
+            "aux",
+            "stage_tau",
+            "stage_tau"
+          ],
+          "kind": 1,
+          "provider": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/stage_tau/stage_tau",
+          "shape": {
+            "halo": [
+              1,
+              1
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          }
+        },
+        {
+          "component": 0,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "field",
+            "unit": null,
+            "value_kind": null
+          },
+          "group_sha256": "91de5e2946c00912189d54905835c7846274e2a5151560c592fc6d892d82e8d9",
+          "key": [
+            "model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262",
+            "field",
+            "phi",
+            "screened_phi"
+          ],
+          "kind": 2,
+          "provider": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/phi/screened_phi",
+          "shape": {
+            "halo": [
+              0,
+              0
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          }
+        }
+      ],
+      "decoded_bytes": 14591,
+      "dimension": 2,
+      "groups": [
+        {
+          "component_count": 1,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "field",
+            "unit": null,
+            "value_kind": null
+          },
+          "identity_sha256": "91de5e2946c00912189d54905835c7846274e2a5151560c592fc6d892d82e8d9",
+          "max": 6.043870318120374,
+          "min": 5.9717546818679015,
+          "payload_sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15",
+          "shape": {
+            "halo": [
+              0,
+              0
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          },
+          "values": 192
+        },
+        {
+          "component_count": 1,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "auxiliary",
+            "unit": "1",
+            "value_kind": "cell_scalar"
+          },
+          "identity_sha256": "c7092a0dc813004ef4f99d86a3bd5a65a46c203da18bdc7ae23f9f5a53e17bf6",
+          "max": 0.00390625,
+          "min": 0.00390625,
+          "payload_sha256": "e6cc652333d60e6b23f848ab84100c58c5dd53fd02dcbb3e4256c827b4beb6cc",
+          "shape": {
+            "halo": [
+              1,
+              1
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          },
+          "values": 192
+        }
+      ],
+      "magic": "POPSAUX2",
+      "providers": [
+        {
+          "accepted_point": {
+            "accepted_step": 0,
+            "clock": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+            "event": 1,
+            "layout_generation": 0,
+            "level": 0,
+            "nonlinear_iteration": 1,
+            "stage": 2,
+            "substep": 0
+          },
+          "identity": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/stage_tau/stage_tau",
+          "kind": 1
+        },
+        {
+          "accepted_point": {
+            "accepted_step": 0,
+            "clock": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+            "event": 2,
+            "layout_generation": 0,
+            "level": 0,
+            "nonlinear_iteration": 0,
+            "stage": 4,
+            "substep": 0
+          },
+          "identity": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/phi/screened_phi",
+          "kind": 2
+        }
+      ],
+      "registry_sha256": "6cc2cde87e203465fcc1755ff0744642425c26cea4678ed6adbcc7b5d0a20119"
+    },
+    "control": {
+      "accepted_generation": 6,
+      "components": [
+        {
+          "component": 0,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "auxiliary",
+            "unit": "1",
+            "value_kind": "cell_scalar"
+          },
+          "group_sha256": "c7092a0dc813004ef4f99d86a3bd5a65a46c203da18bdc7ae23f9f5a53e17bf6",
+          "key": [
+            "model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262",
+            "aux",
+            "stage_tau",
+            "stage_tau"
+          ],
+          "kind": 1,
+          "provider": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/stage_tau/stage_tau",
+          "shape": {
+            "halo": [
+              1,
+              1
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          }
+        },
+        {
+          "component": 0,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "field",
+            "unit": null,
+            "value_kind": null
+          },
+          "group_sha256": "91de5e2946c00912189d54905835c7846274e2a5151560c592fc6d892d82e8d9",
+          "key": [
+            "model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262",
+            "field",
+            "phi",
+            "screened_phi"
+          ],
+          "kind": 2,
+          "provider": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/phi/screened_phi",
+          "shape": {
+            "halo": [
+              0,
+              0
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          }
+        }
+      ],
+      "decoded_bytes": 14591,
+      "dimension": 2,
+      "groups": [
+        {
+          "component_count": 1,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "field",
+            "unit": null,
+            "value_kind": null
+          },
+          "identity_sha256": "91de5e2946c00912189d54905835c7846274e2a5151560c592fc6d892d82e8d9",
+          "max": 6.051180045916048,
+          "min": 5.9800699540839215,
+          "payload_sha256": "0a52cacb31c2a391c7a18d97d4af3e75f3eb615a4663e2d971399f8ed7bdec94",
+          "shape": {
+            "halo": [
+              0,
+              0
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          },
+          "values": 192
+        },
+        {
+          "component_count": 1,
+          "contract": {
+            "centering": "cell",
+            "layout": "cell",
+            "representation": "auxiliary",
+            "unit": "1",
+            "value_kind": "cell_scalar"
+          },
+          "identity_sha256": "c7092a0dc813004ef4f99d86a3bd5a65a46c203da18bdc7ae23f9f5a53e17bf6",
+          "max": 0.0078125,
+          "min": 0.0078125,
+          "payload_sha256": "087123f9a6c9f49fd64e49944d646553b694f8592a90686eece5f357c6d4ea7c",
+          "shape": {
+            "halo": [
+              1,
+              1
+            ],
+            "spatial_rank": 2,
+            "value_components": 1
+          },
+          "values": 192
+        }
+      ],
+      "magic": "POPSAUX2",
+      "providers": [
+        {
+          "accepted_point": {
+            "accepted_step": 1,
+            "clock": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+            "event": 1,
+            "layout_generation": 0,
+            "level": 0,
+            "nonlinear_iteration": 3,
+            "stage": 2,
+            "substep": 0
+          },
+          "identity": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/stage_tau/stage_tau",
+          "kind": 1
+        },
+        {
+          "accepted_point": {
+            "accepted_step": 1,
+            "clock": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+            "event": 2,
+            "layout_generation": 0,
+            "level": 0,
+            "nonlinear_iteration": 0,
+            "stage": 4,
+            "substep": 0
+          },
+          "identity": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262/phi/screened_phi",
+          "kind": 2
+        }
+      ],
+      "registry_sha256": "6cc2cde87e203465fcc1755ff0744642425c26cea4678ed6adbcc7b5d0a20119"
+    }
+  },
+  "base64_rehashed": {
+    "after": [
+      {
+        "bytes": 14591,
+        "path": "/auxiliary/0",
+        "sha256": "288a616efebd8e8e022abc36b4e97da9f0d409603e7bcbc32ad93dd72e9328c6"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/0/4/0/2",
+        "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/0/4/1/2",
+        "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/1/4/0/2",
+        "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/1/4/1/2",
+        "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74"
+      },
+      {
+        "bytes": 1536,
+        "path": "/potentials/0/4",
+        "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15"
+      },
+      {
+        "bytes": 4921,
+        "path": "/program",
+        "sha256": "df7335c624909d9b2a3de9d38897f204081c0e7688dd80f8ffd42d74d59ffc5c"
+      },
+      {
+        "bytes": 1536,
+        "path": "/state/2",
+        "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74"
+      }
+    ],
+    "before": [
+      {
+        "bytes": 14591,
+        "path": "/auxiliary/0",
+        "sha256": "288a616efebd8e8e022abc36b4e97da9f0d409603e7bcbc32ad93dd72e9328c6"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/0/4/0/2",
+        "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/0/4/1/2",
+        "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/1/4/0/2",
+        "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/1/4/1/2",
+        "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74"
+      },
+      {
+        "bytes": 1536,
+        "path": "/potentials/0/4",
+        "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15"
+      },
+      {
+        "bytes": 4921,
+        "path": "/program",
+        "sha256": "df7335c624909d9b2a3de9d38897f204081c0e7688dd80f8ffd42d74d59ffc5c"
+      },
+      {
+        "bytes": 1536,
+        "path": "/state/2",
+        "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74"
+      }
+    ],
+    "control": [
+      {
+        "bytes": 14591,
+        "path": "/auxiliary/0",
+        "sha256": "159b7c49bc6eb1fd3fab0d4906d2053ae6cfd81655bf6ac3a6d64422c67fe7f7"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/0/4/0/2",
+        "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/0/4/1/2",
+        "sha256": "0a52cacb31c2a391c7a18d97d4af3e75f3eb615a4663e2d971399f8ed7bdec94"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/1/4/0/2",
+        "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74"
+      },
+      {
+        "bytes": 1536,
+        "path": "/histories/1/4/1/2",
+        "sha256": "5f51a8bc6319efa5b2a21df80382d53aa6034734747e1c3bae59caa160fe19a1"
+      },
+      {
+        "bytes": 1536,
+        "path": "/potentials/0/4",
+        "sha256": "0a52cacb31c2a391c7a18d97d4af3e75f3eb615a4663e2d971399f8ed7bdec94"
+      },
+      {
+        "bytes": 4921,
+        "path": "/program",
+        "sha256": "5c0572926056cf54d8ee7a4ca095a10384985d34bc15198b0d1f6620eb88a5d9"
+      },
+      {
+        "bytes": 1536,
+        "path": "/state/2",
+        "sha256": "5f51a8bc6319efa5b2a21df80382d53aa6034734747e1c3bae59caa160fe19a1"
+      }
+    ]
+  },
+  "consumer_cursors": {
+    "rows": [],
+    "schema_version": 1,
+    "scope": "Actual empty cursor collection, not evidence of populated output consumers"
+  },
+  "core_files_rehashed": 1198,
+  "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "exact_eight_key_restore": true,
+  "history_summary": {
+    "after": [
+      {
+        "fill": 1,
+        "initialized": true,
+        "level": 0,
+        "name": "phi_stage",
+        "physical_slots": 2,
+        "slot_payloads": [
+          {
+            "max": 6.043870318120374,
+            "min": 5.9717546818679015,
+            "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15",
+            "values": 192
+          },
+          {
+            "max": 6.043870318120374,
+            "min": 5.9717546818679015,
+            "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15",
+            "values": 192
+          }
+        ]
+      },
+      {
+        "fill": 1,
+        "initialized": true,
+        "level": 0,
+        "name": "predictor_Y",
+        "physical_slots": 2,
+        "slot_payloads": [
+          {
+            "max": 2.4798297749774836,
+            "min": 1.5201702250225164,
+            "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74",
+            "values": 192
+          },
+          {
+            "max": 2.4798297749774836,
+            "min": 1.5201702250225164,
+            "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74",
+            "values": 192
+          }
+        ]
+      }
+    ],
+    "before": [
+      {
+        "fill": 1,
+        "initialized": true,
+        "level": 0,
+        "name": "phi_stage",
+        "physical_slots": 2,
+        "slot_payloads": [
+          {
+            "max": 6.043870318120374,
+            "min": 5.9717546818679015,
+            "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15",
+            "values": 192
+          },
+          {
+            "max": 6.043870318120374,
+            "min": 5.9717546818679015,
+            "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15",
+            "values": 192
+          }
+        ]
+      },
+      {
+        "fill": 1,
+        "initialized": true,
+        "level": 0,
+        "name": "predictor_Y",
+        "physical_slots": 2,
+        "slot_payloads": [
+          {
+            "max": 2.4798297749774836,
+            "min": 1.5201702250225164,
+            "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74",
+            "values": 192
+          },
+          {
+            "max": 2.4798297749774836,
+            "min": 1.5201702250225164,
+            "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74",
+            "values": 192
+          }
+        ]
+      }
+    ],
+    "control": [
+      {
+        "fill": 2,
+        "initialized": true,
+        "level": 0,
+        "name": "phi_stage",
+        "physical_slots": 2,
+        "slot_payloads": [
+          {
+            "max": 6.043870318120374,
+            "min": 5.9717546818679015,
+            "sha256": "412d38bb88d89b958c577fac2441c01dda503764aba9793d47699f430d4c6a15",
+            "values": 192
+          },
+          {
+            "max": 6.051180045916048,
+            "min": 5.9800699540839215,
+            "sha256": "0a52cacb31c2a391c7a18d97d4af3e75f3eb615a4663e2d971399f8ed7bdec94",
+            "values": 192
+          }
+        ]
+      },
+      {
+        "fill": 2,
+        "initialized": true,
+        "level": 0,
+        "name": "predictor_Y",
+        "physical_slots": 2,
+        "slot_payloads": [
+          {
+            "max": 2.4798297749774836,
+            "min": 1.5201702250225164,
+            "sha256": "91255a615931598392ed6e9688d24e30c15fa08ac89d0cce7706c3eef7054d74",
+            "values": 192
+          },
+          {
+            "max": 2.4725248016202257,
+            "min": 1.5274751983797745,
+            "sha256": "5f51a8bc6319efa5b2a21df80382d53aa6034734747e1c3bae59caa160fe19a1",
+            "values": 192
+          }
+        ]
+      }
+    ]
+  },
+  "independent_oracle": {
+    "comparisons": {
+      "after/full_state": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "after/phi_stage/slot0": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 5.863753926860227e-12
+      },
+      "after/phi_stage/slot1": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 5.863753926860227e-12
+      },
+      "after/potential": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 5.863753926860227e-12
+      },
+      "after/predictor_Y/slot0": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "after/predictor_Y/slot1": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "before/full_state": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "before/phi_stage/slot0": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 5.863753926860227e-12
+      },
+      "before/phi_stage/slot1": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 5.863753926860227e-12
+      },
+      "before/potential": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 5.863753926860227e-12
+      },
+      "before/predictor_Y/slot0": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "before/predictor_Y/slot1": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "control/full_state": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "control/phi_stage/slot0": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 5.863753926860227e-12
+      },
+      "control/phi_stage/slot1": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 1.5987211554602254e-14
+      },
+      "control/potential": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 1.5987211554602254e-14
+      },
+      "control/predictor_Y/slot0": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "control/predictor_Y/slot1": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "one_interval/accepted": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "one_interval/initial": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 6.661338147750939e-16
+      },
+      "one_interval/phi_stage": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 5.863753926860227e-12
+      },
+      "one_interval/predictor": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "two_intervals/accepted": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      },
+      "two_intervals/initial": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 6.661338147750939e-16
+      },
+      "two_intervals/phi_stage": {
+        "bound": 1.4665873675443233e-10,
+        "max_abs_error": 1.5987211554602254e-14
+      },
+      "two_intervals/predictor": {
+        "bound": 2.2737367544323206e-12,
+        "max_abs_error": 4.440892098500626e-16
+      }
+    },
+    "field_bound": 1.4665873675443233e-10,
+    "first_predictor_norm": 28.124317480256234,
+    "method": "Two separate fixed Euler intervals; face-integral initial cell averages, direct periodic FV difference updates, independent 2D FFT screened reaction solve",
+    "second_predictor_norm": 28.111971544591224,
+    "state_bound": 2.2737367544323206e-12
+  },
+  "installed_sources_rehashed": 1166,
+  "limits": [
+    "Instrumented existing private Native accepted journals; public snapshot API not qualified.",
+    "Dim2 CPU Kokkos MPI-enabled one-rank one-level AMR only; no GPU/coarse-fine/MPI2 or universal qualification.",
+    "No retained ticket validation, rollback phase-counter, local-census, or unrecorded output-cursor claim.",
+    "Full raw Program/Aux/history/potential/state/clock images restored. Program prefix semantically decoded through slots/pending; remaining accepted metadata bytes compared exactly.",
+    "Private issued nonce/high-water not serialized is outside this accepted-state envelope.",
+    "No child Native execution, rerun, package import or Main/environment mutation by reviewer."
+  ],
+  "parameter_update": false,
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/core-manifest.json": {
+      "bytes": 197327,
+      "sha256": "0c871f738710bd736e099b0e7f21d2fb35d6b47958860556a08dc61c697b7ac5"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/identity.json": {
+      "bytes": 2850,
+      "sha256": "83634154c0ed8189f5b155e1acb933ca6cbaadc30b87d35108d092ad8817639c"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/pytest-tmp/test_public_late_refusal_popul0/late-refusal-populated-euler/rank0/actual-receipt.json": {
+      "bytes": 1564,
+      "sha256": "59357e7e57287f3be15428e3294ea58ff7c46637d6bc5e914d0a9137799a26b9"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/pytest-tmp/test_public_late_refusal_popul0/late-refusal-populated-euler/rank0/after-populated-refusal.json": {
+      "bytes": 40456,
+      "sha256": "b6f6c501cd492255bc2b257dca66c19ffbd6dddb0d27cc50544bb38752284943"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/pytest-tmp/test_public_late_refusal_popul0/late-refusal-populated-euler/rank0/before-populated-refusal.json": {
+      "bytes": 40456,
+      "sha256": "b6f6c501cd492255bc2b257dca66c19ffbd6dddb0d27cc50544bb38752284943"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/pytest-tmp/test_public_late_refusal_popul0/late-refusal-populated-euler/rank0/control-two-accepted.json": {
+      "bytes": 40455,
+      "sha256": "f9db925184cbe4d406e59eb82a1a8de564ab1e9d3e6c5a3cf5af386b2c005ac1"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/pytest-tmp/test_public_late_refusal_popul0/late-refusal-populated-euler/rank0/inputs.json": {
+      "bytes": 1041,
+      "sha256": "acc38a6c335037785bb0346bf4c0790b95f187171d5d4bd8ffa4061d3fa15da4"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/pytest-tmp/test_public_late_refusal_popul0/late-refusal-populated-euler/rank0/refusal-diagnostics.json": {
+      "bytes": 98,
+      "sha256": "41ca29d25186a41056cd550937adf9fca69f9e8b01743172b36eee683652e85e"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/pytest.log": {
+      "bytes": 1215,
+      "sha256": "00639b04976dcccb744c3691412bbe513131639f9bd5f33745a7de35bb653469"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/pytest.xml": {
+      "bytes": 672,
+      "sha256": "160b3ae7793e1d5572f670a257cfb9af850ac532a052ec542c915005f8c7a4ee"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/result.json": {
+      "bytes": 1579,
+      "sha256": "74992817f46fa2c9e671ce5f702b48ca66feeffa516cced02b5a83bd98dd6dd3"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-late-refusal-bd291-ed2-20261008/source-files.json": {
+      "bytes": 136555,
+      "sha256": "c3c4ebffbf50cf56cc7943b6af90b0e2ed5a8414889b930b35a88e94db7ba8b7"
+    }
+  },
+  "producer_counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 1
+  },
+  "producer_seconds": 38.33075166599883,
+  "program_wire_metadata": {
+    "after": {
+      "accepted_attempt": 1,
+      "decoded_prefix_bytes": 2771,
+      "dimension": 2,
+      "histories": [
+        {
+          "clock_identity": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+          "components": 1,
+          "depth": 2,
+          "interpolation_identity": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+          "name": "phi_stage",
+          "program_owner": 0,
+          "space_identity": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+          "state_identity": "pops.handle.v1::case:diffusion_predictor_field_euler/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::state::U"
+        },
+        {
+          "clock_identity": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+          "components": 1,
+          "depth": 2,
+          "interpolation_identity": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+          "name": "predictor_Y",
+          "program_owner": 0,
+          "space_identity": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+          "state_identity": "pops.handle.v1::case:diffusion_predictor_field_euler/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::state::U"
+        }
+      ],
+      "level_clocks": [
+        {
+          "level": 0,
+          "macro_step": 1,
+          "phase": [
+            0,
+            1
+          ],
+          "physical_time": 0.00390625
+        }
+      ],
+      "logical_ticks": [
+        {
+          "identity": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+          "tick": 1
+        }
+      ],
+      "magic": "POPSAND9",
+      "materialization_generation": 0,
+      "pending_remaps_count": 0,
+      "remaining_bytes": 2150,
+      "remaining_sha256": "51ce3868fb2bb7187ec64d848aab9413b962bd79a667a49926afe0cbb7210fe9",
+      "slots": [
+        {
+          "fill_count": 1,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "phi_stage",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 0,
+          "start_bits": 0,
+          "start_time": 0.0
+        },
+        {
+          "fill_count": 1,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "phi_stage",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 1,
+          "start_bits": 0,
+          "start_time": 0.0
+        },
+        {
+          "fill_count": 1,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "predictor_Y",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 0,
+          "start_bits": 0,
+          "start_time": 0.0
+        },
+        {
+          "fill_count": 1,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "predictor_Y",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 1,
+          "start_bits": 0,
+          "start_time": 0.0
+        }
+      ],
+      "spatial_contract": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000!pops.amr-runtime-spatial-contracts\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0002t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.amr-system.exact-rankeds\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000fs\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000bs\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0003u\u0001\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000q\u0000\u0000\u0000\u0000\u0000\u0000\u0000M\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001v\u0000\u0000\u0000\u0000\u0000\u0000\u0000<s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000fs\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000bq\u0000\u0000\u0000\u0000\u0000\u0000\u0000\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+      "tail_scope": "Remaining accepted flux/temporal/tagging metadata checked as exact complete bytes; not semantically decoded.",
+      "topology_epoch": 0
+    },
+    "before": {
+      "accepted_attempt": 1,
+      "decoded_prefix_bytes": 2771,
+      "dimension": 2,
+      "histories": [
+        {
+          "clock_identity": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+          "components": 1,
+          "depth": 2,
+          "interpolation_identity": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+          "name": "phi_stage",
+          "program_owner": 0,
+          "space_identity": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+          "state_identity": "pops.handle.v1::case:diffusion_predictor_field_euler/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::state::U"
+        },
+        {
+          "clock_identity": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+          "components": 1,
+          "depth": 2,
+          "interpolation_identity": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+          "name": "predictor_Y",
+          "program_owner": 0,
+          "space_identity": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+          "state_identity": "pops.handle.v1::case:diffusion_predictor_field_euler/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::state::U"
+        }
+      ],
+      "level_clocks": [
+        {
+          "level": 0,
+          "macro_step": 1,
+          "phase": [
+            0,
+            1
+          ],
+          "physical_time": 0.00390625
+        }
+      ],
+      "logical_ticks": [
+        {
+          "identity": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+          "tick": 1
+        }
+      ],
+      "magic": "POPSAND9",
+      "materialization_generation": 0,
+      "pending_remaps_count": 0,
+      "remaining_bytes": 2150,
+      "remaining_sha256": "51ce3868fb2bb7187ec64d848aab9413b962bd79a667a49926afe0cbb7210fe9",
+      "slots": [
+        {
+          "fill_count": 1,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "phi_stage",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 0,
+          "start_bits": 0,
+          "start_time": 0.0
+        },
+        {
+          "fill_count": 1,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "phi_stage",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 1,
+          "start_bits": 0,
+          "start_time": 0.0
+        },
+        {
+          "fill_count": 1,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "predictor_Y",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 0,
+          "start_bits": 0,
+          "start_time": 0.0
+        },
+        {
+          "fill_count": 1,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "predictor_Y",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 1,
+          "start_bits": 0,
+          "start_time": 0.0
+        }
+      ],
+      "spatial_contract": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000!pops.amr-runtime-spatial-contracts\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0002t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.amr-system.exact-rankeds\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000fs\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000bs\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0003u\u0001\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000q\u0000\u0000\u0000\u0000\u0000\u0000\u0000M\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001v\u0000\u0000\u0000\u0000\u0000\u0000\u0000<s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000fs\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000bq\u0000\u0000\u0000\u0000\u0000\u0000\u0000\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+      "tail_scope": "Remaining accepted flux/temporal/tagging metadata checked as exact complete bytes; not semantically decoded.",
+      "topology_epoch": 0
+    },
+    "control": {
+      "accepted_attempt": 2,
+      "decoded_prefix_bytes": 2771,
+      "dimension": 2,
+      "histories": [
+        {
+          "clock_identity": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+          "components": 1,
+          "depth": 2,
+          "interpolation_identity": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+          "name": "phi_stage",
+          "program_owner": 0,
+          "space_identity": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+          "state_identity": "pops.handle.v1::case:diffusion_predictor_field_euler/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::state::U"
+        },
+        {
+          "clock_identity": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+          "components": 1,
+          "depth": 2,
+          "interpolation_identity": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+          "name": "predictor_Y",
+          "program_owner": 0,
+          "space_identity": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+          "state_identity": "pops.handle.v1::case:diffusion_predictor_field_euler/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Ad3e94c4a06ef2fa8c4407d19277ab7753a742ec0a392f84cded0b622c28ca262::state::U"
+        }
+      ],
+      "level_clocks": [
+        {
+          "level": 0,
+          "macro_step": 2,
+          "phase": [
+            0,
+            1
+          ],
+          "physical_time": 0.0078125
+        }
+      ],
+      "logical_ticks": [
+        {
+          "identity": "pops.clock.v1::sha256:fcecae3f23a8dab8f3ec7072b692ac4478d1b6ed7a32f9b35e3b9aafd2c6fd38",
+          "tick": 2
+        }
+      ],
+      "magic": "POPSAND9",
+      "materialization_generation": 0,
+      "pending_remaps_count": 0,
+      "remaining_bytes": 2150,
+      "remaining_sha256": "2fe5e9efd2dd135632ae0629960bca995b096bb78450d002c91d59064eb256fe",
+      "slots": [
+        {
+          "fill_count": 2,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "phi_stage",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 0,
+          "start_bits": 0,
+          "start_time": 0.0
+        },
+        {
+          "fill_count": 2,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "phi_stage",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 1,
+          "start_bits": 4571153621781053440,
+          "start_time": 0.00390625
+        },
+        {
+          "fill_count": 2,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "predictor_Y",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 0,
+          "start_bits": 0,
+          "start_time": 0.0
+        },
+        {
+          "fill_count": 2,
+          "initialized": 1,
+          "interval": 0.00390625,
+          "interval_bits": 4571153621781053440,
+          "level": 0,
+          "name": "predictor_Y",
+          "ordinal": 1,
+          "outgoing_dt": 0.00390625,
+          "sample_kind": 2,
+          "slot": 1,
+          "start_bits": 4571153621781053440,
+          "start_time": 0.00390625
+        }
+      ],
+      "spatial_contract": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000!pops.amr-runtime-spatial-contracts\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0002t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.amr-system.exact-rankeds\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000fs\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000bs\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ni\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0003u\u0001\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nu\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000q\u0000\u0000\u0000\u0000\u0000\u0000\u0000M\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001v\u0000\u0000\u0000\u0000\u0000\u0000\u0000<s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000fs\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u000bq\u0000\u0000\u0000\u0000\u0000\u0000\u0000\b\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+      "tail_scope": "Remaining accepted flux/temporal/tagging metadata checked as exact complete bytes; not semantically decoded.",
+      "topology_epoch": 0
+    }
+  },
+  "real_refusal": [
+    [
+      "RuntimeError",
+      "acceptance guard 'late_field_norm_refusal' failed",
+      true
+    ]
+  ],
+  "role": "independent nonauthor offline Native evidence reception",
+  "same_instance": true,
+  "status": "ADMIT"
+}

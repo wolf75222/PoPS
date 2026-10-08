@@ -96,13 +96,17 @@ Le fixture de continuation après un premier pas accepté est intégré en
 `a6f104f6`, après quatre tests Source et revue mathématique indépendante. Son
 run Native termine PASS1 : refus via la composition publique `limit−2560*tau`,
 image de40456 octets avec deux slots déjà peuplés avant/après et contrôle de
-deux pas ; la réception indépendante est en cours. Les snapshots Aux/historiques utilisent
+deux pas, reçus indépendamment. Le journal Aux est décodé jusqu’à sa fin et
+conserve sa génération3 après refus ; le contrôle atteint génération6. Les
+identités et intervalles des slots restent exacts. Les curseurs de consommateurs
+sont ici une collection vide ; ce cas ne qualifie pas un rollback de sorties
+peuplées. Les snapshots Aux/historiques utilisent
 des accesseurs privés du journal Native ; ils ne qualifient pas une API publique
 de snapshot, un changement de paramètres sur la même instance ou la révocation
 d’un ticket retenu. Le refus SSPRK2 est également reçu sur deux vrais rangs MPI :
 images exactes sur chaque rang, deux diagnostics de refus collectif, tableaux
 du contrôle bit à bit égaux entre rangs et au cas série. Le rollback d’anneaux
-déjà peuplés attend sa réception indépendante. Les [preuves d’échec tardif](evidence/late_refusal_20261008/manifest.json)
+déjà peuplés est reçu pour ce cas série AMR1. Les [preuves d’échec tardif](evidence/late_refusal_20261008/manifest.json)
 conservent les déclarations antérieures au run et les négatifs.
 
 La réception historique détaillée ci-dessous concerne
@@ -268,7 +272,7 @@ ne découle ni des211 contrôles locaux ni des prewarms.
 | Native CPU après les deux changements C++ | db206100 reconstruit/installé, Nativeed2 reçu ; wheel53fd installée | Recompiler après les prochains headers C++ ; ne pas hériter de la réception. |
 | Science CPU | PDE1 et OwnRetry/Native8 reçus à nouveau surbd291, dix tests au total ; cinq constructions publiques et leurs refus/retry reçus | Recevoir le rollback peuplé puis qualifier le prochain cœur modifié. |
 | Native CUDA complet et PDE GPU | Pas de campagne complète suivante soumise à ce checkpoint | Construire depuis le SHA figé dans le scratch personnel, puis qualifier les calculs réels. |
-| Extension publique diffusion→FieldV2 | Euler/deux SSPRK2 et MPI2SSP reçus ; refus initial série/MPI et retry adaptatif reçus ; rollback peuplé producteurPASS | Recevoir indépendamment ce rollback, puis la construction nouvelle à deux modèles. |
+| Extension publique diffusion→FieldV2 | Euler/deux SSPRK2 et MPI2SSP reçus ; refus initial série/MPI, retry adaptatif et rollback peuplé reçus | Intégrer puis qualifier la construction nouvelle à deux modèles et son autorité détachée. |
 
 La préparation du prochain build CPU est conservée dans
 `/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/`.
