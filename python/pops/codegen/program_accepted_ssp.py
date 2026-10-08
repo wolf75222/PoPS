@@ -136,6 +136,8 @@ def prove_accepted_update_ssp(program: Any, *, model_authority: Any = None) -> t
             raise ValueError("an executed effect has no proved accepted-State nonmutation contract")
         frozen=set()
         def frozen_atoms(value,weight,out):
+            if value.op=='acceptance_guard':
+                return frozen_atoms(successful_guard_input(value),weight,out)
             if value.op=='state':
                 out[value.state_ref]=out.get(value.state_ref,Fraction())+weight
             elif value.op=='linear_combine' and set(value.attrs)=={'coeffs'}:
@@ -166,10 +168,15 @@ def prove_accepted_update_ssp(program: Any, *, model_authority: Any = None) -> t
             verified[key]=result
             return result
         def frozen_read_body(value,reads,consumer,bound):
+            if value.op=='acceptance_guard':
+                return frozen_read(successful_guard_input(value),reads,consumer,bound)
             if value.op=='state':return value.state_ref in frozen
             if value.op=='field_publication':
                 from pops.fields._program_publication import validate_field_publication
-                bindings=validate_field_publication(value)
+                from .program_models import ProgramModelGraph
+                from .program_field_publication import publication_target_space
+                target_space=(lambda destination: publication_target_space(model_authority,destination)) if type(model_authority) is ProgramModelGraph else None
+                bindings=validate_field_publication(value,target_space=target_space)
                 supplied={row['component'] for row in bindings if row['target'].block_ref==consumer}
                 if not reads<=supplied:return False
                 # Remaining inputs are consumer-State binding/shape authority.

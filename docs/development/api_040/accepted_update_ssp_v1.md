@@ -59,6 +59,13 @@ actions, non-Bool conditions, detached inputs and projection mutations cannot
 supply this contract. A failed condition withdraws the attempt through the
 existing runtime failure path.
 
+The same successful-value alias rule applies when classifying an unchanged
+accepted driver and when tracing a Field input. A terminal predicate remains
+executed control; it is not an additional mathematical coefficient input on the
+successful path. All issued condition references and their effects are still
+checked before this classification. A changed donor value or mutating condition
+cannot obtain the unchanged-driver premise through that rule.
+
 Source tests cover both expanded and retained-stage public two-stage expressions,
 exact exchange weights, legacy frozen-driver Euler, independent owners, different
 rate expressions, renamed models/operators/stages, reordered independent observations
@@ -80,3 +87,19 @@ unproved with an explicit diagnostic. The low-level authoring-only proof route m
 still-issued registry; installed artifact publication always carries the model graph authority.
 This boundary changes proof inputs only: the mathematical expressions, owner/stage contracts,
 coefficient arithmetic and emitted numerical operations remain unchanged.
+
+Consumed publication uses a shared compiler resolver for its destination space.
+It authenticates the exact destination block, requires that block's model owner
+to equal the declaration owner, authenticates the declaration in that source
+Module, and retrieves its declared FieldSpace. Proof and emission use the same
+resolver through the existing frontend validator's `target_space` callback.
+Missing or foreign graph/module/declaration authorities remain explicit failures;
+compiled detachment does not require reconstructing an authoring Case registry.
+The stored global-field history witness uses its canonical compiled Handle.
+This fixes an authoring-identity suffix in storage metadata and changes no
+mathematical expression or floating-point operation.
+
+These are corrections to the existing version-1 authority and alias semantics.
+The operation meanings, wire contracts and requested coefficient-one guarantee
+are unchanged. Each integrated correction receives a new core fingerprint and
+fresh native qualification; earlier finite receipts do not qualify the new core.

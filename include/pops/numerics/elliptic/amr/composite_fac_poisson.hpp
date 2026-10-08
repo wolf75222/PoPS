@@ -241,6 +241,17 @@ struct SetScalarKernel {
 };
 
 template <int Dim>
+struct CopyVectorValidKernel {
+  FieldView<const Real, Dim> source{};
+  FieldView<Real, Dim> destination{};
+  int components = 0;
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    for (int component = 0; component < components; ++component)
+      destination(cell, component) = source(cell, component);
+  }
+};
+
+template <int Dim>
 struct ScaleKernel {
   FieldView<Real, Dim> values{};
   Real factor = Real(1);
@@ -603,21 +614,21 @@ class CompositeFacPoisson {
       throw std::runtime_error(
           "partitioned FAC metadata, budget, or reusable allocation failed collectively");
     }
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("pops-partitioned-composite-fac"),
-              std::string_view(exact_contract_)}},
-            *lane_))
+    const std::array<ExactOrderedBytePair, 1> hierarchy_contracts{{
+        {std::string_view("pops-partitioned-composite-fac"),
+         std::string_view(exact_contract_)}}};
+    if (!all_ranks_agree_exact_ordered_byte_pairs(hierarchy_contracts, *lane_))
       throw std::invalid_argument(
           "partitioned FAC exact hierarchy contract differs between MPI ranks");
     for (std::size_t connection = 0; connection < connections_.size(); ++connection) {
-      if (!all_ranks_agree_exact_ordered_byte_pairs(
-              {{std::string_view("pops-fac-parent-gather"),
-                std::string_view(connections_[connection]->gather_contract)},
-               {std::string_view("pops-fac-fine-restriction"),
-                std::string_view(connections_[connection]->restriction_contract)},
-               {std::string_view("pops-fac-flux-mismatch"),
-                std::string_view(connections_[connection]->flux_contract)}},
-              *lane_))
+      const std::array<ExactOrderedBytePair, 3> connection_contracts{{
+          {std::string_view("pops-fac-parent-gather"),
+           std::string_view(connections_[connection]->gather_contract)},
+          {std::string_view("pops-fac-fine-restriction"),
+           std::string_view(connections_[connection]->restriction_contract)},
+          {std::string_view("pops-fac-flux-mismatch"),
+           std::string_view(connections_[connection]->flux_contract)}}};
+      if (!all_ranks_agree_exact_ordered_byte_pairs(connection_contracts, *lane_))
         throw std::invalid_argument(
             "partitioned FAC coarse/fine transfer plan differs between MPI ranks");
     }
@@ -1780,10 +1791,8 @@ class CompositeFacPoisson {
       const auto in = source.fab(local).view();
       const auto out = destination.fab(local).view();
       const int components = source.ncomp();
-      for_each_cell(source.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        for (int component = 0; component < components; ++component)
-          out(cell, component) = in(cell, component);
-      });
+      for_each_cell(source.box(local),
+                    fac_detail::CopyVectorValidKernel<Dim>{in, out, components});
     }
     Kokkos::fence();
   }

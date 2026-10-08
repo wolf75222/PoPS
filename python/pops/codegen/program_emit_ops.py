@@ -783,12 +783,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if _child_history_store_is_delegated(program, v, target=target):
             pass
         elif target == "amr_system" and storage_descriptor is not None:
+            from pops.time.references import canonical_handle
             if bidx is None:
                 raise ValueError("global field history storage requires an exact AMR owner index")
             lines.append("ctx.store_global_field_history(%s, %s, %d, %s, %s, ctx.boundary_evaluation_point(%d));"
                          % (json.dumps(v.attrs["history"]), var[value_in.id], bidx,
                             json.dumps(storage_descriptor),
-                            json.dumps(storage_authority["storage_state_witness"].qualified_id), v.id))
+                            json.dumps(canonical_handle(storage_authority["storage_state_witness"]).qualified_id), v.id))
         elif target == "amr_system" and bidx is not None:
             lines.append("ctx.store_history(%s, %s, %d);"
                          % (json.dumps(v.attrs["history"]), var[value_in.id], bidx))

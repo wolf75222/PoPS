@@ -1151,7 +1151,7 @@ void System<Dim>::stage_field_publication_candidate() {
                                                      "System field-output publication");
     p_->active_field_auxiliary_publication_->validate_complete();
     p_->active_field_stale_auxiliary_providers_ =
-        p_->auxiliary_registry_.dependent_provider_identities(provider_identities);
+        p_->auxiliary_registry_.accepted_dependent_provider_identities(provider_identities);
   } catch (...) {
     if (p_->active_field_auxiliary_publication_)
       p_->active_field_auxiliary_publication_->reject();

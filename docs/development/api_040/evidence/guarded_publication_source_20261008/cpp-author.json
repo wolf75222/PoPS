@@ -1,0 +1,69 @@
+{
+  "actual_current_CI": {
+    "job": "113505468653",
+    "log_sha256": "6f749c429ecf76b8bb37e68cd6c54d5515acda9376c06fe03f8381ef45204d67",
+    "run": "37833215669",
+    "symptom": "actual53fd Dim2 MovingIntervalInputs assignment from void at moving_interval.inc97; explicit trailing return fixes originating throw-only lambda type"
+  },
+  "actual_producer_cpp_syntax": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/composed-system-fields-syntax-v1.json",
+  "author_and_peer": {
+    "author": "sol61_gpu_full_private_db",
+    "peer": "Root/designated nonauthor pending; author selfchecks are not independent peer admission",
+    "selfchecks": "completed"
+  },
+  "base_commit": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "candidate_directory": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008",
+  "combined383_header_sdk": "899489b76564e612e5b3df489301255ab6b8ec6736627271df88a5a49ffc52b8",
+  "exact_apply_inverse_receipt": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/actual-patch-roundtrip-v1.json",
+  "futurefullGPU_source_sdk_null": true,
+  "host_dim1_dim2_dim3": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/composed-host-dimension-gates-v1.json",
+  "no_Main_or_Native_build_or_submit": true,
+  "out_of_scope": "Uniform capacity/capture pending-input clock authority incomplete and untouched; existing strict validator/schema/restart guards retained",
+  "patch": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/composed-source-repairs-v1.patch",
+  "patch_sha256": "d419d3f90ab8a8b4e267eb16bd70112760247498403c63292543e2a1ecad3167",
+  "physical_kept_gpu_probe": {
+    "all383_after_headers_pins_valid": true,
+    "baseline_exit": 2,
+    "candidate_exit": 0,
+    "job": "737990",
+    "physical_hashes": {
+      "result.json": {
+        "bytes": 590470,
+        "sha256": "39993a4bee48ba2b904b92c344e00181cf75f1656974c1afa8ee6d3f9a680efd"
+      },
+      "run/baseline-kept/fac_install_gate.cpp4.ii": {
+        "bytes": 10597113,
+        "sha256": "acb54c4a458f87d2a2c6c49036aeaf42d27195d43e371bf18385a97a39d1e811"
+      },
+      "run/candidate-kept/fac_install_gate.cpp1.ii": {
+        "bytes": 10752361,
+        "sha256": "196579e610ea7e6160031a4754ddec39631d2d72cae9864d69c74dd096e58cda"
+      },
+      "run/candidate-kept/fac_install_gate.cpp4.ii": {
+        "bytes": 10597804,
+        "sha256": "fdc5f80db3b33498bf6f50803219e41775cde65fdb6968ed0e10e4433826b3f9"
+      },
+      "run/candidate-kept/fac_install_gate.cudafe1.cpp": {
+        "bytes": 9433117,
+        "sha256": "e1dabb7c851301a8e18b3d8c1f22b6a37d8deaf3528da59e2c79ab3d066b23d4"
+      },
+      "run/candidate-kept/fac_install_gate.ptx": {
+        "bytes": 159422,
+        "sha256": "3671c66aff314277678799cde5b0ac737f433c792e7dd91ef4b2c0ab332072fd"
+      },
+      "run/candidate.o": {
+        "bytes": 5596240,
+        "sha256": "443ad21ef9f1edd12e8bbbe81141aff39237221644a68d7bb83f6e29fc028273"
+      }
+    },
+    "scope": "actual-O0NVCC compiler differential for Compositecandidate2 only; not full-O3GPU17+7/Native/wheel/PDE acceptance"
+  },
+  "storage_jobs_single_observation": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/quota-jobs-single-read-v1.json",
+  "strict_aux_tests": {
+    "count": 21,
+    "errors": 0,
+    "failures": 0,
+    "receipt": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/composed-strict-aux-gate-v1.json"
+  },
+  "version": 1
+}

@@ -11,6 +11,20 @@ from pops.model.provider_pack import ComponentKey, ProviderEntry, ProviderPack
 from pops.time._program.serialization import _json_ready
 
 
+def publication_target_space(model: Any, destination: Handle) -> Any:
+    """Authenticate one compiled publication destination against its source owner."""
+    from .program_models import ProgramModelGraph
+    if type(model) is not ProgramModelGraph:
+        raise ValueError("compiled field publication requires an exact Program model graph")
+    model.model_for_block(destination.block_ref)
+    owner = model.owner_for_block(destination.block_ref)
+    if owner != destination.declaration_ref.owner_path.canonical():
+        raise ValueError("compiled field publication declaration belongs to a different block model")
+    module = model.source_module_for_owner(owner)
+    module.declaration_index().authenticate(destination.declaration_ref)
+    return module.field_spaces()[destination.declaration_ref.local_id]
+
+
 def _key(module: Any, target: Handle, component: str) -> ComponentKey:
     declaration = target.declaration_ref
     if declaration is None or declaration.kind != "field":

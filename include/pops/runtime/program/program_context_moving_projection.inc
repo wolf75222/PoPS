@@ -26,7 +26,7 @@
     // It completes before the local-only interval producer starts device work.
     fill_boundary(*sampled);
     return evaluate_moving_interval(identity, program_block, physical_frame, quadrature,
-        [&](const runtime::multiblock::BoundaryEvaluationPoint& point) {
+        [&](const runtime::multiblock::BoundaryEvaluationPoint& point) -> MovingIntervalInputs<Dim> {
       if constexpr (Dim == 1) {
         const auto& previous = moving_interval_geometry(identity);
         const auto reference = geometry();

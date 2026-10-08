@@ -1,0 +1,90 @@
+{
+  "Main_changed": false,
+  "ci_panel": {
+    "PASS": 25,
+    "catalog": {
+      "new": 879,
+      "new_module_estimate_seconds": 600,
+      "old": 878,
+      "old_costs_preserved": true
+    },
+    "max_ordinary_modeled_seconds": 2097.0,
+    "ordinary_cap_seconds": 2100,
+    "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-V2-port-1766b40b-20261008/ci-source-runs/20261008T205343223609Z/receipt.json",
+    "receipt_sha256": "7391d15ae3fc9999a477e55b5f60d820d49cc8da730f2fbf6d8e078a66097716",
+    "reserved_long_shards_unchanged": true,
+    "shards": 70,
+    "xml": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-V2-port-1766b40b-20261008/ci-source-runs/20261008T205343223609Z/pytest.xml",
+    "xml_sha256": "5c638ef50646d2a3f6ec874ab97b574930630ce7cba82e22b17d9cc19fb4bd8c"
+  },
+  "files": {
+    "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py": {
+      "baseline_sha256": null,
+      "bytes": 9009,
+      "sha256": "afec9df8fff8ae876a92e60d54d5479b6a219b5052f2d8df39f3714a19c26828"
+    },
+    "tests/python/support/guarded_field_diffusion_case.py": {
+      "baseline_sha256": null,
+      "bytes": 7887,
+      "sha256": "63725bd7a6a528a65b30ae5fb3cf497f3cc81a4817623a913601805461e4dc6e"
+    },
+    "tests/python/support/guarded_field_diffusion_observation_case.py": {
+      "baseline_sha256": null,
+      "bytes": 3550,
+      "sha256": "297e4489f150df7b73fa14efe9c665defa554766889ccc24795187226edd579b"
+    },
+    "tests/python/test_durations.json": {
+      "baseline_sha256": "796c2559d268433eca8db9f33af327ee67990dfe5be1cf6d828098cef29177f0",
+      "bytes": 328126,
+      "sha256": "bf4b39fc364f29369b9e01db553959775ea23aa32db2c6f72e7a8f17fb42d726"
+    },
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": {
+      "baseline_sha256": "b9253d57506dc552ff759b370a9c76d6285381ca2f4f0e51fe0eb60be3f0a0b7",
+      "bytes": 30218,
+      "sha256": "7f509e9665b18f43191d4d6d358b2ccd1054fb2487f17ea67688a3374c3a6eeb"
+    }
+  },
+  "invariant": "Original existing unit file and legacy private-helper negatives preserved byte-prefix; no core source or Native Main changes; repository tests contain no external paths/MetaPath loader",
+  "limits": [
+    "External runner alone temporarily places independently reviewed V2 Source modules on codegen path for pending-core Source check",
+    "Native compile/bind/run and CUDA capabilities untested here; Root rebuild/repack and actual reception required",
+    "No new scientific result or all-physics/method closure"
+  ],
+  "meaningful_cases": [
+    "Actual independently authored two-owner frozen guard/Field publication positives, renamed variants, malformed action/mutation/changed donor negatives",
+    "Actual one-level CompositeFieldGMRES public equation recipe resolve/detach/proof/emission, whole CPP equality",
+    "Missing/foreign model/actual foreign receiver-source Module negatives",
+    "Same destination block with actual FIELD declaration from another INCLUDED model owner rejected by explicit ownership relation",
+    "Authored reaction3\u21925 and physical diffusion offset2/7\u21923/11 change actual generated numeric CSE definitions and independent expected Phi/state; same generic conditional coefficient proof"
+  ],
+  "native_future": {
+    "executed": false,
+    "file": "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py",
+    "history": "explicit accepted physical slot1, Sourcestore/rotation contract",
+    "identity": "true installed package/site origin and exact all shipped Python/header hashes, Native/SDK/Source origins",
+    "references": "independent periodic FV Euler difference equations; phi=forcing/reaction; exact rational offset+phi\u00b2; strict bounds declared before compile/run",
+    "selectors": [
+      "test_public_guarded_field_coefficient_diffusion[baseline]",
+      "test_public_guarded_field_coefficient_diffusion[renamed]",
+      "test_public_guarded_field_coefficient_diffusion[changed_expression]"
+    ],
+    "solver": "explicit CompositeFieldGMRES max_iter200 rel1e-12 abs1e-14, one level only"
+  },
+  "patch": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-V2-port-1766b40b-20261008/guarded-publication-port-v1.patch",
+    "sha256": "3e7fa03b9d06133bb385c9309dc09c9463bd97af75ca1814d776bc84711f1e27"
+  },
+  "production_patch_separate": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/successful-guard-frozen-authority-v2.patch",
+    "sha256": "e25f52db5ef4547bf2bb163f539faf7fd0c5448e21417d95ddc48691b7958b13"
+  },
+  "source_panel": {
+    "Native_loaded": [],
+    "PASS": 46,
+    "post_panel_change": "appended-test formatting only; entire unit AST equivalent; explicit future Native selectors added",
+    "receipt_sha256": "1f3a7ae1586c66f7c8a33e911946e8199763d34e7adc276c2029e0403d5eb0fa",
+    "xml": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-V2-port-1766b40b-20261008/source-runs/20261008T205217337430Z/pytest.xml",
+    "xml_sha256": "d21b9621f929819f62a94dc7823c6999d52a555e3dbd6ba54996d81f7f6012de"
+  },
+  "status": "SOURCE_TEST_PORT_READY_NATIVE_PENDING"
+}

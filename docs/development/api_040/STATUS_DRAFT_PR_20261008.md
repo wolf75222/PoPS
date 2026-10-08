@@ -3,6 +3,22 @@
 Snapshot du 8 octobre 2026, actualisé à 19:52 UTC pour la
 [PR brouillon 681](https://github.com/wolf75222/PoPS/pull/681).
 **Mission encore ouverte ; cette PR est un brouillon.**
+Actualisation à 21:15 UTC : sept fichiers de production sont intégrés pour
+l'autorité détachée des publications Field, les alias de garde réussie,
+l'identité canonique des historiques, la copie Kokkos portable et le callback
+Moving Dim2. Leurs contre-revues sont conservées ; le lot intégré passe
+71 contrôles Source, zéro failure/error/skip, sans chargement Native.
+Le nouveau test public écrit deux modèles distincts, une équation elliptique
+avec réaction et une diffusion dont le coefficient dépend du Field publié.
+Ses trois variantes sont ajoutées au catalogue sans retirer les tests existants.
+La sérialisation des rapports réutilise l'encodage exact des octets du dépôt.
+Les [preuves Source](evidence/guarded_publication_source_20261008/manifest.json)
+ne qualifient pas encore ces chemins en exécution native. La signature des
+headers modifiés est `899489b76564e612e5b3df489301255ab6b8ec6736627271df88a5a49ffc52b8` ;
+le binaire installé reste `ed2…` / SDK `af8…`. Tous les consommateurs concernés
+doivent être reconstruits avant ces runs. Une extension distincte de capacité
+des checkpoints et d'autorité des horloges reste candidate, sous contre-revue.
+
 Actualisation suivante du 8 octobre : le code `db206100` a été reconstruit et
 installé avec Native `ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b`.
 Les dix tests Python originaux passent à nouveau et leurs données sont reçues
@@ -54,7 +70,7 @@ checkpoint partagé et ses72 charges reçus. Le census local des cellules/owners
 n’a pas été capturé et n’est pas inféré. Il s’agit d’un cas distribué physique,
 pas de deux cas. Ces corrections ne modifient aucun fichier du cœur.
 
-Le nouveau cœur contient 1198 fichiers figés, d’empreinte
+Le cœur précédemment reçu contient 1198 fichiers figés, d’empreinte
 `bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9`.
 La wheel `64174ea5855a9978c3ae7b61ed116be96217911a68b1a2fab434b059fca0bc90`
 installe 1168 charges Python identiques aux sources ; Native reste `ed2…` et
@@ -69,7 +85,7 @@ la généricité universelle. SSPRK2 a aussi terminé un PASS sur chacun de deux
 vrais rangs MPI. La réception indépendante vérifie l’oracle, les quatre
 tableaux globaux bit à bit égaux entre rangs et au cas série, ainsi que le
 checkpoint commun de72 charges. Le census local des cellules/owners reste
-absent. Les candidates CUDA/Moving/Aux restent externes. La CI et les86
+absent. Ces reçus précèdent le lot Source décrit en tête. La CI et les86
 obligations+8 principes sont ouvertes.
 
 L’injection publique d’échec tardif est intégrée dans les tests au commit

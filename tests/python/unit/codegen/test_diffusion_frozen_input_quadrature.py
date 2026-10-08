@@ -340,3 +340,275 @@ def test_detached_constitutive_module_cannot_be_borrowed_from_a_different_owner(
         plans.append(pops.resolve(pops.validate(case.case),layout=case.layout))
     certificate,reason=prove_accepted_update_ssp(detach_compiled_program(plans[0].time),model_authority=build_program_model_graph(plans[1]))
     assert certificate is None and ('route' in reason or 'owner' in reason)
+
+
+# Independently authored two-owner Field publication regression cases.
+from pops.codegen.program_accepted_ssp import prove_accepted_update_ssp
+
+
+def _guarded_frozen_coefficient(**kwargs):
+    from tests.python.support.guarded_field_diffusion_observation_case import (
+        author_frozen_coefficient_case,
+    )
+    from pops.codegen.program_accepted_ssp import prove_accepted_update_ssp
+
+    p, case = author_frozen_coefficient_case(**kwargs)
+    before = p._ir_hash()
+    certificate, reason = prove_accepted_update_ssp(p)
+    result = {
+        "certificate": certificate is not None,
+        "reason": reason,
+        "unchanged_by_proof": before == p._ir_hash(),
+    }
+    result["quadrature"] = [
+        (v.id, {str(k): str(w) for k, w in weights.items()})
+        for v, weights in accepted_diffusive_quadrature(p)
+    ]
+    return result, p, case
+
+
+@pytest.mark.parametrize(
+    "driver_guard,input_guard,suffix",
+    [
+        (False, False, ""),
+        (True, False, ""),
+        (False, True, ""),
+        (True, True, ""),
+        (False, False, "_renamed"),
+        (True, False, "_renamed"),
+        (False, True, "_renamed"),
+    ],
+)
+def test_successful_frozen_value_aliases_keep_the_actual_elliptic_diffusion_equation(
+    driver_guard, input_guard, suffix
+):
+    result, p, _ = _guarded_frozen_coefficient(
+        guard_driver=driver_guard, guard_field_input=input_guard, suffix=suffix
+    )
+    assert result["certificate"], result["reason"]
+    assert result["unchanged_by_proof"]
+    assert len(result["quadrature"]) == 1 and result["quadrature"][0][1] == {"1": "1"}
+    certificate, reason = prove_accepted_update_ssp(p)
+    assert not reason and certificate.b == (1,) and certificate.coefficient == 1
+    assert any(v.op == "matrix_free_operator" for v in p._values)
+    if driver_guard or input_guard:
+        assert any(v.op == "acceptance_guard" for v in p._values)
+
+
+@pytest.mark.parametrize(
+    "fault", ["unproved_action", "input_mutation", "changed_mathematical_driver"]
+)
+def test_alias_proof_does_not_drop_actual_conditions_effects_or_driver_evolution(fault):
+    import pops
+
+    result, p, _ = _guarded_frozen_coefficient(
+        guard_driver=True, guard_field_input=True
+    )
+    if fault == "unproved_action":
+        guard = next(v for v in p._values if v.op == "acceptance_guard")
+        object.__setattr__(guard, "attrs", {**guard.attrs, "action": object()})
+    elif fault == "input_mutation":
+        p.project(next(v for v in p._values if v.op == "state"))
+    else:
+        reference = next(
+            ref for ref in p._commits if "fixed-owner" in ref.block_ref.local_id
+        )
+        initial = next(
+            v for v in p._values if v.op == "state" and v.state_ref == reference
+        )
+        endpoint = p._commits[reference]
+        changed = p.value("actual-changed-donor", 2 * initial, at=endpoint.point)
+        p._commits[reference] = changed
+    certificate, reason = prove_accepted_update_ssp(p)
+    assert certificate is None and reason
+    with pytest.raises(ValueError, match="SSP coefficient-one convex proof"):
+        accepted_diffusive_quadrature(p)
+
+
+def _guarded_portable_resolved(suffix="", **math_inputs):
+    import pops
+    from pops.solvers import CompositeFieldGMRES
+    from tests.python.support.guarded_field_diffusion_case import author_case
+
+    case, layout, arrays, oracle = author_case(
+        solver=CompositeFieldGMRES(max_iter=200, rel_tol=1e-12, abs_tol=1e-14),
+        suffix=suffix,
+        **math_inputs,
+    )
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    from pops.codegen._orchestration_compile import build_program_model_graph
+
+    return resolved, build_program_model_graph(resolved), oracle
+
+
+@pytest.mark.parametrize("suffix", ["", "_renamed"])
+def test_independent_portable_amr_math_resolves_detaches_and_emits_identical_actual_cpp(
+    suffix,
+):
+    from pops.time._program.detach import detach_compiled_program
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    resolved, authority, oracle = _guarded_portable_resolved(suffix)
+    original = resolved.time
+    detached = detach_compiled_program(original)
+    assert original._ir_hash() == detached._ir_hash()
+    assert oracle["dt"] * oracle["forward_euler_frequency"] < 1
+    a, why_a = prove_accepted_update_ssp(original, model_authority=authority)
+    b, why_b = prove_accepted_update_ssp(detached, model_authority=authority)
+    assert a is not None and b is not None, (why_a, why_b)
+    assert (a.A, a.b, a.c, a.base_weights, a.forward_euler_weights) == (
+        b.A,
+        b.b,
+        b.c,
+        b.base_weights,
+        b.forward_euler_weights,
+    )
+    cpp = emit_cpp_program(
+        original,
+        model_graph=authority,
+        field_plans=resolved.field_plans,
+        target="amr_system",
+    )
+    detached_cpp = emit_cpp_program(
+        detached,
+        model_graph=authority,
+        field_plans=resolved.field_plans,
+        target="amr_system",
+    )
+    assert (
+        cpp == detached_cpp
+    )  # Includes actual guard conditions and canonical storage witness.
+    assert "ctx.store_global_field_history(" in cpp
+    assert "#authoring=" not in cpp
+
+
+@pytest.mark.parametrize(
+    "fault", ["no_source_authority", "foreign_model_graph", "foreign_source_module"]
+)
+def test_detached_publication_never_borrows_an_unknown_or_foreign_source_authority(
+    fault,
+):
+    from pops.time._program.detach import detach_compiled_program
+    from pops.codegen.program_models import ProgramModelGraph
+
+    resolved, authority, _ = _guarded_portable_resolved()
+    detached = detach_compiled_program(resolved.time)
+    selected = authority
+    if fault == "no_source_authority":
+        selected = None
+    elif fault == "foreign_model_graph":
+        _, selected, _ = _guarded_portable_resolved("_foreign")
+    else:
+        modules = dict(authority.source_modules_by_owner)
+        publication = next(
+            value for value in detached._values if value.op == "field_publication"
+        )
+        receiver_owner = authority.owner_for_block(
+            publication.attrs["bindings"][0]["target"].block_ref
+        )
+        donor_owner = next(owner for owner in modules if owner != receiver_owner)
+        modules[receiver_owner] = modules[donor_owner]
+        selected = ProgramModelGraph(
+            models_by_owner=authority.models_by_owner,
+            source_modules_by_owner=modules,
+            owners_by_block=authority.owners_by_block,
+            authorities_by_owner=authority._authorities_by_owner,
+            models_by_block=authority._models_by_block,
+            numerics_by_block=authority._numerics_by_block,
+        )
+    certificate, reason = prove_accepted_update_ssp(detached, model_authority=selected)
+    assert certificate is None and reason
+
+
+def test_publication_declaration_cannot_borrow_a_different_known_block_owner():
+    from pops.time._program.detach import detach_compiled_program
+    from pops.codegen.program_field_publication import publication_target_space
+
+    resolved, authority, _ = _guarded_portable_resolved()
+    detached = detach_compiled_program(resolved.time)
+    publication = next(
+        value for value in detached._values if value.op == "field_publication"
+    )
+    target = publication.attrs["bindings"][0]["target"]
+    donor = next(
+        value.block
+        for value in detached._values
+        if value.op == "state" and value.block.local_id == "donor"
+    )
+    corrupt = object.__new__(type(target))
+    for cls in reversed(type(target).__mro__):
+        slots = cls.__dict__.get("__slots__", ())
+        for name in (slots,) if isinstance(slots, str) else slots:
+            if name not in {"__dict__", "__weakref__"} and hasattr(target, name):
+                object.__setattr__(corrupt, name, getattr(target, name))
+    donor_module = authority.source_module_for_owner(authority.owner_for_block(donor))
+    donor_declaration = donor_module.field_handle(donor_module.field_spaces()["fields"])
+    assert donor_declaration.kind == "field"
+    object.__setattr__(corrupt, "_declaration_ref", donor_declaration)
+    # Both source owners are real graph members; keep the destination block unchanged.
+    authority.model_for_block(corrupt.block_ref)
+    authority.source_module_for_owner(donor_declaration.owner_path)
+    with pytest.raises(ValueError, match="different block model"):
+        publication_target_space(authority, corrupt)
+
+
+def test_independent_fv_oracle_matches_separable_discrete_eigenvalues():
+    import numpy as np
+    from tests.python.support.guarded_field_diffusion_case import independent_oracle
+
+    arrays, oracle = independent_oracle()
+    q0 = arrays["receiver"][0]
+    nx, ny = 16, 12
+    dx, dy = 2 / nx, 3 / ny
+    x = (np.arange(nx) + 0.5) * dx
+    y = (np.arange(ny) + 0.5) * dy
+    mode_x = 0.08 * np.sinc(1 / nx) * np.cos(np.pi * x)[None, :]
+    mode_y = 0.03 * np.sinc(1 / ny) * np.cos(2 * np.pi * y / 3)[:, None]
+    eigen_x = 4 * np.sin(np.pi / nx) ** 2 / dx**2
+    eigen_y = 4 * np.sin(np.pi / ny) ** 2 / dy**2
+    coefficient = 2 / 7 + (0.6 / 3) ** 2
+    spectral = q0 - oracle["dt"] * coefficient * (eigen_x * mode_x + eigen_y * mode_y)
+    np.testing.assert_allclose(oracle["receiver"], spectral, rtol=0, atol=3e-16)
+    np.testing.assert_array_equal(oracle["phi"], np.full((ny, nx), 0.2))
+
+
+def test_changed_guarded_publication_equations_change_actual_numerical_cpp_and_oracle(
+    tmp_path,
+):
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.time._program.detach import detach_compiled_program
+
+    original, old_graph, old_oracle = _guarded_portable_resolved()
+    changed, new_graph, new_oracle = _guarded_portable_resolved(
+        reaction=5, diffusion_offset=Fraction(3, 11)
+    )
+    old_cpp = emit_cpp_program(
+        detach_compiled_program(original.time),
+        model_graph=old_graph,
+        field_plans=original.field_plans,
+        target="amr_system",
+    )
+    new_cpp = emit_cpp_program(
+        detach_compiled_program(changed.time),
+        model_graph=new_graph,
+        field_plans=changed.field_plans,
+        target="amr_system",
+    )
+    assert old_oracle["coefficient"] != new_oracle["coefficient"]
+    assert old_oracle["phi"][0, 0] == 0.2 and new_oracle["phi"][0, 0] == 0.12
+    assert not (old_oracle["receiver"] == new_oracle["receiver"]).all()
+    # These are generated physical value assignments, not provenance hashes.
+    (tmp_path / "original.cpp").write_text(old_cpp)
+    (tmp_path / "changed.cpp").write_text(new_cpp)
+    old_values = [
+        line.strip() for line in old_cpp.splitlines() if "pops::Real cse" in line
+    ]
+    new_values = [
+        line.strip() for line in new_cpp.splitlines() if "pops::Real cse" in line
+    ]
+    assert old_values and new_values and old_values != new_values
+    for program, authority in [(original.time, old_graph), (changed.time, new_graph)]:
+        certificate, reason = prove_accepted_update_ssp(
+            program, model_authority=authority
+        )
+        assert certificate is not None and certificate.b == (1,), reason

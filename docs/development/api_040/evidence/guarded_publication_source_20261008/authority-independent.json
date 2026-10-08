@@ -1,0 +1,34 @@
+{
+  "Core_runtime_remains_parent_frozen": "bd291",
+  "Main_changed": false,
+  "author_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/receipt-v2.json",
+    "sha256": "63224e7a681597dd6aa2a116c0d05cd34affd131c496f960dc2a2d971d60b5bf"
+  },
+  "findings": [
+    "Shared exact ProgramModelGraph resolver authenticates destination block route, compares its canonical model owner to declaration owner BEFORE selecting Module, authenticates declaration index and returns declared FieldSpace",
+    "Proof and emitter call same resolver via existing compiler-independent target_space callback; no authoring registry reconstruction or representative Model fallback",
+    "V1 successful terminal guard alias four lines retained; global issued/condition/nonmutation/read closure and exact convex arithmetic unchanged",
+    "Canonical storage_state_witness projection removes only authoring identity suffix; numerical lowering call and witness authority otherwise unchanged",
+    "Actual original and renamed two-owner CompositeFieldGMRES AMR source recipes resolve/detach/prove/emit with directly equal complete CPP; no text normalization",
+    "Known cross-member negative keeps destination block and borrows actual donor declaration with both graph members known; rejection uses explicit different-block-model check",
+    "Three missing/foreign/module negatives plus21 previous fences remain actual Source tests"
+  ],
+  "limitations": [
+    "No independent full28 rerun; exact raw XML/runner/source/negative constructions inspected and hashes verified",
+    "No Native/scientific qualification or universal all-physics proof",
+    "Cross-member donor declaration in existing negative is State-kind; it demonstrates owner relation but does not separately exercise a foreign Field-kind declaration",
+    "New publication case does not yet include changed-expression metamorphic CPP assertion; requested test port will add explicit coverage"
+  ],
+  "metadata_scope": "Canonical history identity and authority relation; not physics/model/method identity dispatch",
+  "patch": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/successful-guard-frozen-authority-v2.patch",
+    "sha256": "e25f52db5ef4547bf2bb163f539faf7fd0c5448e21417d95ddc48691b7958b13"
+  },
+  "source_xml": {
+    "PASS": 28,
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/source-authority-v2.xml",
+    "sha256": "14170fa7c6f4cb4e6f44704580f4d958dfcfa676a2077cb159a2d4a35783082a"
+  },
+  "status": "ADMIT_BOUNDED_SOURCE"
+}

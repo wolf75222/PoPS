@@ -12,16 +12,13 @@ from pops.time._program.serialization import _json_ready
 
 def emit_field_publication(value: Any, var: Any, lines: list[str], model: Any, *, target: str, provider_plans: Any, block_idx: Any) -> None:
     from .program_models import ProgramModelGraph
-    from .program_field_publication import _key, provider_identity
+    from .program_field_publication import _key, provider_identity, publication_target_space
     from .component_provider_packs import require_emitter_provider_carrier
 
     if target not in ("system", "amr_system") or type(model) is not ProgramModelGraph:
         raise ValueError("consumed field publication requires an exact native Program model graph")
     def target_space(destination: Any) -> Any:
-        model.model_for_block(destination.block_ref)
-        module = model.source_module_for_owner(destination.declaration_ref.owner_path)
-        module.declaration_index().authenticate(destination.declaration_ref)
-        return module.field_spaces()[destination.declaration_ref.local_id]
+        return publication_target_space(model, destination)
 
     bindings = validate_field_publication(value, target_space=target_space)
     if provider_plans is None:
