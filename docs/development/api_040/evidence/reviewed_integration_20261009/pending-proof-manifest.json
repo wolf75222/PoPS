@@ -1,0 +1,17 @@
+{
+  "parent_source": "f91c142963e3b8c2e86a297baadf044c39cd4450",
+  "patch_sha256": "918418df0c230f97a032aa5f23cfdb1b9529904e3dbb5f5aa0fc9a482d0416e6",
+  "scope": "Fixture-only canonical state identity restores prepublication guard; eight faults and positive case retained; author CPU1 and MPI2 runs reviewed independently, no new complete Native acceptance.",
+  "receipts": [
+    {
+      "file": "pending-proof-author-v2.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/review-ready-v2.json",
+      "sha256": "b446bd4ede0799a2ab74274bfdb0f3112e97192a30620365b0dd2ce2216d166d"
+    },
+    {
+      "file": "pending-proof-non-author-v2.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-independent-20261009/pending-proof-fixture-counterreview.json",
+      "sha256": "053d9d270c118d7e2d3388a9599979b88f2f7dae7b46a332940150d7c799ac7b"
+    }
+  ]
+}

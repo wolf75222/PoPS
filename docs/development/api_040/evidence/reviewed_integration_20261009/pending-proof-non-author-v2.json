@@ -1,0 +1,67 @@
+{
+  "verdict": "ACCEPT bounded fixture correction; no production change or weakened guard",
+  "base": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "patch_sha256": "918418df0c230f97a032aa5f23cfdb1b9529904e3dbb5f5aa0fc9a482d0416e6",
+  "independent_actions": "Read-only source/diff/evidence audit and exact byte rehash; no Native import/run, build, clone, Main/environment change",
+  "cause": "Canonical installed state route and boundary use tests.spatial-proof/tracer/state@1; old pending ledger used tracer/state. Serial fault2 clears all retained proofs, so fallback scans pending coarse entries by owner+canonical state. Old identity hid the coarse ledger, empty expression published, consume false, EXPECT_THROW failed and rollback inactive. With canonical ledger the prepublication guard throws its exact original error. MPI original additionally refuses differing retained-proof presence between ranks, so its prior PASS did not establish the serial contract.",
+  "preserved": {
+    "faults": 8,
+    "positive_case": 1,
+    "rank0_damage_target_unchanged": true,
+    "damage_helper_byte_identical": true,
+    "publication_and_consume_assertions_byte_identical": true,
+    "rollback_and_three_state_value_checks_byte_identical": true,
+    "EXPECT_THROW_exception_type_unchanged": "std::exception",
+    "new_assertion": "fault2 exact serial refusal or MPI collective wrapper; diagnostic SCOPED_TRACE"
+  },
+  "author_execution_evidence_received": [
+    {
+      "world": 1,
+      "rank": 0,
+      "pass": 1,
+      "xml_sha256": "642fcd6fecb4849c6fb8eabf6b5a7325aecb6f713f85aa2858a58bd0a6533060"
+    },
+    {
+      "world": 2,
+      "rank": 0,
+      "pass": 1,
+      "xml_sha256": "68df0781fc739dec11d078c80ef48c00445b7f5985f17d6503938ce999aee0a7"
+    },
+    {
+      "world": 2,
+      "rank": 1,
+      "pass": 1,
+      "xml_sha256": "d01e26ecbeb2c46130d342c411a7b5c96e47dcc4b266c4b541d99e7b2901fca3"
+    }
+  ],
+  "scope": "One existing C++ test, positive plus eight faults, recorded mpiexec -n1/-n2 on frozen Source988 snapshot and existing object graph; three rank-case PASS. No independent runtime rerun or whole-suite/CI/GPU/3D/installed-extension qualification claim.",
+  "rank_evidence_limit": "Launcher argv uses PMI_RANK for distinct XML paths and stdout contains exactly one/two matching PASS. Old harness has no explicit rank XML property and no separate rank identity packet; filenames alone not treated as rank authentication.",
+  "link_scope_limit": "Small-file counterreview verifies command graph and binary/object hash plus three exact Source988 headers. Does not freshly rehash all 25 copied inputs or entire SDK; prior admission remains separate.",
+  "retained_failure": "Original diagnostic world1 fault2 failure/false consume/inactive rollback remains pinned; old MPI PASS remains distinct. Independent reader initial slice SyntaxError and incorrect wrapper argv-index assertion corrected, before-fix readers preserved; these are reader defects and no Native runs occurred.",
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/pending-proof-canonical-state-fixture-v2.patch": "918418df0c230f97a032aa5f23cfdb1b9529904e3dbb5f5aa0fc9a482d0416e6",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2.cpp": "2aacc583aaff8f12aad97eca909e93aa0344824b1d6edf9e231bfaa212aefad6",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/baseline-original.cpp": "d6644a5805d2bb29aca820d5192848f149352774c2931e43b41e9cb2fabbbbf9",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-commands.json": "6428f3b51bffa55af3d74df380918ad35176a173d5c9704c0457b2d917437b6d",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-build.json": "77af58208bc225c57d06f230e97bc73fdc4655b26f380dc9f652847e86ffd4ac",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-build0.log": "c4fc951806bcc10c89358c942c2325eee535417c21eaa0a32528464804ce4d18",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-build1.log": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-ready.json": "8b56a8bf2376a152ccfc7dfc2e804b8b0662e6809c43413429c105ed9594d4be",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/snapshot-header-pins.json": "d4895206ad6df44d10f6542360d4e3cd57d3206439e6916846b9bd61a7765b58",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/diagnostic.cpp": "41da0304607d4e8115331a3ba218ecf17b206d807b72f8df814ed8289b3d582b",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/diagnostic-world1.log": "871b870b75ef4c7e04b4725624e72cbc2fbab24d73ff532595ac475ff9fcce92",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/diagnostic-world2.log": "dc3257fd3700e5f1e69b707d81c43ab0e3f59eb1b777870538aa046d3ddcfc6a",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-world1.log": "1daa7dec90618ca608df49eaa8bf9f36f8526ebf3d878e82a2e0a99264e16e6d",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-world2.log": "a81982f4df0866efe398fb21c2a61ef2b48023fc210ba292a17ac6506b62967a",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-world1-rank0.xml": "642fcd6fecb4849c6fb8eabf6b5a7325aecb6f713f85aa2858a58bd0a6533060",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-world2-rank0.xml": "68df0781fc739dec11d078c80ef48c00445b7f5985f17d6503938ce999aee0a7",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-world2-rank1.xml": "d01e26ecbeb2c46130d342c411a7b5c96e47dcc4b266c4b541d99e7b2901fca3",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/review-ready-v2.json": "b446bd4ede0799a2ab74274bfdb0f3112e97192a30620365b0dd2ce2216d166d",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2": "cc15af605f3b476d26aaace940d54cf31012ee01f9a085fc0f1a7fc7857035df",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2.o": "7d4e4388502dfd1b453d28825d96b903798b2ac074924198d39b7fc437d924f5",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/snapshot/include/pops/runtime/program/amr_program_context_flux_expression_runtime.inc": "ace8423a9a9e7dc79e7ac056a3fa8d71b6ee560dadd5b87c2d3ae5389c3cff9a",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/snapshot/include/pops/runtime/program/amr_program_context_spatial_imex.inc": "f767f50460e15b543e3afcd0ebbb3229d8e544656e680bbafe8c1a454ad6f031",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/snapshot/include/pops/runtime/program/amr_program_context_spatial.inc": "f5f12ecfe5c4c457745b764d9b7e51678657ad625891638bd1868c8e271f6748",
+    "git:98804c6849c9966e05b5397126bab983a5fa0227:src/runtime/amr/amr_system.cpp": "59e3fd9fe42cc8c31d2999840d16b1e2ac5ca399a828986126c98265add0a185"
+  }
+}
