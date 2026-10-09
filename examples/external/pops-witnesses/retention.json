@@ -1,0 +1,15 @@
+{
+  "archive_path": "/home/nimarano/pops-witnesses-620ac6b6-evidence.tar.gz",
+  "archive_bytes": 116877721,
+  "archive_sha256": "7090dc79c74411c0717b99302ed03d1cd552b1f369d46c45152fb4c0fadbcc74",
+  "archive_job": "738908",
+  "campaign_path": "/scratch_p/nimarano/pops-witnesses-620ac6b6/campaign-7",
+  "included_failures": "campaign-1 through campaign-6 and available job logs",
+  "scope": "Original execution files and recorded compiler/loader identities; integrity relative to the trusted cluster record, not adversarial attestation.",
+  "self_reference": "retention.json is a post-archive digest pointer and is not inside its own hashed capsule.",
+  "archive_verification_job": "738910",
+  "sealed_original_files_verified": 242,
+  "retained_compiler_cpp_files_verified": 18,
+  "retained_loaded_dso_files_verified": 24,
+  "wheel_and_frozen_core_archive_verified": true
+}

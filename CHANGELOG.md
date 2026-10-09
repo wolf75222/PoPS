@@ -16,6 +16,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ## [Unreleased]
 
+### Added
+
+- External linear and cubic formula witnesses with independent discrete references and retained native execution evidence on the #681 core.
+
 ### Changed
 
 - Make the named region-transfer pack/unpack functor types accessible to NVCC host stubs,
