@@ -63,18 +63,39 @@ def retain_v_provenance(artifact,native,directory,rank):
              'rank':rank,'native':pin(native.__file__),'compilation':entries,'before_bind':True})
     return entries
 
+def native_profile_world(native):
+    """Use only the actual compiled MPI world; a Serial profile has no MPI authority."""
+    from pops.codegen._native_mpi import native_mpi_communicator
+    return native.mpi_world() if native_mpi_communicator(native) == "MPI_COMM_WORLD" else None
+
+
+def world_rank(world):
+    return 0 if world is None else int(world.rank)
+
+
+def world_size(world):
+    return 1 if world is None else int(world.size)
+
+
+def world_allgather(world, value):
+    if world is None:
+        return (value,)
+    from pops._native_collectives import allgather_value
+    return allgather_value(world, value)
+
+
 def capture_initial_carriers(world,runtime,directory,authority):
     # Existing native codec used by CP12: no publication, solve or Field getter.
     method,failures=collective_attempt(world,lambda:required_initial_method(runtime))
     raw=None
     if not any(failures):raw,failures=collective_attempt(world,method)
     def save():
-        evidence={'schema':'pops.evolved-stage-v-initial-carriers@1','rank':world.rank,
-                  'ranks':world.size,'failures':failures,'available':raw is not None,'authority':authority}
+        evidence={'schema':'pops.evolved-stage-v-initial-carriers@1','rank':world_rank(world),
+                  'ranks':world_size(world),'failures':failures,'available':raw is not None,'authority':authority}
         if raw is not None:
             if type(raw) is not bytes:raise TypeError('native CP12 codec must return exact bytes')
-            path=directory/('initial-carriers-rank%d.bin'%world.rank);path.write_bytes(raw);evidence['file']=pin(path)
-        receipt=directory/('initial-carriers-rank%d.json'%world.rank)
+            path=directory/('initial-carriers-rank%d.bin'%world_rank(world));path.write_bytes(raw);evidence['file']=pin(path)
+        receipt=directory/('initial-carriers-rank%d.json'%world_rank(world))
         save_json(receipt,evidence)
         return {**evidence,'receipt':pin(receipt)}
     evidence=collective_call(world,save)
@@ -83,7 +104,7 @@ def capture_initial_carriers(world,runtime,directory,authority):
     from tests.review.sol61_amr_full_carrier_offline import decode
     def validate():
         image=decode(np.frombuffer(raw,dtype=np.uint8))
-        validate_initial_envelope(image,world.size,authority=authority)
+        validate_initial_envelope(image,world_size(world),authority=authority)
     collective_call(world,validate)
     return evidence
 
@@ -94,7 +115,6 @@ def required_initial_method(runtime):
 
 def initial_carrier_authority(world,runtime,artifact):
     """Expected valid geometry comes from actual allocation, never from captured bytes."""
-    from pops._native_collectives import allgather_value
     collective_call(world,artifact.verify)
     blocks=tuple(block.name for block in artifact.blocks)
     components={block.name:int(block.model.n_vars) for block in artifact.blocks}
@@ -102,9 +122,9 @@ def initial_carrier_authority(world,runtime,artifact):
     shape=collective_call(world,runtime.spatial_shape)
     fine=collective_call(world,runtime.patch_boxes)
     local=collective_call(world,lambda:runtime.amr.coarse_local_box_bounds())
-    owned=collective_call(world,lambda:allgather_value(world,local))
+    owned=collective_call(world,lambda:world_allgather(world,local))
     def expected():
-        if len(shape)!=2 or len(owned)!=world.size or levels!=2:raise ValueError('actual V allocation authority differs')
+        if len(shape)!=2 or len(owned)!=world_size(world) or levels!=2:raise ValueError('actual V allocation authority differs')
         coarse=sorted({tuple(tuple(int(v) for v in corner) for corner in box) for rank in owned for box in rank})
         boxes={0:[tuple((lo[axis],hi[axis]-1) for axis in range(2)) for lo,hi in coarse]}
         for level,lo,hi in fine:
