@@ -912,7 +912,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep original duration-bin identities even when the plan omits empty bins.
-        # Watchdogs and native-dimension routing continue to use the fixed 70-bin partition.
+        # Watchdogs and native-dimension routing continue to use the fixed 71-bin partition.
         shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}
 
     env:
@@ -925,7 +925,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "70"
+      SHARD_TOTAL: "71"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache

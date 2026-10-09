@@ -68,7 +68,7 @@ def capture(variant,directory):
     assert variant in ('representative','rename','decay')
     directory=Path(directory);directory.mkdir(mode=0o700,parents=True,exist_ok=False)
     before=identity()
-    labels={} if variant!='rename' else {role:'renamed-'+role.replace('_','-') for role in (
+    labels={} if variant!='rename' else {role:'renamed_'+role for role in (
         'domain','donor_model','donor_state','receiver_model','receiver_state','phi_input','psi_input',
         'case','donor_block','receiver_block','field_owner','phi','psi','field_problem','method')}
     decay=Fraction(11,10) if variant=='decay' else DECAY

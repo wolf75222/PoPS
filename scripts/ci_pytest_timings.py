@@ -15,7 +15,7 @@ from pathlib import Path
 import time
 
 ORDINARY_BUDGET_SECONDS = 35 * 60
-SHARD_TOTAL = 70
+SHARD_TOTAL = 71
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:

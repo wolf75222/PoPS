@@ -1601,7 +1601,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}" in python_shards_block
-    assert 'SHARD_TOTAL: "70"' in python_shards_block
+    assert 'SHARD_TOTAL: "71"' in python_shards_block
     assert "strategy.job-total" not in python_shards_block
     for family, block in (("cpp", cpp_shards_block), ("python", python_shards_block)):
         assert "name: ci-plan" in block
