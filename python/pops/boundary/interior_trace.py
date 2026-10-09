@@ -1,5 +1,5 @@
 """Explicit primary-State interior trace for public pointwise Ghost expressions."""
-from pops.fields.boundary_values import BoundaryValue
+from pops.model.pointwise_boundary import BoundaryValue
 
 
 class InteriorTrace(BoundaryValue):

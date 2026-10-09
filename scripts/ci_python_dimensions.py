@@ -29,38 +29,82 @@ def partition(paths: list[str], contract: dict) -> dict[int, list[str]]:
     return dict(sorted(groups.items()))
 
 
-def run_groups(groups: dict[int, list[str]], packages: Path, timings: Path) -> int:
+def run_groups(groups: dict[int, list[str]], packages: Path, timings: Path,
+               *, install_root: Path | None = None, backend: str = "serial") -> int:
+    """Install every declared native group from its retained wheel; never inject a build tree."""
     status = 0
+    if install_root is None:
+        runner_temp = os.environ.get("RUNNER_TEMP")
+        if not runner_temp:
+            raise ValueError("installed CI execution requires explicit RUNNER_TEMP")
+        install_root = Path(runner_temp) / "pops-installed-dimensions"
+    install_root = install_root.resolve()
+    if install_root.is_relative_to(ROOT.resolve()):
+        raise ValueError("CI installation prefix must be outside checkout")
+    if backend not in {"serial", "mpi"}:
+        raise ValueError("explicit native backend must be serial or mpi")
     for dimension, paths in groups.items():
-        print(f"Running {len(paths)} selected Python files with native Dim{dimension}", flush=True)
-        # Each downloaded package has its own authenticated variants.json; do not merge
-        # packages or inherit another process's selected extension/search path.
         package = (packages / f"dim{dimension}").resolve()
-        if not (package / "pops/_native/variants.json").is_file():
-            raise FileNotFoundError(f"missing declared Dim{dimension} native package: {package}")
+        wheels = sorted(package.glob("pops-*.whl"))
+        if len(wheels) != 1:
+            raise FileNotFoundError(f"Dim{dimension} requires exactly one retained wheel: {package}")
         receipts = (timings / f"dim{dimension}").resolve()
         receipts.mkdir(parents=True, exist_ok=True)
         (receipts / "selected.txt").write_text("\n".join(paths) + "\n", encoding="utf-8")
+        prefix = install_root / f"dim{dimension}"
+        if prefix.exists():
+            raise FileExistsError(f"refuse reused CI environment: {prefix}")
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        prefix.parent.chmod(0o700)
+        wheel_dir = install_root / f"wheel-dim{dimension}"
+        wheel_dir.mkdir(mode=0o700)
+        retained = wheel_dir / wheels[0].name
+        import shutil
+        shutil.copyfile(wheels[0], retained)
         environment = os.environ.copy()
-        # Build artifacts carry Python/native files, whereas wheel installation adds
-        # package-owned headers. Relocating this build tree breaks the historical
-        # three-parent include search; use this checkout's signature-checked headers.
+        for key in ("PYTHONPATH", "PYTHONOPTIMIZE", "POPS_NATIVE_VARIANTS_ROOT", "POPS_INCLUDE", "POPS_CI_NATIVE_PACKAGE", "PYTEST_ADDOPTS", "PIP_PREFIX", "PIP_TARGET", "PIP_USER"):
+            environment.pop(key, None)
         environment.update(POPS_NATIVE_DIM=str(dimension), PYTHONNOUSERSITE="1",
-                           POPS_INCLUDE=str(ROOT / "include"),
-                           PYTHONPATH=os.pathsep.join((str(ROOT / "scripts"), str(package))),
                            POPS_CI_PYTEST_TIMINGS_DIR=str(receipts),
-                           POPS_CI_NATIVE_PACKAGE=str(package))
-        environment.pop("POPS_NATIVE_VARIANTS_ROOT", None)
-        verified = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/verify_installed_native.py"),
-             "--expect-dim", str(dimension), "--expect-serial"],
-            cwd=ROOT, env=environment, check=False)
-        if verified.returncode:
-            status = status or verified.returncode
+                           POPS_CI_TEST_EXECUTION="installed")
+        python = prefix / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        stages = [
+            [sys.executable, "-m", "venv", "--system-site-packages", str(prefix)],
+            [str(python), "-m", "pip", "--isolated", "install", "--ignore-installed", "--no-deps", "--prefix", str(prefix), str(retained)],
+            [str(python), str(ROOT / "scripts/prove_installed_wheel.py"),
+             "--wheel", str(retained), "--expect-dim", str(dimension)],
+            [str(python), str(ROOT / "scripts/verify_installed_native.py"),
+             "--expect-dim", str(dimension), "--expect-" + backend],
+        ]
+        stage_receipts = []
+        verified = True
+        for command in stages:
+            if any("prove_installed_wheel.py" in str(arg) for arg in command):
+                with (receipts / "installed-wheel-proof.json").open("w") as proof:
+                    result = subprocess.run(command, cwd=ROOT, env=environment, check=False, stdout=proof)
+            else:
+                result = subprocess.run(command, cwd=ROOT, env=environment, check=False)
+            stage_receipts.append({"argv": command, "returncode": result.returncode})
+            if result.returncode:
+                status = status or result.returncode
+                verified = False
+                break
+        (receipts / "installation-stages.json").write_text(json.dumps(stage_receipts, indent=2) + "\n")
+        if not verified:
             continue
+        bootstrap = (
+            "import sys; from pathlib import Path; "
+            f"sys.path[:0]=[{str(ROOT / 'scripts')!r},{str(ROOT)!r}]; "
+            "import pops; "
+            "assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()); "
+            f"assert not Path(pops.__file__).resolve().is_relative_to(Path({str(ROOT)!r})); "
+            "import pytest; raise SystemExit(pytest.main(sys.argv[1:]))"
+        )
         result = subprocess.run(
-            [sys.executable, "-u", "-m", "pytest", "-v", "-ra", "--durations=20",
-             "-p", "ci_pytest_timings", f"--junitxml={receipts / 'junit.xml'}", *paths],
+            [str(python), "-u", "-c", bootstrap, "-v", "-ra", "--durations=20",
+             "-o", "pythonpath=", "-o", f"cache_dir={receipts / 'pytest-cache'}",
+             f"--basetemp={receipts / 'pytest-tmp'}", "-p", "ci_pytest_timings",
+             f"--junitxml={receipts / 'junit.xml'}", *paths],
             cwd=ROOT, env=environment, check=False)
         status = status or result.returncode
     return status
@@ -72,6 +116,8 @@ def main() -> int:
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--packages-root", type=Path)
     parser.add_argument("--timings-dir", type=Path)
+    parser.add_argument("--install-root", type=Path)
+    parser.add_argument("--native-backend", choices=("serial", "mpi"), default="serial")
     args = parser.parse_args()
     paths = [line.strip() for line in args.selected_file.read_text().splitlines() if line.strip()]
     groups = partition(paths, json.loads(CONTRACT.read_text()))
@@ -82,7 +128,7 @@ def main() -> int:
         return 0
     if args.packages_root is None or args.timings_dir is None:
         parser.error("execution requires --packages-root and --timings-dir")
-    return run_groups(groups, args.packages_root, args.timings_dir)
+    return run_groups(groups, args.packages_root, args.timings_dir, install_root=args.install_root, backend=args.native_backend)
 
 
 if __name__ == "__main__":

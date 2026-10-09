@@ -4,9 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-class PathArithmeticComposition:
-    """Common typed interface for public library path compositions."""
-    __slots__ = ()
+from pops._ir.path_arithmetic import PathArithmeticComposition
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -31,7 +29,7 @@ class NormalizedPolynomialPath(PathArithmeticComposition):
 
     def __init__(self, product, *, frame, covectors, plan, flux, matrices):
         from collections.abc import Mapping
-        from pops._ir.expr import _wrap
+        from pops.model.expression_language import _wrap
         from pops.physics.nonconservative import NonconservativeProductHandle
         from pops.codegen.moment_path_kernel import emit_moment_path_kernel
         if not isinstance(product, NonconservativeProductHandle):
@@ -44,9 +42,9 @@ class NormalizedPolynomialPath(PathArithmeticComposition):
         rows = tuple(tuple(_wrap(value) for value in covectors[axis]) for axis in frame.axes)
         if any(len(row) != 2 for row in rows):
             raise ValueError("path covectors must contain two coordinate components")
-        from pops._ir.expr import Var
-        from pops._ir.quantity import QuantityRef
-        from pops._ir.visitors import _children
+        from pops.model.expression_language import Var
+        from pops.model.expression_language import QuantityRef
+        from pops.model.expression_language import _children
         pending = [value for row in rows for value in row]
         while pending:
             value = pending.pop()
@@ -64,7 +62,7 @@ class NormalizedPolynomialPath(PathArithmeticComposition):
         self._authenticate(matrices, product.law.matrices)
 
     def _authenticate(self, expected, actual):
-        from pops._ir.quantity import local_expression_identity
+        from pops.model.expression_language import local_expression_identity
         from pops.model.hash_data import canonical_hash_data
         with local_expression_identity(self.product.owner_path):
             if canonical_hash_data(expected) != canonical_hash_data(actual):
@@ -79,13 +77,13 @@ class NormalizedPolynomialPath(PathArithmeticComposition):
         self._authenticate(self.flux, model.module.operator_registry().get(flux.reg_name).body)
 
     def declaration_references(self):
-        from pops._ir.expr_references import collect_reference_value
+        from pops.model.expression_language import collect_reference_value
         result = [self.product, self.state]
         collect_reference_value((self.covectors, self.flux, self.matrices), result, set())
         return tuple(result)
 
     def resolve_references(self, resolver):
-        from pops._ir.expr_references import resolve_reference_value
+        from pops.model.expression_language import resolve_reference_value
         result = object.__new__(type(self))
         for name in ("product", "state", "frame", "covectors", "plan", "flux", "matrices"):
             value = getattr(self, name)
@@ -105,7 +103,7 @@ class NormalizedPolynomialPath(PathArithmeticComposition):
                 "identity_namespace": "numerics.normalized-polynomial-path"}
 
     def validate_native(self, *, law, flux_body, native):
-        from pops._ir.application import substitute_quantities
+        from pops.model.expression_language import substitute_quantities
         # The numerical declaration holds qualified instance quantities, whereas
         # the selected native module holds its authenticated declaration state.
         # Rebind by the exact retained handle and index, never by component names.
@@ -116,7 +114,7 @@ class NormalizedPolynomialPath(PathArithmeticComposition):
         self._authenticate(native(substitute_quantities(self.flux, bindings)), native(flux_body))
 
     def to_data(self):
-        from pops._ir.balance import _handle_data
+        from pops.model.expression_language import _handle_data
         from pops.model.hash_data import canonical_hash_data
         return {"kind": "normalized_polynomial_path", "schema_version": 1,
                 "product": _handle_data(self.product), "frame": self.frame.to_dict(),

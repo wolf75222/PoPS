@@ -866,8 +866,42 @@ template <int Dim>
 std::vector<double> explicit_block_state_oracle(pops::AmrSystem<Dim>& system, int runtime_block,
                                                 int level, int components) {
   const pops::MultiFab<Dim>& carrier = system.prepared_amr_block_state(runtime_block, level);
-  return pops::runtime::system::marshaling::gather_global(
-      carrier, system.prepared_amr_level_geometry(level).domain(), components);
+  // A refined level is sparse: independently assemble its owned valid patch
+  // pieces, preserving +0 holes and exact value bits without demanding a full tile.
+  const pops::Box<Dim> domain = system.prepared_amr_level_geometry(level).domain();
+  const std::size_t cells = static_cast<std::size_t>(domain.numPts());
+  std::vector<double> result(cells * static_cast<std::size_t>(components), 0.0);
+  std::vector<double> coverage(cells, 0.0);
+  for (const auto& piece : pops::output_local_pieces(carrier, level, carrier.distribution().replicated())) {
+    if (piece.replicated && pops::my_rank() != 0)
+      continue;
+    if (piece.ncomp < components || piece.values.size() !=
+          static_cast<std::size_t>(piece.box.numPts()) * static_cast<std::size_t>(piece.ncomp))
+      throw std::runtime_error("sparse oracle patch has inconsistent component storage");
+    for (std::int64_t ordinal = 0; ordinal < piece.box.numPts(); ++ordinal) {
+      std::int64_t remainder = ordinal;
+      std::size_t linear = 0, stride = 1;
+      for (int axis = 0; axis < Dim; ++axis) {
+        const int coordinate = piece.box.lo[axis] + static_cast<int>(remainder % piece.box.length(axis));
+        remainder /= piece.box.length(axis);
+        if (coordinate < domain.lo[axis] || coordinate > domain.hi[axis])
+          throw std::runtime_error("sparse oracle patch lies outside its physical level domain");
+        linear += static_cast<std::size_t>(coordinate - domain.lo[axis]) * stride;
+        stride *= static_cast<std::size_t>(domain.length(axis));
+      }
+      ++coverage[linear];
+      for (int component = 0; component < components; ++component)
+        result[static_cast<std::size_t>(component) * cells + linear] =
+            piece.values[static_cast<std::size_t>(component) * static_cast<std::size_t>(piece.box.numPts()) +
+                         static_cast<std::size_t>(ordinal)];
+    }
+  }
+  const auto& lane = pops::ExecutionLane::world();
+  pops::all_reduce_sum_inplace(coverage.data(), coverage.size(), lane);
+  if (std::any_of(coverage.begin(), coverage.end(), [](double count) { return count < 0 || count > 1; }))
+    throw std::runtime_error("sparse oracle has multiply owned valid cells");
+  pops::all_reduce_or_inplace(reinterpret_cast<char*>(result.data()), result.size() * sizeof(double), lane);
+  return result;
 }
 
 template <int Dim>
@@ -957,9 +991,13 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   result.patches = system.n_patches();
   result.topology_before = system.engine()->topology_epoch();
   EXPECT_NE(&system.prepared_amr_block_state(0, 0), &system.prepared_amr_block_state(1, 0));
-  EXPECT_GT(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0),
-                                        system.prepared_amr_block_state(1, 0)),
-            pops::Real(0));
+  const auto& first_coarse = system.prepared_amr_block_state(0, 0);
+  const auto& second_coarse = system.prepared_amr_block_state(1, 0);
+  // Replicated data has one complete copy per rank; a SUM would overcount.
+  const pops::Real block_difference = first_coarse.distribution().replicated()
+      ? pops::difference_sum_sq_all_local(first_coarse, second_coarse)
+      : pops::difference_sum_sq_all(first_coarse, second_coarse);
+  EXPECT_GT(block_difference, pops::Real(0));
   std::array<std::vector<std::vector<double>>, 2> block_oracles;
   for (std::size_t block = 0; block < names.size(); ++block) {
     block_oracles[block].reserve(static_cast<std::size_t>(system.n_levels()));

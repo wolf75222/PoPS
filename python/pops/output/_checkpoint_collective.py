@@ -235,7 +235,7 @@ def _manifest_character_budget(names: tuple[str, ...]) -> int:
 
 
 def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) -> None:
-    from pops.runtime._checkpoint_manifest import (
+    from pops.identity.checkpoint_origin import (
         BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION, RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION,
         _is_bound_initial_origin,
     )

@@ -41,25 +41,7 @@ def _solve_nodes(program: Any, handle: Any) -> tuple[Any, ...]:
                  and _canonical(_physical_metadata(node).get("field_handle")) == expected)
 
 
-def _reachable(node: Any, all_nodes: tuple[Any, ...]) -> tuple[Any, ...]:
-    """Follow actual data inputs and nested apply blocks, never unrelated metadata witnesses."""
-    by_id = {item.id: item for item in all_nodes}
-    result = {}
-
-    def visit(value: Any) -> None:
-        if not hasattr(value, "id") or value.id in result:
-            return
-        value = by_id.get(value.id, value)
-        result[value.id] = value
-        for source in value.inputs:
-            visit(source)
-        for key in ("apply_block", "residual_block", "body_block"):
-            for child in value.attrs.get(key, ()):
-                visit(child)
-
-    visit(node)
-    return tuple(result.values())
-
+from pops.time._graph.value_traversal import reachable_values as _reachable
 
 @dataclass(frozen=True, slots=True)
 class ResolvedProgramFieldPlan:

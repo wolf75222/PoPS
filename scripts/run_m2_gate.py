@@ -7,6 +7,7 @@ import ast
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -63,6 +64,50 @@ def _skip_or_xfail_markers(node: ast.AST) -> list[str]:
 def _ctest_suites() -> dict[str, dict]:
     data = tomllib.loads(TEST_MANIFEST.read_text(encoding="utf-8"))
     return {str(row["name"]): row for row in data.get("cpp", {}).get("suite", ())}
+
+
+def _cpp_code(text: str) -> str:
+    """Mask comments/literals before locating actual C++ proof bodies."""
+    pattern = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.DOTALL)
+    return pattern.sub(lambda match: " " * len(match.group()), text)
+
+
+def _ctest_proof_errors(suite: dict, selector: str) -> list[str]:
+    """Require one existing mandatory selected body, independent of other tests."""
+    errors = []
+    try:
+        selection = re.compile(selector)
+    except re.error as error:
+        return ["invalid CTest selector: " + str(error)]
+    proofs = {}
+    pattern = re.compile(r"\bTEST(?:_F)?\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)\s*\{")
+    for relative in suite.get("sources", ()):
+        source = ROOT / relative
+        if not source.is_file():
+            errors.append("missing source " + relative)
+            continue
+        code = _cpp_code(source.read_text(encoding="utf-8"))
+        for match in pattern.finditer(code):
+            name = ".".join(match.groups())
+            depth = 1
+            end = match.end()
+            while end < len(code) and depth:
+                depth += (code[end] == "{") - (code[end] == "}")
+                end += 1
+            if depth:
+                errors.append("unterminated GTest body: " + name)
+                continue
+            if name in proofs:
+                errors.append("duplicate GTest proof: " + name)
+            proofs[name] = (match.groups(), code[match.end():end-1])
+    selected = [name for name in proofs if selection.search(name)]
+    if len(selected) != 1:
+        errors.append("CTest selector must select exactly one declared proof; selected %d" % len(selected))
+    for name in selected:
+        names, body = proofs[name]
+        if any(part.startswith("DISABLED_") for part in names) or re.search(r"\bGTEST_SKIP\s*\(", body):
+            errors.append("selected proof %s contains a skip marker" % name)
+    return errors
 
 
 def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
@@ -153,13 +198,9 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             if target not in cpp_suites:
                 errors.append("%s references unknown CTest target %r" % (where, target))
                 continue
-            for relative in cpp_suites[target].get("sources", ()):
-                source = ROOT / relative
-                if not source.is_file():
-                    errors.append("%s target %r has missing source %s" % (where, target, relative))
-                elif "GTEST_SKIP" in source.read_text(encoding="utf-8") \
-                        or "DISABLED_" in source.read_text(encoding="utf-8"):
-                    errors.append("%s target %r contains a skip marker" % (where, target))
+            if isinstance(selector, str) and selector:
+                errors.extend("%s target %r %s" % (where, target, error)
+                              for error in _ctest_proof_errors(cpp_suites[target], selector))
         else:
             errors.append("%s kind must be pytest or ctest" % where)
 

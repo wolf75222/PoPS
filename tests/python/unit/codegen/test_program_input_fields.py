@@ -40,13 +40,17 @@ def test_runtime_inputs_resolve_and_emit_an_actual_collective_publication():
     case.program(program)
     resolved = pops.resolve(pops.validate(case), layout=Uniform(CartesianGrid(
         frame=frame, cells=(16, 16), periodic=PeriodicAxes(frame.axes))), backend=Production())
-    code = emit_cpp_program(resolved.time, model=lower_and_validate(model)[0])
+    from pops.codegen.program_models import ProgramModelGraph
+    authority = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    code = emit_cpp_program(resolved.time, model=authority)
+    with pytest.raises(ValueError, match="requires resolved ProgramModelGraph source authority"):
+        emit_cpp_program(resolved.time, model=lower_and_validate(model)[0])
     assert "ctx.prepare_provider_values(" in code
     assert ".apply(" in code
     assert "ctx.solve_fields" not in code
     assert fields.field_context.stage_sources == ((value.n.block, value.n.id),)
     with pytest.raises(NotImplementedError, match="nonempty input_fields"):
-        emit_cpp_program(resolved.time, model=lower_and_validate(model)[0], target="amr_system")
+        emit_cpp_program(resolved.time, model=authority, target="amr_system")
 
 
 def test_input_observation_refuses_foreign_operator_and_stale_stage():

@@ -1,4 +1,65 @@
 {
+  "current_scoped_summary_20261009": {
+    "schema": 1,
+    "date": "2026-10-09",
+    "scope": "Source988 scientific reception and reviewed Source integration; changed integrated Native is not yet built.",
+    "full_94_obligations_closed": false,
+    "historical_rows_equations_mappings_preserved": true,
+    "genericity_contract": "core_expression_translation_contract_v1.md",
+    "observed_native_source_commit": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "native_sha256": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+    "sdk_sha256": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+    "core_fingerprint_schema": 2,
+    "core_fingerprint": "b756f21226ad09e2108026bc9c3bfce9a251d1480e8a81e0e733db0c0845871a",
+    "world1": {
+      "guarded_field_variants": 3,
+      "original_pde": 1,
+      "retry_and_native8": 9,
+      "public_methods_rollback_capacity": 10,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0
+    },
+    "mpi2": {
+      "representative_per_rank": {
+        "pass": 2,
+        "fail": 0
+      },
+      "public_rollback_guarded_per_rank": {
+        "pass": 11,
+        "fail": 2,
+        "errors": 0,
+        "skips": 0
+      },
+      "physically_unique_checkpoints": 13,
+      "payloads": 850
+    },
+    "integrated_source_patch_sha256": "9c685bcefa658a2b66ea1fb1c48ff7e0efe1f35190f63847f5eaf6cf972adb4c",
+    "integrated_source_paths": 57,
+    "native_qualification_for_integrated_source": "pending; no transfer from Source988",
+    "source_composition": {
+      "scope": "external composed Source, author integration validation",
+      "pass": 900,
+      "fail": 0,
+      "errors": 0,
+      "skips": 0
+    },
+    "ROMEO": {
+      "source_commit": "98804c6849c9966e05b5397126bab983a5fa0227",
+      "build_job": 738116,
+      "build_state": "FAILED",
+      "exit_code": "127:0",
+      "runtime_job": 738117,
+      "runtime_state": "CANCELLED",
+      "native_gpu_or_science_received": false,
+      "failure": "managed probe compiled but libcudart.so.12 was absent from loader path; no PoPS Native build begun"
+    },
+    "status_document": "STATUS_DRAFT_PR_20261009.md",
+    "receipts": [
+      "evidence/current_988_f8d_20261009/manifest.json",
+      "evidence/reviewed_integration_20261009/manifest.json"
+    ]
+  },
   "fixed_core_public_methods_scoped_summary_20261008": {
     "date_utc": "2026-10-08T19:57:46.473054+00:00",
     "observed_source_commit": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",

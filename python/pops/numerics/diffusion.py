@@ -26,7 +26,7 @@ class Diffusion(Descriptor):
 
     def validate(self):
         import math
-        from pops._ir.expr import Const
+        from pops.model.expression_language import Const
         from pops.physics.diffusion import DiffusiveFluxLaw
 
         if self.transport is not None:
@@ -40,9 +40,9 @@ class Diffusion(Descriptor):
         law = self.law
         if type(law) is not DiffusiveFluxLaw or law.dimension not in (1, 2, 3):
             raise ValueError("native diffusion requires a Cartesian frame with one through three axes")
-        from pops._ir.quantity import QuantityRef
-        from pops._ir.expr import Var
-        from pops._ir.visitors import _children
+        from pops.model.expression_language import QuantityRef
+        from pops.model.expression_language import Var
+        from pops.model.expression_language import _children
         for component, (variable, tensor) in enumerate(zip(law.variables, law.component_coefficients, strict=True)):
             # The physical declaration can express cross-gradients. This two-point
             # monotone realization requires each W_i to depend only on U_i; its

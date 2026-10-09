@@ -42,6 +42,7 @@ class ProgramModelGraph:
         "_models_by_block",
         "_rhs_coherence_neighbours",
         "_numerics_by_block",
+        "_resolved_provider_sources",
     )
 
     def __init__(
@@ -54,6 +55,7 @@ class ProgramModelGraph:
         models_by_block: Mapping[str, Any] | None = None,
         rhs_coherence_neighbours: Mapping[str, frozenset[str]] | None = None,
         numerics_by_block: Mapping[str, Any] | None = None,
+        resolved_provider_sources: Mapping[str, Any] | None = None,
     ) -> None:
         if not models_by_owner:
             raise ValueError("ProgramModelGraph requires at least one model owner")
@@ -88,6 +90,7 @@ class ProgramModelGraph:
         if set(routed_models) != set(owners_by_block):
             raise ValueError("ProgramModelGraph block model routes must match owner block routes")
         self._models_by_block = MappingProxyType(routed_models)
+        self._resolved_provider_sources = MappingProxyType(dict(resolved_provider_sources or {}))
         self._numerics_by_block = MappingProxyType(dict(numerics_by_block or {}))
         if self._numerics_by_block and set(self._numerics_by_block) != set(owners_by_block):
             raise ValueError("ProgramModelGraph numerical routes must cover exactly its block owners")
@@ -177,7 +180,37 @@ class ProgramModelGraph:
             models_by_block=block_models,
             rhs_coherence_neighbours=resolved_rhs_neighbours(blocks),
             numerics_by_block={block.name: block.numerics for block in blocks},
+            resolved_provider_sources={block.name: (
+                block.instance_owner_qid, block.resolved_operations,
+                block.resolved_operations.identity.token,
+            ) for block in blocks if block.resolved_operations is not None},
         )
+
+    def resolved_provider_pack_for_block(self, block: Any) -> Any:
+        """accepted-static-provider-read@1: reauthenticate actual resolved producers."""
+        from pops.identity import canonical_bytes
+        from pops.model.provider_pack import ProviderPack
+        from ._resolved_operation_ownership import require_block_plan_owner
+
+        owner = self.owner_for_block(block)
+        try:
+            instance, plan, identity = self._resolved_provider_sources[block.local_id]
+        except KeyError:
+            raise ValueError("static provider proof requires its resolved block source plan") from None
+        if instance != str(block.instance_owner_path.canonical()) or plan.identity.token != identity:
+            raise ValueError("static provider source plan changed its issued block/identity authority")
+        # Cached identity equality alone cannot authenticate a mutated payload.
+        from .resolved_operations import ResolvedOperationPlan
+        ResolvedOperationPlan.from_data(plan.to_data())
+        require_block_plan_owner(plan, instance, where="static provider proof", required=True)
+        module = self.source_module_for_owner(owner)
+        actual = plan.require_provider_packs(module).auxiliary
+        from .program_emit_kernels import _model_impl
+        emitted = _model_impl(self.model_for_block(block))._auxiliary_provider_pack
+        if type(actual) is not ProviderPack or type(emitted) is not ProviderPack \
+                or canonical_bytes(actual.to_data()) != canonical_bytes(emitted.to_data()):
+            raise ValueError("static provider source differs from the actual emitted ProviderPack")
+        return actual
 
     def numerics_for_block(self, block: Any) -> Any:
         self.owner_for_block(block)

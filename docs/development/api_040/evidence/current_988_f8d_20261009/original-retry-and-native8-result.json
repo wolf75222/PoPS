@@ -1,0 +1,39 @@
+{
+  "returncode": 0,
+  "counts": {
+    "tests": 9,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "duration_seconds": 551.3684654160024,
+  "status": "passed",
+  "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "Native": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+  "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+  "pytest_args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-x",
+    "-ra",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "-p",
+    "no:cacheprovider",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/original-retry-and-native8/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/original-retry-and-native8/pytest-tmp",
+    "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py::test_original_imex_checkpoint_retry_replays_one_completed_seal",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_manual_state_field_restart",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_preset_parity_and_rejected_rollback",
+    "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py::test_original_imex_final_checkpoint_failure_restores_science_and_outputs",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_system_direct_step_requires_the_installed_python_program_strategy",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_restores_default_field_onto_fresh_unmaterialized_target"
+  ],
+  "identity_sha256": "8adf7de1646ec4995a964afbd1339d05897de6cdc94006bc0c38bdca093ced03"
+}

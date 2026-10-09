@@ -341,11 +341,11 @@ def resolve(
     # Compile remains the sole native compilation phase; exact input validation follows.
     generated=tuple(component for block in blocks if block.numerics is not None
         for boundary in block.numerics.boundaries
-        for component in getattr(boundary,"inferred_component_inputs",()))
+        for component in boundary.inferred_component_inputs)
     # Preserve the explicit sequence: never deduplicate author input before its
     # exact guards. The set is solely an additional generated-conflict check.
-    input_ids={getattr(item,"component_id",None) or item.component_manifest.component_id
-        for item in components}
+    from pops.mesh.boundaries.component_binding import _component_identity
+    input_ids={_component_identity(item)[0] for item in components}
     for item in generated:
         identity=item.component_manifest.component_id
         if identity in input_ids:

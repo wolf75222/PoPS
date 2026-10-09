@@ -1,3 +1,5 @@
+> Historique du 8 octobre, conservé intégralement. L’état courant, les Source/Native réellement exécutés et les corrections intégrées figurent dans [STATUS_DRAFT_PR_20261009.md](STATUS_DRAFT_PR_20261009.md). Les mentions « actuel » ci-dessous appartiennent à ce checkpoint historique.
+
 # PR brouillon - état réel de l’intégration PoPS 0.4.0
 
 Snapshot du 8 octobre 2026 UTC (9 octobre à Paris) pour la

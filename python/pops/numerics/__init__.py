@@ -37,4 +37,11 @@ __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", 
            "ScharfetterGummel",
            "DiscreteGradientStencil", "LinearAxisStencil", "DiscretizationPlan", "JointEvaluation"]
 
-from pops.moments.fan_li_path import FanLi15RawMomentPath
+def __getattr__(name: str):
+    """Resolve registered compatibility names to their canonical library classes."""
+    from pops.public_api_exports import resolve_public_library_alias
+    return resolve_public_library_alias(__name__, name)
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))

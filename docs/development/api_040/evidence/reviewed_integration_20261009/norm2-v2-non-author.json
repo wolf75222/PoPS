@@ -1,0 +1,618 @@
+{
+  "verdict": "ACCEPT bounded generic per-level finite replica participation correction",
+  "reviewer": "non-author sol61_ci_generic_review",
+  "base": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "patch_sha256": "35bee0295bfe8d4f8163b9606a0293e8ce5b2a29ff93c6ff22055869b946c4de",
+  "author_receipt_sha256": "6017c7c34103291064913efe0f1e3b85d451ffb2a2377c42ffd613ce6ccc8d9a",
+  "production_header_sha256": "b2b0c5ab0102d1a274f9fd8e606ed8d25dcb1ec5dca8244268696c1866e2cb71",
+  "forward_apply_exact": true,
+  "original_test_prefix_preserved": true,
+  "physical_checks_count": 80,
+  "physical_checks": [
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o",
+      "expected": "f9bd7bbeb0727fa423ae531263a18a1f5b08c040d0359c876817e1816ae70a60",
+      "actual": "f9bd7bbeb0727fa423ae531263a18a1f5b08c040d0359c876817e1816ae70a60",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o",
+      "expected": "4894afb2750ac6ad2c151552d3dc5403fcc18c1f630778b2ecd3e2f6406dd610",
+      "actual": "4894afb2750ac6ad2c151552d3dc5403fcc18c1f630778b2ecd3e2f6406dd610",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o",
+      "expected": "bf82a9679da0ee4e4d9c8fe1e49860b583ffac6c0fd7e2271f9bca66490a408c",
+      "actual": "bf82a9679da0ee4e4d9c8fe1e49860b583ffac6c0fd7e2271f9bca66490a408c",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o",
+      "expected": "462a5b558cb93fa4d35c76bfd2784e4e62b5a9a764c4f8dbd0236e92ea36dd90",
+      "actual": "462a5b558cb93fa4d35c76bfd2784e4e62b5a9a764c4f8dbd0236e92ea36dd90",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/norm2-candidate.o",
+      "expected": "2d01a22e38a8549d1fe4a0752fbf02ac413f413da88e72319216767c37f14621",
+      "actual": "2d01a22e38a8549d1fe4a0752fbf02ac413f413da88e72319216767c37f14621",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/lib/libgtest.a",
+      "expected": "9225d577fcfe4c234015dceecaa038f15217419aa114e45eb61d1a972034a584",
+      "actual": "9225d577fcfe4c234015dceecaa038f15217419aa114e45eb61d1a972034a584",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/tests/libpops_gtest_main.a",
+      "expected": "3b29a35c13b6de619b705210a960d1041cb27c5d2aa56714019e26b8c9715b18",
+      "actual": "3b29a35c13b6de619b705210a960d1041cb27c5d2aa56714019e26b8c9715b18",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/libpops_runtime_system_abi.a",
+      "expected": "c5948403ebbee031ddfe0ad27f7dd0a0e074e80bcaa60dbe87f4ab3788f5b75f",
+      "actual": "c5948403ebbee031ddfe0ad27f7dd0a0e074e80bcaa60dbe87f4ab3788f5b75f",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/libpops_runtime_core.a",
+      "expected": "4601bf18a85e685b6b8a78767369dc1ba8c6fd06d47f22335c28534e991c3e34",
+      "actual": "4601bf18a85e685b6b8a78767369dc1ba8c6fd06d47f22335c28534e991c3e34",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkoscontainers.5.2.0.dylib",
+      "expected": "c0c8db330d9d203b8591dec23fa24f76219780fa1edafbd44ec60eec65ab61a2",
+      "actual": "c0c8db330d9d203b8591dec23fa24f76219780fa1edafbd44ec60eec65ab61a2",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkosalgorithms.a",
+      "expected": "f536894ca4589d0c1728686d9ea0747fcdf4e1a56201b5eeaf3feda1adaa7028",
+      "actual": "f536894ca4589d0c1728686d9ea0747fcdf4e1a56201b5eeaf3feda1adaa7028",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkossimd.a",
+      "expected": "b6ee62fd760116aafd49a2239173ec36705ff00df11e271a0724c71f3bf7bf32",
+      "actual": "b6ee62fd760116aafd49a2239173ec36705ff00df11e271a0724c71f3bf7bf32",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkoscore.5.2.0.dylib",
+      "expected": "32ee292f9fc0341397c585aa08992d2120429c9221a3ca6e06e34d008201ffc3",
+      "actual": "32ee292f9fc0341397c585aa08992d2120429c9221a3ca6e06e34d008201ffc3",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libomp.dylib",
+      "expected": "844796bbd71a7492d78776fad75a306fbb1206e521c1d4ca593e5c1b83d338f1",
+      "actual": "844796bbd71a7492d78776fad75a306fbb1206e521c1d4ca593e5c1b83d338f1",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib",
+      "expected": "f86a1c41429720377bf19bfe446579dc9eb97d7636ebacc4be1b44351f629963",
+      "actual": "f86a1c41429720377bf19bfe446579dc9eb97d7636ebacc4be1b44351f629963",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib",
+      "expected": "45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7",
+      "actual": "45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib",
+      "expected": "40c8476c0b9e6507c0d0eac8e393a3489121e62a7ab409bb60668a9efcb2d905",
+      "actual": "40c8476c0b9e6507c0d0eac8e393a3489121e62a7ab409bb60668a9efcb2d905",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libhdf5.dylib",
+      "expected": "ca024fb0a462cf0b0c9c9e485298ddaea06cc69d3521e7b149cc7aad1b36ea5a",
+      "actual": "ca024fb0a462cf0b0c9c9e485298ddaea06cc69d3521e7b149cc7aad1b36ea5a",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libcrypto.dylib",
+      "expected": "350780cccbc70716e6ba36b0bce2e54436660700c93660c9e0f7f899be788da9",
+      "actual": "350780cccbc70716e6ba36b0bce2e54436660700c93660c9e0f7f899be788da9",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libcurl.dylib",
+      "expected": "c20d9d4ae09433aaec8400ce4d21b4a5d1742321d346cd506befd71980855f65",
+      "actual": "c20d9d4ae09433aaec8400ce4d21b4a5d1742321d346cd506befd71980855f65",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libpthread.tbd",
+      "expected": "20cfce043f11a083e2eb6111efe3579919a8082fa4cc912a7bd839af2010ec57",
+      "actual": "20cfce043f11a083e2eb6111efe3579919a8082fa4cc912a7bd839af2010ec57",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libsz.dylib",
+      "expected": "418c7d818ef8e54de445302bbc017a75394088a972ba152c5541bab12b418585",
+      "actual": "418c7d818ef8e54de445302bbc017a75394088a972ba152c5541bab12b418585",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libz.dylib",
+      "expected": "8020844faf07e3a0a3058cf2eb8cc859ee3981297cdb3f3620db0714e2813b77",
+      "actual": "8020844faf07e3a0a3058cf2eb8cc859ee3981297cdb3f3620db0714e2813b77",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libdl.tbd",
+      "expected": "20cfce043f11a083e2eb6111efe3579919a8082fa4cc912a7bd839af2010ec57",
+      "actual": "20cfce043f11a083e2eb6111efe3579919a8082fa4cc912a7bd839af2010ec57",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libm.tbd",
+      "expected": "20cfce043f11a083e2eb6111efe3579919a8082fa4cc912a7bd839af2010ec57",
+      "actual": "20cfce043f11a083e2eb6111efe3579919a8082fa4cc912a7bd839af2010ec57",
+      "matches": true
+    },
+    {
+      "group": "linked",
+      "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/libfftw3.dylib",
+      "expected": "4ff65098b93a5374006cdf1b0af91594aed526935b028268b95e8fad96ecd7d7",
+      "actual": "4ff65098b93a5374006cdf1b0af91594aed526935b028268b95e8fad96ecd7d7",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-baseline-authentic-0.log",
+      "expected": "d2c590017321707a7ced2ce568fb8feb02bc6eb733349ec88fba622c2427a74b",
+      "actual": "d2c590017321707a7ced2ce568fb8feb02bc6eb733349ec88fba622c2427a74b",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-baseline-authentic-1.log",
+      "expected": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552",
+      "actual": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-baseline-authentic-3.log",
+      "expected": "619210e3aabb7e0a36aad802538221231124915dbfb0582ea29675ca3b603d67",
+      "actual": "619210e3aabb7e0a36aad802538221231124915dbfb0582ea29675ca3b603d67",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-baseline-authentic-2.log",
+      "expected": "84bd33cc3d0bbfd5cd4ef1850728da0001c307b37eadc05d2cf91f1fb7ddda78",
+      "actual": "84bd33cc3d0bbfd5cd4ef1850728da0001c307b37eadc05d2cf91f1fb7ddda78",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-baseline-authentic-source.cpp",
+      "expected": "7b5b827a2f21fdbee0431529a160d92c8eee89d4b8746b55b39318b6ff2fa488",
+      "actual": "7b5b827a2f21fdbee0431529a160d92c8eee89d4b8746b55b39318b6ff2fa488",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-baseline-authentic-checks.json",
+      "expected": "525fa58b708bad709244e670c29b680d20c6f27e1f957d0ebae807c35ae8b5d6",
+      "actual": "525fa58b708bad709244e670c29b680d20c6f27e1f957d0ebae807c35ae8b5d6",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-candidate-verified-checks.json",
+      "expected": "056c4cdb6682da48c0a2804955ae440ae042317cc196266aab1a8856415d29f8",
+      "actual": "056c4cdb6682da48c0a2804955ae440ae042317cc196266aab1a8856415d29f8",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-candidate-verified-2.log",
+      "expected": "cded4a609616065dc955d22f4c9b5f29ea264b33c8ee83ba3de4501247343a4f",
+      "actual": "cded4a609616065dc955d22f4c9b5f29ea264b33c8ee83ba3de4501247343a4f",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-candidate-verified-3.log",
+      "expected": "fed5367acb49479dc88835e8df52815da25b794d4be93f00e5ec0015d72589c4",
+      "actual": "fed5367acb49479dc88835e8df52815da25b794d4be93f00e5ec0015d72589c4",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-candidate-verified-1.log",
+      "expected": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552",
+      "actual": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-candidate-verified-0.log",
+      "expected": "d2c590017321707a7ced2ce568fb8feb02bc6eb733349ec88fba622c2427a74b",
+      "actual": "d2c590017321707a7ced2ce568fb8feb02bc6eb733349ec88fba622c2427a74b",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-candidate-v2-fixed-1.log",
+      "expected": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552",
+      "actual": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-candidate-v2-fixed-0.log",
+      "expected": "d2c590017321707a7ced2ce568fb8feb02bc6eb733349ec88fba622c2427a74b",
+      "actual": "d2c590017321707a7ced2ce568fb8feb02bc6eb733349ec88fba622c2427a74b",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-candidate-v2-0.log",
+      "expected": "96621559a7dfb4c74d2c585a9a222439946461a1d457602474ceebfaecb9c5cb",
+      "actual": "96621559a7dfb4c74d2c585a9a222439946461a1d457602474ceebfaecb9c5cb",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/primitive-candidate-v2-build-checks.json",
+      "expected": "7e28ad73f48c7ad9d7bab4cde2dfed78e82375d04fbede74c6b2e706c0c14bb8",
+      "actual": "7e28ad73f48c7ad9d7bab4cde2dfed78e82375d04fbede74c6b2e706c0c14bb8",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/mixed-v2-checks.json",
+      "expected": "da38e779c8208737f5f53f16ddcf58aba922b9d25ddb781e4768ea45b14b0383",
+      "actual": "da38e779c8208737f5f53f16ddcf58aba922b9d25ddb781e4768ea45b14b0383",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/mixed-v2-world1-rank0.xml",
+      "expected": "f50359a4c245162c8294490a913de13b2b1824b832f9a96ed48df2929254ffa9",
+      "actual": "f50359a4c245162c8294490a913de13b2b1824b832f9a96ed48df2929254ffa9",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/mixed-v2-world2-rank1.xml",
+      "expected": "83acbdc0405cb6d9d1cc27e3532e60cbe60c60d9cdce4f2ea845331ec7feea4f",
+      "actual": "83acbdc0405cb6d9d1cc27e3532e60cbe60c60d9cdce4f2ea845331ec7feea4f",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/mixed-v2-world2.log",
+      "expected": "ec9967ab9004f7e63beb00457d5822c1ea87db0a5e925cbdf42b5666147ef5d8",
+      "actual": "ec9967ab9004f7e63beb00457d5822c1ea87db0a5e925cbdf42b5666147ef5d8",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/mixed-v2-world2-rank0.xml",
+      "expected": "83acbdc0405cb6d9d1cc27e3532e60cbe60c60d9cdce4f2ea845331ec7feea4f",
+      "actual": "83acbdc0405cb6d9d1cc27e3532e60cbe60c60d9cdce4f2ea845331ec7feea4f",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/mixed-v2-world1.log",
+      "expected": "30b8d793ed7030d5196d621ed0d3cd949f424b32f7e6773590e6ad9c92522395",
+      "actual": "30b8d793ed7030d5196d621ed0d3cd949f424b32f7e6773590e6ad9c92522395",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/norm2-complete-world1.log",
+      "expected": "7221f2652f8f17fbd9716694e9551eb5ec995e60f907db96b869152534503d1d",
+      "actual": "7221f2652f8f17fbd9716694e9551eb5ec995e60f907db96b869152534503d1d",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/norm2-complete-world2.log",
+      "expected": "c2647b4fc6b50a5422b8d64a0f16faa8989ca859d1b3e124568d007b17099474",
+      "actual": "c2647b4fc6b50a5422b8d64a0f16faa8989ca859d1b3e124568d007b17099474",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/norm2-complete-world1-rank-0.xml",
+      "expected": "a65756caeff900665a13ee06a0abffda0d1de45d6ba29471057c9cc570103594",
+      "actual": "a65756caeff900665a13ee06a0abffda0d1de45d6ba29471057c9cc570103594",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/pending-proof-unchanged-baseline.xml",
+      "expected": "3a6c0f0bb7b6809e60dd42807e451a7e88185c3178e06f52c41bb18f5488aada",
+      "actual": "3a6c0f0bb7b6809e60dd42807e451a7e88185c3178e06f52c41bb18f5488aada",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/pending-proof-unchanged-baseline.log",
+      "expected": "0c938bd972c2af82af6e29f37afb45377acded98a171b2ec5a4a47c41d5e33ea",
+      "actual": "0c938bd972c2af82af6e29f37afb45377acded98a171b2ec5a4a47c41d5e33ea",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-norm-measurements.json",
+      "expected": "f69810b8542b370f949abfaf3808626bf976d4455d70ff597e1c081372f77035",
+      "actual": "f69810b8542b370f949abfaf3808626bf976d4455d70ff597e1c081372f77035",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-candidate-experiment.json",
+      "expected": "3b91a566c35509cbea3beed36990d5e51eb1573e34bc652a1bab76acf88ba6aa",
+      "actual": "3b91a566c35509cbea3beed36990d5e51eb1573e34bc652a1bab76acf88ba6aa",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/run_actual_guard_norm_diagnostic2.py",
+      "expected": "ea4f578650de88ed9e7eb58febc7f2cd629a6dc4237502c781a2fe97b800e816",
+      "actual": "ea4f578650de88ed9e7eb58febc7f2cd629a6dc4237502c781a2fe97b800e816",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/run_actual_guard_norm_candidate3.py",
+      "expected": "df690c6a8cdfc9d157b88fcb7947eb5554c4eb830e2063b3366c5238d2f43554",
+      "actual": "df690c6a8cdfc9d157b88fcb7947eb5554c4eb830e2063b3366c5238d2f43554",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/guard-instrumented-rank1-emission1.cpp",
+      "expected": "031ca7e08f02425a1abb55182b953671874ff197273423169533407c7e85b19c",
+      "actual": "031ca7e08f02425a1abb55182b953671874ff197273423169533407c7e85b19c",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/guard-instrumented-rank1-emission2.cpp",
+      "expected": "ef17221fca5ef94c6ca78182be868770a344cac2bd30ddf0e1cd86bcff58946a",
+      "actual": "ef17221fca5ef94c6ca78182be868770a344cac2bd30ddf0e1cd86bcff58946a",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/guard-candidate-rank1-emission2.cpp",
+      "expected": "d8e4d0e409729635e175aa712676666ecdcd02f3383ac68bbc236471ba3d336c",
+      "actual": "d8e4d0e409729635e175aa712676666ecdcd02f3383ac68bbc236471ba3d336c",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/guard-candidate-rank1-emission1.cpp",
+      "expected": "2bbd16b3d263d3ca42c88777a35f49ee544ecbf56b5481f6951dbcf85849ef9c",
+      "actual": "2bbd16b3d263d3ca42c88777a35f49ee544ecbf56b5481f6951dbcf85849ef9c",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/guard-candidate-rank0-emission2.cpp",
+      "expected": "d8e4d0e409729635e175aa712676666ecdcd02f3383ac68bbc236471ba3d336c",
+      "actual": "d8e4d0e409729635e175aa712676666ecdcd02f3383ac68bbc236471ba3d336c",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/guard-candidate-rank0-emission1.cpp",
+      "expected": "2bbd16b3d263d3ca42c88777a35f49ee544ecbf56b5481f6951dbcf85849ef9c",
+      "actual": "2bbd16b3d263d3ca42c88777a35f49ee544ecbf56b5481f6951dbcf85849ef9c",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/guard-instrumented-rank0-emission1.cpp",
+      "expected": "031ca7e08f02425a1abb55182b953671874ff197273423169533407c7e85b19c",
+      "actual": "031ca7e08f02425a1abb55182b953671874ff197273423169533407c7e85b19c",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/guard-instrumented-rank0-emission2.cpp",
+      "expected": "ef17221fca5ef94c6ca78182be868770a344cac2bd30ddf0e1cd86bcff58946a",
+      "actual": "ef17221fca5ef94c6ca78182be868770a344cac2bd30ddf0e1cd86bcff58946a",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank1.log",
+      "expected": "bfedcedbeb69bb58785cfc3209792664fe215b345c367f534458ace8a3cfcc8f",
+      "actual": "bfedcedbeb69bb58785cfc3209792664fe215b345c367f534458ace8a3cfcc8f",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank0.log",
+      "expected": "c568581cc9b1aa4fe6b2364ea8da2c22b76cde6cecd25143bc79bdbc5bc108a6",
+      "actual": "c568581cc9b1aa4fe6b2364ea8da2c22b76cde6cecd25143bc79bdbc5bc108a6",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank1.identity.json",
+      "expected": "553e25060ab679dcec77997ecc1cc5858d28caeed521ef821a5a7347457ef5ed",
+      "actual": "553e25060ab679dcec77997ecc1cc5858d28caeed521ef821a5a7347457ef5ed",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank0.identity.json",
+      "expected": "71cdc21397af6595b0379b675e1254833d292c147e8a138df5dea41daa69a988",
+      "actual": "71cdc21397af6595b0379b675e1254833d292c147e8a138df5dea41daa69a988",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank1.xml",
+      "expected": "fd6dbdc32e3534d5b471662091895e6dc68459a84aa3e333432efe480fdd9911",
+      "actual": "fd6dbdc32e3534d5b471662091895e6dc68459a84aa3e333432efe480fdd9911",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank0.xml",
+      "expected": "fd6dbdc32e3534d5b471662091895e6dc68459a84aa3e333432efe480fdd9911",
+      "actual": "fd6dbdc32e3534d5b471662091895e6dc68459a84aa3e333432efe480fdd9911",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank1.identity-check.json",
+      "expected": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db",
+      "actual": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank0.identity-check.json",
+      "expected": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db",
+      "actual": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-candidate3/rank1.log",
+      "expected": "d158c4da127a4ef6738a87e7955405ad1bbafe4fcf9563c17bc04eb3f54327fe",
+      "actual": "d158c4da127a4ef6738a87e7955405ad1bbafe4fcf9563c17bc04eb3f54327fe",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-candidate3/rank0.log",
+      "expected": "7138ede9a003ff1db6319b6aa54bee6484bd098a183b4757ff5f52c888d4fd08",
+      "actual": "7138ede9a003ff1db6319b6aa54bee6484bd098a183b4757ff5f52c888d4fd08",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-candidate3/rank1.identity.json",
+      "expected": "553e25060ab679dcec77997ecc1cc5858d28caeed521ef821a5a7347457ef5ed",
+      "actual": "553e25060ab679dcec77997ecc1cc5858d28caeed521ef821a5a7347457ef5ed",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-candidate3/rank0.identity.json",
+      "expected": "71cdc21397af6595b0379b675e1254833d292c147e8a138df5dea41daa69a988",
+      "actual": "71cdc21397af6595b0379b675e1254833d292c147e8a138df5dea41daa69a988",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-candidate3/rank1.xml",
+      "expected": "3bb588e1c7d6ba40dd343ee8ef7700948f77fef86559707127b3d238c5d3b4f7",
+      "actual": "3bb588e1c7d6ba40dd343ee8ef7700948f77fef86559707127b3d238c5d3b4f7",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-candidate3/rank0.xml",
+      "expected": "d54e6de42460f87697b260173e70ef1b6653bc3193fb0be8f877a93b568665b7",
+      "actual": "d54e6de42460f87697b260173e70ef1b6653bc3193fb0be8f877a93b568665b7",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-candidate3/rank1.identity-check.json",
+      "expected": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db",
+      "actual": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db",
+      "matches": true
+    },
+    {
+      "group": "evidence",
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-candidate3/rank0.identity-check.json",
+      "expected": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db",
+      "actual": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db",
+      "matches": true
+    }
+  ],
+  "mixed_xml": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/mixed-v2-world1-rank0.xml",
+      "sha256": "f50359a4c245162c8294490a913de13b2b1824b832f9a96ed48df2929254ffa9",
+      "attributes": {
+        "tests": "1",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.031",
+        "timestamp": "2026-10-09T01:54:14.575",
+        "name": "AllTests"
+      }
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/mixed-v2-world2-rank0.xml",
+      "sha256": "83acbdc0405cb6d9d1cc27e3532e60cbe60c60d9cdce4f2ea845331ec7feea4f",
+      "attributes": {
+        "tests": "1",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.041",
+        "timestamp": "2026-10-09T01:54:14.767",
+        "name": "AllTests"
+      }
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/mixed-v2-world2-rank1.xml",
+      "sha256": "83acbdc0405cb6d9d1cc27e3532e60cbe60c60d9cdce4f2ea845331ec7feea4f",
+      "attributes": {
+        "tests": "1",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.041",
+        "timestamp": "2026-10-09T01:54:14.767",
+        "name": "AllTests"
+      }
+    }
+  ],
+  "mathematics": "Same comp0 dot_active_local and EB mask at each selected actual level; replicated finite contribution enters only prepared lane rank0. Distributed fine levels are independently retained. Covered coarse samples still count, independent raw census16+64 samples of2 gives sqrt320 at unchanged1e-13 tolerance. No composite cover/volume weighting change. Every copy evaluated; non-root nonfinite contribution retained. Original collective exception convergence remains. Original overflow/subnormal/local FP products/order not repaired or promised improved.",
+  "proof": "MPI2 raw census confirms one coarse replica/four fine patches, two truly local fine patches on each rank; per-coordinate fine owner count1. Authentic primitive baseline demonstrates old duplicated finite replicas. Comp0 sentinel, last-rankNaN, multiowner/empty-rank proofs inspected. Actual paired JIT public guard experiment is prototype evidence only.",
+  "limits": "No reviewer Native rerun. Existing whole-world1 pending-proof test failure baseline-identical, separate diagnostic ongoing. XML rank identity relies on distinct recorded perrank paths/launch+stdout, not XML property. Existing988 objects/JIT do not qualify future official rebuilt SDK/installed runtime; matching header consumers must rebuild. No CI/GPU/3D/higher-world-size claim.",
+  "main_environment_mutated": false
+}

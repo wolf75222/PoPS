@@ -2,9 +2,9 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
-from pops.model import Handle
-from pops.numerics.normalized_polynomial_path import PathArithmeticComposition
+from pops._ir.path_arithmetic import PathArithmeticComposition
 if TYPE_CHECKING:
+    from pops.model import Handle
     from pops._ir.expr import Expr
     from pops.physics.nonconservative import NonconservativeProductHandle
 

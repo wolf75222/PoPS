@@ -1,0 +1,164 @@
+{
+  "status": "SEMANTICS_ACCEPTED_INTEGRATION_CORRECTIONS_VERIFIED_M2_PROOFS_PENDING",
+  "merged_input_sha256": "55eee4fd310d50019c1372c00e48b70dbe719687146b2f1bafeb9dab305acaf9",
+  "scope": "Independent complete Source overlay with Gitindex; no Main/authorcandidate edits and no Native loads",
+  "full_architecture_actual_counts": {
+    "tests": 869,
+    "failures": 6,
+    "errors": 0,
+    "skipped": 0
+  },
+  "expected_remaining_failure_names": [
+    "test_m2_manifest_references_only_real_mandatory_proofs",
+    "test_m2_final_gate_has_no_deferred_requirement",
+    "test_m2_fallible_solver_evaluations_use_exact_native_proofs",
+    "test_m2_pytest_nodeids_are_individually_collectible",
+    "test_m2_adc667_history_and_migration_routes_use_exact_proofs",
+    "test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs"
+  ],
+  "remaining_failure_reason": "Four concrete native CTest proofs absent, each required by exactmanifest selectors. SixSource M2 gate tests fail closed; no selector/layer/skipwaiver.",
+  "focused_integration_counts": {
+    "tests": 43,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "new_owner_unit_counts": {
+    "tests": 6,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "guard_current_case_IDS": [
+    "test_amr_witness_published_release_and_installed_origin[published-False-True]",
+    "test_amr_witness_published_release_and_installed_origin[previous-False-False]",
+    "test_amr_witness_published_release_and_installed_origin[True-False-False]",
+    "test_amr_witness_published_release_and_installed_origin[published-True-False]"
+  ],
+  "semantics": {
+    "status": "PASS_NONAUTHOR_SOURCE_SEMANTICS",
+    "numeric_bodies": {
+      "coordinated_face": {
+        "callables_compared": 8,
+        "all_non_import_AST_equal": true
+      },
+      "diffusion": {
+        "callables_compared": 22,
+        "all_non_import_AST_equal": true
+      },
+      "nonconservative": {
+        "callables_compared": 12,
+        "all_non_import_AST_equal": true
+      },
+      "normalized_polynomial_path": {
+        "callables_compared": 8,
+        "all_non_import_AST_equal": true
+      },
+      "scharfetter_gummel": {
+        "callables_compared": 6,
+        "all_non_import_AST_equal": true
+      },
+      "state_storage": {
+        "callables_compared": 8,
+        "all_non_import_AST_equal": true
+      },
+      "symbolic_path": {
+        "callables_compared": 8,
+        "all_non_import_AST_equal": true
+      }
+    },
+    "expression_language_exact_aliases": {
+      "substitute_quantities": "pops._ir.application",
+      "_handle_data": "pops._ir.balance",
+      "source_balance_supported": "pops._ir.balance",
+      "Const": "pops._ir.expr",
+      "Expr": "pops._ir.expr",
+      "Var": "pops._ir.expr",
+      "_wrap": "pops._ir.expr",
+      "collect_reference_value": "pops._ir.expr_references",
+      "resolve_reference_value": "pops._ir.expr_references",
+      "diff": "pops._ir.lowering",
+      "QuantityRef": "pops._ir.quantity",
+      "local_expression_identity": "pops._ir.quantity",
+      "RuntimeParamRef": "pops._ir.values",
+      "_children": "pops._ir.visitors"
+    },
+    "single_live_tau_registry": [
+      "python/pops/time/_authoring.py"
+    ],
+    "counterfeit_subclass_foreign_and_registry_replacement_refused": true,
+    "owner_weak_liveness_and_leaf_cleanup_preserved": true,
+    "lower_JSON_function_identity_and_numeric_types_preserved": true,
+    "canonical_JSON_and_history_non_traversal_AST_unchanged": true,
+    "moved_SSA_traversal_algorithm_AST_exact": true,
+    "authentic_nested_Program_traversal_same_order": true,
+    "authoring_snapshot_transaction_AST_unchanged": true,
+    "Native_attempts": []
+  },
+  "Native_unavailable_attempts_recorded": [
+    "_pops",
+    "pops._pops",
+    "_pops",
+    "pops._pops"
+  ],
+  "Native_loaded": [],
+  "actual_ci_qualification": false,
+  "preserved_failures": [
+    "authorpartialCandidate lackedconftest",
+    "independent fullSourcecopy initially lacked Gitindex",
+    "overstrictRuntimeError blocker defeated optionalNative absence fallback; replacedwith ModuleNotFoundError(name)",
+    "newunitdurationcatalog missing, new exactgraphleafmissing, rootguardduplicateuncovered",
+    "initialdeletiondiffleftemptyfile; final /dev/null removal verified",
+    "supplementary probes initially retainedownerloopreference and overclaimed entireglobalHistory ASTequality; correctedreaderonly"
+  ],
+  "pins": {
+    "semantic-probe-result.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/semantic-probe-result.json",
+      "sha256": "9dd2d44512f03dd4b561057a6ca35506227a788c7d2a43c84ff61253c45ea805"
+    },
+    "final-architecture-result.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/final-architecture-result.json",
+      "sha256": "ae3044fd2ab75ae9b55e101257ab72965bfcb1fc50298d127fb5f8313c36a06b"
+    },
+    "final-architecture.xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/final-architecture.xml",
+      "sha256": "ebc03ea452082afbf376161f1dd80d1212855d0963db54cf4c2f8ef9f4fa6f60"
+    },
+    "integration-focused-final-result.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/integration-focused-final-result.json",
+      "sha256": "86229ddab4b30455a86537e91b315ec8a641bc442b6bfabb4a35d0381faac9a2"
+    },
+    "integration-focused-final.xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/integration-focused-final.xml",
+      "sha256": "6dc1ab2b84fa73571992bdd5a9862b014c648bd7b98261f6d7ddec037e9b1390"
+    },
+    "inventory-integration.patch": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/inventory-integration.patch",
+      "sha256": "b5504d0690a614c9ad15f9ebc3659064c6ff55bc00c7a23d68d601ccf38966d1"
+    },
+    "guard-migration-v3.patch": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/guard-migration-v3.patch",
+      "sha256": "e5a42a7ebe1fe14c1f5c0bb29e3ed2339a3b73aabbe309c43903fab5c6b3c62d"
+    },
+    "integration-proposal-v3.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/integration-proposal-v3.json",
+      "sha256": "e70febfd86285b1cba94be555b41bacd49d70ebc4ff856a85b550f9c62c4b6bc"
+    },
+    "architecture-result.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/architecture-result.json",
+      "sha256": "d9d04831780293eaf9ef28701139d9b63a47739646ea2d930d8fbcf0639bf01c"
+    },
+    "complete-architecture-result.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/complete-architecture-result.json",
+      "sha256": "f6a4d09e22c93ffdbd832a69352d02aeddb7067dcad3389394a1bafea5c81ca7"
+    },
+    "git-source-architecture-result.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/git-source-architecture-result.json",
+      "sha256": "1d2fbe5bdd3fbac59cae5b7501ea412eb721b338544c001c529c0060b123b872"
+    },
+    "corrected-architecture-result.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/corrected-architecture-result.json",
+      "sha256": "07a46e5c279f285e42e9cdaa4c653508ee9788f1dac624fa221e562c2f2a1f21"
+    }
+  }
+}

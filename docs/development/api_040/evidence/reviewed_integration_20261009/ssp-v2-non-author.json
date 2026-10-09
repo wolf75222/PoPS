@@ -1,0 +1,76 @@
+{
+  "scope": "Independent readonly external Source counter-review; no Native import/run/install or Main mutation.",
+  "Source_base": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "contract": "pops.accepted-static-provider-read@1",
+  "verdict": "SOURCE_ACCEPT_V2; original648901blockedandpreserved",
+  "patch_sha256": "e69613130dd1bf2172c4290b8110aeaa5903d5021f034e5fbf18117531f051ca",
+  "author_receipt_sha256": "4b967aae3afda8be0734effe78d12d408f212b94ec8647651a4019e6c64f8536",
+  "actual_candidate_source_hashes": {
+    "python/pops/codegen/program_accepted_ssp.py": "b264d64a072318848fd211cf81453a29a9783142c85916ea879a655a53331567",
+    "python/pops/codegen/program_models.py": "8e3a8704a9ad9d8765dbddf6e19a8fdf1bf09d7927d86bd929faedcb90290d89",
+    "python/pops/codegen/program_static_provider_proof.py": "38a7463c0e9c4eba3f5c63b5bd3418f138a19f371e478e79e91c397a4b4ce1d3",
+    "tests/python/unit/codegen/test_program_input_fields.py": "e127fc5efbbfd42a3bed36576dbe306833fe3e35a63dd9b212aba5e3e9b3288e",
+    "tests/python/unit/codegen/test_static_provider_ssp_proof.py": "deddf7465ec87992a0ce897f25bd88925600e4edda4bf92e032002b7f6a45dd6"
+  },
+  "readonly_Main_applycheck": 0,
+  "six_mathematical_function_AST_unchanged": [
+    "_exact_terms",
+    "successful_guard_input",
+    "_convex_coefficient_one",
+    "frozen_atoms",
+    "expression",
+    "affine"
+  ],
+  "independent_Source_suite": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "0",
+    "skipped": "0",
+    "tests": "28",
+    "time": "36.826",
+    "timestamp": "2026-10-09T01:12:47.954832+02:00",
+    "hostname": "macbookpro.home"
+  },
+  "independent_Source_suite_receipt_sha256": "131cfe73bb399360786a7c91224430202dfb007800e23d440802bf5077e3f4b6",
+  "independent_original_counterexamples_now_refused": {
+    "scope": "Actual private candidate Source objects; no Native imported; Main untouched",
+    "contract": "pops.accepted-static-provider-read@1",
+    "cases": [
+      {
+        "fault": "untouched",
+        "stored_identity_unchanged": true,
+        "canonical_plan_identity_authentic": true,
+        "certified": true,
+        "reason": ""
+      },
+      {
+        "fault": "mutated_stencil_with_cached_identity",
+        "stored_identity_unchanged": true,
+        "canonical_plan_identity_authentic": false,
+        "certified": false,
+        "reason": "resolved operation identity/evidence is not authentic or canonical"
+      },
+      {
+        "fault": "mutated_native_route_with_cached_identity",
+        "stored_identity_unchanged": true,
+        "canonical_plan_identity_authentic": false,
+        "certified": false,
+        "reason": "resolved operation identity/evidence is not authentic or canonical"
+      }
+    ],
+    "Native_loaded": []
+  },
+  "original_v1_counter_review_sha256": "96e37b8d1c6afbfffcdcd3a17afe899864a051831b25c6197298a7dc00ad0a80",
+  "review_findings": [
+    "current canonical immutable plan payload reauthenticated by existing strict from_data, retaining issuedtoken and owner guards",
+    "exact actual source Module and actual typed ProviderPack compare, emitter attachment witness required by model_impl",
+    "State stage/owner/clock/point/storage and FieldContext union/formalsurface exact; no boolean input_fields substitution without source proof",
+    "executed replacing publications are refused and publication-reprojected computed producers cannot become runtime_input",
+    "contract@1 is internal Sourceproof classification, not exported wire/native ABI upgrade; six authored arithmetic functions unchanged"
+  ],
+  "limits": [
+    "Source authenticity/proof only; numericalCPU/MPI/GPU qualification remains separate",
+    "Author89Source suite reported; independent targeted28Source tests rerun and zero failures/skips pinned in XML",
+    "newpackagehelper/newtest require correctmanifest/staging/durationinventory during Rootintegration; notperformedbyreviewer"
+  ]
+}

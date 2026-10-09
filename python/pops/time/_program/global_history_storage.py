@@ -22,8 +22,8 @@ def storage_contract(program: Any, source: Any, owner: Any) -> dict[str, Any]:
     if source.block is not None or source.state_ref is not None or source.space is not None:
         raise ValueError("global field history cannot override physical State ownership")
     _width, _component, solve = validate_field_observation(source)
-    from pops.codegen.program_field_plan import _nodes, _reachable
-    reachable = _reachable(solve, _nodes(program))
+    from pops.time._graph.value_traversal import walk_program_nodes, reachable_values
+    reachable = reachable_values(solve, tuple(walk_program_nodes(program._values)))
     field = solve.attrs.get("field")
     if field is None:
         from pops.model import Handle
@@ -89,7 +89,7 @@ class _IssuedStorage:
 
 def _equal_metadata(left: Any, right: Any) -> bool:
     import json
-    from pops.time._program.serialization import _json_ready
+    from pops.time.canonical_data import _json_ready
 
     # Container freezing may replace list/dict by tuple/MappingProxyType; _json_ready
     # restores their one wire image. JSON tokens retain bool/int/float distinctions
@@ -144,9 +144,9 @@ def validate_issuances(program: Any) -> None:
     validate_closed_issuances(program)
     if not getattr(program, "_global_field_history_issuance", None):
         return
-    from pops.codegen.program_field_plan import _nodes
+    from pops.time._graph.value_traversal import walk_program_nodes
     found = set()
-    for node in _nodes(program):
+    for node in walk_program_nodes(program._values):
         if node.op == "store_history" and node.attrs.get("history") in program._global_field_history_issuance:
             validate_storage_node(program, node)
             found.add(node.attrs["history"])
@@ -168,7 +168,7 @@ def transfer_issuances(source: Any, target: Any, remap_metadata: Any, history_na
 
 def descriptor(program: Any, name: str) -> str | None:
     import json
-    from pops.time._program.serialization import _json_ready
+    from pops.time.canonical_data import _json_ready
 
     validate_issuances(program)
     stores = [node for node in program._values if node.op == "store_history"

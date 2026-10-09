@@ -57,10 +57,10 @@ OLD_MODULES = (
 )
 
 PUBLIC = (
-    "Program", "ProgramValue", "StageStateSet", "StencilAccess", "ResidualSolution",
+    "Program", "ProgramValue", "MovingFieldProjection", "StageStateSet", "StencilAccess", "ResidualSolution",
     "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
     "DerivativeStrategy", "SolveRequest", "SolveRequestError", "SolveUnknown",
-    "ImplicitStage", "ImplicitDiffusionStage",
+    "ImplicitStage", "ImplicitDiffusionStage", "EvolvedOriginalFieldStage", "EvolvedOriginalFieldRate", "TemporalTau",
     "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
     "SOLVE_STATUSES", "Schedule",
     "StepStrategy", "FixedDt", "ComputedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",

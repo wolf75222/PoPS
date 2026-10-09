@@ -20,6 +20,32 @@ from functools import wraps
 from typing import Any
 
 
+_PROGRAM_TYPE: type | None = None
+_TAU_PROGRAMS: dict = {}
+
+
+def register_program_type(cls: type) -> type:
+    """Register the one concrete Program authority without creating reverse imports."""
+    global _PROGRAM_TYPE
+    if not isinstance(cls, type):
+        raise TypeError("Program authority must be a class")
+    if _PROGRAM_TYPE is not None and _PROGRAM_TYPE is not cls:
+        raise RuntimeError("the concrete pops.time.Program authority is already registered")
+    _PROGRAM_TYPE = cls
+    return cls
+
+
+def require_program(value: Any, *, exact: bool, where: str) -> Any:
+    """Authenticate a Program against its registered concrete type."""
+    if _PROGRAM_TYPE is None:
+        raise RuntimeError("pops.time.Program authority has not been initialized")
+    accepted = type(value) is _PROGRAM_TYPE if exact else isinstance(value, _PROGRAM_TYPE)
+    if not accepted:
+        qualifier = "exact " if exact else ""
+        raise TypeError("%s requires an %spops.time.Program" % (where, qualifier))
+    return value
+
+
 class _AuthoringSnapshot:
     """Identity-preserving snapshot of one Program's Python authoring state."""
 

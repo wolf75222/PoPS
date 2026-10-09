@@ -11,7 +11,7 @@ from .normalized_polynomial_path import NormalizedPolynomialPath, PathArithmetic
 from .coordinated_face import CoordinatedFace, FaceBalance
 
 if TYPE_CHECKING:
-    from pops._ir.expr import Expr
+    from pops.model.expression_language import Expr
     from pops.physics.nonconservative import NonconservativeProductHandle
 
 

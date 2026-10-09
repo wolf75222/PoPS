@@ -48,9 +48,9 @@ class SymbolicPath:
 
     def __init__(self, product: Any, *, frame: Any, quadrature: Any,
                  speed: Any, bend: Any = None) -> None:
-        from pops._ir.application import substitute_quantities
-        from pops._ir.expr import Const, Var, _wrap
-        from pops._ir.lowering import diff
+        from pops.model.expression_language import substitute_quantities
+        from pops.model.expression_language import Const, Var, _wrap
+        from pops.model.expression_language import diff
         from pops.physics.nonconservative import NonconservativeProductHandle
 
         if not isinstance(product, NonconservativeProductHandle):
@@ -129,9 +129,9 @@ class SymbolicPath:
             for i in range(len(frame.axes))))
 
     def validate_flux(self, flux: Any) -> None:
-        from pops._ir.quantity import QuantityRef
-        from pops._ir.visitors import _children
-        from pops._ir.expr import Var
+        from pops.model.expression_language import QuantityRef
+        from pops.model.expression_language import _children
+        from pops.model.expression_language import Var
         from pops.physics.board_handles import FluxHandle
 
         model = self.product._model_ref()
@@ -153,13 +153,13 @@ class SymbolicPath:
             pending.extend(_children(value))
 
     def declaration_references(self) -> tuple:
-        from pops._ir.expr_references import collect_reference_value
+        from pops.model.expression_language import collect_reference_value
         result = [self.product]
         collect_reference_value((self.integrals, self.speeds, self.curves), result, set())
         return tuple(result)
 
     def resolve_references(self, resolver: Any) -> SymbolicPath:
-        from pops._ir.expr_references import resolve_reference_value
+        from pops.model.expression_language import resolve_reference_value
         result = object.__new__(type(self))
         object.__setattr__(result, "product", resolver(self.product))
         object.__setattr__(result, "frame", self.frame)
@@ -180,8 +180,8 @@ class SymbolicPath:
     def validate_native(self, *, law: Any, flux_body: Any, native: Any) -> None:
         # The integral was constructed from this exact retained product. The common
         # lowerer authenticates the resolved law and method identities separately.
-        from pops._ir.expr import Var
-        from pops._ir.visitors import _children
+        from pops.model.expression_language import Var
+        from pops.model.expression_language import _children
         pending = [item for row in native(flux_body).values() for item in row]
         while pending:
             node = pending.pop()
@@ -190,7 +190,7 @@ class SymbolicPath:
             pending.extend(_children(node))
 
     def to_data(self) -> dict:
-        from pops._ir.balance import _handle_data
+        from pops.model.expression_language import _handle_data
         from pops.model.hash_data import canonical_hash_data
         return {"kind": "symbolic_path", "schema_version": 1,
                 "product": _handle_data(self.product), "frame": self.frame.to_dict(),
@@ -204,9 +204,9 @@ class SymbolicPath:
 
 
 def _validate_body(expressions: tuple, left: tuple, right: tuple) -> None:
-    from pops._ir.expr import Const, Var
-    from pops._ir.values import RuntimeParamRef
-    from pops._ir.visitors import _children
+    from pops.model.expression_language import Const, Var
+    from pops.model.expression_language import RuntimeParamRef
+    from pops.model.expression_language import _children
 
     arguments = {id(value) for value in (*left, *right)}
     pending, seen = list(expressions), set()

@@ -1,0 +1,38 @@
+{
+  "status": "PASS_CURRENT_DIRECT_UNIFORM_CP9_INTEGRITY",
+  "base_receipt_sha256": "164c5f04f68c9b1ebb1766d4aec9dc341071cc910a8c4d4e10c43c68054f6d7c",
+  "top_checkpoint_count": 8,
+  "nested_child_checkpoint_count": 0,
+  "actual_top_payload_count": 558,
+  "actual_Uniform_phases": [
+    {
+      "phase": "accepted1",
+      "actual_checkpoint_path": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/public-methods-rollback-capacity/pytest-tmp/test_installed_three_instance_0/field-publication-instance/accepted1-checkpoint.npz",
+      "checkpoint_version": 9,
+      "nested_member_names": [],
+      "actual_auxiliary_carrier_count": 1,
+      "manifest_payload_count": 66
+    },
+    {
+      "phase": "accepted2",
+      "actual_checkpoint_path": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/public-methods-rollback-capacity/pytest-tmp/test_installed_three_instance_0/field-publication-instance/accepted2-checkpoint.npz",
+      "checkpoint_version": 9,
+      "nested_member_names": [],
+      "actual_auxiliary_carrier_count": 1,
+      "manifest_payload_count": 66
+    },
+    {
+      "phase": "initial",
+      "actual_checkpoint_path": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/public-methods-rollback-capacity/pytest-tmp/test_installed_three_instance_0/field-publication-instance/initial-checkpoint.npz",
+      "checkpoint_version": 9,
+      "nested_member_names": [],
+      "actual_auxiliary_carrier_count": 1,
+      "manifest_payload_count": 66
+    }
+  ],
+  "limits": [
+    "Currentcase has one actualUniformlayout/carrier, not prior two-layout variant",
+    "Threeactual phases initial/accepted1/accepted2; no variablebyteclock or pendingattempt qualification",
+    "CP9direct manifests/restartIDs/rawpayloads verified by base reader; no Native semantic decoder/run by reviewer"
+  ]
+}

@@ -6,22 +6,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 
-def resolve_handle(reference: Any, resolver: Any, *, where: str) -> Any:
-    """Authenticate one declaration through an assembly resolver."""
-    from pops.model import Handle
-
-    if not isinstance(reference, Handle):
-        raise TypeError("%s must be a declaration Handle" % where)
-    resolve = resolver if callable(resolver) else getattr(resolver, "resolve", None)
-    if not callable(resolve):
-        raise TypeError(
-            "%s reference resolution requires a callable resolver or an object exposing "
-            "resolve(handle)" % where
-        )
-    resolved = resolve(reference)
-    if not isinstance(resolved, Handle) or not resolved.is_resolved:
-        raise TypeError("%s resolver must return a canonical Handle" % where)
-    return resolved
+from pops.model.pointwise_boundary import resolve_handle
 
 
 def resolve_value(value: Any, resolver: Any, *, where: str) -> Any:

@@ -879,11 +879,16 @@ jobs:
           python3 scripts/verify_installed_native.py
           --expect-dim "$POPS_NATIVE_DIM" --expect-serial
 
+      - name: Assemble authenticated installed-package wheel without recompiling Native
+        run: |
+          python3 scripts/ci_assemble_installed_wheel.py \
+            --package build-kokkos-py/python --dimension "$POPS_NATIVE_DIM" \
+            --output-dir "$RUNNER_TEMP/pops-ci-wheel"
       - name: Upload Python module artifact
         uses: actions/upload-artifact@v7
         with:
           name: gate-python-build-kokkos-py-dim${{ matrix.dimension }}
-          path: build-kokkos-py/python/**
+          path: ${{ runner.temp }}/pops-ci-wheel/**
           if-no-files-found: error
           retention-days: 1
 

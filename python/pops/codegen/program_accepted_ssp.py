@@ -119,7 +119,6 @@ def prove_accepted_update_ssp(program: Any, *, model_authority: Any = None) -> t
     proof; names, fingerprints and known tableaux do not select a recipe.
     """
     try:
-        graph_hash = program.to_graph().graph_hash  # authenticates issued SSA references
         from .program_emit_field_routes import _walk_program_nodes
         issued={}
         for value in _walk_program_nodes(program._values):
@@ -132,6 +131,15 @@ def prove_accepted_update_ssp(program: Any, *, model_authority: Any = None) -> t
             for child in value.inputs:
                 if issued.get(child.id) is not child:
                     raise ValueError("executed input/condition has detached SSA authority")
+        # Check static availability contexts before serialization follows their
+        # stage references. A forged self-stage must fail closed, not recurse.
+        from .program_static_provider_proof import prove_static_provider_read
+        for value in issued.values():
+            if value.op == "diffusive_rhs":
+                for extra in value.inputs[1:]:
+                    if extra.op == "input_fields":
+                        prove_static_provider_read(program, extra, value, set(), model_authority, issued)
+        graph_hash = program.to_graph().graph_hash  # authenticates issued SSA references
         if any(not _independent_effect(program, value) for value in program._values):
             raise ValueError("an executed effect has no proved accepted-State nonmutation contract")
         frozen=set()
@@ -281,7 +289,11 @@ def prove_accepted_update_ssp(program: Any, *, model_authority: Any = None) -> t
                         pending.extend(_children(expr))
                     if constitutive_reads and len(value.inputs)==1:
                         raise ValueError("forward-Euler premise lacks closed constitutive reads")
-                    if any(not frozen_read(extra,constitutive_reads,value.block)
+                    from .program_static_provider_proof import prove_static_provider_read
+                    if any(not (prove_static_provider_read(
+                            program, extra, value, constitutive_reads, model_authority, issued)
+                            if extra.op == "input_fields" else
+                            frozen_read(extra, constitutive_reads, value.block))
                            for extra in value.inputs[1:]):
                         raise ValueError("forward-Euler premise unproved for dependent Field/evaluation inputs")
                     visit(value.inputs[0]);rates[value.id] = value

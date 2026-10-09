@@ -38,7 +38,7 @@ class CoordinatedFace:
     __pops_ir_immutable__ = True
 
     def __init__(self, *, flux, product, frame, body):
-        from pops._ir.expr import Const, Var, _wrap
+        from pops.model.expression_language import Const, Var, _wrap
         from pops.physics.nonconservative import NonconservativeProductHandle
         if not isinstance(product, NonconservativeProductHandle):
             raise TypeError("CoordinatedFace requires an exact nonconservative product")
@@ -89,13 +89,13 @@ class CoordinatedFace:
                      for value in (*row.flux, *row.left, *row.right, row.stability))
 
     def declaration_references(self):
-        from pops._ir.expr_references import collect_reference_value
+        from pops.model.expression_language import collect_reference_value
         result = [self.flux, self.product]
         collect_reference_value(self._expressions(), result, set())
         return tuple(result)
 
     def resolve_references(self, resolver):
-        from pops._ir.expr_references import resolve_reference_value
+        from pops.model.expression_language import resolve_reference_value
         result = object.__new__(type(self))
         for name in ("flux", "product"):
             object.__setattr__(result, name, resolver(getattr(self, name)))
@@ -120,7 +120,7 @@ class CoordinatedFace:
         SymbolicPath.validate_native(self, law=law, flux_body=flux_body, native=native)
 
     def to_data(self):
-        from pops._ir.balance import _handle_data
+        from pops.model.expression_language import _handle_data
         from pops.model.hash_data import canonical_hash_data
         return {"kind": "coordinated_face", "schema_version": 1,
                 "flux": _handle_data(self.flux), "product": _handle_data(self.product),

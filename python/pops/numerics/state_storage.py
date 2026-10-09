@@ -32,7 +32,7 @@ class StateStorage(Descriptor):
         return True
 
     def validate_balance_view(self, view: Any) -> bool:
-        from pops._ir.balance import source_balance_supported
+        from pops.model.expression_language import source_balance_supported
 
         return source_balance_supported(view)
 

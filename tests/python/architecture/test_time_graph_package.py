@@ -27,6 +27,7 @@ def test_temporal_graph_has_one_private_unidirectional_implementation():
 
     allowed = {
         "base": set(),
+        "value_traversal": set(),
         "nodes": {"base"},
         "validation": {"base"},
         "control": {"base", "nodes", "validation"},

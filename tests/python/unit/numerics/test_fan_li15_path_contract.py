@@ -94,3 +94,106 @@ def test_resolved_numerical_identity_retains_the_separate_product_and_path():
     assert data["path"]["kind"] == "fan_li15_straight_raw_moment_path"
     assert data["path"]["product"]["kind"] == "nonconservative_product"
     assert data["nonconservative_interfaces"] == "canonical_fine_subface_side_contributions"
+
+
+def test_shared_path_arithmetic_marker_is_model_free_and_identity_preserving():
+    import ast
+    import inspect
+    from pops._ir.path_arithmetic import PathArithmeticComposition
+    from pops.numerics.normalized_polynomial_path import PathArithmeticComposition as PublicMarker
+    from pops.numerics.normalized_polynomial_path import NormalizedPolynomialPath
+
+    tree = ast.parse(inspect.getsource(inspect.getmodule(PathArithmeticComposition)))
+    assert not any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in ast.walk(tree))
+    assert PublicMarker is PathArithmeticComposition
+    assert NormalizedPolynomialPath.__mro__[1] is PathArithmeticComposition
+    assert FanLi15RawMomentPath.__mro__[1] is PathArithmeticComposition
+
+
+def test_public_library_alias_preserves_canonical_class_without_construction(monkeypatch):
+    import pops.numerics as numerics
+    import pops.public_api_exports as exports
+    from pops.moments.fan_li_path import FanLi15RawMomentPath as Canonical
+    alias = exports.PUBLIC_LIBRARY_ALIASES[("pops.numerics", "FanLi15RawMomentPath")]
+    assert alias.canonical_module == "pops.moments.fan_li_path"
+    assert alias.source_path == "python/pops/moments/fan_li_path.py"
+    assert alias.contract_version == exports.PUBLIC_LIBRARY_ALIAS_VERSION == 1
+    def refuse_construction(*args, **kwargs):
+        raise AssertionError("alias lookup must not construct a path")
+    monkeypatch.setattr(Canonical, "__init__", refuse_construction)
+    assert numerics.FanLi15RawMomentPath is Canonical is FanLi15RawMomentPath
+    assert exports.resolve_public_library_alias("pops.numerics", "FanLi15RawMomentPath") is Canonical
+    assert "FanLi15RawMomentPath" in numerics.__all__ and "FanLi15RawMomentPath" in dir(numerics)
+    with pytest.raises(AttributeError):
+        numerics.unregistered_library_alias
+    with pytest.raises(AttributeError):
+        exports.resolve_public_library_alias("pops.fields", "FanLi15RawMomentPath")
+    with pytest.raises(AttributeError):
+        exports.resolve_public_library_alias("pops.numerics", object())
+    with pytest.raises(TypeError):
+        exports.resolve_public_library_alias("pops.numerics", "FanLi15RawMomentPath", object())
+
+
+@pytest.mark.parametrize("change", [
+    {"contract_version": 2}, {"contract_version": True},
+    {"kind": "python_library_class"}, {"kind": "numeric_method"},
+    {"source_path": "/private/source.py"},
+    {"source_path": "python/pops/moments/../moments/fan_li_path.py"},
+    {"canonical_module": "pops.codegen.model_recipe"},
+    {"canonical_module": "pops.runtime.model_recipe"},
+    {"canonical_module": "pops._ir.model_recipe"},
+    {"public_name": "not.an.identifier"},
+])
+def test_public_library_alias_schema_refuses_unversioned_or_nonlibrary_routes(change):
+    from dataclasses import replace
+    from pops.public_api_exports import PUBLIC_LIBRARY_ALIASES
+    alias = PUBLIC_LIBRARY_ALIASES[("pops.numerics", "FanLi15RawMomentPath")]
+    with pytest.raises(ValueError):
+        replace(alias, **change)
+
+
+def test_public_library_alias_registry_and_records_are_immutable():
+    from dataclasses import FrozenInstanceError
+    from pops.public_api_exports import PUBLIC_LIBRARY_ALIASES
+    alias = PUBLIC_LIBRARY_ALIASES[("pops.numerics", "FanLi15RawMomentPath")]
+    assert tuple(PUBLIC_LIBRARY_ALIASES) == (("pops.numerics", "FanLi15RawMomentPath"),)
+    with pytest.raises(TypeError):
+        PUBLIC_LIBRARY_ALIASES[("pops.numerics", "fake")] = alias
+    with pytest.raises(FrozenInstanceError):
+        alias.canonical_name = "fake"
+
+
+def test_public_library_alias_refuses_wrong_key_and_nonclass_owner(monkeypatch):
+    from dataclasses import replace
+    from types import MappingProxyType
+    import pops.public_api_exports as exports
+    key = ("pops.numerics", "FanLi15RawMomentPath")
+    alias = exports.PUBLIC_LIBRARY_ALIASES[key]
+    monkeypatch.setattr(exports, "PUBLIC_LIBRARY_ALIASES", MappingProxyType({
+        key: replace(alias, public_name="fake"),
+    }))
+    with pytest.raises(RuntimeError, match="key/owner mismatch"):
+        exports.resolve_public_library_alias(*key)
+    monkeypatch.setattr(exports, "PUBLIC_LIBRARY_ALIASES", MappingProxyType({
+        key: replace(alias, canonical_name="fan_li15_path"),
+    }))
+    with pytest.raises(RuntimeError, match="canonical class/source owner mismatch"):
+        exports.resolve_public_library_alias(*key)
+
+
+def test_public_library_alias_rechecks_canonical_source_and_version(monkeypatch):
+    from dataclasses import replace
+    from types import MappingProxyType
+    import pops.moments.fan_li_path as owner
+    import pops.public_api_exports as exports
+    key = ("pops.numerics", "FanLi15RawMomentPath")
+    alias = exports.PUBLIC_LIBRARY_ALIASES[key]
+    with monkeypatch.context() as source_change:
+        source_change.setattr(owner.__spec__, "origin", "/unrelated/fan_li_path.py")
+        with pytest.raises(RuntimeError, match="canonical class/source owner mismatch"):
+            exports.resolve_public_library_alias(*key)
+    corrupt = replace(alias)
+    object.__setattr__(corrupt, "contract_version", 99)
+    monkeypatch.setattr(exports, "PUBLIC_LIBRARY_ALIASES", MappingProxyType({key: corrupt}))
+    with pytest.raises(ValueError, match="unsupported.*version"):
+        exports.resolve_public_library_alias(*key)

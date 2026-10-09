@@ -1,0 +1,70 @@
+{
+  "status": "ACCEPTED_TWO_FIXTURE_CORRECTIONS_EXACT_ISOLATED_CPU1_MPI2",
+  "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+  "patch_sha256": "8f3dd70ba8a5745bb278768c2136abf0f5ecd40148fc27a6913eb3c7599d7758",
+  "admission": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-cpp-fixture-independent-20261009/admission.json",
+    "sha256": "585cab208aaf5d5b31d66765c2f6781d98f4f76dea8e5d914da6436643786378"
+  },
+  "runs": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-cpp-fixture-independent-20261009/independent-four-corrected-case-runs.json",
+    "sha256": "1e7758622c360afb0ea5e0f6c59d6c17ccc6654aa70c7c3df73fee7a1aeeda23"
+  },
+  "commands": 4,
+  "rank_case_passes": 6,
+  "exact_cases": [
+    "test_amr_program_positivity_floor.RefinedProgramTrajectoryUsesFloorAndRollsBackExactly",
+    "test_amr_system_contract.TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz"
+  ],
+  "linked29_and_two_sources_binary_receipts_rehashed": true,
+  "Main_environment_build_install_mutations": false,
+  "original_guards": {
+    "cells": 32,
+    "floor": 1e-06,
+    "macro_dt": 0.0002,
+    "mass_tolerance": 2e-10
+  },
+  "actual_cpp8_deltas": [
+    {
+      "ranks": 1,
+      "rank": 0,
+      "unfloored_mass_change": 4.996003610813204e-16,
+      "floored_mass_change": 1.0547118733938987e-15,
+      "fine_interior_floor_effect": 1.1005762912130734e-07
+    },
+    {
+      "ranks": 2,
+      "rank": 0,
+      "unfloored_mass_change": 4.996003610813204e-16,
+      "floored_mass_change": 9.43689570931383e-16,
+      "fine_interior_floor_effect": 1.1005762912130734e-07
+    },
+    {
+      "ranks": 2,
+      "rank": 1,
+      "unfloored_mass_change": 4.996003610813204e-16,
+      "floored_mass_change": 9.43689570931383e-16,
+      "fine_interior_floor_effect": 1.1005762912130734e-07
+    }
+  ],
+  "fine_source_count_math": "2executions(trial+replay)\u00d72fine_substeps\u00d72blocks=8; nonzero_block providerbinds=4",
+  "oracle_math": "Sparseowned validcells have coverage0or1; replicatedrank0 alone contributes; rawbyteOR neutral+0 holes preserves exactowner bits; overlaprefused. No numerical/core changes.",
+  "budget_lifetime_reading": {
+    "ratio": "installedbeforebootstrap",
+    "flux_expression_budget": "installedafterbootstrap,beforefirstadvance; prepare candidate ownsstorage at publication",
+    "subcycling_engine_and_interface_ledger": "firstadvance invokes preparation afterbegin_step andbeforeinterfaceattempt/numericalbody; fixture outertrialtransaction is alreadyopen",
+    "limit": "This does not establish no allocation anywhere inside acceptedtransactions or budgetbeforebootstrap."
+  },
+  "excluded_failures": [
+    "Author initialfailedcompile and stale diagnostic cpp1-sparse-oracle.log/XML are excluded",
+    "Author wholecpp1 repeatedScopeGuard abort excluded; nowholebinary run byreviewer",
+    "ReviewerMPI wrapper initiallyclosedPMIfd, hangterminated; preserved",
+    "Reviewerinitialwrongselector RebuildDistributionModes CPU1pass/MPI2collectiveexceptiontypefail preserved butexcluded; correctedtwoactualselectors independentlypassed"
+  ],
+  "limits": [
+    "Existing C++test executables linked to officially admitted988/de2 runtimeobjects only",
+    "ActualMPIrank tied to launchercommand/PMIenvironment/stdout in worker, notXMLfilenames",
+    "No rebuild/install/PythonNativeimport/GitHubCI/fullNative/GPU/3D/scientificcampaign qualification"
+  ]
+}

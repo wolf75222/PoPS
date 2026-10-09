@@ -1,0 +1,129 @@
+{
+  "status": "MPI2_POSITIVES_RECEIVED_TWO_DISTINCT_REAL_FAILURES_RETAINED",
+  "identity": {
+    "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "Native": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+    "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+    "core": "b756f21226ad09e2108026bc9c3bfce9a251d1480e8a81e0e733db0c0845871a",
+    "core_scope_schema": 2
+  },
+  "phase_counts_per_rank": {
+    "mpi2-representative": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "mpi2-public-rollback-and-guarded": {
+      "tests": 13,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "actual_unique_positive_CP_count": 13,
+  "actual_unique_CP_payload_count": 850,
+  "representative_original64_values_rank_parity": {
+    "initial": {
+      "values": 64,
+      "bytes_equal": true,
+      "sha256": "884ba3da3c8fff0b2a1dbe13611c182c28588e168b67338dcaa8b659fc48cac6"
+    },
+    "accepted": {
+      "values": 64,
+      "bytes_equal": true,
+      "sha256": "a041fd72dc544f5a2be8e196188a36e9c4be47f4619dd0a8d62ba866e784a8e1"
+    },
+    "field": {
+      "values": 64,
+      "bytes_equal": true,
+      "sha256": "b6edbaf1e0ebcb571cc528b5a3462a1af64ba8b8aedf33ccdfd514d34e269c7e"
+    }
+  },
+  "positive_mathematics": {
+    "originalPDE": "actual64 values/rank U84/25/F144/25 originalbounds;Yreferenceonly",
+    "publicmethods": "Six current testcase occurrences across both phases \u00d7 two ranks: twelve freshly checked rank receipts, all 192 values per role/rank; no world1 arrays reused.",
+    "guarded3": "all192actual donor/receiver/phi perrank independentrectangular spectralreferences and rawCP/reportbytes",
+    "latecontrols2": "two-bindings failure/control, rawprivatebefore/afterjournals equal perrank, originalbounds",
+    "capacity1": "initial/accepted1/accepted2 actualCP9auxmetadata+futurebounds, no pendingattempt/variableclock claim"
+  },
+  "actual_failure_separation": [
+    {
+      "case": "automatic_retry",
+      "stage": "automatic retry also rejects shrunkenDT",
+      "per_rank": [
+        {
+          "rank": 0,
+          "threshold": 0.1,
+          "actual_norm": 0.10479918293744765,
+          "owned_norm": 0.07410421291787876,
+          "replication_factor": "sqrt(2)",
+          "scope": "distinct JIT-only instrumented matchingNative diagnostic, originalcohort failure unchanged"
+        },
+        {
+          "rank": 1,
+          "threshold": 0.1,
+          "actual_norm": 0.10479918293744765,
+          "owned_norm": 0.07410421291787876,
+          "replication_factor": "sqrt(2)",
+          "scope": "distinct JIT-only instrumented matchingNative diagnostic, originalcohort failure unchanged"
+        }
+      ]
+    },
+    {
+      "case": "populated_history",
+      "stage": "first acceptance fails, before populatedhistory continuation",
+      "per_rank": [
+        {
+          "rank": 0,
+          "threshold": 30.0,
+          "actual_norm": 39.773791213065074,
+          "owned_norm": 28.12431748025623,
+          "replication_factor": "sqrt(2)",
+          "scope": "distinct JIT-only instrumented matchingNative diagnostic, originalcohort failure unchanged"
+        },
+        {
+          "rank": 1,
+          "threshold": 30.0,
+          "actual_norm": 39.773791213065074,
+          "owned_norm": 28.12431748025623,
+          "replication_factor": "sqrt(2)",
+          "scope": "distinct JIT-only instrumented matchingNative diagnostic, originalcohort failure unchanged"
+        }
+      ]
+    }
+  ],
+  "observed_cause": "Replicated AMR norm2 sums bothfullrankcopies; diagnostic replica1/fabs1/ncomp1 and actual/owned=sqrt2. Guardthresholds unchanged.",
+  "positive_scope_not_transferred_from_world1_or_historicalMPI": true,
+  "full_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-mpi2-offline-reception-20261009/mpi2-reception.json",
+    "sha256": "c851c2edc5b130fcfef279405a4f83ab33ac9dcfa05cbc9092906fbf17a68422"
+  },
+  "limits": [
+    "True two-rank launch/identity/results received; no world1 or historical MPI positives transferred",
+    "Representative2/2 and public11/13 perrank; failingphase is not green",
+    "Capacity JIT-only diagnostic actualscalars linked separately to originalcohort; no newrun by thisreader",
+    "Offline CP identity/raw payload integrity and exact physical outputs only; no Native decoder/run byreader",
+    "One-level math here, no refined AMR/convergence/GPU/3D/full94 admission",
+    "Private snapshot/ticket/public parameter-update limits retained",
+    "No populated-ring continuation reception for failingcase: it stops before firstaccept; no automaticretry success inferred",
+    "Actualglobalarray rank equality does not establish a new localownership census",
+    "Only currentmatchingCore diagnostic is associated with cause; no newrun/import byreviewer"
+  ],
+  "diagnostic_actual_log_links": [
+    {
+      "rank": 0,
+      "actual_diagnostic_log": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank0.log",
+      "sha256": "c568581cc9b1aa4fe6b2364ea8da2c22b76cde6cecd25143bc79bdbc5bc108a6",
+      "actual_scalar_lines_verified": 3,
+      "identity": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank0.identity.json"
+    },
+    {
+      "rank": 1,
+      "actual_diagnostic_log": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank1.log",
+      "sha256": "bfedcedbeb69bb58785cfc3209792664fe215b345c367f534458ace8a3cfcc8f",
+      "actual_scalar_lines_verified": 3,
+      "identity": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/actual-guard-diagnostic2/rank1.identity.json"
+    }
+  ]
+}

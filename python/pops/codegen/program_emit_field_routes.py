@@ -63,20 +63,7 @@ def validate_program_field_routes(program: Any, field_plans: Any) -> None:
                 % (plan.name, space_outputs, expected_outputs))
 
 
-def _walk_program_nodes(values: Any) -> Any:
-    for node in values:
-        yield node
-        attrs = getattr(node, "attrs", {})
-        if not isinstance(attrs, Mapping):
-            continue
-        for key in (
-            "cond_block", "body_block", "true_block", "false_block",
-            "apply_block", "residual_block",
-        ):
-            nested = attrs.get(key)
-            if isinstance(nested, (list, tuple)):
-                yield from _walk_program_nodes(nested)
-
+from pops.time._graph.value_traversal import walk_program_nodes as _walk_program_nodes
 
 def field_point_cpp(program: Any, value: Any, slot: str) -> list[str]:
     """Materialize the solve node's exact logical TimePoint before native iteration."""

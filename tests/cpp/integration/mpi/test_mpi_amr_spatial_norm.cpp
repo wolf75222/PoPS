@@ -434,3 +434,204 @@ TEST(AmrSpatialNorm, ConvergenceDriftAndOverflowVoteBeforeKrylov) {
   EXPECT_EQ(reduce_norm_inf(state), Real(0));
   }
 }
+
+
+#if POPS_NATIVE_DIM == 2
+namespace {
+using NormProbeModel =
+    pops::CompositeModel<pops::nd::ScalarAdvection<2>, pops::NoSource, pops::NoElliptic>;
+
+void measure_actual_program_norm2(bool distributed) {
+  using namespace pops;
+  AmrSystemConfig<2> config;
+  config.shape = Extent<2>{4, 4};
+  config.periodicity = {true, true};
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  config.regrid_every = 0;
+  config.distribute_coarse = distributed;
+  config.coarse_max_grid = Extent<2>{2, 2};
+  AmrSystem<2> system(config);
+  test::install_amr_runtime_authority(system, "tests.norm2.ownership/actual-runtime@1");
+  system.install_block_state_route("tracer", "tests.norm2.ownership/state@1");
+  NormProbeModel model;
+  model.hyp = nd::ScalarAdvection<2>::prepare(RealVector<2>{});
+  add_compiled_model<2>(system, "tracer", model, "minmod", "rusanov", "conservative", "explicit",
+                        static_cast<double>(kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                        static_cast<double>(kWenoEpsilon), false, "tests.norm2.ownership/flux@1");
+  system.set_conservative_state("tracer", std::vector<double>(16, 2));
+  (void)system.engine();
+  system.install_program_step([](double) {});
+  system.set_program_block_map({0});
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("tests.norm2.ownership/clock@1");
+  const auto& state = context->state(0);
+  const auto& lane = context->prepared_execution_lane();
+  const auto* active = context->pointwise_active_mask(0, state);
+  const Real local = dot_active_local(state, state, 0, active);
+  const Real observed = context->norm2(0, state);
+  const Real owned = std::sqrt(static_cast<Real>(all_reduce_sum(
+      state.distribution().replicated() && lane.rank() != 0 ? Real(0) : local, lane)));
+  std::printf(
+      "NORM2_PRIMITIVE rank=%d ranks=%d mode=%s replicated=%d local_fabs=%zu local_square=%a "
+      "observed=%a owned_oracle=%a\n",
+      lane.rank(), lane.size(), distributed ? "distributed" : "replicated",
+      int(state.distribution().replicated()), state.local_size(), double(local), double(observed),
+      double(owned));
+  EXPECT_EQ(state.distribution().replicated(), !distributed);
+  EXPECT_DOUBLE_EQ(owned, Real(8));
+  EXPECT_DOUBLE_EQ(observed, Real(8));
+  // Same owner/layout/masks; component1 is a sentinel and is not part of norm2's public contract.
+  auto& vector = context->scalar_scratch(12300, 0, state, 2, 0);
+  vector.set_val(Real(1000));
+  for (std::size_t local_fab = 0; local_fab < vector.local_size(); ++local_fab) {
+    const auto values = vector.fab(local_fab).view();
+    for_each_cell(vector.box(local_fab),
+                  [=] POPS_HD(const Index<2>& cell) { values(cell, 0) = Real(2); });
+  }
+  const Real vector_norm = context->norm2(0, vector);
+  std::printf("NORM2_COMPONENT_CONTRACT rank=%d mode=%s ncomp=%d comp0=2 comp1=1000 observed=%a\n",
+              lane.rank(), distributed ? "distributed" : "replicated", vector.ncomp(),
+              double(vector_norm));
+  EXPECT_DOUBLE_EQ(vector_norm, Real(8));
+  if (lane.rank() == lane.size() - 1 && vector.local_size()) {
+    vector.set_val(std::numeric_limits<Real>::quiet_NaN());
+  }
+  EXPECT_FALSE(std::isfinite(context->norm2(0, vector)))
+      << "a nonfinite participating replica must still reach the original guard predicate";
+}
+}  // namespace
+
+TEST(AmrProgramNorm2Ownership, DistributedPhysicalCellsParticipateOnce) {
+  measure_actual_program_norm2(true);
+}
+TEST(AmrProgramNorm2Ownership, ReplicatedCoarsePhysicalCellsParticipateOnce) {
+  measure_actual_program_norm2(false);
+}
+#endif
+
+#if POPS_NATIVE_DIM == 2
+TEST(AmrProgramNorm2Ownership, MultipleOwnersAndEmptyRanksRetainExactPhysicalScope) {
+  using namespace pops;
+  for (bool distributed : {false, true}) {
+    AmrSystemConfig<2> config;
+    config.shape = Extent<2>{4, 4};
+    config.periodicity = {true, true};
+    config.level_count = 1;
+    config.transition_ratios.clear();
+    config.transition_buffers.clear();
+    config.transition_lookaheads.clear();
+    config.regrid_every = 0;
+    config.distribute_coarse = distributed;
+    config.coarse_max_grid = Extent<2>{4, 4};
+    AmrSystem<2> system(config);
+    test::install_amr_runtime_authority(system, "tests.norm2.multi-owner/actual-runtime@1");
+    for (const auto name : {"left", "right"})
+      system.install_block_state_route(name, std::string("tests.norm2.multi-owner/") + name);
+    for (const auto name : {"left", "right"}) {
+      NormProbeModel model;
+      model.hyp = nd::ScalarAdvection<2>::prepare(RealVector<2>{});
+      add_compiled_model<2>(system, name, model, "minmod", "rusanov", "conservative", "explicit",
+                            static_cast<double>(kPhysicalDefaultGamma), 1, 1, {}, {}, 0.,
+                            static_cast<double>(kWenoEpsilon), false,
+                            std::string("tests.norm2.multi-owner/flux/") + name);
+      system.set_conservative_state(name,
+                                    std::vector<double>(16, std::string(name) == "left" ? 2 : 3));
+    }
+    (void)system.engine();
+    system.install_program_step([](double) {});
+    system.set_program_block_map({1, 0});
+    auto context = runtime::program::make_program_execution_provider(&system);
+    context->configure_primary_clock("tests.norm2.multi-owner/clock@1");
+    const auto& first = context->state(0);
+    const auto& second = context->state(1);
+    const Real first_norm = context->norm2(0, first);
+    const Real second_norm = context->norm2(1, second);
+    EXPECT_DOUBLE_EQ(first_norm, Real(12));
+    EXPECT_DOUBLE_EQ(second_norm, Real(8));
+    const auto& lane = context->prepared_execution_lane();
+    if (distributed && lane.size() > 1 && lane.rank() > 0)
+      EXPECT_EQ(first.local_size(), 0U);
+    std::printf("NORM2_MULTI_OWNER rank=%d ranks=%d replica=%d first_fabs=%zu first=%a second=%a\n",
+                lane.rank(), lane.size(), int(first.distribution().replicated()),
+                first.local_size(), double(first_norm), double(second_norm));
+  }
+}
+#endif
+
+#if POPS_NATIVE_DIM == 2
+TEST(AmrProgramNorm2Ownership, MixedReplicatedCoarsePartitionedFineUsesPerLevelOwnership) {
+  using namespace pops;
+  AmrSystemConfig<2> config;
+  config.shape = Extent<2>{4, 4};
+  config.periodicity = {true, true};
+  config.level_count = 2;
+  config.regrid_every = 0;
+  config.distribute_coarse = false;
+  config.cluster_min_box_size = 1;
+  config.cluster_max_box_size = 2;
+  AmrSystem<2> system(config);
+  test::install_amr_runtime_authority(system, "tests.norm2.mixed-level/actual-runtime@1");
+  system.install_block_state_route("tracer", "tests.norm2.mixed-level/state@1");
+  NormProbeModel model;
+  model.hyp = nd::ScalarAdvection<2>::prepare(RealVector<2>{});
+  add_compiled_model<2>(system, "tracer", model, "minmod", "rusanov", "conservative", "explicit",
+                        static_cast<double>(kPhysicalDefaultGamma), 1, 1, {}, {}, 0.,
+                        static_cast<double>(kWenoEpsilon), false, "tests.norm2.mixed-level/flux@1");
+  system.set_conservative_state("tracer", std::vector<double>(16, 2));
+  test::install_prepared_threshold_union(
+      system, {{"tracer", NormProbeModel::conservative_vars().names[0], .5}},
+      "tests.norm2.mixed-level/tagging@1");
+  ASSERT_EQ(system.engine()->hierarchy().num_levels(), 2U);
+  system.install_program_step([](double) {});
+  system.set_program_block_map({0});
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("tests.norm2.mixed-level/clock@1");
+  EXPECT_TRUE(system.prepared_amr_block_state(0, 0).distribution().replicated());
+  EXPECT_FALSE(system.prepared_amr_block_state(0, 1).distribution().replicated());
+  const auto& lane = context->prepared_execution_lane();
+  // Census raw valid samples and masks independently of the norm's dot/reduction path.
+  std::array<int, 64> fine_cell_owners{};
+  std::array<int, 16> coarse_cell_copies{};
+  int local_fine_patches = 0;
+  context->for_each_program_resource_level([&](int level) {
+    const auto& field = context->state(0);
+    const auto* active = context->pointwise_active_mask(0, field);
+    ASSERT_EQ(active, nullptr);  // No EB exclusion; covered coarse samples remain in this contract.
+    sync_host();
+    for (std::size_t local = 0; local < field.local_size(); ++local) {
+      const auto box = field.box(local);
+      const auto values = field.fab(local).view();
+      if (level == 1)
+        ++local_fine_patches;
+      for (int y = box.lo[1]; y <= box.hi[1]; ++y) {
+        for (int x = box.lo[0]; x <= box.hi[0]; ++x) {
+          EXPECT_EQ(values(Index<2>{x, y}, 0), Real(2));
+          if (level == 0) {
+            ASSERT_GE(x, 0); ASSERT_LT(x, 4);
+            ASSERT_GE(y, 0); ASSERT_LT(y, 4);
+            ++coarse_cell_copies[static_cast<std::size_t>(4 * y + x)];
+          } else {
+            ASSERT_GE(x, 0); ASSERT_LT(x, 8);
+            ASSERT_GE(y, 0); ASSERT_LT(y, 8);
+            ++fine_cell_owners[static_cast<std::size_t>(8 * y + x)];
+          }
+        }
+      }
+    }
+    std::printf("NORM2_MIXED_CENSUS rank=%d level=%d replica=%d local_fabs=%zu mask=%d\n",
+                lane.rank(), level, int(field.distribution().replicated()), field.local_size(),
+                int(active != nullptr));
+  });
+  for (const int copies : coarse_cell_copies)
+    EXPECT_EQ(copies, 1);  // Each rank physically stores the complete replicated coarse box.
+  EXPECT_GT(local_fine_patches, 0);  // On MPI2, both ranks truly participate in the fine level.
+  for (const int local_owners : fine_cell_owners)
+    EXPECT_EQ(all_reduce_sum(static_cast<long>(local_owners), lane), 1);  // Every fine coordinate has one owner.
+  // 16 coarse + 64 fine valid active component-zero samples, each exactly 2.
+  // This is the existing per-level sample norm, not an AMR composite-cover/volume norm.
+  EXPECT_NEAR(context->norm2(0, context->state(0)), std::sqrt(Real(320)), Real(1e-13));
+}
+#endif

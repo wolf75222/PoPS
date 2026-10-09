@@ -1,0 +1,90 @@
+{
+  "status": "PASS_CURRENT_ORIGINAL_PDE_OWN_RETRY_NATIVE8_FILE_RECEPTION",
+  "identity": {
+    "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "Native": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+    "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+    "core_fingerprint": "b756f21226ad09e2108026bc9c3bfce9a251d1480e8a81e0e733db0c0845871a",
+    "core_scope_schema": 2
+  },
+  "producer_test_counts": {
+    "original-pde": 1,
+    "retry-plus-native8": 9
+  },
+  "checkpoint_counts_measured": {
+    "original_pde": {
+      "files": 1,
+      "payloads": 46
+    },
+    "own_retry": {
+      "files": 6,
+      "payloads": 312
+    },
+    "native8": {
+      "files": 17,
+      "payloads": 809
+    },
+    "retry_native8_all": {
+      "files": 23,
+      "payloads": 1121
+    }
+  },
+  "checkpoint_authenticity_scope": "Non-corrupt CP manifest/restart identities and raw payloads rehashed offline; no independent native semantic admission or numerical acceptance inferred per diagnostic capture.",
+  "publication_actual_transaction_stats": {
+    "before-rank0": {
+      "temporal/transaction_stats": {
+        "accepted": 0,
+        "failed": 0,
+        "rejected": 0
+      }
+    },
+    "after-rank0": {
+      "temporal/transaction_stats": {
+        "accepted": 0,
+        "failed": 0,
+        "rejected": 0
+      }
+    }
+  },
+  "publication_full_JSON_including_stats_actually_equal": true,
+  "reader_repair": {
+    "reader_sha256_before": "a2d76c94e3d151a41c237e6520b753074130dfa4cad5121341b7317082318aff",
+    "failure": "AssertionError at assert not list(cases[0]); actual pytest testcase has normal recorded properties, not a failure/error/skipped child",
+    "producer_failure": false,
+    "reader_sha256_after": "c23be0e29396c55afb754189dbd2b20c33cb84e8c26cba88cd57b833d7c63204",
+    "repair": "Accept recorded pytest properties while still refusing every failure,error,skipped XMLchild. Rational references,bounds and payload checks unchanged."
+  },
+  "supplementary_extra_assumption_preserved": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-original-offline-reception-20261009/supplementary-stats-assumption-failure.json",
+  "tools": {
+    "offline_common.py": {
+      "sha256": "7440e88df0a07af90d1d63530beb9ab5e77f426ef0739cc7bd393dfc7de28e34"
+    },
+    "review_original_pde.py": {
+      "sha256": "c23be0e29396c55afb754189dbd2b20c33cb84e8c26cba88cd57b833d7c63204"
+    },
+    "review_original_retry_native9.py": {
+      "sha256": "fae3c6fbb5f2da64ea192b36857bd42e0701536ea5ee734d22cd83ffa9ddd400"
+    }
+  },
+  "receipts": {
+    "original-pde-reception.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-original-offline-reception-20261009/original-pde-reception.json",
+      "sha256": "0d3025e335311ac68387fc676b9cdf5c066f747265fd4d406db4e1da2453a1cc"
+    },
+    "own-retry-reception.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-original-offline-reception-20261009/own-retry-reception.json",
+      "sha256": "0617647f5a02f5838ca3f04c8555723cd244c9389051c99fde65e7844011a992"
+    },
+    "native8-reception.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-original-offline-reception-20261009/native8-reception.json",
+      "sha256": "9bdcac5df8bad62a6d658fe0a4d48a7ce2dabde80776ec9e5ae906bbb403a0aa"
+    }
+  },
+  "limitations": [
+    "Prior science receipts never transferred; prior code/selector names used only as reader scaffolding",
+    "PDE predictorY48/25 reference-only; time-origin literal not promoted to a physical clock",
+    "Paired AMR example checks exact savedphysics/JSON/Program; no new analytical AMR oracle",
+    "No Nativeimport/solver/restart/build/install by reviewer",
+    "CPUworld1 Dim2 only; no MPI2/GPU/3D/convergence/Full94 or generalpublicationprotocolproof"
+  ]
+}

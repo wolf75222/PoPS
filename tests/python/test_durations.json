@@ -583,7 +583,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 815,
+    "estimated_count": 817,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -1035,6 +1035,7 @@
       "tests/python/unit/codegen/test_shared_interface_validation.py",
       "tests/python/unit/codegen/test_source_state_storage.py",
       "tests/python/unit/codegen/test_state_read_extent.py",
+      "tests/python/unit/codegen/test_static_provider_ssp_proof.py",
       "tests/python/unit/codegen/test_subcycle_integral_independent.py",
       "tests/python/unit/codegen/test_symbolic_data_model.py",
       "tests/python/unit/codegen/test_symbolic_exp_local_residual.py",
@@ -1375,6 +1376,7 @@
       "tests/python/unit/time/test_step_transaction_contract.py",
       "tests/python/unit/time/test_temporal_handle_data_model.py",
       "tests/python/unit/time/test_temporal_problem_regions.py",
+      "tests/python/unit/time/test_temporal_tau_program_authority.py",
       "tests/python/unit/time/test_time_codegen.py",
       "tests/python/unit/time/test_time_control_flow.py",
       "tests/python/unit/time/test_time_control_flow_b.py",
@@ -1499,7 +1501,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 880,
+    "total_files": 882,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -4763,6 +4765,22 @@
       "estimated_seconds": 1.0,
       "basis": "Unmeasured one-second scheduling estimate for 15 isolated pure emitter/capacity contract tests; no Native computation. Local Source timings are not a CI measurement. Existing file weights and shard caps preserved.",
       "source_sha256": "af1d32346a212fa8a2e3694af274edae18a441f37aaeb8bc8bdce0cf189a928f"
+    },
+    "ci_20261009_temporal_program_authority": {
+      "files": [
+        "tests/python/unit/time/test_temporal_tau_program_authority.py"
+      ],
+      "estimated_seconds": 5.0,
+      "source_sha256": "7ccecdabbb7fec49d9f94928462d063be6e4db4d9f12c56e4730bca97ab713d3",
+      "basis": "Conservative five-second Source-only scheduling estimate for six exact Program/Tau ownership and JSON contract tests. Complete local file timing was 0.1861785 seconds (six passed); no CI duration inferred. Existing weights, shard caps and exact inventory gates unchanged."
+    },
+    "ci_20261009_static_provider_ssp_source": {
+      "files": [
+        "tests/python/unit/codegen/test_static_provider_ssp_proof.py"
+      ],
+      "estimated_seconds": 5.0,
+      "source_sha256": "deddf7465ec87992a0ce897f25bd88925600e4edda4bf92e032002b7f6a45dd6",
+      "basis": "Unmeasured five-second Source-only scheduling estimate for resolved static-provider SSP proof guards and exact authored quadrature tests. No Native execution or CI duration measured; replace only from a complete per-file CI timing receipt. Existing scheduling weights, caps and native dimensions preserved."
     }
   },
   "tests/python/integration/amr/test_accepted_halo_extent_binding.py": 600,
@@ -5072,5 +5090,7 @@
   "tests/python/unit/time/test_split_subflow_input_coordinates.py": 5,
   "tests/python/integration/runtime/test_public_diffusion_field_predictor.py": 600,
   "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": 600,
-  "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py": 600
+  "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py": 600,
+  "tests/python/unit/time/test_temporal_tau_program_authority.py": 5.0,
+  "tests/python/unit/codegen/test_static_provider_ssp_proof.py": 5.0
 }

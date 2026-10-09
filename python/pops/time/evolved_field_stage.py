@@ -14,9 +14,6 @@ from pops.time.points import StagePoint, TimePoint, point_clock
 from pops.time.values import _Coeff
 
 
-_TAU_PROGRAMS: dict = {}
-
-
 class TemporalTau(Expr):
     """An exact multiple of the issued frame duration, bound to one Program/point.
 
@@ -26,10 +23,12 @@ class TemporalTau(Expr):
     """
 
     def __init__(self, program: Any, coefficient: Any, *, at: Any) -> None:
-        from pops.time._program.api import Program
+        from pops.time._authoring import require_program
 
-        if type(program) is not Program:
-            raise TypeError("TemporalTau requires an exact Program")
+        try:
+            require_program(program, exact=True, where="TemporalTau")
+        except TypeError:
+            raise TypeError("TemporalTau requires an exact Program") from None
         if type(coefficient) is not _Coeff or set(coefficient.powers) != {1}:
             raise TypeError("TemporalTau requires an exact multiple of Program.dt")
         factor = scalar_literal(coefficient.powers[1])
@@ -44,7 +43,7 @@ class TemporalTau(Expr):
         # The process-local capability is outside the scientific snapshot; serialized
         # authority consists solely of owner, clock/point and exact duration factor.
         from weakref import ref
-        from pops.time import evolved_field_stage as authority
+        import pops.time._authoring as authority
 
         key = id(self)
         authority._TAU_PROGRAMS[key] = (
@@ -57,7 +56,7 @@ class TemporalTau(Expr):
 
     @property
     def prog(self) -> Any:
-        from pops.time import evolved_field_stage as authority
+        import pops.time._authoring as authority
 
         leaf, owner = authority._TAU_PROGRAMS[id(self)]
         if leaf() is not self:

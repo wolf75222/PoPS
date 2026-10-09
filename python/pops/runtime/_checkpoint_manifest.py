@@ -13,15 +13,10 @@ from pops._generated_release_contract import (
 )
 from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
 
-BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION = 2
-RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION = 1
-_BOUND_INITIAL_ORIGIN = {"schema_version": 1, "kind": "bound_initial"}
-
-
-def _is_bound_initial_origin(value: Any) -> bool:
-    return isinstance(value, Mapping) and set(value) == {"schema_version", "kind"} \
-        and type(value["schema_version"]) is int and value == _BOUND_INITIAL_ORIGIN
-
+from pops.identity.checkpoint_origin import (
+    BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION, RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION,
+    _BOUND_INITIAL_ORIGIN, _is_bound_initial_origin,
+)
 
 def _require_initial_temporal(state: Any) -> None:
     """Authenticate the existing accepted controller/cursors, without starting a run."""

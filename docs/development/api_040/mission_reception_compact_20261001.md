@@ -1,3 +1,19 @@
+# Réception bornée du 9 octobre 2026
+
+L’[état courant de la PR brouillon](STATUS_DRAFT_PR_20261009.md) distingue le Source intégré et le dernier Native réellement construit Source988/f8d/de2. Le contrat du cœur fixe exige que les équations et méthodes Python deviennent leur traduction C++ sans traitement par identité de modèle. Les 94 obligations, leurs équations, mappings et critères restent ouverts et inchangés dans les tableaux historiques ci-dessous et dans `corpus.json`.
+
+| Domaine | Acquis exactement reçu | Prochaine réception |
+|---|---|---|
+| Native CPU Source988/f8d/de2 | Build officiel, preuve physique Source/install/wheel ; 23 cas world1 scientifiques/refus/reprises PASS, oracles indépendants | Nouveau paquet après intégration du code et du SDK modifiés ; références et non-régression |
+| MPI2 Source988/f8d/de2 | 2 cas représentatifs PASS par rang ; 11/13 de la seconde cohorte PASS, 2 FAIL gardes norm2 ; 13 checkpoints/850 payloads reçus indépendamment | Relancer les deux cas après correction générique de propriété et reconstruire les consommateurs |
+| Architecture/SSP/CI/M2/fixtures | Code réellement intégré ; Source900 PASS externe, contre-revues bornées et C++ CPU1/MPI2 ciblé | Cohorte Source du commit final, Native complet, CI requise sur ce SHA |
+| Norme AMR | Correction générique reçue en Source ; garde nonfinie conservée sur toutes les copies, somme de composante0 par niveau | Build officiel et mêmes gardes scientifiques sur le nouveau SDK |
+| ROMEO GPU Source988 | 738116 : Conda/setup/Kokkos et sonde compilée, FAIL127 au chargement libcudart ; 738117 annulé | Reprise additive privée, sonde CUDA exécutée puis vrai Native ; aucune science GPU encore reçue |
+
+Les manifests [Native988](evidence/current_988_f8d_20261009/manifest.json) et [intégration revue](evidence/reviewed_integration_20261009/manifest.json) conservent leurs portées distinctes. Aucune ligne M/T/C/W n’est refermée par cette synthèse. Les mentions « actuel » de la suite désignent leurs dates historiques.
+
+## Historique préservé avant cette réception
+
 # Réception actuelle bornée - 8 octobre 2026
 
 Deux identités restent séparées. **Headers Source actuels** : Main `637c3220da44102ff7dbe3468c99086d141f6981`, callable `ec50b10fdf582f51515fce07fb622dde32a13edba0009102ae29f8c0d5817231`, signature des383 headers `af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1`. **C++ réellement reçu** : Source2cb88/CPP3e98/Coref3, SDK967e, binairee625. Coref3 et test3e98 sont inchangés ; ce résultat SDK967 ne qualifie ni les nouveaux headers/Native/DSO af8 ni le Python installé D154.

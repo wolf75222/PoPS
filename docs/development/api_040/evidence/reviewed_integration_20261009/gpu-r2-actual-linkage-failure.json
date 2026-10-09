@@ -1,0 +1,257 @@
+{
+  "utc": "2026-10-08T23:46:47.666896+00:00",
+  "files": {
+    "results/build-738116.log": {
+      "exists": true,
+      "bytes": 1295,
+      "sha256": "4e19bc4bce8e1d0594094f33759ce11122e4b4df237c3b144273899c37b5ff71",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-build-738116.log"
+    },
+    "results/official-setup-entered.json": {
+      "exists": true,
+      "bytes": 159,
+      "sha256": "beb492c967aba88d62c2fb8140a605b8d39da1f83c9f873cbf060be9e1738191",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-official-setup-entered.json"
+    },
+    "results/conda-effective-context-resume.json": {
+      "exists": true,
+      "bytes": 1844,
+      "sha256": "c9e38b4558986955dbefc5f020ff3c75231e4c900655d7765bbdea671e377829",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-conda-effective-context-resume.json"
+    },
+    "results/conda-shell-reload-route-resume.txt": {
+      "exists": true,
+      "bytes": 6,
+      "sha256": "bc33022edcb7639ff53355b4e91dade50a0bbf0299efeb6171d1ec0ba5029cfc",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-conda-shell-reload-route-resume.txt"
+    },
+    "results/resume-finally-statuses-v2.json": {
+      "exists": true,
+      "bytes": 65,
+      "sha256": "9aba9a060a74f3adaddaabbc8cc70271da208baacaa789e213d5c6a594d32c2d",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-resume-finally-statuses-v2.json"
+    },
+    "results/kokkos-configure.log": {
+      "exists": true,
+      "bytes": 1803,
+      "sha256": "7df6df645e2690edb6f3dd34c4246379cb2252776bc15b26e88fe8f880cb686c",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-kokkos-configure.log"
+    },
+    "results/kokkos-build.log": {
+      "exists": true,
+      "bytes": 3293,
+      "sha256": "15fec0441847a0d238a51090e8ffa2b6ddad15c08350bf26e8a0b8c464ae5346",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-kokkos-build.log"
+    },
+    "results/kokkos-install.log": {
+      "exists": true,
+      "bytes": 102928,
+      "sha256": "c9bd4057183bc0ef7360c0a64961e04ca1cd79b83e79daa85133adca75513998",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-kokkos-install.log"
+    },
+    "results/profile-probe-configure.log": {
+      "exists": true,
+      "bytes": 2251,
+      "sha256": "38814b58beb10fe47e81c43feaf9aa8c943c9a7f284b6e41529ec4480c123f17",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-profile-probe-configure.log"
+    },
+    "results/profile-probe-build.log": {
+      "exists": true,
+      "bytes": 4839,
+      "sha256": "8b31966cc9158db18241b0bcc7692f9e1e3deb4f01e744053ead2de54dd3706e",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-profile-probe-build.log"
+    },
+    "results/managed-pointer-launch-probe.json": {
+      "exists": true,
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-results-managed-pointer-launch-probe.json"
+    },
+    "kokkos-unified-build/CMakeCache.txt": {
+      "exists": true,
+      "bytes": 52208,
+      "sha256": "065512c7593af9de245f09381cc2373037b027cf4a45dec1b1f9d822fbc34e94",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-kokkos-unified-build-CMakeCache.txt"
+    },
+    "profile-probe-build/CMakeCache.txt": {
+      "exists": true,
+      "bytes": 35308,
+      "sha256": "ac7bc0036f5c1b8926edde4d18050869dc908974af4acf342ec3c0c6f46d3fd5",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-profile-probe-build-CMakeCache.txt"
+    },
+    "profile-probe-build/build.ninja": {
+      "exists": true,
+      "bytes": 42454,
+      "sha256": "f5d6af4b893d7835d1608724a41da3a9451d509f543b0041940f86e7245a7754",
+      "local_exact_copy": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r2-profile-probe-build-build.ninja"
+    },
+    "probe_binary": {
+      "bytes": 868184,
+      "sha256": "7e0eec5471ae93f8635f5b1f1dc9791f7e67c8767358571bd1358da575936e95"
+    }
+  },
+  "commands": [
+    {
+      "argv": [
+        "squeue",
+        "-j",
+        "738117",
+        "-h",
+        "-o",
+        "%i|%T|%R"
+      ],
+      "exit": 0,
+      "stdout": "738117|PENDING|(DependencyNeverSatisfied)\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "scancel",
+        "738117"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "sacct",
+        "-j",
+        "738116,738117",
+        "-n",
+        "-X",
+        "-P",
+        "-o",
+        "JobID,State,ExitCode,Elapsed,NodeList"
+      ],
+      "exit": 0,
+      "stdout": "738116|FAILED|127:0|00:02:00|romeo-a041\n738117|CANCELLED by 100267|0:0|00:00:00|None assigned\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "readelf",
+        "-d",
+        "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/profile-probe-build/managed_cuda_probe"
+      ],
+      "exit": 0,
+      "stdout": "\nDynamic section at offset 0xaf7b8 contains 34 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libcudart.so.12]\n 0x0000000000000001 (NEEDED)             Shared library: [libcuda.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libgomp.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x000000000000000f (RPATH)              Library rpath: [/project/r250127/sol61-gpu-bootstrap-20261004/compiler13/lib]\n 0x000000000000000c (INIT)               0x7890\n 0x000000000000000d (FINI)               0x42c10\n 0x0000000000000019 (INIT_ARRAY)         0xbf000\n 0x000000000000001b (INIT_ARRAYSZ)       256 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0xbf100\n 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)\n 0x0000000000000004 (HASH)               0x290\n 0x000000006ffffef5 (GNU_HASH)           0x7c0\n 0x0000000000000005 (STRTAB)             0x1ac8\n 0x0000000000000006 (SYMTAB)             0x820\n 0x000000000000000a (STRSZ)              5919 (bytes)\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000015 (DEBUG)              0x0\n 0x0000000000000003 (PLTGOT)             0xbffe8\n 0x0000000000000002 (PLTRELSZ)           3768 (bytes)\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000017 (JMPREL)             0x69d8\n 0x0000000000000007 (RELA)               0x3558\n 0x0000000000000008 (RELASZ)             13440 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffffb (FLAGS_1)            Flags: PIE\n 0x000000006ffffffe (VERNEED)            0x3378\n 0x000000006fffffff (VERNEEDNUM)         5\n 0x000000006ffffff0 (VERSYM)             0x31e8\n 0x000000006ffffff9 (RELACOUNT)          491\n 0x0000000000000000 (NULL)               0x0\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/usr/lpp/mmfs/bin/mmlsquota",
+        "-u",
+        "rmdraux",
+        "--block-size",
+        "1K",
+        "gpfs"
+      ],
+      "exit": 0,
+      "stdout": "                         Block Limits                                               |     File Limits\nFilesystem Fileset    type             KB      quota      limit   in_doubt    grace |    files   quota    limit in_doubt    grace  Remarks\ngpfs       home       USR        16887608   15728640   20971520          0  expired |   230970 1000000  1500000        0     none romeo.romeo.univ-reims.fr\ngpfs       scratch    USR        18399256   15728640   20971520          0   7 days |   295982 1000000  1500000        0     none romeo.romeo.univ-reims.fr\ngpfs       projet     USR        86505264          0          0          0     none |  1390193       0        0        0     none romeo.romeo.univ-reims.fr\n",
+      "stderr": ""
+    }
+  ],
+  "cuda_libraries": [
+    {
+      "cache_entry": "CUDA_CUDART:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcudart.so",
+      "exists": true,
+      "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcudart.so.12.6.77",
+      "bytes": 699568,
+      "sha256": "a647c8437c8fd810f781a6cd1ceb3532be9d6765f489f0d84cd15d71afcc6a13"
+    },
+    {
+      "cache_entry": "CUDA_cublasLt_LIBRARY:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcublasLt.so",
+      "exists": true,
+      "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcublasLt.so.12.6.4.1",
+      "bytes": 470616952,
+      "sha256": "7851afcf2b7f71a444407e8134d63fdab02e9b806d56454190ebf9b4f5137c87"
+    },
+    {
+      "cache_entry": "CUDA_cublasLt_static_LIBRARY:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcublasLt_static.a",
+      "exists": true,
+      "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcublasLt_static.a",
+      "bytes": 699883154,
+      "sha256": "596d0fecb0585410a106335854ef5567b1684d6f51a2c9501577a79e8f8af1c5"
+    },
+    {
+      "cache_entry": "CUDA_cublas_LIBRARY:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcublas.so",
+      "exists": true,
+      "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcublas.so.12.6.4.1",
+      "bytes": 105619232,
+      "sha256": "a980e44c230ce9cfce545243a4012898b2ad4628ae09e1da3c8f1bada2cba2ce"
+    },
+    {
+      "cache_entry": "CUDA_cublas_static_LIBRARY:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcublas_static.a",
+      "exists": true,
+      "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcublas_static.a",
+      "bytes": 168153958,
+      "sha256": "4e900a584e05976c3516caa70ce2523a3e59a9906bdd6a640ae8766935a157a2"
+    },
+    {
+      "cache_entry": "CUDA_cudart_LIBRARY:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcudart.so",
+      "exists": true,
+      "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcudart.so.12.6.77",
+      "bytes": 699568,
+      "sha256": "a647c8437c8fd810f781a6cd1ceb3532be9d6765f489f0d84cd15d71afcc6a13"
+    },
+    {
+      "cache_entry": "CUDA_cudart_static_LIBRARY:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcudart_static.a",
+      "exists": true,
+      "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcudart_static.a",
+      "bytes": 1310116,
+      "sha256": "0aa6ae99741ce7c2c314fa94c2c0f435bd54f42240f639a516495e246f959275"
+    },
+    {
+      "cache_entry": "CUDA_cusparse_LIBRARY:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcusparse.so",
+      "exists": true,
+      "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcusparse.so.12.5.4.2",
+      "bytes": 289733120,
+      "sha256": "6650b245e07ceb3d074a37308e21dfd79664a74270ff7db3681317ec37f11886"
+    },
+    {
+      "cache_entry": "CUDA_cusparse_static_LIBRARY:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcusparse_static.a",
+      "exists": true,
+      "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcusparse_static.a",
+      "bytes": 325160714,
+      "sha256": "bbed3278c279289945b65223fc680a1f43775610ca8d1a6e5755572535cc0c8b"
+    },
+    {
+      "cache_entry": "CUDA_CUDART-ADVANCED:INTERNAL=1",
+      "exists": false
+    },
+    {
+      "cache_entry": "CUDA_cublasLt_LIBRARY-ADVANCED:INTERNAL=1",
+      "exists": false
+    },
+    {
+      "cache_entry": "CUDA_cublasLt_static_LIBRARY-ADVANCED:INTERNAL=1",
+      "exists": false
+    },
+    {
+      "cache_entry": "CUDA_cublas_LIBRARY-ADVANCED:INTERNAL=1",
+      "exists": false
+    },
+    {
+      "cache_entry": "CUDA_cublas_static_LIBRARY-ADVANCED:INTERNAL=1",
+      "exists": false
+    },
+    {
+      "cache_entry": "CUDA_cudart_LIBRARY-ADVANCED:INTERNAL=1",
+      "exists": false
+    },
+    {
+      "cache_entry": "CUDA_cudart_static_LIBRARY-ADVANCED:INTERNAL=1",
+      "exists": false
+    },
+    {
+      "cache_entry": "CUDA_cusparse_LIBRARY-ADVANCED:INTERNAL=1",
+      "exists": false
+    },
+    {
+      "cache_entry": "CUDA_cusparse_static_LIBRARY-ADVANCED:INTERNAL=1",
+      "exists": false
+    }
+  ],
+  "scope": "Actual read-only byte/linkage receipts and cancelled never-started dependency. No execution of the ARM/CUDA probe on the login node."
+}
