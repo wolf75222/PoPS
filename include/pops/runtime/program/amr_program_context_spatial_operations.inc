@@ -282,7 +282,12 @@ Real norm2(int program_block, const field_type& field) const {
     for_each_owner_active_level_(
         program_block, field, nullptr,
         [&](const field_type& level_field, const field_type*, const field_type* active) {
-          local += pops::dot_active_local(level_field, level_field, 0, active);
+          const Real contribution = pops::dot_active_local(level_field, level_field, 0, active);
+          // Evaluate every copy, but count finite replicated storage once on its owned lane.
+          // Retain nonfinite contributions so the original norm/guard failure path is not hidden.
+          if (!level_field.distribution().replicated() || lane.rank() == 0 ||
+              !std::isfinite(contribution))
+            local += contribution;
         });
   } catch (...) {
     local_error = std::current_exception();
